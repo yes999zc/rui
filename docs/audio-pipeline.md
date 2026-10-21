@@ -45,5 +45,8 @@ Without a reference channel this cannot work. Say so in the UI.
 - **Bit-depth** above. Silent failure mode: sounds fine, fails only with music.
 - **Clock drift.** Device clock and server clock diverge; the jitter buffer must
   adapt or the queue grows until latency is unusable.
-- **Sample rate on the playback path.** If the device only accepts 16 kHz, music
-  through the voice path sounds like a phone call. Measure before designing.
+- **Sample rate on the playback path.** Measured on an LX06 (1.94.13):
+  playback PCM is `S16_LE`, 2 ch, **48000 Hz**; capture is `S32_LE`, 8 ch,
+  **48000 Hz**. So music does not have to squeeze through the 16 kHz voice path —
+  downsample to 16 kHz only for AEC/KWS, keep 48 kHz for playback. Verify on your
+  own device before trusting this line: `cat /proc/asound/card*/pcm*/sub0/hw_params`.
