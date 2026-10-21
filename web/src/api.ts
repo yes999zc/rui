@@ -24,9 +24,10 @@ export interface Check {
 
 export interface DoctorReport {
   verdict: 'ok' | 'degraded' | 'unsupported'
-  rtf: number
+  aec_rtf: number
   cpu_share: number
   device_capacity: number
+  capacity_basis: string
   measured_at: string
   checks: Check[]
 }
@@ -37,8 +38,12 @@ export interface Device {
   model: string
   room: string
   host: string
+  transport: string
+  status: 'ready' | 'unavailable'
+  error?: string
   capabilities: string[]
   missing_for_barge_in: string[]
+  has_device_token?: boolean
 }
 
 export interface Provider {
@@ -47,31 +52,71 @@ export interface Provider {
   model: string
   api_key_env: string
   timeout_s: number
-  fallback: string
+  voice: string
   has_key?: boolean
 }
 
+export interface Capture {
+  rate: number
+  channels: number
+  mic_channels: number
+  ref_channels: number
+  bits: number
+  mic_shift: number
+  ref_shift: number
+}
+
+export interface Voice {
+  rate: number
+  frame_ms: number
+  kws_threshold: number
+  vad_min_speech_ms: number
+  vad_end_silence_ms: number
+  barge_in: boolean
+}
+
+export interface Playback {
+  rate: number
+  channels: number
+  queue_ms: number
+  fade_out_ms: number
+  target_silence_ms: number
+}
+
+export type StageKey = 'asr' | 'tts' | 'llm'
+
 export interface Config {
   version: number
-  web: { host: string; port: number; auth_token: string }
+  web: { host: string; port: number; auth_required: boolean }
   devices: Device[]
   audio: {
-    sample_rate: number
-    frame_ms: number
-    kws_threshold: number
-    vad_min_speech_ms: number
-    vad_end_silence_ms: number
-    barge_in: boolean
-    aec: { enabled: boolean; filter_len: number; channels: number; mic_shift: number; ref_shift: number }
+    capture: Capture
+    voice: Voice
+    playback: Playback
+    aec: { enabled: boolean; filter_len: number }
   }
-  providers: { asr: Provider; tts: Provider; llm: Provider }
+  providers: {
+    catalog: Record<string, Provider>
+    asr: { chain: string[] }
+    tts: { chain: string[] }
+    llm: { chain: string[] }
+  }
   tools: { expose: string; whitelist: string[]; mcp_servers: { name: string; transport: string; url: string }[] }
 }
 
 export const api = {
-  health: () => request<{ status: string; version: string; uptime_s: number }>('/health'),
+  health: () =>
+    request<{
+      status: string
+      version: string
+      config_version: number
+      uptime_s: number
+      devices: number
+      device_errors: number
+    }>('/health'),
   doctor: () => request<DoctorReport>('/api/v1/doctor'),
   config: () => request<Config>('/api/v1/config'),
   devices: () => request<Device[]>('/api/v1/devices'),
   tools: () => request<{ count: number; names: string[] }>('/api/v1/tools'),
+  traces: () => request<{ limit: number; turns: unknown[] }>('/api/v1/traces'),
 }

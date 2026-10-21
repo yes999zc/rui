@@ -1,6 +1,6 @@
 services:
   house-ear:
-    image: ghcr.io/yes999zc/house-ear:latest
+    image: ${HOUSE_EAR_IMAGE:-ghcr.io/yes999zc/house-ear:latest}
     container_name: house-ear
     restart: unless-stopped
     network_mode: host          # device audio is a long-lived socket; host avoids NAT surprises

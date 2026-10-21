@@ -1,4 +1,13 @@
-from .schema import Config, ConfigError, DeviceConfig
-from .store import default_config_path, load_config, save_config
+from .schema import CONFIG_VERSION, Config, ConfigError, DeviceConfig
+from .store import default_config_path, load_config, redacted, save_config
 
-__all__ = ["Config", "ConfigError", "DeviceConfig", "default_config_path", "load_config", "save_config"]
+__all__ = [
+    "CONFIG_VERSION",
+    "Config",
+    "ConfigError",
+    "DeviceConfig",
+    "default_config_path",
+    "load_config",
+    "redacted",
+    "save_config",
+]

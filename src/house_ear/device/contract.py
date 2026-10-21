@@ -4,6 +4,13 @@ A new speaker is supported by writing one adapter, never by touching the core.
 Adapters declare capabilities and the core degrades gracefully: a device with no
 playback-reference channel simply cannot do barge-in while music plays, and the UI
 says so instead of pretending.
+
+Two transport directions exist and both fit this contract:
+  outbound - we connect to the device (USB audio, an exposed HTTP/ALSA bridge);
+  inbound  - the device's client dials us (LX06: ws://<server>:<port>/?token=...).
+An inbound adapter's `open()` starts accepting and `frames()` yields from the
+connected client; `probe()` reports what the device declared at handshake and what
+we verified over SSH, never an optimistic guess.
 """
 from __future__ import annotations
 
@@ -24,6 +31,11 @@ class Capability(StrEnum):
     STREAMING_ASR = "streaming_asr"  # can push audio continuously
 
 
+class Transport(StrEnum):
+    OUTBOUND = "outbound"            # we dial the device
+    INBOUND = "inbound"              # the device dials us
+
+
 @dataclass(frozen=True)
 class DeviceInfo:
     id: str
@@ -32,9 +44,12 @@ class DeviceInfo:
     host: str
     room: str = ""
     capabilities: frozenset[Capability] = frozenset()
+    transport: Transport = Transport.OUTBOUND
     channels: int = 1
     sample_rate: int = 16000
     bit_depth: int = 16
+    mic_channels: int = 1
+    ref_channels: int = 0
 
     def supports(self, cap: Capability) -> bool:
         return cap in self.capabilities
@@ -46,14 +61,38 @@ class DeviceInfo:
 
 @dataclass
 class AudioFrame:
+    """One interleaved capture block, already scaled to 16-bit.
+
+    The reference channels travel inside the same frame as the microphones (LX06:
+    ch0..ch5 mics, ch6..ch7 reference), so a frame describes one layout for all of
+    its channels instead of pretending reference audio arrives separately.
+    """
+
     device_id: str
     seq: int
     ts_ms: float
-    pcm: bytes                    # interleaved, already scaled to 16-bit
+    pcm: bytes                    # interleaved, int16 little-endian, already scaled
     channels: int = 1
-    sample_rate: int = 16000
-    is_reference: bool = False
+    sample_rate: int = 48000
+    reference_channels: int = 0   # trailing channels in `pcm` that carry the reference
     meta: dict = field(default_factory=dict)
+
+    @property
+    def mic_channels(self) -> int:
+        return self.channels - self.reference_channels
+
+    @property
+    def frame_samples(self) -> int:
+        """Samples per channel in this frame."""
+        if self.channels <= 0:
+            return 0
+        return len(self.pcm) // (2 * self.channels)
+
+    @property
+    def duration_ms(self) -> float:
+        if self.sample_rate <= 0:
+            return 0.0
+        return self.frame_samples * 1000.0 / self.sample_rate
 
 
 @runtime_checkable
@@ -68,9 +107,13 @@ class DeviceAdapter(Protocol):
 
     def frames(self) -> AsyncIterator[AudioFrame]: ...
 
-    async def play(self, pcm: bytes, sample_rate: int) -> None: ...
+    async def play(self, pcm: bytes, *, sample_rate: int, channels: int) -> None:
+        """Queue PCM for playback. Channels matter: LX06 plays 2 ch at 48 kHz."""
+        ...
 
-    async def stop_playback(self, fade_ms: int = 120) -> None: ...
+    async def stop_playback(self, fade_ms: int = 120) -> None:
+        """Fade out and flush, including whatever the device has already buffered."""
+        ...
 
     async def set_volume(self, volume: int) -> None: ...
 

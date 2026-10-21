@@ -25,14 +25,20 @@ onMounted(async () => {
 
   <div v-for="d in devices" :key="d.id" class="card">
     <h2>{{ d.room || d.id }} <span class="tag">{{ d.adapter }}</span></h2>
+    <div class="row">
+      <span class="k">status</span>
+      <span class="v" :class="d.status === 'ready' ? 'ok' : 'fail'">{{ d.status }}</span>
+    </div>
+    <div class="row" v-if="d.error"><span class="k">error</span><span class="v fail">{{ d.error }}</span></div>
     <div class="row"><span class="k">id</span><span class="v">{{ d.id }}</span></div>
     <div class="row"><span class="k">host</span><span class="v">{{ d.host }}</span></div>
-    <div class="row"><span class="k">model</span><span class="v">{{ d.model }}</span></div>
-    <div class="row">
+    <div class="row" v-if="d.model"><span class="k">model</span><span class="v">{{ d.model }}</span></div>
+    <div class="row" v-if="d.transport !== 'unknown'"><span class="k">transport</span><span class="v">{{ d.transport }}</span></div>
+    <div class="row" v-if="d.capabilities.length">
       <span class="k">capabilities</span>
       <span class="v"><span v-for="c in d.capabilities" :key="c" class="tag">{{ c }}</span></span>
     </div>
-    <div class="row">
+    <div class="row" v-if="d.capabilities.length">
       <span class="k">barge-in</span>
       <span class="v" :class="d.missing_for_barge_in.length ? 'warn' : 'ok'">
         {{ d.missing_for_barge_in.length ? '不可用，缺 ' + d.missing_for_barge_in.join(', ') : '可用' }}

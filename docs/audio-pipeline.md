@@ -2,11 +2,28 @@
 
 The part that decides whether the product feels good. Everything else is plumbing.
 
+## Three rates, three jobs
+
+| path | rate | layout | why |
+|---|---|---|---|
+| capture | 48000 | 8 ch, 32 bit | what the LX06 actually sends |
+| voice | 16000 | 1 ch per filter | AEC / KWS / VAD; 4096 taps = 256 ms of tail |
+| playback | 48000 | 2 ch, 16 bit | what the LX06 amplifies |
+
+Measured, not assumed: `cat /proc/asound/card*/pcm*/sub0/hw_params` on the device
+`S32_LE` 8 ch 48000 Hz while capturing, `S16_LE` 2 ch 48000 Hz while playing.
+Music never squeezes through the 16 kHz path — downsample only the copy that goes
+to the voice pipeline.
+
 ## The frame
 
-16 kHz, 20 ms frames (320 samples). Eight interleaved 32-bit channels:
-`ch0..ch5` are microphones, `ch6` and `ch7` are the same playback-reference
-loopback.
+`voice.frame_ms` (20 ms) frames at `voice.rate` (320 samples). Capture arrives
+wider and faster: 20 ms at 48 kHz is 960 samples per channel, so the adapter
+decimates 3:1 before anything else touches the samples.
+
+Eight interleaved channels: `ch0..ch5` microphones, `ch6` and `ch7` the same
+playback-reference loopback. Reference travels **inside** the frame, which is why
+`AudioFrame` carries `reference_channels` instead of an `is_reference` flag.
 
 ## The one number that matters
 
@@ -27,26 +44,38 @@ If you change one thing in this repo, keep this one.
 MDF, 4096 taps, 16 kHz, one filter per mic channel. The reference arrives 2.4 ms
 before the microphones hear it, so alignment is a fixed delay, not a search.
 
-RTF budget: the canceller must use less than half a core at six channels, or a
-4-core NAS cannot host more than one speaker. `house-ear doctor` measures this
-with the real tap count and reports device capacity.
+Measured on this box: **rtf 0.004 at six channels** — 0.4% of one core. The
+canceller is not the CPU problem; KWS and streaming ASR are. `house-ear doctor`
+recomputes the canceller cost with the real tap count and prints the per-device
+budget as an explicitly labelled assumption until M1 measures it.
 
 ## Barge-in
 
-1. Playback runs through a queue of ~200 ms.
+1. Playback runs through a queue of ~200 ms (`playback.queue_ms`).
 2. KWS stays armed during playback; AEC keeps the mic clean.
-3. On wake: fade out over 120 ms, flush the queue, transition to `listening`.
-4. Target: fully silent within 300 ms of the user starting to speak.
+3. On wake: fade out over `playback.fade_out_ms`, flush the queue **and whatever
+   the device has already buffered**, transition to `listening`.
+4. Target: fully silent within `playback.target_silence_ms` (300 ms) of the user
+   starting to speak.
+
+Step 3 is where the risk lives: flushing our own queue is microseconds, flushing
+the speaker's ALSA buffer needs a control message the device client must honour.
+Measure it (wake → mic energy floor) before believing the 300 ms number.
 
 Without a reference channel this cannot work. Say so in the UI.
+
+## Latency marks
+
+`house_ear.trace` stamps the boundaries that cost time: `wake`,
+`end_of_speech`, `asr_first`, `asr_done`, `llm_first`, `llm_done`, `tts_first`,
+`play_start`, `barge_in`, `silence`. It computes `first_response_ms`
+(wake → play_start) and `silence_after_ms` (barge_in → silence). A stage without a
+number is a stage nobody has measured.
 
 ## Known traps
 
 - **Bit-depth** above. Silent failure mode: sounds fine, fails only with music.
 - **Clock drift.** Device clock and server clock diverge; the jitter buffer must
   adapt or the queue grows until latency is unusable.
-- **Sample rate on the playback path.** Measured on an LX06 (1.94.13):
-  playback PCM is `S16_LE`, 2 ch, **48000 Hz**; capture is `S32_LE`, 8 ch,
-  **48000 Hz**. So music does not have to squeeze through the 16 kHz voice path —
-  downsample to 16 kHz only for AEC/KWS, keep 48 kHz for playback. Verify on your
-  own device before trusting this line: `cat /proc/asound/card*/pcm*/sub0/hw_params`.
+- **Decimation is not free.** 8 ch × 48 kHz × 32 bit ≈ 1.5 MB/s over the socket;
+  one bad WiFi hop shows up as a gap in `frames()`, not as an error.

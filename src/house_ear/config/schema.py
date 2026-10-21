@@ -1,12 +1,23 @@
-"""Config is the single source of truth; JSON Schema is generated from these models."""
+"""Config is the single source of truth; JSON Schema is generated from these models.
+
+Version history:
+  1 - one flat `audio` block with a single sample rate and channel count.
+      Wrong for every real speaker we measured: an LX06 captures 48 kHz / 8 ch / 32 bit
+      and plays 48 kHz / 2 ch, while the voice pipeline runs at 16 kHz.
+  2 - rates and channel counts are explicit per direction (`capture`, `voice`,
+      `playback`); providers are a catalog plus an ordered fallback chain per stage.
+"""
 from __future__ import annotations
 
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+CONFIG_VERSION = 2
+
 AdapterName = Literal["xiaoai", "mock"]
 ExposeMode = Literal["domain", "whitelist", "all"]
+STAGES = ("asr", "tts", "llm")
 
 
 class ConfigError(ValueError):
@@ -32,6 +43,10 @@ class DeviceConfig(BaseModel):
     enabled: bool = True
     wake_words: list[str] = Field(default_factory=lambda: ["你好小瑞"])
     volume: int = Field(default=60, ge=0, le=100)
+    # Inbound transports: the LX06 client dials us (ws://<server>:<port>/?token=...).
+    # None means "adapter default". The token value lives in the environment only.
+    listen_port: int | None = Field(default=None, ge=1, le=65535)
+    token_env: str = "HOUSE_EAR_DEVICE_TOKEN"
 
     @field_validator("id")
     @classmethod
@@ -41,25 +56,69 @@ class DeviceConfig(BaseModel):
         return v
 
 
-class AecConfig(BaseModel):
-    enabled: bool = True
-    filter_len: int = Field(default=4096, ge=256, le=16384)
-    channels: int = Field(default=6, ge=1, le=8)
-    # Per-channel bit-depth scaling: mics are 2**23 full scale, playback reference
-    # is 2**28. Scaling both by >>8 clips 52-78% of the reference and kills the echo
-    # canceller. These two numbers are the whole trick.
+class CaptureConfig(BaseModel):
+    """What arrives from the device, measured rather than assumed.
+
+    LX06 (1.94.13): S32_LE, 8 interleaved channels, 48000 Hz; ch0..ch5 are the mic
+    array, ch6 and ch7 carry the same playback reference. Mic full scale is 2**23,
+    reference full scale is 2**28 - hence two different shifts, not one.
+    """
+
+    rate: int = Field(default=48000, ge=8000, le=96000)
+    channels: int = Field(default=8, ge=1, le=16)
+    mic_channels: int = Field(default=6, ge=1, le=16)
+    ref_channels: int = Field(default=2, ge=0, le=16)
+    bits: Literal[16, 32] = 32
     mic_shift: int = Field(default=8, ge=0, le=31)
     ref_shift: int = Field(default=13, ge=0, le=31)
 
+    @model_validator(mode="after")
+    def _layout_adds_up(self) -> CaptureConfig:
+        if self.mic_channels + self.ref_channels != self.channels:
+            raise ValueError(
+                f"mic_channels({self.mic_channels}) + ref_channels({self.ref_channels}) "
+                f"must equal channels({self.channels})"
+            )
+        return self
 
-class AudioConfig(BaseModel):
-    sample_rate: int = Field(default=16000, ge=8000, le=48000)
+
+class VoiceConfig(BaseModel):
+    """The AEC/KWS/VAD rate. Downsample from capture; never run DSP at 48 kHz."""
+
+    rate: int = Field(default=16000, ge=8000, le=48000)
     frame_ms: int = Field(default=20, ge=10, le=40)
-    aec: AecConfig = Field(default_factory=AecConfig)
-    kws_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    kws_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
     vad_min_speech_ms: int = Field(default=200, ge=50, le=2000)
     vad_end_silence_ms: int = Field(default=600, ge=100, le=3000)
     barge_in: bool = True
+
+    @property
+    def frame_samples(self) -> int:
+        return self.rate * self.frame_ms // 1000
+
+
+class PlaybackConfig(BaseModel):
+    """Music and speech both leave at the device's native rate: 48 kHz, 2 ch on LX06."""
+
+    rate: int = Field(default=48000, ge=8000, le=96000)
+    channels: int = Field(default=2, ge=1, le=8)
+    queue_ms: int = Field(default=200, ge=20, le=1000)
+    fade_out_ms: int = Field(default=120, ge=0, le=500)
+    # Acceptance target: fully silent within this many ms of the user starting to speak.
+    target_silence_ms: int = Field(default=300, ge=50, le=1500)
+
+
+class AecConfig(BaseModel):
+    enabled: bool = True
+    # Taps at `voice.rate`: 4096 taps = 256 ms of echo tail at 16 kHz.
+    filter_len: int = Field(default=4096, ge=256, le=16384)
+
+
+class AudioConfig(BaseModel):
+    capture: CaptureConfig = Field(default_factory=CaptureConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    playback: PlaybackConfig = Field(default_factory=PlaybackConfig)
+    aec: AecConfig = Field(default_factory=AecConfig)
 
 
 class ProviderConfig(BaseModel):
@@ -68,13 +127,58 @@ class ProviderConfig(BaseModel):
     model: str = ""
     api_key_env: str = ""
     timeout_s: float = Field(default=15.0, gt=0, le=120)
-    fallback: str = ""  # name of another provider block, handled in M2
+    voice: str = ""  # TTS voice name; ignored by ASR/LLM
+
+
+def _default_catalog() -> dict[str, ProviderConfig]:
+    return {
+        "asr": ProviderConfig(api_key_env="HOUSE_EAR_ASR_KEY"),
+        "tts": ProviderConfig(api_key_env="HOUSE_EAR_TTS_KEY"),
+        "llm": ProviderConfig(api_key_env="HOUSE_EAR_LLM_KEY"),
+    }
+
+
+class StageConfig(BaseModel):
+    """Ordered provider names: first is primary, the rest are fallbacks in order."""
+
+    chain: list[str] = Field(min_length=1)
+
+    @field_validator("chain")
+    @classmethod
+    def _sane_chain(cls, v: list[str]) -> list[str]:
+        if len(set(v)) != len(v):
+            raise ValueError("chain contains duplicate provider names")
+        for name in v:
+            if not name.replace("-", "").replace("_", "").isalnum():
+                raise ValueError(f"provider name must be alphanumeric: {name}")
+        return v
 
 
 class ProvidersConfig(BaseModel):
-    asr: ProviderConfig = Field(default_factory=lambda: ProviderConfig(api_key_env="HOUSE_EAR_ASR_KEY"))
-    tts: ProviderConfig = Field(default_factory=lambda: ProviderConfig(api_key_env="HOUSE_EAR_TTS_KEY"))
-    llm: ProviderConfig = Field(default_factory=lambda: ProviderConfig(api_key_env="HOUSE_EAR_LLM_KEY"))
+    """A catalog of named providers plus one ordered chain per stage.
+
+    Separating the name from the settings is what makes per-stage fallback expressible:
+    a stage is [primary, fallback, ...] and every name resolves to exactly one block.
+    """
+
+    catalog: dict[str, ProviderConfig] = Field(default_factory=_default_catalog)
+    asr: StageConfig = Field(default_factory=lambda: StageConfig(chain=["asr"]))
+    tts: StageConfig = Field(default_factory=lambda: StageConfig(chain=["tts"]))
+    llm: StageConfig = Field(default_factory=lambda: StageConfig(chain=["llm"]))
+
+    @model_validator(mode="after")
+    def _chains_resolve(self) -> ProvidersConfig:
+        for stage in STAGES:
+            for name in getattr(self, stage).chain:
+                if name not in self.catalog:
+                    raise ValueError(f"providers.{stage}.chain references unknown provider: {name}")
+        return self
+
+    def resolve(self, stage: str) -> list[tuple[str, ProviderConfig]]:
+        """[(name, config)] in fallback order for one stage."""
+        if stage not in STAGES:
+            raise ValueError(f"unknown stage: {stage}")
+        return [(n, self.catalog[n]) for n in getattr(self, stage).chain]
 
 
 class McpServerConfig(BaseModel):
@@ -98,13 +202,20 @@ class ToolsConfig(BaseModel):
 
 
 class Config(BaseModel):
-    version: int = 1
+    version: int = CONFIG_VERSION
     system: SystemConfig = Field(default_factory=SystemConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     devices: list[DeviceConfig] = Field(default_factory=list)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+
+    @field_validator("version")
+    @classmethod
+    def _known_version(cls, v: int) -> int:
+        if v > CONFIG_VERSION:
+            raise ValueError(f"config version {v} is newer than this build ({CONFIG_VERSION})")
+        return v
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Config:

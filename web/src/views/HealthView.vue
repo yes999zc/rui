@@ -35,8 +35,11 @@ onMounted(run)
         {{ report.verdict }}
       </span>
     </div>
-    <div class="row"><span class="k">AEC rtf</span><span class="v">{{ report.rtf }}（单核 {{ report.cpu_share }}%）</span></div>
-    <div class="row"><span class="k">可带设备</span><span class="v">~{{ report.device_capacity }} 台</span></div>
+    <div class="row"><span class="k">AEC rtf</span><span class="v">{{ report.aec_rtf }}（单核 {{ report.cpu_share }}%）</span></div>
+    <div class="row">
+      <span class="k">可带设备</span>
+      <span class="v">~{{ report.device_capacity }} 台 <span class="tag">{{ report.capacity_basis }}</span></span>
+    </div>
     <div class="row"><span class="k">measured_at</span><span class="v">{{ report.measured_at }}</span></div>
   </div>
 

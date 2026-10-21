@@ -13,21 +13,54 @@ def client(cfg: Config | None = None) -> TestClient:
 def test_health() -> None:
     body = client().get("/health").json()
     assert body["status"] == "ok"
+    assert body["config_version"] == 2
+    assert body["device_errors"] == 0
 
 
 def test_mock_device_is_probed() -> None:
     cfg = Config(devices=[DeviceConfig(id="living", adapter="mock", host="127.0.0.1", room="客厅")])
     devices = client(cfg).get("/api/v1/devices").json()
     assert devices[0]["room"] == "客厅"
+    assert devices[0]["status"] == "ready"
     assert devices[0]["missing_for_barge_in"] == []
+
+
+def test_device_without_an_adapter_still_shows_up() -> None:
+    """A configured LX06 must not take the control plane down before M1 lands."""
+    cfg = Config(devices=[DeviceConfig(id="living", adapter="xiaoai", host="<LAN-IP>")])
+    c = client(cfg)
+    assert c.get("/health").json()["device_errors"] == 1
+    devices = c.get("/api/v1/devices").json()
+    assert devices[0]["id"] == "living"
+    assert devices[0]["status"] == "unavailable"
+    assert "M1" in devices[0]["error"]
 
 
 def test_secrets_are_not_in_payload() -> None:
     cfg = Config()
-    cfg.providers.llm.api_key_env = "SOME_KEY"
+    cfg.providers.catalog["llm"].api_key_env = "SOME_KEY"
     payload = client(cfg).get("/api/v1/config").json()
-    assert "api_key" not in payload["providers"]["llm"]
-    assert payload["providers"]["llm"]["has_key"] is False
+    block = payload["providers"]["catalog"]["llm"]
+    assert "api_key" not in block
+    assert block["has_key"] is False
+
+
+def test_present_key_is_reported_as_a_flag_only(monkeypatch) -> None:
+    cfg = Config()
+    cfg.providers.catalog["llm"].api_key_env = "HOUSE_EAR_TEST_KEY"
+    monkeypatch.setenv("HOUSE_EAR_TEST_KEY", "sk-do-not-leak")
+    payload = client(cfg).get("/api/v1/config").json()
+    block = payload["providers"]["catalog"]["llm"]
+    assert block["has_key"] is True
+    assert "sk-do-not-leak" not in str(payload)
+
+
+def test_device_token_is_reported_as_a_flag_only(monkeypatch) -> None:
+    cfg = Config(devices=[DeviceConfig(id="living", adapter="mock", host="127.0.0.1")])
+    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", "dev-secret")
+    payload = client(cfg).get("/api/v1/config").json()
+    assert payload["devices"][0]["has_device_token"] is True
+    assert "dev-secret" not in str(payload)
 
 
 def test_auth_token_never_leaves_the_server() -> None:
@@ -43,3 +76,8 @@ def test_auth_is_enforced_when_configured() -> None:
     c = client(cfg)
     assert c.get("/api/v1/config").status_code == 401
     assert c.get("/api/v1/config", headers={"X-Auth-Token": "s3cret"}).status_code == 200
+
+
+def test_traces_are_empty_before_the_audio_plane_exists() -> None:
+    body = client().get("/api/v1/traces").json()
+    assert body["turns"] == []
