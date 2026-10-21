@@ -1,0 +1,14 @@
+services:
+  house-ear:
+    image: ghcr.io/yes999zc/house-ear:latest
+    container_name: house-ear
+    restart: unless-stopped
+    network_mode: host          # device audio is a long-lived socket; host avoids NAT surprises
+    env_file:
+      - .env
+    volumes:
+      - ./config:/config
+      - ./data:/var/lib/house-ear
+    environment:
+      HOUSE_EAR_CONFIG: /config/config.yaml
+      HOUSE_EAR_WEB_DIR: /app/web/dist
