@@ -8,6 +8,7 @@ payload can contain any byte, including a newline):
   type 0x01  control   UTF-8 JSON, one message per frame
   type 0x02  voice PCM audio plane -> control plane, mono at `voice.rate`
   type 0x03  play PCM  control plane -> audio plane, at `playback.rate`
+  type 0x04  utterance  audio plane -> control plane: one turn's speech, mono `voice.rate`
 
 PCM payload = seq (uint32) | ts_ms (float64) | s16le samples, header big endian.
 The frame carries its own sequence number and timestamp because the audio plane is
@@ -35,6 +36,7 @@ class FrameType(IntEnum):
     CONTROL = 0x01
     VOICE_PCM = 0x02
     PLAY_PCM = 0x03
+    UTTERANCE_PCM = 0x04
 
 
 def encode_frame(frame_type: FrameType, payload: bytes = b"") -> bytes:
@@ -111,6 +113,8 @@ class Metrics(BaseModel):
     wake_count: int = 0
     kws_enabled: bool = False
     kws_error: str = ""
+    vad_enabled: bool = False
+    utterances: int = 0
     playback_s: float = 0.0
     frames_in: int
     frames_out: int
@@ -132,6 +136,12 @@ class Wake(BaseModel):
     erle_db: float | None = None
     ref_active: bool = False
     playback_s: float = 0.0
+
+
+class SpeakFinished(BaseModel):
+    """control -> plane: the last PLAY_PCM frame of this reply has been sent."""
+
+    type: Literal["speak_finished"] = "speak_finished"
 
 
 class Error(BaseModel):
@@ -163,7 +173,8 @@ class QueryMetrics(BaseModel):
 
 
 ControlMessage = Annotated[
-    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | Error | Shutdown,
+    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | SpeakFinished
+    | Error | Shutdown,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

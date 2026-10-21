@@ -1,0 +1,154 @@
+"""Turn segmentation: from a wake word to one utterance worth transcribing.
+
+The gate does what the VAD alone cannot: after "你好小瑞" the person keeps talking
+immediately, and the wake phrase itself must not reach the transcriber. So it skips a
+short tail, waits for the first speech, keeps a small preroll so the onset is not clipped,
+and closes the turn after enough silence - with a hard cap so a stuck VAD cannot grow an
+endless buffer.
+
+Silero decides speech/no-speech (same model the old deployment used). This class owns the
+state machine around it: `is_speech_detected()` per block, our own buffer and timers.
+"""
+from __future__ import annotations
+
+import logging
+from collections import deque
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+log = logging.getLogger(__name__)
+
+
+class VadUnavailable(RuntimeError):
+    """sherpa-onnx or silero_vad.onnx is missing: no turn segmentation."""
+
+
+@dataclass
+class GateConfig:
+    rate: int = 16000
+    skip_after_wake_ms: int = 300     # the tail of the wake phrase itself
+    preroll_ms: int = 200             # kept before the first detected speech
+    min_speech_ms: int = 200          # anything shorter is a cough, not a request
+    end_silence_ms: int = 600         # this much quiet closes the turn
+    max_utterance_ms: int = 10000     # hard cap, whatever the VAD thinks
+    max_wait_ms: int = 5000           # wake with nothing said: give up
+    threshold: float = 0.5
+
+
+class UtteranceGate:
+    """Armed by a wake, closed by silence."""
+
+    def __init__(self, cfg: GateConfig, model_path: str | Path) -> None:
+        try:
+            import sherpa_onnx
+        except ImportError as exc:  # pragma: no cover - install extra
+            raise VadUnavailable("sherpa-onnx is not installed (uv sync --extra kws)") from exc
+        model = Path(model_path)
+        if not model.exists():
+            raise VadUnavailable(f"VAD model not found: {model}")
+
+        self.cfg = cfg
+        config = sherpa_onnx.VadModelConfig()
+        config.silero_vad.model = str(model)
+        config.silero_vad.threshold = cfg.threshold
+        config.silero_vad.min_silence_duration = cfg.end_silence_ms / 1000.0
+        config.silero_vad.min_speech_duration = cfg.min_speech_ms / 1000.0
+        config.sample_rate = cfg.rate
+        self._vad = sherpa_onnx.VoiceActivityDetector(
+            config, buffer_size_in_seconds=max(30, cfg.max_utterance_ms // 1000 + 5)
+        )
+        self.rate = cfg.rate
+        self.armed = False
+        self.turns = 0
+        self.discarded = 0
+        self._reset_state()
+
+    def _reset_state(self) -> None:
+        self._skipping = 0
+        self._preroll: deque[np.ndarray] = deque()
+        self._preroll_samples = 0
+        self._buf: list[np.ndarray] = []
+        self._speech_ms = 0.0
+        self._silence_ms = 0.0
+        self._waited_ms = 0.0
+        self._started = False
+
+    # ------------------------------------------------------------------ state
+    def arm(self) -> None:
+        """A wake word just fired: ignore the phrase tail, then listen."""
+        self._vad.reset()
+        self._reset_state()
+        self.armed = True
+        self._skipping = int(self.rate * self.cfg.skip_after_wake_ms / 1000)
+
+    def disarm(self) -> None:
+        self.armed = False
+        self._vad.reset()
+        self._reset_state()
+
+    # ------------------------------------------------------------------ input
+    def feed(self, pcm: bytes, ts_ms: float = 0.0) -> tuple[bytes, float] | None:
+        """int16 mono block in; the finished utterance (int16) out when it closes."""
+        if not self.armed or not pcm:
+            return None
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        # The VAD always sees the whole stream, including the wake phrase tail: resetting
+        # it at the wake and starting mid-word is how the first syllable gets missed.
+        self._vad.accept_waveform(samples)
+        speaking = bool(self._vad.is_speech_detected())
+        if self._skipping:
+            skip = min(self._skipping, samples.size)
+            samples = samples[skip:]
+            self._skipping -= skip
+            if samples.size == 0:
+                return None
+
+        block_ms = samples.size * 1000.0 / self.rate
+
+        if not self._started:
+            self._preroll.append(samples)
+            self._preroll_samples += samples.size
+            limit = int(self.rate * self.cfg.preroll_ms / 1000)
+            while self._preroll_samples > limit and len(self._preroll) > 1:
+                self._preroll_samples -= self._preroll.popleft().size
+            if not speaking:
+                self._waited_ms += block_ms
+                if self._waited_ms >= self.cfg.max_wait_ms:
+                    log.info("wake with no speech after %.0f ms; disarming", self._waited_ms)
+                    self.discarded += 1
+                    self.disarm()
+                return None
+            # First speech: include the preroll so the onset is not chopped.
+            self._started = True
+            self._buf = list(self._preroll)
+            self._preroll.clear()
+            self._preroll_samples = 0
+            self._speech_ms = sum(b.size for b in self._buf) * 1000.0 / self.rate
+            self._silence_ms = 0.0
+            return None
+
+        self._buf.append(samples)
+        if speaking:
+            self._silence_ms = 0.0
+            self._speech_ms += block_ms
+        else:
+            self._silence_ms += block_ms
+
+        if self._silence_ms < self.cfg.end_silence_ms and self._speech_ms < self.cfg.max_utterance_ms:
+            return None
+
+        audio = np.concatenate(self._buf) if self._buf else np.zeros(0, dtype=np.float32)
+        # Trailing silence adds nothing for the transcriber; keep 100 ms of it.
+        trim = int(self.rate * max(0.0, self._silence_ms - 100) / 1000)
+        if trim and trim < audio.size:
+            audio = audio[: audio.size - trim]
+        speech_ms = self._speech_ms
+        self.disarm()
+        if speech_ms < self.cfg.min_speech_ms:
+            log.info("utterance discarded: %.0f ms of speech", speech_ms)
+            self.discarded += 1
+            return None
+        self.turns += 1
+        return np.clip(audio * 32768.0, -32768, 32767).astype("<i2").tobytes(), ts_ms

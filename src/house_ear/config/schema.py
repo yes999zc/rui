@@ -97,6 +97,8 @@ class VoiceConfig(BaseModel):
     kws_model_dir: str = ""
     kws_keywords_file: str = ""
     kws_chunk: int = Field(default=8, ge=4, le=16)
+    # Turn segmentation. Empty path disables it (wake fires, nothing is transcribed).
+    vad_model_path: str = ""
 
     @property
     def frame_samples(self) -> int:

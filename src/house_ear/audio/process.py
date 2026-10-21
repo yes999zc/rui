@@ -45,14 +45,17 @@ from .protocol import (
     PlayFile,
     QueryMetrics,
     Ready,
+    SpeakFinished,
     StopAudio,
     Wake,
+    decode_pcm,
     encode_json,
     encode_pcm,
     read_frame,
 )
 from .resample import resample
 from .ring import ArrivalStats, PcmRing
+from .vad import GateConfig, UtteranceGate, VadUnavailable
 
 METRICS_EVERY_S = 2.0
 PLAY_CHUNK_MS = 100
@@ -73,6 +76,10 @@ class AudioPlane:
         self.kws_error = ""
         self.wake_count = 0
         self.last_wake: Wake | None = None
+        self.gate: UtteranceGate | None = None
+        self.vad_error = ""
+        self.utterances = 0
+        self._speak_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=200)
         self.frames_in = 0
         self.frames_out = 0
         self.frames_dropped = 0
@@ -133,6 +140,25 @@ class AudioPlane:
             self.kws_error = str(exc)
             log.warning("kws off: %s", exc)
 
+    def _build_vad(self) -> None:
+        voice = self.cfg.audio.voice
+        if not voice.vad_model_path:
+            self.vad_error = "vad_model_path is empty: wake fires but nothing is transcribed"
+            log.warning("vad off: %s", self.vad_error)
+            return
+        try:
+            self.gate = UtteranceGate(
+                GateConfig(
+                    rate=voice.rate,
+                    min_speech_ms=voice.vad_min_speech_ms,
+                    end_silence_ms=voice.vad_end_silence_ms,
+                ),
+                voice.vad_model_path,
+            )
+        except VadUnavailable as exc:
+            self.vad_error = str(exc)
+            log.warning("vad off: %s", exc)
+
     # ------------------------------------------------------------- pipeline
     def _frame_to_voice(self, frame: AudioFrame, decimator: Decimator) -> bytes:
         """Frame -> one mono voice-rate block, echo-cancelled when a reference exists."""
@@ -160,6 +186,7 @@ class AudioPlane:
         info = await self.adapter.probe()
         self._build_aec(info.mic_channels, info.ref_channels)
         self._build_kws()
+        self._build_vad()
         decimator = Decimator(
             factor=max(1, info.sample_rate // self.cfg.audio.voice.rate),
             channels=info.channels,
@@ -186,12 +213,24 @@ class AudioPlane:
                         playback_s=round(self.playback_s, 1),
                     )
                     self.last_wake = event
+                    if self.gate is not None:
+                        self.gate.arm()
                     if connected.is_set():
                         try:
                             writer.write(encode_json(event))
                             await writer.drain()
                         except (ConnectionResetError, BrokenPipeError):
                             connected.clear()
+            if self.gate is not None and pcm:
+                finished = self.gate.feed(pcm, ts_ms=frame.ts_ms)
+                if finished is not None and connected.is_set():
+                    utt, ts = finished
+                    self.utterances += 1
+                    try:
+                        writer.write(encode_pcm(FrameType.UTTERANCE_PCM, self.utterances, ts, utt))
+                        await writer.drain()
+                    except (ConnectionResetError, BrokenPipeError):
+                        connected.clear()
             if not connected.is_set():
                 self.no_consumer += 1
             elif not self.ring.push(frame.seq, now_ms(), pcm):
@@ -269,6 +308,34 @@ class AudioPlane:
             if not loop:
                 break
 
+    async def _speak_loop(self) -> None:
+        """Play PCM the control plane pushes, paced at the chunk's own duration."""
+        while not self._stop.is_set():
+            chunk = await self._speak_queue.get()
+            if chunk is None:
+                continue
+            adapter = self.adapter
+            if adapter is None:
+                continue
+            try:
+                await adapter.play(chunk, sample_rate=self.cfg.audio.playback.rate, channels=1)
+            except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+                log.info("speak: %s", exc)
+                continue
+            seconds = len(chunk) / 2.0 / self.cfg.audio.playback.rate
+            self.playback_s += seconds
+            await asyncio.sleep(seconds)
+        # drain on shutdown
+        while not self._speak_queue.empty():
+            self._speak_queue.get_nowait()
+
+    def _flush_speech(self) -> None:
+        while not self._speak_queue.empty():
+            try:
+                self._speak_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
     async def _stop_playback(self) -> None:
         if self._playback_task is not None and not self._playback_task.done():
             self._playback_task.cancel()
@@ -293,6 +360,8 @@ class AudioPlane:
             wake_count=self.wake_count,
             kws_enabled=self.wake is not None,
             kws_error=self.kws_error,
+            vad_enabled=self.gate is not None,
+            utterances=self.utterances,
             speaker_connected=bool(getattr(self.adapter, "health", lambda: {})().get("connected"))
             if self.adapter is not None
             else False,
@@ -346,11 +415,20 @@ class AudioPlane:
                 asyncio.create_task(self._capture(connected, writer), name="capture"),
                 asyncio.create_task(self._send_audio(writer, connected), name="send-audio"),
                 asyncio.create_task(self._metrics_loop(writer, connected), name="metrics"),
+                asyncio.create_task(self._speak_loop(), name="speak"),
             ]
             while not self._stop.is_set():
                 kind, payload = await read_frame(reader)
+                if kind is FrameType.PLAY_PCM:
+                    seq, _ts, pcm = decode_pcm(payload)
+                    if pcm:
+                        try:
+                            self._speak_queue.put_nowait(pcm)
+                        except asyncio.QueueFull:
+                            log.warning("speak queue full, dropping a chunk")
+                    continue
                 if kind is not FrameType.CONTROL:
-                    continue  # PCM from the control plane is not used yet
+                    continue
                 msg = CONTROL.validate_json(payload)
                 if msg.type == "shutdown":
                     break
@@ -364,7 +442,10 @@ class AudioPlane:
                     path = self._start_playback(msg)
                     log.info("playback requested: %s loop=%s gain=%.2f", path, msg.loop, msg.gain)
                 elif isinstance(msg, StopAudio):
+                    self._flush_speech()
                     await self._stop_playback()
+                elif isinstance(msg, SpeakFinished):
+                    log.info("speak finished, %s chunks queued", self._speak_queue.qsize())
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         except Exception as exc:  # noqa: BLE001 - reported to the client, then the process exits

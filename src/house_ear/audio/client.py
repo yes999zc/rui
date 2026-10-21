@@ -20,8 +20,11 @@ from .protocol import (
     QueryMetrics,
     Ready,
     Shutdown,
+    SpeakFinished,
     Wake,
+    decode_pcm,
     encode_json,
+    encode_pcm,
     read_frame,
 )
 
@@ -46,6 +49,8 @@ class AudioPlaneClient:
         # Debug aid: keep the exact mono stream the plane produced (what AEC/KWS saw).
         self.record_voice = False
         self.voice_audio = bytearray()
+        self.utterances = 0
+        self.last_utterance: bytes = b""
         self._metrics_event = asyncio.Event()
         self._read_task: asyncio.Task | None = None
 
@@ -60,6 +65,11 @@ class AudioPlaneClient:
         """Consume everything the plane sends; latest metrics wins."""
         while True:
             kind, payload = await self.read_frame()
+            if kind is FrameType.UTTERANCE_PCM:
+                _seq, _ts, pcm = decode_pcm(payload)
+                self.utterances += 1
+                self.last_utterance = pcm
+                continue
             if kind is FrameType.VOICE_PCM:
                 self.voice_frames += 1
                 self.voice_bytes += max(0, len(payload) - 12)
@@ -81,6 +91,14 @@ class AudioPlaneClient:
 
     def start_pump(self) -> None:
         self._read_task = asyncio.create_task(self.pump(), name="audio-plane-read")
+
+    async def speak(self, pcm: bytes, chunk_ms: int = 100, rate: int = 16000) -> None:
+        """Push one reply to the speaker as PLAY_PCM frames."""
+        step = max(2, rate * chunk_ms // 1000 * 2)
+        for start in range(0, len(pcm), step):
+            self.writer.write(encode_pcm(FrameType.PLAY_PCM, start // step, 0.0, pcm[start:start + step]))
+        await self.writer.drain()
+        await self.send(SpeakFinished())
 
     async def request_metrics(self, timeout_s: float = 3.0) -> Metrics | None:
         """Ask for a metrics snapshot instead of using the 2 s periodic one."""
@@ -240,6 +258,7 @@ class AudioPlaneSupervisor:
             out["voice_frames_received"] = self.client.voice_frames
             out["voice_bytes_received"] = self.client.voice_bytes
             out["wake_count"] = self.client.wakes
+            out["utterances"] = self.client.utterances
             if self.client.last_wake is not None:
                 out["last_wake"] = self.client.last_wake.model_dump()
         return out
