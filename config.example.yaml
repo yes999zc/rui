@@ -18,13 +18,17 @@ devices:
 audio:
   # Measured on LX06 1.94.13 - do not copy these numbers to another speaker, measure it.
   capture:
-    rate: 48000            # /proc/asound: S32_LE, 8 ch, 48000 Hz
+    # The speaker's ALSA device runs 48000 Hz / S32_LE / 8 ch, but this number is what
+    # we *ask* the client to send. The client JSON-encodes raw bytes as an int array,
+    # so 48 kHz costs ~6 MB/s over wifi versus ~1 MB/s at 16 kHz. AEC/KWS/VAD run at
+    # 16 kHz anyway; set 48000 only for a full-rate analysis capture.
+    rate: 16000
     channels: 8
     mic_channels: 6        # ch0..ch5
     ref_channels: 2        # ch6, ch7 (playback reference, needed for barge-in)
-    bits: 32
-    mic_shift: 8           # mics are 2**23 full scale
-    ref_shift: 13          # reference is 2**28: >>8 here clips half the samples
+    bits: 32               # hardware bit depth; the client converts to 16 bit on the wire
+    mic_shift: 12          # sent to the device; 8 clips loud speech, 12 leaves 4 bits
+    ref_shift: 16          # reference is 2**28: >>13 is level-matched, 16 adds headroom
   voice:
     rate: 16000            # AEC / KWS / VAD run here, not at 48 kHz
     frame_ms: 20

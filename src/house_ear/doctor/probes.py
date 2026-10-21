@@ -152,9 +152,9 @@ def run_doctor(cfg: Config | None = None) -> Report:
     checks.append(Check(
         "capture_layout",
         "ok",
-        f"{cap.rate} Hz / {cap.channels} ch / {cap.bits} bit "
+        f"{cap.rate} Hz requested / {cap.channels} ch / S{cap.bits}_LE on the device "
         f"(mic {cap.mic_channels} + ref {cap.ref_channels}, >>{cap.mic_shift}/>>{cap.ref_shift})",
-        "verify on the device: cat /proc/asound/card*/pcm*/sub0/hw_params",
+        "hardware runs 48000 Hz; verify with: cat /proc/asound/card*/pcm*/sub0/hw_params",
     ))
     checks.append(Check(
         "playback_layout",

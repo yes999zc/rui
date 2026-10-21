@@ -6,9 +6,10 @@ Self-hosted voice endpoint for SSH-enabled smart speakers.
 wake word, speech, reasoning, and playback all run on your own box, and tools
 (Home Assistant, MCP servers, local commands) are exposed through one registry.
 
-> Status: **M1 in progress (S0 + S1 done)** — control plane, contracts, latency
-> ruler and the separate audio-plane process are in place; the LX06 adapter lands in
-> S2. v1 supports exactly one speaker model: Xiaomi 小爱音箱 Pro (LX06).
+> Status: **M1 in progress (S0–S2 done, real-device capture pending)** — control
+> plane, contracts, latency ruler, the separate audio-plane process and the inbound
+> LX06 adapter are in place. v1 supports exactly one speaker model: Xiaomi 小爱音箱
+> Pro (LX06).
 
 ## What works today
 
@@ -30,8 +31,13 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 - Audio plane as a child process behind framed Unix-socket IPC (JSON control +
   mono 16 kHz PCM), stateful 48 kHz -> 16 kHz FIR decimation, bounded ring with a
   drop counter, and `/api/v1/audio` for live numbers
+- LX06 adapter — tier 2, inbound websocket: the speaker's own client dials us, we ask
+  it for 8 ch with the reference pair and receive int16 at the rate we request;
+  documented in [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md)
 - `scripts/measure_plane.py` — runs the plane for N seconds and prints frames,
   drops, jitter percentiles, CPU and rtf; every M1 claim comes from it
+- `scripts/measure_capture.py` — records raw frames through the adapter (per-channel
+  RMS, frame intervals, WAV out); `--fake` synthesizes a speaker for desk checks
 
 ## Measured so far
 
@@ -40,6 +46,8 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 | AEC load, 6 channels | rtf 0.004 (0.4% of one core) | `house-ear doctor` |
 | audio plane, 5 min, mock 48 kHz/8 ch | 14234 frames in, 0 dropped, rtf 0.0055 | `scripts/measure_plane.py` |
 | frame interval | p50 21.2 ms, p99 21.3 ms | same run |
+| LX06 adapter, synthetic speaker, 48 kHz/8 ch | 417 frames, 960 samples/ch/frame, ref ch6/7 at −5.4 dBFS, mic0 −17.7 dBFS, 0 clipped | `scripts/measure_capture.py --fake` |
+| same, frame interval | p50 24.4 ms, p99 24.7 ms (includes the fake client's JSON encode) | same run |
 | config v1 -> v2 migration | loads, file untouched | `tests/test_config.py` |
 
 ## Quick start
@@ -64,6 +72,7 @@ Then open `http://127.0.0.1:8080/`.
 
 - [docs/architecture.md](docs/architecture.md) — layers, process model, IPC seam
 - [docs/adapter-contract.md](docs/adapter-contract.md) — how a new speaker is supported
+- [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md) — the LX06 wire protocol we depend on
 - [docs/audio-pipeline.md](docs/audio-pipeline.md) — three rates, AEC, bit-depth scaling, barge-in
 - [docs/deploy.md](docs/deploy.md) — NAS deployment
 - [docs/adr/](docs/adr/) — the decisions and what they cost

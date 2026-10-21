@@ -55,3 +55,28 @@ def test_api_without_plane_says_so(tmp_path) -> None:
     with TestClient(app) as client:
         body = client.get("/api/v1/audio").json()
         assert body == {"running": False, "error": "audio plane not started"}
+
+
+def test_plane_failure_is_reported_with_its_reason(tmp_path, monkeypatch) -> None:
+    """An LX06 with no device token must show up as a stated error, not as silence."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "version: 2\n"
+        "devices:\n"
+        "  - id: living\n"
+        "    adapter: xiaoai\n"
+        "    host: <LAN-IP>\n"
+        "    listen_port: 4599\n"
+        "    token_env: HOUSE_EAR_MISSING_TOKEN\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HOUSE_EAR_MISSING_TOKEN", raising=False)
+    monkeypatch.setenv("HOUSE_EAR_AUDIO_SOCK", str(tmp_path / "audio.sock"))
+
+    app = create_app(load_config(config_path), config_path=config_path, start_audio=True)
+    with TestClient(app) as client:
+        assert client.get("/health").json()["audio_plane"] is False
+        body = client.get("/api/v1/audio").json()
+        assert body["running"] is False
+        assert "TOKEN" in body["error"]
+        assert "metrics" not in body

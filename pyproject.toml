@@ -12,6 +12,7 @@ dependencies = [
     "ruamel.yaml>=0.18",
     "numpy>=1.26",
     "psutil>=5.9",
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]

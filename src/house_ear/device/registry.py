@@ -27,17 +27,14 @@ class AdapterSet:
         return len(self.adapters)
 
 
-def _build(dev: DeviceConfig) -> DeviceAdapter:
+def _build(dev: DeviceConfig, cfg: Config) -> DeviceAdapter:
     if dev.adapter == "mock":
         return MockAdapter(dev.id, dev.host, dev.room)
     if dev.adapter == "xiaoai":
-        try:
-            from .xiaoai.adapter import XiaoaiAdapter
-        except ModuleNotFoundError as exc:
-            raise AdapterUnavailable(
-                "xiaoai adapter is not implemented in this build yet (M1, step S2)"
-            ) from exc
-        return XiaoaiAdapter(dev)
+        # The adapter needs the capture layout to tell the device what to record.
+        from .xiaoai.adapter import XiaoaiAdapter
+
+        return XiaoaiAdapter(dev, cfg.audio.capture, cfg.audio.voice)
     raise AdapterUnavailable(f"unknown adapter: {dev.adapter}")
 
 
@@ -47,7 +44,7 @@ def build_adapters(cfg: Config) -> AdapterSet:
         if not dev.enabled:
             continue
         try:
-            out.adapters[dev.id] = _build(dev)
+            out.adapters[dev.id] = _build(dev, cfg)
         except AdapterUnavailable as exc:
             out.errors[dev.id] = str(exc)
     return out

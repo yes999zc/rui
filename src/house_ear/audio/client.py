@@ -13,6 +13,7 @@ from .process import default_socket_path, resolve_socket_path
 from .protocol import (
     CONTROL,
     ControlMessage,
+    Error,
     FrameType,
     Hello,
     Metrics,
@@ -138,11 +139,25 @@ class AudioPlaneSupervisor:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
+        try:
+            await self._greet(device, timeout_s)
+        except Exception as exc:
+            # Whatever went wrong, the console must be able to say why: keep the reason
+            # and take the half-started child down instead of leaving it running blind.
+            self.error = str(exc)
+            await self.stop()
+            raise
+        return self
+
+    async def _greet(self, device: str, timeout_s: float) -> None:
+        assert self.proc is not None
         deadline = asyncio.get_running_loop().time() + timeout_s
         while asyncio.get_running_loop().time() < deadline:
             if self.proc.returncode is not None:
                 err = (await self.proc.stderr.read()).decode(errors="replace") if self.proc.stderr else ""
-                raise AudioPlaneError(f"audio plane exited with {self.proc.returncode}: {err[-400:]}")
+                raise AudioPlaneError(
+                    f"audio plane exited with {self.proc.returncode}: {err[-400:].strip()}"
+                )
             if self.socket_path.exists():
                 try:
                     reader, writer = await asyncio.open_unix_connection(str(self.socket_path))
@@ -162,12 +177,12 @@ class AudioPlaneSupervisor:
                         raise AudioPlaneError("audio plane did not greet us")
                     msg = CONTROL.validate_json(payload)
                     if not isinstance(msg, Ready):
-                        raise AudioPlaneError(f"audio plane refused: {msg.model_dump()}")
+                        detail = msg.message if isinstance(msg, Error) else msg.model_dump()
+                        raise AudioPlaneError(f"audio plane refused: {detail}")
                     self.client.ready = msg
                     self.client.start_pump()
-                    return self
-            await asyncio.sleep(0.05)
-        await self.stop()
+                    self.error = ""
+                    return
         raise AudioPlaneError(f"audio plane did not accept a connection in {timeout_s:.0f}s")
 
     async def stop(self) -> None:
@@ -184,24 +199,33 @@ class AudioPlaneSupervisor:
 
     @property
     def running(self) -> bool:
-        return self.client is not None and self.proc is not None and self.proc.returncode is None
+        return (
+            self.client is not None
+            and self.client.ready is not None
+            and self.proc is not None
+            and self.proc.returncode is None
+        )
 
     def status(self) -> dict:
-        if self.client is None:
-            return {"running": False, "error": self.error}
-        metrics = self.client.metrics
-        return {
-            "running": self.running,
-            "pid": self.proc.pid if self.proc else None,
-            "device_id": self.client.ready.device_id if self.client.ready else "",
-            "capture": {
-                "rate": self.client.ready.capture_rate if self.client.ready else 0,
-                "channels": self.client.ready.capture_channels if self.client.ready else 0,
-                "mic_channels": self.client.ready.mic_channels if self.client.ready else 0,
-                "reference_channels": self.client.ready.reference_channels if self.client.ready else 0,
-            },
-            "metrics": metrics.model_dump() if metrics else None,
-            "voice_frames_received": self.client.voice_frames,
-            "voice_bytes_received": self.client.voice_bytes,
+        """Everything the console needs, and nothing it has to interpret."""
+        ready = self.client.ready if self.client is not None else None
+        running = self.running
+        out: dict = {
+            "running": running,
+            "pid": self.proc.pid if self.proc is not None else None,
+            "error": self.error or ("" if running else "audio plane is not running"),
         }
-
+        if ready is not None:
+            out["device_id"] = ready.device_id
+            out["capture"] = {
+                "rate": ready.capture_rate,
+                "channels": ready.capture_channels,
+                "mic_channels": ready.mic_channels,
+                "reference_channels": ready.reference_channels,
+            }
+        if self.client is not None and self.client.metrics is not None:
+            out["metrics"] = self.client.metrics.model_dump()
+        if self.client is not None:
+            out["voice_frames_received"] = self.client.voice_frames
+            out["voice_bytes_received"] = self.client.voice_bytes
+        return out

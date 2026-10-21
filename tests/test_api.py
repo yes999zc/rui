@@ -25,15 +25,31 @@ def test_mock_device_is_probed() -> None:
     assert devices[0]["missing_for_barge_in"] == []
 
 
-def test_device_without_an_adapter_still_shows_up() -> None:
-    """A configured LX06 must not take the control plane down before M1 lands."""
+def test_xiaoai_device_is_reported_as_an_inbound_speaker() -> None:
+    cfg = Config(devices=[DeviceConfig(id="living", adapter="xiaoai", host="<LAN-IP>")])
+    c = client(cfg)
+    assert c.get("/health").json()["device_errors"] == 0
+    device = c.get("/api/v1/devices").json()[0]
+    assert device["status"] == "ready"
+    assert device["transport"] == "inbound"
+    assert "reference" in device["capabilities"]
+    assert device["missing_for_barge_in"] == []
+
+
+def test_an_adapter_that_cannot_be_built_is_reported_not_raised(monkeypatch) -> None:
+    """A broken adapter must surface per device, never as a startup failure."""
+    from house_ear.device import registry
+
+    def boom(dev, cfg):
+        raise registry.AdapterUnavailable("adapter exploded")
+
+    monkeypatch.setattr(registry, "_build", boom)
     cfg = Config(devices=[DeviceConfig(id="living", adapter="xiaoai", host="<LAN-IP>")])
     c = client(cfg)
     assert c.get("/health").json()["device_errors"] == 1
-    devices = c.get("/api/v1/devices").json()
-    assert devices[0]["id"] == "living"
-    assert devices[0]["status"] == "unavailable"
-    assert "M1" in devices[0]["error"]
+    device = c.get("/api/v1/devices").json()[0]
+    assert device["status"] == "unavailable"
+    assert "exploded" in device["error"]
 
 
 def test_secrets_are_not_in_payload() -> None:
