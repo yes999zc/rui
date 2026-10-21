@@ -161,6 +161,19 @@ class Wake(BaseModel):
     ack_mode: str = ""
 
 
+class VendorSignalMsg(BaseModel):
+    """plane -> control: the device's own assistant woke, or finished its dialog.
+
+    Not audio and not ours: the control plane decides whether to stay quiet. 小爱同学
+    waking the vendor's assistant used to make both assistants answer the same sentence.
+    """
+
+    type: Literal["vendor_signal"] = "vendor_signal"
+    kind: str          # "wake" | "dialog_end" | "playing"
+    text: str = ""
+    ts_ms: float = 0.0
+
+
 class SpeakFinished(BaseModel):
     """control -> plane: the last PLAY_PCM frame of this reply has been sent."""
 
@@ -197,7 +210,7 @@ class QueryMetrics(BaseModel):
 
 ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | SpeakFinished
-    | Error | Shutdown,
+    | VendorSignalMsg | Error | Shutdown,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

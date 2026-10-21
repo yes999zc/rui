@@ -268,6 +268,15 @@ class ToolsConfig(BaseModel):
     ha: HaConfig = Field(default_factory=HaConfig)
 
 
+class SessionConfig(BaseModel):
+    """Conversation-level behaviour, as opposed to one cue or one turn."""
+
+    # How long we stay quiet after the speaker's own assistant answered. The old build
+    # used 12 s: long enough to cover one vendor dialog, short enough that a later
+    # "你好小瑞" is not fighting a stale window.
+    vendor_quiet_s: float = Field(default=12.0, ge=0.0, le=60.0)
+
+
 class Config(BaseModel):
     version: int = CONFIG_VERSION
     system: SystemConfig = Field(default_factory=SystemConfig)
@@ -275,6 +284,7 @@ class Config(BaseModel):
     devices: list[DeviceConfig] = Field(default_factory=list)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     ack: AckConfig = Field(default_factory=AckConfig)
+    session: SessionConfig = Field(default_factory=SessionConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
 

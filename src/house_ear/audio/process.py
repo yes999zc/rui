@@ -50,6 +50,7 @@ from .protocol import (
     Ready,
     SpeakFinished,
     StopAudio,
+    VendorSignalMsg,
     Wake,
     decode_pcm,
     encode_json,
@@ -253,11 +254,25 @@ class AudioPlane:
                 self._keep_preroll(pcm, frame.ts_ms)
             if self.gate is not None and pcm:
                 await self._feed_gate(pcm, frame.ts_ms, writer, connected)
+            for vendor in self._drain_signals():
+                if connected.is_set():
+                    try:
+                        writer.write(encode_json(VendorSignalMsg(
+                            kind=vendor.kind, text=vendor.text, ts_ms=float(vendor.ts)
+                        )))
+                        await writer.drain()
+                    except (ConnectionResetError, BrokenPipeError):
+                        connected.clear()
             if not connected.is_set():
                 self.no_consumer += 1
             elif not self.ring.push(frame.seq, now_ms(), pcm):
                 self.frames_dropped += 1
             self.cpu_s += time.perf_counter() - t0
+
+    def _drain_signals(self) -> list:
+        """Vendor events the adapter saw (or none, for adapters that cannot report them)."""
+        drain = getattr(self.adapter, "drain_signals", None)
+        return list(drain()) if callable(drain) else []
 
     # ---------------------------------------------------- wake, preroll, ack
     def _keep_preroll(self, pcm: bytes, ts_ms: float) -> None:

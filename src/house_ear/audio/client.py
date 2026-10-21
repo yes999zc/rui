@@ -22,6 +22,7 @@ from .protocol import (
     Ready,
     Shutdown,
     SpeakFinished,
+    VendorSignalMsg,
     Wake,
     decode_pcm,
     encode_json,
@@ -47,6 +48,10 @@ class AudioPlaneClient:
         self.last_voice_ms: float | None = None
         self.wakes = 0
         self.last_wake: Wake | None = None
+        self.vendor_signals = 0
+        # The control plane decides what a vendor wake means; the client only delivers it.
+        self.on_vendor: Callable[[str, str], object] | None = None
+        self.on_wake: Callable[[Wake], object] | None = None
         # Debug aid: keep the exact mono stream the plane produced (what AEC/KWS saw).
         self.record_voice = False
         self.voice_audio = bytearray()
@@ -54,6 +59,8 @@ class AudioPlaneClient:
         self.last_utterance: bytes = b""
         # Set by the control plane: called (in a task) for every finished utterance.
         self.on_utterance: Callable[[bytes], Awaitable[None]] | None = None
+        self.last_vendor: VendorSignalMsg | None = None
+        self._turns: set[asyncio.Task] = set()
         self._metrics_event = asyncio.Event()
         self._read_task: asyncio.Task | None = None
 
@@ -73,7 +80,11 @@ class AudioPlaneClient:
                 self.utterances += 1
                 self.last_utterance = pcm
                 if self.on_utterance is not None:
-                    asyncio.create_task(self.on_utterance(pcm), name="turn")
+                    # Keep a reference: the loop only holds these weakly, and a turn that
+                    # gets collected mid-flight shows up as "utterance counted, no reply".
+                    task = asyncio.create_task(self.on_utterance(pcm), name="turn")
+                    self._turns.add(task)
+                    task.add_done_callback(self._turns.discard)
                 continue
             if kind is FrameType.VOICE_PCM:
                 self.voice_frames += 1
@@ -91,6 +102,13 @@ class AudioPlaneClient:
             elif isinstance(msg, Wake):
                 self.wakes += 1
                 self.last_wake = msg
+                if self.on_wake is not None:
+                    self.on_wake(msg)
+            elif isinstance(msg, VendorSignalMsg):
+                self.vendor_signals += 1
+                self.last_vendor = msg
+                if self.on_vendor is not None:
+                    self.on_vendor(msg.kind, msg.text)
             elif isinstance(msg, Ready):
                 self.ready = msg
 

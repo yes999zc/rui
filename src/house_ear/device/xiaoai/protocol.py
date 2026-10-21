@@ -26,6 +26,7 @@ import base64
 import binascii
 import json
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -130,4 +131,68 @@ def parse_reply(message: str) -> dict[str, Any] | None:
         value = body.get(key)
         if isinstance(value, dict):
             return {key: value}
+    return None
+
+
+# --- vendor signals ---------------------------------------------------------
+# The client mirrors what the *vendor's* assistant is doing as `{"Event": {...}}` frames.
+# The one that matters: 小爱同学 wakes the vendor, it answers, and without this we would
+# answer too - two assistants replying to one sentence (the old project hit exactly this
+# and fixed it by yielding to the vendor for a window).
+
+
+@dataclass(frozen=True)
+class VendorSignal:
+    kind: str        # "wake" | "dialog_end" | "playing" | "instruction"
+    text: str = ""
+    ts: float = 0.0
+
+
+def _unwrap_new_line(data) -> dict | None:
+    """`data.NewLine` arrives as a dict or as JSON in a string, sometimes nested twice."""
+    raw = data
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(raw, dict):
+        return None
+    line = raw.get("NewLine")
+    for _ in range(2):
+        if isinstance(line, str):
+            try:
+                line = json.loads(line)
+            except (ValueError, TypeError):
+                return None
+        else:
+            break
+    return line if isinstance(line, dict) else None
+
+
+def parse_vendor_signal(event: dict, ts: float = 0.0) -> VendorSignal | None:
+    """What the vendor's own assistant is doing, from one `Event` frame body."""
+    kind = str(event.get("event") or "")
+    data = event.get("data")
+    if kind == "playing":
+        return VendorSignal(kind="playing", text=str(data or "").lower(), ts=ts)
+    if kind != "instruction":
+        return None
+    line = _unwrap_new_line(data)
+    if line is None:
+        return None
+    header = line.get("header") or {}
+    payload = line.get("payload") or {}
+    namespace = str(header.get("namespace") or "")
+    name = str(header.get("name") or "")
+    if namespace != "SpeechRecognizer":
+        return None
+    if name == "RecognizeResult" and payload.get("is_final"):
+        results = payload.get("results") or [{}]
+        text = str((results[0] or {}).get("text") or "")
+        # Only a final recognition means the vendor wake fired; StopCapture is its dialog
+        # ending and would re-trigger us in the middle of a session.
+        return VendorSignal(kind="wake", text=text, ts=ts) if text else None
+    if name == "StopCapture":
+        return VendorSignal(kind="dialog_end", ts=ts)
     return None

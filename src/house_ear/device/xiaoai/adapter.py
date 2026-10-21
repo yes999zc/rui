@@ -51,6 +51,7 @@ class XiaoaiAdapter(DeviceAdapter):
         self._conn: ServerConnection | None = None
         self._frames: asyncio.Queue[AudioFrame] = asyncio.Queue(maxsize=64)
         self._seq = 0
+        self._signals: list[protocol.VendorSignal] = []
         self.frames_received = 0
         self.frames_dropped = 0
         self.bad_frames = 0
@@ -192,6 +193,10 @@ class XiaoaiAdapter(DeviceAdapter):
                 self._playing = False
             log.info("xiaoai: speaker disconnected after %s frames", self.frames_received)
 
+    def drain_signals(self) -> list[protocol.VendorSignal]:
+        signals, self._signals = self._signals, []
+        return signals
+
     def _token_ok(self, conn: ServerConnection) -> bool:
         path = getattr(getattr(conn, "request", None), "path", "") or ""
         got = (parse_qs(urlparse(path).query).get("token") or [""])[0]
@@ -203,7 +208,16 @@ class XiaoaiAdapter(DeviceAdapter):
             return
         if "Event" in reply:
             event = reply["Event"]
-            log.info("xiaoai: event %s", event.get("event") or event.get("id"))
+            signal = protocol.parse_vendor_signal(event, ts=now_ms())
+            if signal is not None:
+                # Vendor signals are not audio: the plane forwards them to the session,
+                # which is the only layer that may decide to stay quiet.
+                self._signals.append(signal)
+                del self._signals[:-16]
+                if signal.kind == "wake":
+                    log.info("xiaoai: vendor wake (%r), we yield", signal.text)
+            elif event.get("event") not in {"consumed"}:
+                log.debug("xiaoai: event %s", event.get("event") or event.get("id"))
         elif "Response" in reply:
             response = reply["Response"]
             if int(response.get("code") or 0) != 0:

@@ -24,6 +24,7 @@ from ...doctor import run_doctor
 from ...providers.chain import build_stage
 from ...session.ack import ensure_ack_wav
 from ...session.turn import DEFAULT_PROMPT, TurnRunner
+from ...session.vendor import VendorWindow
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
 
@@ -67,6 +68,8 @@ def create_app(
         )
         app.state.runner = runner
         app.state.last_turn = None
+        vendor = VendorWindow(cfg.session.vendor_quiet_s)
+        app.state.vendor = vendor
         for stage in ("asr", "tts", "llm"):
             for _name, provider in build_stage(cfg.providers, stage):
                 warm = getattr(provider, "warm", None)
@@ -92,6 +95,12 @@ def create_app(
             client = supervisor.client
             if client is not None:
                 async def on_utterance(pcm: bytes) -> None:
+                    if vendor.muted():
+                        # The speaker's own assistant is answering; answering too would
+                        # double-reply to one sentence.
+                        log.info("vendor dialog, dropping our turn (%.1fs left)",
+                                 vendor.remaining())
+                        return
                     trace = TurnTrace(device_id=client.ready.device_id if client.ready else "")
                     if client.last_wake is not None:
                         trace.mark("wake", at_ms=client.last_wake.ts_ms)
@@ -105,6 +114,8 @@ def create_app(
                     log.info("turn: %s", result.to_dict())
 
                 client.on_utterance = on_utterance
+                client.on_vendor = vendor.vendor_spoke
+                client.on_wake = lambda _msg: vendor.ours_spoke()
         # The cue is rendered *after* the plane is up and in the background: it is a nicety,
         # and a vendor that hangs must not delay /health or the speaker's reconnect. The
         # plane re-reads ack.wav on every wake, so a file that lands a second later is
@@ -142,6 +153,13 @@ def create_app(
             "devices": len(adapters),
             "device_errors": len(adapters.errors),
             "audio_plane": bool(supervisor is not None and supervisor.running),
+            "vendor": {
+                "quiet_s": cfg.session.vendor_quiet_s,
+                "muted_for": round(getattr(app.state, "vendor", None).remaining(), 1)
+                if getattr(app.state, "vendor", None) else 0.0,
+                "vendor_wakes": getattr(getattr(app.state, "vendor", None), "vendor_wakes", 0),
+                "yielded_turns": getattr(getattr(app.state, "vendor", None), "yielded_turns", 0),
+            },
             # What the plane will actually play on a wake, and why, if it was downgraded.
             "ack": {
                 "mode": cfg.ack.mode,

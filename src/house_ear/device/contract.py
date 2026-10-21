@@ -117,4 +117,12 @@ class DeviceAdapter(Protocol):
 
     async def set_volume(self, volume: int) -> None: ...
 
+    def drain_signals(self) -> list:
+        """Non-audio events the device reported since the last call (vendor wake, keys).
+
+        Default is empty: an adapter that cannot see the vendor's own assistant simply
+        never reports one, and the core then behaves as it always did.
+        """
+        return []
+
     async def set_led(self, effect: str, color: str = "") -> None: ...
