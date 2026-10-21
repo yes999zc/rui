@@ -59,7 +59,7 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 | S5d | 控制台补齐（旧项目 10 个分区 → 六页 Vue） | ⬜ |
 | S5e | 打断 300 ms + 工具执行 | ⬜ |
 
-测试 **164 passed**，ruff clean。S5a 之后 5 个提交（286b867 → 77bc6fc）。
+测试 **164 passed**，ruff clean。S5a 相关提交 7 个（286b867 → 15157bd），已推 origin/main。
 
 ## 4. 已定的决策（别推翻，改了先问 9哥）
 
@@ -121,7 +121,7 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 
 按收益排序，每步都要实测数字，不接受「已完成」：
 
-0. ~~S5a~~ **已完成**（提交 286b867…77bc6fc）：三档应答、preroll 回放、hold 缓冲、
+0. ~~S5a~~ **已完成**（提交 286b867…15157bd）：三档应答、preroll 回放、hold 缓冲、
    `ack.max_ms` 强制执行、doctor 的 `wake_path`/`ack_wav` 检查、`fetch-models` 拉 silero。
    数据与复现命令在 `docs/ack.md`。
 2. **S5b 回合质量**：相同问句去重、禁止复读/抱怨、无工具时禁止报具体数值。
