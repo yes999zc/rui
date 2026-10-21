@@ -48,6 +48,8 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 | frame interval | p50 21.2 ms, p99 21.3 ms | same run |
 | LX06 adapter, synthetic speaker, 48 kHz/8 ch | 417 frames, 960 samples/ch/frame, ref ch6/7 at −5.4 dBFS, mic0 −17.7 dBFS, 0 clipped | `scripts/measure_capture.py --fake` |
 | same, frame interval | p50 24.4 ms, p99 24.7 ms (includes the fake client's JSON encode) | same run |
+| LX06 hardware, 16 kHz/8 ch, 60 s | 1494 frames, 640 samples/ch, mic −50 dBFS (peaks −20), ref silent, 0 clipped, interval p50 39.6/p99 84.5 ms | `scripts/measure_capture.py` |
+| LX06 hardware, 48 kHz/8 ch, 10 s | 246 frames, 1920 samples/ch, mic −45 dBFS, ref silent, 0 clipped | same |
 | config v1 -> v2 migration | loads, file untouched | `tests/test_config.py` |
 
 ## Quick start

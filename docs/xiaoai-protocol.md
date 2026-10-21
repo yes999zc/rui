@@ -53,6 +53,28 @@ plug layer for whatever we want, and 16 kHz × 8 ch is what the old deployment r
 production. AEC, KWS and VAD all run at 16 kHz anyway, so `config.example.yaml` asks for
 16 kHz and `capture.rate: 48000` stays available for analysis runs.
 
+## Measured on the speaker (2026-10-21, LX06 1.94.13)
+
+Two captures through this adapter, same room, no playback:
+
+| | 16 kHz request | 48 kHz request |
+|---|---|---|
+| frames | 1494 over 59.76 s | 246 over 9.84 s |
+| samples/ch per frame | 640 | 1920 |
+| frame interval | p50 39.55 ms, p99 84.47 ms | p50 34.4 ms, p99 88.9 ms (one reconnect mixed in) |
+| mic RMS | −50 dBFS, peaks −20 | −45 dBFS, peaks −13 |
+| reference ch6/7 | exactly zero (nothing playing) | exactly zero |
+| clipped samples | 0 | 0 |
+
+Two things to keep in mind when reading that table:
+
+- **Frames arrive every ~40 ms, not 20 ms.** `start_recording` asks for a 20 ms period and
+  a 40 ms buffer, and the client sends one websocket frame per buffer. That is 25 frames
+  per second of audio, which also bounds how fast KWS can react to a wake word.
+- **The reference pair is silent when nothing plays.** A useful AEC fixture needs the
+  speaker emitting sound, which is why the 80 %-volume test belongs to S3/S5 with the
+  debug playback path rather than to this capture.
+
 ## Lifecycle and failure modes
 
 - The adapter is **inbound**: `open()` starts a websocket server on
