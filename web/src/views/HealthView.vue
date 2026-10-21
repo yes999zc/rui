@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { api, type DoctorReport } from '../api'
+import { api, type AudioStatus, type DoctorReport } from '../api'
 
 const report = ref<DoctorReport | null>(null)
+const audio = ref<AudioStatus | null>(null)
 const busy = ref(false)
 const error = ref('')
 
@@ -11,6 +12,7 @@ async function run() {
   error.value = ''
   try {
     report.value = await api.doctor()
+    audio.value = await api.audio()
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -41,6 +43,28 @@ onMounted(run)
       <span class="v">~{{ report.device_capacity }} 台 <span class="tag">{{ report.capacity_basis }}</span></span>
     </div>
     <div class="row"><span class="k">measured_at</span><span class="v">{{ report.measured_at }}</span></div>
+  </div>
+
+  <div v-if="audio" class="card">
+    <h2>音频面</h2>
+    <div class="row">
+      <span class="k">status</span>
+      <span class="v" :class="audio.running ? 'ok' : 'warn'">
+        {{ audio.running ? '运行中 · pid ' + audio.pid : (audio.error || '未启动') }}
+      </span>
+    </div>
+    <template v-if="audio.metrics">
+      <div class="row"><span class="k">帧（进 / 出 / 丢）</span>
+        <span class="v">{{ audio.metrics.frames_in }} / {{ audio.metrics.frames_out }} / {{ audio.metrics.frames_dropped }}</span>
+      </div>
+      <div class="row"><span class="k">帧间隔 p50 / p99</span>
+        <span class="v">{{ audio.metrics.jitter_p50_ms }} / {{ audio.metrics.jitter_p99_ms }} ms</span>
+      </div>
+      <div class="row"><span class="k">rtf</span>
+        <span class="v" :class="audio.metrics.rtf <= 0.5 ? 'ok' : 'warn'">{{ audio.metrics.rtf }}</span>
+      </div>
+      <div class="row"><span class="k">已处理音频</span><span class="v">{{ audio.metrics.audio_s }} s</span></div>
+    </template>
   </div>
 
   <div v-if="report" class="card">

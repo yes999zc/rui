@@ -56,6 +56,31 @@ export interface Provider {
   has_key?: boolean
 }
 
+export interface AudioMetrics {
+  type: string
+  uptime_s: number
+  frames_in: number
+  frames_out: number
+  frames_dropped: number
+  no_consumer: number
+  jitter_p50_ms: number
+  jitter_p99_ms: number
+  cpu_s: number
+  audio_s: number
+  rtf: number
+}
+
+export interface AudioStatus {
+  running: boolean
+  error?: string
+  pid?: number | null
+  device_id?: string
+  capture?: { rate: number; channels: number; mic_channels: number; reference_channels: number }
+  metrics?: AudioMetrics | null
+  voice_frames_received?: number
+  voice_bytes_received?: number
+}
+
 export interface Capture {
   rate: number
   channels: number
@@ -115,6 +140,7 @@ export const api = {
       device_errors: number
     }>('/health'),
   doctor: () => request<DoctorReport>('/api/v1/doctor'),
+  audio: () => request<AudioStatus>('/api/v1/audio'),
   config: () => request<Config>('/api/v1/config'),
   devices: () => request<Device[]>('/api/v1/devices'),
   tools: () => request<{ count: number; names: string[] }>('/api/v1/tools'),

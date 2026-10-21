@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -11,6 +13,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from ... import __version__
+from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
 from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import redacted
 from ...device.registry import build_adapters
@@ -31,13 +34,41 @@ code{background:#f4f4f5;padding:2px 6px;border-radius:4px}</style></head>
 <p>API: <code>/health</code>, <code>/api/v1/doctor</code>, <code>/api/v1/config</code></p></body></html>"""
 
 
-def create_app(cfg: Config) -> FastAPI:
-    app = FastAPI(title="house-ear", version=__version__)
+def create_app(
+    cfg: Config,
+    config_path: Path | None = None,
+    start_audio: bool = False,
+) -> FastAPI:
     registry = ToolRegistry()
     adapters = build_adapters(cfg)
     traces = TraceLog()
     for dev_id, err in adapters.errors.items():
         log.warning("device %s is configured but not drivable: %s", dev_id, err)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if start_audio:
+            supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
+            try:
+                await supervisor.start()
+                ready = supervisor.client.ready if supervisor.client else None
+                log.info(
+                    "audio plane up: pid=%s device=%s capture=%s Hz/%s ch",
+                    supervisor.proc.pid if supervisor.proc else "?",
+                    ready.device_id if ready else "?",
+                    ready.capture_rate if ready else "?",
+                    ready.capture_channels if ready else "?",
+                )
+            except AudioPlaneError as exc:
+                supervisor.error = str(exc)
+                log.warning("audio plane did not start: %s", exc)
+            app.state.audio = supervisor
+        yield
+        supervisor = getattr(app.state, "audio", None)
+        if supervisor is not None:
+            await supervisor.stop()
+
+    app = FastAPI(title="house-ear", version=__version__, lifespan=lifespan)
 
     def auth(x_auth_token: str | None = Header(default=None)) -> None:
         if not cfg.web.auth_token:
@@ -47,6 +78,7 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict:
+        supervisor = getattr(app.state, "audio", None)
         return {
             "status": "ok",
             "version": __version__,
@@ -55,6 +87,7 @@ def create_app(cfg: Config) -> FastAPI:
             "uptime_s": round(time.time() - START, 1),
             "devices": len(adapters),
             "device_errors": len(adapters.errors),
+            "audio_plane": bool(supervisor is not None and supervisor.running),
         }
 
     @app.get("/api/v1/doctor", dependencies=[Depends(auth)])
@@ -64,6 +97,23 @@ def create_app(cfg: Config) -> FastAPI:
     @app.get("/api/v1/config", dependencies=[Depends(auth)])
     async def get_config() -> dict:
         return redacted(cfg)
+
+    @app.get("/api/v1/audio", dependencies=[Depends(auth)])
+    async def audio_status() -> dict:
+        """Live numbers from the audio plane: frames, drops, jitter, rtf.
+
+        Asks for a fresh snapshot first - the periodic message is up to 2 s old, and a
+        stale counter is exactly the kind of number this project refuses to print.
+        """
+        supervisor = getattr(app.state, "audio", None)
+        if supervisor is None:
+            return {"running": False, "error": "audio plane not started"}
+        if supervisor.client is not None:
+            try:
+                await supervisor.client.request_metrics(timeout_s=0.5)
+            except (ConnectionError, TimeoutError):
+                pass
+        return supervisor.status()
 
     @app.get("/api/v1/devices", dependencies=[Depends(auth)])
     async def devices() -> list[dict]:
@@ -111,7 +161,7 @@ def create_app(cfg: Config) -> FastAPI:
 
     @app.get("/api/v1/traces", dependencies=[Depends(auth)])
     async def recent_traces(limit: int = 20) -> dict:
-        """Latency marks for recent turns. Empty until the audio plane lands in M1."""
+        """Latency marks for recent turns. Empty until a turn runs through the plane."""
         return {"limit": max(1, min(limit, 200)), "turns": traces.recent(limit)}
 
     if WEB_DIST.is_dir():

@@ -47,8 +47,24 @@ def cmd_serve(args: argparse.Namespace) -> int:
     cfg = load_config(path) if path.exists() else Config()
     host = args.host or cfg.web.host
     port = args.port or cfg.web.port
-    app = create_app(cfg)
+    app = create_app(cfg, config_path=path if path.exists() else None,
+                     start_audio=not args.no_audio)
     uvicorn.run(app, host=host, port=port, log_level=cfg.system.log_level.lower())
+    return 0
+
+
+def cmd_audio(args: argparse.Namespace) -> int:
+    import asyncio
+
+    from .audio.process import build_plane
+
+    path = _config_path(args)
+    cfg = load_config(path)
+    plane = build_plane(cfg, args.device, Path(args.socket) if args.socket else None)
+    try:
+        asyncio.run(plane.serve())
+    except KeyboardInterrupt:
+        return 0
     return 0
 
 
@@ -78,7 +94,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve = _leaf("serve", "run the control plane")
     p_serve.add_argument("--host")
     p_serve.add_argument("--port", type=int)
+    p_serve.add_argument("--no-audio", action="store_true",
+                         help="control plane only; do not spawn the audio plane")
     p_serve.set_defaults(func=cmd_serve)
+
+    p_audio = _leaf("audio", "run the audio plane in the foreground")
+    p_audio.add_argument("--device", required=True)
+    p_audio.add_argument("--socket")
+    p_audio.set_defaults(func=cmd_audio)
 
     p_doc = _leaf("doctor", "probe hardware, network and audio headroom")
     p_doc.add_argument("--json", action="store_true")
