@@ -180,6 +180,8 @@ class AudioPlane:
                     rate=voice.rate,
                     min_speech_ms=voice.vad_min_speech_ms,
                     end_silence_ms=voice.vad_end_silence_ms,
+                    skip_after_wake_ms=voice.wake_skip_ms,
+                    preroll_ms=voice.vad_preroll_ms,
                 ),
                 voice.vad_model_path,
             )

@@ -38,3 +38,26 @@ def write_wav_mono(path: Path, pcm: bytes, rate: int) -> None:
         w.setframerate(rate)
         w.writeframes(pcm)
     tmp.replace(path)
+
+
+def trim_silence(pcm: bytes, rate: int, thresh_db: float = -45.0) -> bytes:
+    """Drop leading/trailing near-silence from raw int16 mono PCM.
+
+    A TTS vendor pads its output: "我在。" came back 933 ms for a 550 ms utterance, and a
+    spoken acknowledgement that is measured with the padding looks like it breaks the cap
+    when it does not. The old build trimmed for the same reason.
+    """
+    x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    win = max(1, rate // 100)  # 10 ms
+    usable = x.size // win * win
+    if usable < win * 4:
+        return pcm
+    frames = x[:usable].reshape(-1, win)
+    rms = np.sqrt(np.square(frames).mean(axis=1))
+    db = 20.0 * np.log10(np.maximum(rms, 1e-6))
+    loud = np.where(db > thresh_db)[0]
+    if loud.size == 0:
+        return pcm
+    start = max(0, (int(loud[0]) - 3) * win)
+    end = min(x.size, (int(loud[-1]) + 2) * win)
+    return (np.clip(x[start:end], -1.0, 1.0) * 32767.0).astype("<i2").tobytes()

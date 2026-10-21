@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 from ..audio.ack import ack_wav_path
-from ..audio.wav import write_wav_mono
+from ..audio.wav import trim_silence, write_wav_mono
 from ..config.schema import Config
 from ..providers.chain import tts_chain
 
@@ -35,7 +35,8 @@ async def synthesize(cfg: Config, text: str) -> tuple[bytes, int, str]:
             log.warning("ack tts: %s failed: %s", name, exc)
             continue
         if chunks:
-            return b"".join(chunks), rate, name
+            # Vendor padding is not part of the cue: measure the speech, not the silence.
+            return trim_silence(b"".join(chunks), rate), rate, name
         attempts.append(f"{name}: no audio")
     raise RuntimeError("; ".join(attempts) or "no tts provider configured")
 

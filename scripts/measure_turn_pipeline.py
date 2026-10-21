@@ -199,6 +199,10 @@ async def run(args: argparse.Namespace) -> int:
         cfg.ack.text = args.ack_text
     if args.preroll_ms is not None:
         cfg.audio.voice.wake_preroll_ms = args.preroll_ms
+    if args.gate_preroll_ms is not None:
+        cfg.audio.voice.vad_preroll_ms = args.gate_preroll_ms
+    if args.wake_skip_ms is not None:
+        cfg.audio.voice.wake_skip_ms = args.wake_skip_ms
     port = free_port()
     cfg.devices[0].listen_port = port
     os.environ[TOKEN_ENV] = "pipeline-token"
@@ -339,6 +343,10 @@ def main() -> int:
                    help="frame feed rate; keep 1.0 when measuring ack timing")
     p.add_argument("--ack-mode", choices=["none", "earcon", "tts"], default="")
     p.add_argument("--ack-text", default="")
+    p.add_argument("--gate-preroll-ms", type=int, default=None,
+                   help="override audio.voice.vad_preroll_ms (the gate's own onset buffer)")
+    p.add_argument("--wake-skip-ms", type=int, default=None,
+                   help="override audio.voice.wake_skip_ms (wake phrase tail dropped)")
     p.add_argument("--preroll-ms", type=int, default=None,
                    help="override audio.voice.wake_preroll_ms (0 = no replay, the baseline)")
     p.add_argument("--tight", action="store_true",

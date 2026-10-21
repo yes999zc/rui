@@ -90,6 +90,11 @@ class VoiceConfig(BaseModel):
     kws_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
     vad_min_speech_ms: int = Field(default=200, ge=50, le=2000)
     vad_end_silence_ms: int = Field(default=600, ge=100, le=3000)
+    # Audio kept before the *detected* onset. Silero reports speech a little late, so a
+    # small value clips the first syllable: "今天天气怎么样" arrives as "天天气怎么样".
+    vad_preroll_ms: int = Field(default=200, ge=0, le=1000)
+    # The wake phrase's own tail, dropped after the KWS fires.
+    wake_skip_ms: int = Field(default=300, ge=0, le=1000)
     barge_in: bool = True
     # Wake word. Off unless a model directory is configured: the model is a download,
     # not something a pip install can guess.
