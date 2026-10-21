@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import socket
@@ -124,10 +125,43 @@ async def silence(ws, ms: int, block_ms: int, speed: float = 1.0) -> None:
         await asyncio.sleep(block_ms / 1000.0 / speed)
 
 
+async def _consume(ws, state: dict) -> None:
+    """Read the device socket for the whole round, like a real client does.
+
+    Never stop reading early: the plane writes voice frames and cue audio back over this
+    socket, and if nobody drains them `writer.drain()` blocks the plane's event loop -
+    which shows up much later as "keepalive ping timeout" and looks like a crash.
+    """
+    try:
+        while True:
+            raw = await ws.recv()
+            try:
+                message = json.loads(raw)
+            except (ValueError, TypeError):
+                message = None
+            if isinstance(message, dict) and "Request" in message:
+                command = message["Request"].get("command")
+                if command in {"stop_play", "start_play"}:
+                    state[command] = state.get(command, 0) + 1
+                continue
+            try:
+                tag, payload = protocol.decode_stream(raw)
+            except protocol.StreamError:
+                continue
+            if tag == "play" and payload:
+                state["audio_bytes"] = state.get("audio_bytes", 0) + len(payload)
+    except (asyncio.CancelledError, OSError):
+        return
+    except Exception:  # noqa: BLE001 - a closed socket ends the drain, it is not a failure
+        return
+
+
 async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, tail_ms: int,
                      wait_s: float, speed: float = 1.0, wake_counter=None,
                      turn_done=None) -> dict:
     started = time.monotonic()
+    state: dict = {}
+    reader = asyncio.create_task(_consume(ws, state), name="consume")
     baseline = wake_counter() if wake_counter else 0
     watch = (lambda: wake_counter() > baseline) if wake_counter else None
     hit_after_wake = await stream(ws, wake, rate, 60, speed=speed, watch=watch)
@@ -136,48 +170,21 @@ async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, ta
         hit_after_wake = await stream(ws, command, rate, 60, speed=speed, watch=watch)
         if hit_after_wake is not None:
             hit_after_wake += len(wake) / 2 / rate + gap_ms / 1000.0
-    await silence(ws, tail_ms, 60, speed=speed) if hit_after_wake is not None else None
-    if hit_after_wake is None:
-        # the command stream was consumed above; nothing left to send
-        pass
+    if hit_after_wake is not None:
+        await silence(ws, tail_ms, 60, speed=speed)
 
-    played = b""
+    # Wait for the turn to land, then give the reply a moment to start arriving.
     deadline = time.monotonic() + wait_s
-    idle_since: float | None = None
     while time.monotonic() < deadline:
-        # --asr-only never produces reply audio, so waiting for "played then quiet" would
-        # sit out the whole --wait-s on every round. The turn result is the same signal.
-        if not played and turn_done is not None and turn_done():
+        await asyncio.sleep(0.2)
+        if turn_done is not None and turn_done():
+            await asyncio.sleep(0.3)
             break
-        try:
-            raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
-        except TimeoutError:
-            idle_since = idle_since or time.monotonic()
-            # the reply arrives in chunks; stop only after it has gone quiet
-            if played and time.monotonic() - idle_since > 2.0:
-                break
-            if not played and turn_done is not None and turn_done():
-                break
-            continue
-        idle_since = None
-        # Two kinds of traffic on this wire: control Requests (JSON) and stream frames
-        # (tag + payload). Only the stream carries audio.
-        try:
-            message = json.loads(raw)
-        except (ValueError, TypeError):
-            message = None
-        if isinstance(message, dict) and "Request" in message:
-            command = message["Request"].get("command")
-            if command == "stop_play":
-                break
-            continue
-        tag, payload = protocol.decode_stream(raw)
-        if tag == "play" and payload:
-            played += payload
-        elif tag == "stop_play":
-            break
+    reader.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await reader
     return {
-        "audio_bytes": len(played),
+        "audio_bytes": state.get("audio_bytes", 0),
         "wall_s": round(time.monotonic() - started, 1),
         # Wall-clock elapsed scaled back to audio time: --speed changes the feed rate, and
         # an unscaled number would silently mean something else at every speed.
