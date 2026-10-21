@@ -54,8 +54,8 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 | S3 | speexdsp AEC（6 麦克风、4096 taps）+ debug 播放 + KWS | ✅ 真机 ERLE 19.8–21.2 dB（后半段 24.7–25.1）；放歌 75 s 唤醒 18/18 |
 | S4 | VAD 分段、回合编排（ASR→LLM→TTS→推流）、provider 链、trace 打点 | ✅ 20 轮 pipeline：20/20，首句出声 p50 3563 ms |
 | S5a | 唤醒应答、preroll 回放、回声窗口 | ✅ 见 `docs/ack.md` |
-| S5b | 回合质量（去重、禁复读、无工具不许报数） | ⬜ 下一步 |
-| S5c | 会话控制（停止词、超时、告别语、filler）+ 厂家让位真机验证 | ⬜ |
+| S5b | 回合质量（复读、抱怨、编造、标记、唤醒词尾巴） | ✅ 见 `docs/turn-quality.md` |
+| S5c | 会话控制（停止词、超时、告别语、filler）+ 厂家让位真机验证 | ⬜ 下一步 |
 | S5d | 控制台补齐（旧项目 10 个分区 → 六页 Vue） | ⬜ |
 | S5e | 打断 300 ms + 工具执行 | ⬜ |
 
@@ -102,10 +102,15 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 
 ## 6. 已知问题（在案）
 
-- **无工具的回合会编造事实**：连问 20 轮天气出现过「今天晴天最高20度」「我在北京 今天晴天」
-  这类自相矛盾的具体数值。工具只注册未执行。
-- **history 会让回复退化成复读**：同一句连问 20 轮，第 13 轮起连续 8 轮一字不差；另一次
-  20 轮里语气逐步变冲（「再问我要罢工了哦」）。需要去重 + 禁止模仿上轮措辞。
+- ~~无工具的回合会编造事实~~ **已收口（S5b）**：实测 4 句 × 20 轮，编造具体数值 0/20，
+  并且模型不再宣称能开关灯/放音乐（一个工具都没接时那是编造能力）。机制是提示词里那段
+  「本轮没有查证工具」的降级注释（照老项目 OFFLINE_NOTE 的做法），不是后置检测。
+  真正让天气/时间能答的是 S5e 的工具，见 `docs/turn-quality.md`。
+- ~~history 会让回复退化成复读~~ **已收口（S5b）**：同句 20 轮不相同率 40–65% → 85–95%，
+  最长一字不差连跑 12 → 1–2 轮，抱怨/威胁（「再问我就装没听见」）消失。根因不是历史长度，
+  是「模型能看到自己对同一个问题的上一轮回答」→ 复制；`TurnRunner.history_messages()`
+  把重复问题的旧副本从窗口里去掉。**顺带修了一个真 bug**：`history[-2 * 0:]` 等于整段历史，
+  `history_rounds: 0` 以前等于「无限历史」。
 - ~~唤醒前 0.5 s 音频被丢~~ **已修（S5a）**：`voice.wake_preroll_ms: 500`，实测无回放时
   20/20 丢首字（「天气怎么样？」），有回放时完整。KWS 命中延迟实测 1.09–1.22 s（从唤醒词
   开头算），不是「0.5 s」。
@@ -114,6 +119,24 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 - **回复曾以 3 倍速播放**（16 k PCM 当 48 k 播）：S4 起就存在，S5a 修在音频面重采样里。
   记在这里是因为它只靠耳朵能发现，别再用「字节数/时长统计正常」当证据。
 - 打断链路（barge-in）未实现，`trace` 里的 `barge_in/silence` 阶段目前没有数据。
+- **时间/天气/新闻/搜索一条都答不了**：它们全是工具（老项目 `server/tools/`），house-ear
+  一个都没接（S5e）。老项目还在 system prompt 里拼了「现在是X年X月X日 星期X X点X分」，
+  所以它答「现在几点」不靠工具——house-ear 要不要照抄这条，S5e 接工具时一起定。
+- **`ack.mode: tts` 的文本级回声去重没移植**（老项目 `_is_ack_echo`）：默认是 160 ms 提示音，
+  而语音应答实测整句被吞（0/20），所以现在没有可去重的回声；等 tts 应答重新启用时再移植。
+- **单连接多回合端到端跑不通（S5b 发现，且 pre-S5b 一样）**：`measure_turn_pipeline.py`
+  5 轮里只有第 1 轮真的落回合。证据（`~/.hermes/cache/scratch/house-ear-s5b/e2e-5b.log`）：
+  第 2–5 轮 KWS 都命中（lag 1.25–1.31 s）、提示音都播了（ack_plays 5）、gate 都 arm 了，
+  但 `utterances` 始终 =1；每次唤醒时音频面报 `wake while a turn was open: 900 ms discarded`，
+  整条连接 325 帧（每轮只送出 ~3.9 s）；且每轮之间隔 55 s（两处 `wait_s` 25 s 各超时一次）。
+  **A/B 结论**：`git stash` 回到 S5a 代码，同一条命令结果一模一样 —— 不是 S5b 引入的。
+  已排除：harness 轮间不读 socket（已改成整段一个 reader，结果不变）、音频面日志缺失（已修）。
+  下一步：给 harness 记每轮送帧/收帧数，重点查「回复播放期间设备侧读取是否被拖住」。
+  **S5c（超时/告别/filler）与 S5e（打断/工具）的多轮验收都依赖它，先修再往下走。**
+- **`system.log_level` 以前根本没生效**：没有一处调用 `logging.basicConfig`，音频面所有
+  `log.info`（gate 放弃、utterance 丢弃、播放结束）全部不输出，控制面的 `turn:` 也没有。
+  S5b 已加 `house_ear/log_setup.py` 并在 `serve` 与音频面进程里调用；同时把音频面的 stderr
+  从「没人读的 PIPE」改成持续读取（不读会在 64 KB 处把子进程卡死在写日志里）。
 - Mac 本机音频输出曾整机哑掉（`AudioQueueStart failed 0xe000002ec`，`voice_rms_db` 恒 -53 dBFS），
   恢复要 `sudo killall coreaudiod`。声学那组（放歌 + 20 次唤醒）因此没跑成。
 
@@ -124,11 +147,16 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 0. ~~S5a~~ **已完成**（提交 286b867…15157bd）：三档应答、preroll 回放、hold 缓冲、
    `ack.max_ms` 强制执行、doctor 的 `wake_path`/`ack_wav` 检查、`fetch-models` 拉 silero。
    数据与复现命令在 `docs/ack.md`。
-2. **S5b 回合质量**：相同问句去重、禁止复读/抱怨、无工具时禁止报具体数值。
-   验收：同句 20 轮回复不相同率、编造具体数值 0 次。
+2. ~~S5b~~ **已完成**：提示词层照抄老项目（人格/长度分档/唤醒应答别再打招呼）、`clean_reply`、
+   `strip_wake`、`history_rounds=6`、无工具降级注释、重复问题不进 history。
+   验收数字：同句 20 轮不相同率 **85–95%**（原 40–65%），最长一字不差 **1–2 轮**（原 8–12），
+   编造数值 **0/20**，抱怨/威胁 **0**。数据与复现命令在 `docs/turn-quality.md`。
+   **先决条件**：多回合端到端还没修（见 §6），S5b 用的是 `scripts/measure_reply_quality.py`。
 3. **S5c 会话控制**：停止词、超时、告别语、filler。验收：停止词生效、超时后告别、filler 只在超阈值出现。
+   **开工前先修 §6 的多回合端到端**，否则验收跑不起来。
 4. **S5d 控制台补齐**：把旧项目 10 个分区的可配置项搬进六页 Vue，带恢复默认/备份/原子写。
-5. **S5e 打断 300 ms + 工具执行**：设备侧丢缓冲 + 停推；工具注册表接进回合。
+5. **S5e 打断 300 ms + 工具执行**：设备侧丢缓冲 + 停推；工具注册表接进回合
+   （`weather`/`news`/`web_search` 直接借老项目的 schema 与 open-meteo，免 key）。
 6. **厂家让位真机验证**（跨 adapter/IPC/session，代码已就绪）：说「小爱同学，今天天气怎么
    样」，日志应只有 `xiaoai: vendor wake ...` 和厂家的回答，没有我们的 `[asr]`；随后
    「你好小瑞」必须立刻接管。
@@ -180,19 +208,22 @@ NAS（Bakey-NAS，Intel N100，`<LAN-IP>`，`yes999zc`）：pip 必须走
 凭据位置：`~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_APPID/API_KEY/API_SECRET`）。
 **只写变量名，不写值进任何文档、日志、聊天。**
 
-## 9. 交接时的现场状态（2026-10-22 凌晨 01:5x）
+## 9. 交接时的现场状态（2026-10-22 凌晨 04:0x）
 
-- **S5a 已完成并提交**（`286b867` → `eef3b19`，共 6 个提交）：唤醒应答三档、preroll 回放、
-  hold 缓冲（不是聋窗）、`ack.max_ms` 强制执行、doctor 的 `wake_path`/`ack_wav`、
-  `fetch-models` 一并拉 silero、厂家让位（离线测试覆盖，真机未验）。
-- 测试 **164 passed**，ruff clean。CI 需要重跑一次确认三 job（本地没推之前先别当绿）。
-- S5a 实测：8 档 × 20 轮 = **140 轮**，数据在
-  `~/.hermes/cache/scratch/house-ear-s5a-run/`（24 h 会被清；结论已固化进 `docs/ack.md`）：
-  preroll 0 → 完整 0/20；preroll 500 + none/earcon（gap 0/150/300/500）→ 每档 20/20；
-  tts 应答在「唤醒后立刻说话」→ 0/20（整句被压麦窗口吃掉）。
+- **S5a 已完成并提交**（`286b867` → `7032f12`）：唤醒应答三档、preroll 回放、hold 缓冲
+  （不是聋窗）、`ack.max_ms` 强制执行、doctor 的 `wake_path`/`ack_wav`、`fetch-models`
+  一并拉 silero、厂家让位（离线测试覆盖，真机未验）。
+- **S5b 已完成**（本次）：`session/prompts.py`（照抄老项目提示词 + 无工具降级注释）、
+  `session/text.py`（`clean_reply` / `strip_wake`）、`assistant.*` 配置分区、
+  `session.history_rounds=6`、`TurnRunner.history_messages()`（重复问题不进 history）、
+  每轮重建系统提示词、DSML 句子不进 TTS。数据在 `docs/turn-quality.md`。
+- 顺带修的两个真 bug：`history[-2 * 0:]` 等于整段历史（`history_rounds: 0` 变成无限历史）；
+  `system.log_level` 从没生效（无 `basicConfig`）+ 音频面 stderr 是没人读的 PIPE。
+- 测试 **174 passed**，ruff clean，web typecheck 通过。CI 待推后核对三个 job。
+- 实测数据都在 `~/.hermes/cache/scratch/house-ear-s5b/`（24 h 会清，结论已进 docs）：
+  `baseline-*.jsonl` 4 句 × 20 轮、`final-*.jsonl` 同 4 句 × 20 轮、`e2e-5b.log` 端到端。
 - 音箱：**全程没有切**，仍是旧入口 `ws://<LAN-IP>:4399`，今晚所有测试都用假音箱。
-- 未提交的东西：无（工作树干净）。今晚删掉了我自己写的 `session/quality.py`（未接线的
-  自造去重 guard，方向错了，见文件头那条规矩）。
-- 下一步第一个动作：**S5b**，按文件头规矩先读老项目（`prompts.py` / `clean_reply` /
-  `history_rounds` / `strip_wake` / 相关 `test_*.py`），先跑现状基线，再动手。
+- 未提交的东西：无。
+- 下一步第一个动作：**修 §6 的「单连接多回合端到端跑不通」**（证据已固定，pre-S5b 一样），
+  然后才进 S5c；要 9哥 出声的两条（厂家让位、打断 300 ms）留到他白天配合时做。
 - 真机还欠两条：厂家让位验证、打断 300 ms —— 都要 9哥 白天配合出声，按 §8 切换并还原。
