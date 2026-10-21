@@ -41,6 +41,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 SENSEVOICE_REPO = "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
 SENSEVOICE_FILES = ("model.int8.onnx", "tokens.txt")
+# Silero VAD, 2 MB. Without it the turn gate never exists, so the pre-wake replay, the
+# acknowledgement hold and `gate_*` metrics are all inert while everything still looks up -
+# the same "works on the dev Mac, silently dead on the NAS" shape as a missing model.
+VAD_REPO = "csukuangfj/sherpa-onnx-vad"
+VAD_FILE = "silero_vad.onnx"
 
 
 def cmd_fetch_models(args: argparse.Namespace) -> int:
@@ -84,6 +89,21 @@ def cmd_fetch_models(args: argparse.Namespace) -> int:
             return 1
         part.replace(target)
         print(f"  {name}: {done / 1e6:.1f} MB")
+    vad_target = Path(args.vad_dest)
+    if vad_target.exists() and not args.force:
+        print(f"have {VAD_FILE} ({vad_target.stat().st_size / 1e6:.1f} MB)")
+    else:
+        vad_target.parent.mkdir(parents=True, exist_ok=True)
+        url = f"{args.vad_base or 'https://hf-mirror.com/' + VAD_REPO + '/resolve/main'}/{VAD_FILE}"
+        print(f"fetching {url}")
+        with httpx.stream("GET", url, follow_redirects=True, timeout=None) as resp:
+            resp.raise_for_status()
+            part = vad_target.with_suffix(vad_target.suffix + ".part")
+            with part.open("wb") as fh:
+                for block in resp.iter_bytes(1 << 20):
+                    fh.write(block)
+            part.replace(vad_target)
+        print(f"  {VAD_FILE}: {vad_target.stat().st_size / 1e6:.1f} MB")
     onnx, tokens = model_paths(dest)  # recompute: the int8 file did not exist before
     if not onnx.exists() or not tokens.exists():
         print(f"model incomplete in {dest}")
@@ -223,8 +243,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_audio.add_argument("--socket")
     p_audio.set_defaults(func=cmd_audio)
 
-    p_fetch = _leaf("fetch-models", "download the local ASR model to a data volume")
+    p_fetch = _leaf("fetch-models", "download the local ASR and VAD models to a data volume")
     p_fetch.add_argument("--dest", default="/data/models/sensevoice")
+    p_fetch.add_argument("--vad-dest", default="/data/models/silero_vad.onnx")
+    p_fetch.add_argument("--vad-base", default="", help="override the VAD download base URL")
     p_fetch.add_argument("--base", default="", help="override the download base URL")
     p_fetch.add_argument("--force", action="store_true")
     p_fetch.set_defaults(func=cmd_fetch_models)

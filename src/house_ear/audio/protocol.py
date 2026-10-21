@@ -119,10 +119,14 @@ class Metrics(BaseModel):
     # nothing said). Without these two the console can only show "0".
     gate_armed: bool = False
     gate_discarded: int = 0
+    gate_interrupted: int = 0
     playback_s: float = 0.0
     # Wake acknowledgement (S5a). `ack_mode` is what actually played, not what was asked.
     ack_mode: str = ""
+    ack_attempts: int = 0
     ack_plays: int = 0
+    ack_skipped: int = 0
+    ack_failed: int = 0
     ack_error: str = ""
     preroll_replayed_ms: float = 0.0
     preroll_replays: int = 0

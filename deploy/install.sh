@@ -52,8 +52,11 @@ echo "[4/5] local ASR model"
 if [ -f "$DIR/data/models/sensevoice/model.int8.onnx" ]; then
   echo "      model already present"
 else
+  # Both models: without the VAD the turn gate never starts, and every S5a feature
+  # (wake cue, pre-wake replay, gate metrics) is silently inert on a fresh install.
   docker run --rm -v "$DIR/data:/data" "$IMAGE" fetch-models --dest /data/models/sensevoice \
-    || echo "      WARNING: model download failed; ASR will use the cloud provider"
+      --vad-dest /data/models/silero_vad.onnx \
+    || echo "      WARNING: model download failed; ASR uses the cloud provider, the wake path stays off"
 fi
 
 echo "[5/5] starting"

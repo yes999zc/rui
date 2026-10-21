@@ -35,6 +35,9 @@ class GateConfig:
     max_utterance_ms: int = 10000     # hard cap, whatever the VAD thinks
     max_wait_ms: int = 5000           # wake with nothing said: give up
     threshold: float = 0.5
+    # How much of the acknowledgement window is kept for the moment it lifts: enough for
+    # the start of a request spoken over the cue, not the cue itself.
+    hold_keep_ms: int = 600
 
 
 class UtteranceGate:
@@ -63,11 +66,16 @@ class UtteranceGate:
         self.armed = False
         self.turns = 0
         self.discarded = 0
+        # A second wake while a turn was still open: its buffer is thrown away by arm(),
+        # so it is counted here instead of vanishing without a trace.
+        self.interrupted = 0
         self._reset_state()
 
     def _reset_state(self) -> None:
         self._skipping = 0
         self._hold_ms = 0.0
+        self._hold_buf: deque[np.ndarray] = deque()
+        self._hold_samples = 0
         self._preroll: deque[np.ndarray] = deque()
         self._preroll_samples = 0
         self._buf: list[np.ndarray] = []
@@ -75,6 +83,11 @@ class UtteranceGate:
         self._silence_ms = 0.0
         self._waited_ms = 0.0
         self._started = False
+
+    @property
+    def speech_ms(self) -> float:
+        """Speech gathered for the open turn: what a second wake is about to throw away."""
+        return self._speech_ms
 
     # ------------------------------------------------------------------ state
     def arm(self, *, start_after_ms: float = 0.0) -> None:
@@ -97,10 +110,15 @@ class UtteranceGate:
         self._reset_state()
 
     def hold(self, ms: float) -> None:
-        """Keep the gate shut for `ms` of audio: the speaker is still sounding.
+        """The speaker is still sounding: listen, but do not open a turn yet.
 
         Separate from `arm()` because the pre-wake replay belongs before the hold: those
         blocks are the person's own words, captured while the microphone was still open.
+
+        Blocks that arrive *during* the hold are buffered, not dropped. A deaf window is
+        how the start of the request gets eaten: the old build hit exactly that and fixed
+        it with an echo-tail buffer, so the cue's echo cannot open a turn while the words
+        spoken over it still reach the transcriber once the hold lifts.
         """
         self._hold_ms = max(0.0, ms)
 
@@ -109,7 +127,34 @@ class UtteranceGate:
         """int16 mono block in; the finished utterance (int16) out when it closes."""
         if not self.armed or not pcm:
             return None
-        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        block = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        if self._hold_ms > 0:
+            self._hold_buf.append(block)
+            self._hold_samples += block.size
+            # Only the last `hold_keep_ms` of the hold is kept. The cue's own echo sits at
+            # the *start* of the hold and a person answers at its end, so keeping the newest
+            # audio recovers the request without feeding our own tone to the VAD.
+            limit = int(self.rate * self.cfg.hold_keep_ms / 1000)
+            while self._hold_samples > limit and len(self._hold_buf) > 1:
+                self._hold_samples -= self._hold_buf.popleft().size
+            self._hold_ms -= block.size * 1000.0 / self.rate
+            if self._hold_ms > 0:
+                return None
+            # Hold lifted: hand every buffered block through the normal path, oldest first,
+            # and stop as soon as one of them closes a turn.
+            pending = list(self._hold_buf)
+            self._hold_buf.clear()
+            self._hold_samples = 0
+            out = None
+            for buffered in pending:
+                out = self._consume(buffered, ts_ms)
+                if out is not None:
+                    return out
+            return None
+        return self._consume(block, ts_ms)
+
+    def _consume(self, samples: np.ndarray, ts_ms: float) -> tuple[bytes, float] | None:
+        """One block through the VAD, the wake-tail skip and the segment state machine."""
         # The VAD always sees the whole stream, including the wake phrase tail: resetting
         # it at the wake and starting mid-word is how the first syllable gets missed.
         self._vad.accept_waveform(samples)
@@ -122,13 +167,6 @@ class UtteranceGate:
                 return None
 
         block_ms = samples.size * 1000.0 / self.rate
-
-        # The acknowledgement is still playing: the device mic is muted, so whatever the
-        # VAD hears is the box's own cue plus its tail. Spending the hold in audio time
-        # keeps `start_after_ms` meaningful when the frames arrive faster than real time.
-        if self._hold_ms > 0:
-            self._hold_ms -= block_ms
-            return None
 
         if not self._started:
             self._preroll.append(samples)

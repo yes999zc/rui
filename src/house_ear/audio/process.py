@@ -35,7 +35,7 @@ from ..config import Config, load_config
 from ..device import build_adapters
 from ..device.contract import AudioFrame, DeviceAdapter
 from ..trace import now_ms
-from .ack import render as render_ack
+from .ack import render_cached as render_ack
 from .aec import AecChain, AecUnavailable
 from .decimate import Decimator
 from .kws import KwsUnavailable, WakeHit, WakeWord
@@ -63,6 +63,9 @@ from .wav import read_wav_mono
 
 METRICS_EVERY_S = 2.0
 PLAY_CHUNK_MS = 100
+# The device buffer keeps sounding after the last frame is sent (~300 ms at 48 kHz), so a
+# tone needs a tail floor before the gate may open. The old build used 250 ms.
+ACK_TAIL_MS = 250
 log = logging.getLogger(__name__)
 
 
@@ -116,8 +119,12 @@ class AudioPlane:
         # Wake acknowledgement (S5a). Fire-and-forget: awaiting it here would block the
         # frame consumer for the cue's whole length and drop microphone audio.
         self._ack_task: asyncio.Task | None = None
-        self._ack_cache: tuple[tuple[int, str], np.ndarray] | None = None
+        # Four counters because one number cannot describe four outcomes: a cue that was
+        # asked for, one that started, one that finished and one that was superseded.
+        self.ack_attempts = 0
         self.ack_plays = 0
+        self.ack_skipped = 0
+        self.ack_failed = 0
         self.ack_mode_effective = cfg.ack.mode
         self.ack_error = ""
 
@@ -235,12 +242,15 @@ class AudioPlane:
                 self.arrivals.add(frame.ts_ms - last_ts)
             last_ts = frame.ts_ms
             pcm = self._frame_to_voice(frame, decimator)
-            if pcm:
-                self._keep_preroll(pcm)
             if self.wake is not None and pcm:
                 for hit in self.wake.accept(pcm, ts_ms=frame.ts_ms):
                     self.wake_count += 1
                     await self._on_wake(hit, writer, connected)
+            if pcm:
+                # After the wake check: the frame that fired the wake is replayed from the
+                # ring, and feeding it again here would duplicate 20 ms inside the first
+                # word - exactly where the replay exists to protect the onset.
+                self._keep_preroll(pcm, frame.ts_ms)
             if self.gate is not None and pcm:
                 await self._feed_gate(pcm, frame.ts_ms, writer, connected)
             if not connected.is_set():
@@ -250,15 +260,19 @@ class AudioPlane:
             self.cpu_s += time.perf_counter() - t0
 
     # ---------------------------------------------------- wake, preroll, ack
-    def _keep_preroll(self, pcm: bytes) -> None:
-        """Hold the last `wake_preroll_ms` of voice-rate audio for the next wake."""
+    def _keep_preroll(self, pcm: bytes, ts_ms: float) -> None:
+        """Hold the last `wake_preroll_ms` of voice-rate audio for the next wake.
+
+        The frame timestamp travels with the block: a replay that stamps every block with
+        the wake time erases the timeline the trace needs.
+        """
         limit = int(self.cfg.audio.voice.rate * self.cfg.audio.voice.wake_preroll_ms / 1000)
         if limit <= 0:
             return
-        self._preroll.append(pcm)
+        self._preroll.append((ts_ms, pcm))
         self._preroll_samples += len(pcm) // 2
         while self._preroll_samples > limit and len(self._preroll) > 1:
-            self._preroll_samples -= len(self._preroll.popleft()) // 2
+            self._preroll_samples -= len(self._preroll.popleft()[1]) // 2
 
     async def _on_wake(
         self, hit: WakeHit, writer: asyncio.StreamWriter, connected: asyncio.Event
@@ -271,11 +285,15 @@ class AudioPlane:
         """
         audio, mode, note = render_ack(self.cfg)
         self.ack_mode_effective = mode
-        if note:
-            self.ack_error = note
+        # Cleared on success: an error that sticks forever makes the console report a
+        # problem that was fixed an hour ago.
+        self.ack_error = note
         cue_ms = audio.size * 1000.0 / self.cfg.audio.playback.rate if audio.size else 0.0
-        # A spoken cue mutes the device microphone; a tone only needs its own length.
-        hold_ms = cue_ms + float(self.cfg.ack.echo_ignore_ms) if mode == "tts" else cue_ms
+        # A spoken cue mutes the device microphone; a tone rings out through the device's
+        # own 300 ms buffer. Both need more than their nominal length, so the hold carries
+        # a floor - the old build used 250 ms for exactly this - and anything arriving
+        # meanwhile is buffered, not dropped.
+        hold_ms = cue_ms + (float(self.cfg.ack.echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS)
 
         event = Wake(
             ts_ms=hit.ts_ms,
@@ -290,10 +308,15 @@ class AudioPlane:
         self.last_wake = event
 
         if self.gate is not None:
+            if self.gate.armed:
+                # A second wake while a turn was open: arm() resets the buffer, so count it
+                # instead of letting a whole utterance disappear silently.
+                self.gate.interrupted += 1
+                log.info("wake while a turn was open: %.0f ms discarded", self.gate.speech_ms)
             self.gate.arm()
             replayed = 0
-            for block in list(self._preroll):
-                await self._feed_gate(block, hit.ts_ms, writer, connected)
+            for ts, block in list(self._preroll):
+                await self._feed_gate(block, ts, writer, connected)
                 replayed += len(block) // 2
             self._preroll.clear()
             self._preroll_samples = 0
@@ -303,6 +326,7 @@ class AudioPlane:
             self.gate.hold(hold_ms)
 
         if audio.size:
+            self.ack_attempts += 1
             self._start_ack(audio)
 
         if connected.is_set():
@@ -332,7 +356,10 @@ class AudioPlane:
     def _start_ack(self, audio: np.ndarray) -> None:
         """Fire and forget. Awaiting the cue here would block the frame consumer."""
         if self._ack_task is not None and not self._ack_task.done():
-            return
+            # The previous cue belongs to a wake we have already moved past; playing it out
+            # would make the hold describe a cue nobody hears.
+            self._ack_task.cancel()
+            self.ack_skipped += 1
         self._ack_task = asyncio.create_task(self._play_ack(audio), name="ack")
 
     async def _play_ack(self, audio: np.ndarray) -> None:
@@ -341,6 +368,7 @@ class AudioPlane:
             return
         rate = self.cfg.audio.playback.rate
         step = max(1, rate * PLAY_CHUNK_MS // 1000)
+        due = time.monotonic()
         try:
             for start in range(0, audio.size, step):
                 chunk = audio[start : start + step]
@@ -352,12 +380,15 @@ class AudioPlane:
                     channels=1,
                 )
                 self.playback_s += chunk.size / rate
-                if start + step < audio.size:
-                    await asyncio.sleep(chunk.size / rate)
+                # Absolute deadline, so the time spent sending is absorbed instead of
+                # added to every chunk.
+                due += chunk.size / rate
+                await asyncio.sleep(max(0.0, due - time.monotonic()))
             self.ack_plays += 1
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - a broken cue must not kill the plane
+            self.ack_failed += 1
             self.ack_error = f"{type(exc).__name__}: {exc}"
             log.info("ack: %s", self.ack_error)
 
@@ -442,6 +473,7 @@ class AudioPlane:
         """
         target = self.cfg.audio.playback.rate
         source = self.cfg.audio.voice.rate
+        due = 0.0
         while not self._stop.is_set():
             chunk = await self._speak_queue.get()
             if chunk is None:
@@ -460,7 +492,11 @@ class AudioPlane:
                 continue
             seconds = audio.size / target
             self.playback_s += seconds
-            await asyncio.sleep(seconds)
+            # Pace against a deadline: sending costs 1-3 ms per chunk, and adding that to
+            # every chunk drifts a 20 s answer half a second past what the device plays.
+            now = time.monotonic()
+            due = max(due, now) + seconds
+            await asyncio.sleep(max(0.0, due - time.monotonic()))
         # drain on shutdown
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
@@ -473,6 +509,11 @@ class AudioPlane:
                 break
 
     async def _stop_playback(self) -> None:
+        # A cue is playback too: StopAudio and shutdown must not leave it sounding.
+        if self._ack_task is not None and not self._ack_task.done():
+            self._ack_task.cancel()
+            await asyncio.gather(self._ack_task, return_exceptions=True)
+        self._ack_task = None
         if self._playback_task is not None and not self._playback_task.done():
             self._playback_task.cancel()
             try:
@@ -500,12 +541,16 @@ class AudioPlane:
             utterances=self.utterances,
             gate_armed=bool(self.gate.armed) if self.gate is not None else False,
             gate_discarded=self.gate.discarded if self.gate is not None else 0,
+            gate_interrupted=self.gate.interrupted if self.gate is not None else 0,
             speaker_connected=bool(getattr(self.adapter, "health", lambda: {})().get("connected"))
             if self.adapter is not None
             else False,
             playback_s=round(self.playback_s, 1),
             ack_mode=self.ack_mode_effective,
+            ack_attempts=self.ack_attempts,
             ack_plays=self.ack_plays,
+            ack_skipped=self.ack_skipped,
+            ack_failed=self.ack_failed,
             ack_error=self.ack_error,
             preroll_replayed_ms=self.preroll_replayed_ms,
             preroll_replays=self.preroll_replays,
@@ -579,7 +624,15 @@ class AudioPlane:
                     break
                 if msg.type == "hello":
                     assert isinstance(msg, Hello)
-                    self.cfg.audio.voice.rate = msg.voice_rate
+                    # The decimator, the AEC and the gate froze their rate when the adapter
+                    # opened; retuning the live config here used to make the preroll window,
+                    # the replay length and the gate disagree about what a second is.
+                    if msg.voice_rate != self.cfg.audio.voice.rate:
+                        log.warning(
+                            "control plane asked for %s Hz, the plane runs %s Hz: ignored",
+                            msg.voice_rate,
+                            self.cfg.audio.voice.rate,
+                        )
                 elif isinstance(msg, QueryMetrics):
                     writer.write(encode_json(self.metrics()))
                     await writer.drain()

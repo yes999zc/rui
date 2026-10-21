@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -50,6 +51,15 @@ def create_app(
     for dev_id, err in adapters.errors.items():
         log.warning("device %s is configured but not drivable: %s", dev_id, err)
 
+    async def _render_cue() -> None:
+        try:
+            app.state.ack_note = await asyncio.wait_for(ensure_ack_wav(cfg), timeout=15)
+        except TimeoutError:
+            app.state.ack_note = "tts timed out: the plane plays whatever ack.wav holds"
+        except Exception as exc:  # noqa: BLE001 - a cue is never worth an outage
+            app.state.ack_note = f"{type(exc).__name__}: {exc}; the plane will use a tone"
+        log.info("ack: %s", app.state.ack_note)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         runner = TurnRunner(
@@ -62,16 +72,7 @@ def create_app(
                 warm = getattr(provider, "warm", None)
                 if warm is not None:
                     await warm()
-        # Before the plane starts: with mode=tts the plane plays a file that must exist.
-        # The cap is enforced here, so a too-long cue is downgraded to a tone at startup
-        # instead of muting the microphone on every wake.
         app.state.ack_note = ""
-        if cfg.ack.mode == "tts":
-            try:
-                app.state.ack_note = await asyncio.wait_for(ensure_ack_wav(cfg), timeout=20)
-            except TimeoutError:
-                app.state.ack_note = "tts timed out: the plane will use a tone"
-            log.info("ack: %s", app.state.ack_note)
         if start_audio:
             supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
             try:
@@ -104,7 +105,18 @@ def create_app(
                     log.info("turn: %s", result.to_dict())
 
                 client.on_utterance = on_utterance
+        # The cue is rendered *after* the plane is up and in the background: it is a nicety,
+        # and a vendor that hangs must not delay /health or the speaker's reconnect. The
+        # plane re-reads ack.wav on every wake, so a file that lands a second later is
+        # picked up without a restart.
+        if cfg.ack.mode == "tts":
+            app.state.ack_task = asyncio.create_task(_render_cue(), name="ack-cue")
         yield
+        cue_task = getattr(app.state, "ack_task", None)
+        if cue_task is not None and not cue_task.done():
+            cue_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await cue_task
         supervisor = getattr(app.state, "audio", None)
         if supervisor is not None:
             await supervisor.stop()
@@ -135,6 +147,7 @@ def create_app(
                 "mode": cfg.ack.mode,
                 "note": getattr(app.state, "ack_note", ""),
                 "wav": str(ack_wav_path(cfg)) if cfg.ack.mode == "tts" else "",
+                "wav_exists": ack_wav_path(cfg).is_file() if cfg.ack.mode == "tts" else False,
             },
         }
 

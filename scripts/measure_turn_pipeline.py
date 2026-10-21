@@ -172,7 +172,9 @@ async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, ta
     return {
         "audio_bytes": len(played),
         "wall_s": round(time.monotonic() - started, 1),
-        "wake_lag_ms": None if hit_after_wake is None else round(hit_after_wake * 1000),
+        # Wall-clock elapsed scaled back to audio time: --speed changes the feed rate, and
+        # an unscaled number would silently mean something else at every speed.
+        "wake_lag_ms": None if hit_after_wake is None else round(hit_after_wake * 1000 * speed),
     }
 
 
@@ -203,6 +205,11 @@ async def run(args: argparse.Namespace) -> int:
         cfg.audio.voice.vad_preroll_ms = args.gate_preroll_ms
     if args.wake_skip_ms is not None:
         cfg.audio.voice.wake_skip_ms = args.wake_skip_ms
+    if args.tail_ms is None:
+        # Silero reports silence later than it happens, so the gate needs roughly twice
+        # `vad_end_silence_ms` before it closes a turn. A fixed 1800 only suits the default
+        # config and recreated the "every round scores zero with no error" bug once already.
+        args.tail_ms = 2 * cfg.audio.voice.vad_end_silence_ms + 600
     port = free_port()
     cfg.devices[0].listen_port = port
     os.environ[TOKEN_ENV] = "pipeline-token"
@@ -296,14 +303,17 @@ async def run(args: argparse.Namespace) -> int:
                         "first_response_ms": trace.get("first_response_ms"),
                         "stages_ms": trace.get("stages_ms", {}),
                     }
+                    if round_info["wake_lag_ms"] is None:
+                        row["error"] = row.get("error") or "wake word never fired"
                     rows.append(row)
                     fh.write(json.dumps(row, ensure_ascii=False) + "\n")
                     fh.flush()
+                    play_rate = cfg.audio.playback.rate
                     print(f"{i:2d} {row['first_response_ms']} ms "
                           f"asr={row['stages_ms'].get('asr_done')} "
                           f"llm={row['stages_ms'].get('llm_first')} "
                           f"tts={row['stages_ms'].get('tts_first')} "
-                          f"audio={row['audio_bytes'] / 32000:.1f}s "
+                          f"audio={row['audio_bytes'] / 2 / play_rate:.1f}s "
                           f"| {row['transcript']} -> {row['reply'][:20]}", flush=True)
                     await asyncio.sleep(args.between)
     finally:
@@ -325,6 +335,9 @@ async def run(args: argparse.Namespace) -> int:
                   f"discarded={r['gate_discarded']} "
                   f"preroll={r['preroll_replayed_ms']}ms ack={r['ack_mode']} "
                   f"/{r['ack_plays']} | {r['transcript']}")
+    dead = [r["round"] for r in rows if r.get("error") == "wake word never fired"]
+    if dead:
+        print(f"rounds where the wake word never fired: {dead}")
     empty = [r["round"] for r in rows if not r["reply"]]
     if empty:
         print(f"rounds with no reply: {empty}")
@@ -356,7 +369,8 @@ def main() -> int:
     # The gate closes on `vad_end_silence_ms` (600) *of VAD-detected* silence, and Silero
     # needs its own min_silence_duration before it reports silence at all: 900 ms of
     # trailing quiet left the turn open, so every round scored 0 with no error anywhere.
-    p.add_argument("--tail-ms", type=int, default=1800)
+    p.add_argument("--tail-ms", type=int, default=None,
+                   help="trailing silence per round; default 2*vad_end_silence_ms + 600")
     p.add_argument("--wait-s", type=float, default=25.0)
     p.add_argument("--between", type=float, default=1.0)
     p.add_argument("--out", default="/tmp/house-ear-pipeline.jsonl")

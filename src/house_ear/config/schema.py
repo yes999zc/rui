@@ -91,8 +91,9 @@ class VoiceConfig(BaseModel):
     vad_min_speech_ms: int = Field(default=200, ge=50, le=2000)
     vad_end_silence_ms: int = Field(default=600, ge=100, le=3000)
     # Audio kept before the *detected* onset. Silero reports speech a little late, so a
-    # small value clips the first syllable: "今天天气怎么样" arrives as "天天气怎么样".
-    vad_preroll_ms: int = Field(default=200, ge=0, le=1000)
+    # small value clips the first syllable: measured 20 rounds, "今天天气怎么样" arrived as
+    # "天天气怎么样" in 20/20 at 200 ms, and 0/20 at 350 ms and 500 ms.
+    vad_preroll_ms: int = Field(default=350, ge=0, le=1000)
     # The wake phrase's own tail, dropped after the KWS fires.
     wake_skip_ms: int = Field(default=300, ge=0, le=1000)
     barge_in: bool = True
@@ -146,11 +147,25 @@ class AckConfig(BaseModel):
     mode: Literal["none", "earcon", "tts"] = "earcon"
     text: str = "我在。"
     chime: str = "soft2"
-    chime_ms: int = Field(default=160, ge=60, le=1000)
-    chime_trim: float = Field(default=1.0, ge=0.0, le=1.0)
+    # 0 = the preset's natural length (soft2 500 ms, woodblock 120, windchime 700).
+    chime_ms: int = Field(default=160, ge=0, le=1200)
+    # The floor is 0.5, as in the old console: 0 would be a silent cue that still reports
+    # "earcon", which reads as a dead speaker rather than a typo.
+    chime_trim: float = Field(default=1.0, ge=0.5, le=1.0)
     max_ms: int = Field(default=600, ge=100, le=3000)
     # The box hears its own spoken cue. Ignore that tail before a turn may start.
     echo_ignore_ms: int = Field(default=1200, ge=0, le=3000)
+
+    @field_validator("chime")
+    @classmethod
+    def _known_chime(cls, v: str) -> str:
+        # A name from the old console that this build does not have must fail loudly here,
+        # not fall back to soft2 at runtime while the config still says windchime.
+        from ..audio.chime import PRESETS
+
+        if v not in PRESETS:
+            raise ValueError(f"unknown chime preset {v!r}; available: {', '.join(PRESETS)}")
+        return v
 
 
 class AudioConfig(BaseModel):

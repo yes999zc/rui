@@ -12,10 +12,12 @@ import platform
 import shutil
 import socket
 import time
+import wave
 from dataclasses import dataclass, field
 
 import psutil
 
+from ..audio.ack import ack_wav_path
 from ..config.schema import AecConfig, Config
 
 SUPPORTED_ARCH = {"x86_64", "AMD64", "arm64", "aarch64"}
@@ -175,6 +177,35 @@ def run_doctor(cfg: Config | None = None) -> Report:
         status = "fail"
     checks.append(Check("aec_rtf", status, f"{aec_rtf:.3f}",
                         "" if status == "ok" else "reduce aec.filter_len or run single-mic mode"))
+
+    # --- the wake path: a missing model or an unwritable data volume makes S5a inert
+    # while every number elsewhere still looks healthy.
+    gate_on = bool(audio.voice.vad_model_path)
+    if not gate_on and (cfg.ack.mode != "none" or audio.voice.wake_preroll_ms > 0):
+        checks.append(Check(
+            "wake_path", "warn", "no vad_model_path",
+            "the turn gate never starts, so the wake cue, the pre-wake replay and the "
+            "gate metrics are inert; run `house-ear fetch-models`",
+        ))
+    else:
+        checks.append(Check("wake_path", "ok", f"preroll {audio.voice.wake_preroll_ms} ms",
+                            f"ack mode {cfg.ack.mode}"))
+    if cfg.ack.mode == "tts":
+        path = ack_wav_path(cfg)
+        if not path.is_file():
+            checks.append(Check("ack_wav", "warn", str(path),
+                                "not rendered yet: the plane plays a tone until it exists"))
+        else:
+            try:
+                with wave.open(str(path)) as w:
+                    ms = w.getnframes() * 1000.0 / w.getframerate()
+            except (OSError, wave.Error) as exc:
+                checks.append(Check("ack_wav", "warn", str(path), f"unreadable: {exc}"))
+            else:
+                status = "ok" if ms <= cfg.ack.max_ms else "warn"
+                checks.append(Check("ack_wav", status, f"{ms:.0f} ms", 
+                                    "" if status == "ok" else
+                                    f"over the {cfg.ack.max_ms} ms cap: the plane plays a tone"))
 
     for dev in cfg.devices:
         if not dev.enabled:

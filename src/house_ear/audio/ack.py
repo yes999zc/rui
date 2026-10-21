@@ -47,6 +47,33 @@ def tone(cfg: Config) -> np.ndarray:
                             trim=cfg.ack.chime_trim)
 
 
+_CACHE: dict[tuple, tuple[np.ndarray, str, str]] = {}
+
+
+def render_cached(cfg: Config) -> tuple[np.ndarray, str, str]:
+    """`render()` plus a cache keyed on everything that changes the answer.
+
+    The render happens inside the frame consumer, at the one instant the pipeline must not
+    stall; on a NAS whose data_dir is a network mount that read is real I/O. The file's
+    mtime and size are part of the key, so the control plane can rewrite ack.wav at any
+    time and the plane picks it up on the next wake.
+    """
+    stamp: tuple = (cfg.ack.mode, cfg.ack.chime, cfg.ack.chime_ms, cfg.ack.chime_trim)
+    if cfg.ack.mode == "tts":
+        try:
+            stat = ack_wav_path(cfg).stat()
+        except OSError:
+            stamp += (0, 0)
+        else:
+            stamp += (stat.st_mtime_ns, stat.st_size)
+    hit = _CACHE.get(stamp)
+    if hit is None:
+        hit = render(cfg)
+        _CACHE.clear()
+        _CACHE[stamp] = hit
+    return hit
+
+
 def render(cfg: Config) -> tuple[np.ndarray, str, str]:
     """(audio at the playback rate, the mode actually used, why it was downgraded).
 

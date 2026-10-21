@@ -10,6 +10,7 @@ therefore a property of the build instead of a sentence in a document.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 
 from ..audio.ack import ack_wav_path
@@ -49,17 +50,25 @@ async def ensure_ack_wav(cfg: Config) -> str:
     try:
         pcm, rate, provider = await synthesize(cfg, cfg.ack.text)
     except RuntimeError as exc:
-        path.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
         log.warning("ack: %s", exc)
         return f"tts failed, plane will use a tone: {exc}"
     duration_ms = len(pcm) / 2.0 * 1000.0 / rate
     if duration_ms > cfg.ack.max_ms:
         # Refusing is the point of the cap: a long cue mutes the microphone and eats the
         # request it was supposed to introduce.
-        path.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
         return (
             f"{cfg.ack.text!r} renders to {duration_ms:.0f} ms, over the {cfg.ack.max_ms} ms"
             " cap: plane will use a tone"
         )
-    write_wav_mono(path, pcm, rate)
+    try:
+        write_wav_mono(path, pcm, rate)
+    except OSError as exc:
+        # A read-only data volume, a full disk, a path that is a file: the cue is optional
+        # and the assistant is not, so this is a downgrade with a reason - never an
+        # exception that takes the control plane down with it at startup.
+        return f"cannot write {path}: {exc}; the plane will use a tone"
     return f"ack.wav written from {provider}: {duration_ms:.0f} ms at {rate} Hz -> {path}"

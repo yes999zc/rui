@@ -124,22 +124,29 @@ def _speech(seconds: float = 1.0) -> bytes:
 
 
 @needs_vad
-def test_hold_drops_the_cue_window_and_then_listens() -> None:
+def test_a_request_spoken_during_the_cue_is_buffered_not_dropped() -> None:
+    """The hold must not be a deaf window.
+
+    The old build tried a mute window first and had to replace it with an echo-tail buffer:
+    a person answers the moment the cue ends, which is inside the window. What the hold is
+    allowed to do is delay the *turn*, not throw the words away.
+    """
     from house_ear.audio.vad import GateConfig, UtteranceGate
 
     gate = UtteranceGate(GateConfig(), MODEL)
     gate.arm()
-    gate.hold(600)  # the cue is playing; the device mic is muted
-    for block in _blocks(_speech(0.5)):
-        assert gate.feed(block) is None  # nothing from inside the hold becomes a turn
-    # live audio, after the hold: silence, a request, silent tail
+    gate.hold(1200)  # the cue is still sounding
+    for block in _blocks(b"\x00\x00" * 8000):  # 0.5 s: the cue and its tail
+        assert gate.feed(block) is None  # nothing may open a turn while it sounds
+    for block in _blocks(_speech(0.9)):  # the request starts inside the window
+        gate.feed(block)
     out = None
-    for block in _blocks(b"\x00\x00" * 8000 + _speech(1.0) + b"\x00\x00" * 48000):
+    for block in _blocks(b"\x00\x00" * 48000):
         result = gate.feed(block)
         if result:
             out = result
-    assert out is not None
-    assert 0.5 < len(out[0]) / 2 / 16000 < 2.2
+    assert out is not None, "the request spoken during the cue was thrown away"
+    assert len(out[0]) / 2 / 16000 > 0.3
 
 
 @needs_vad
@@ -167,19 +174,29 @@ def test_preroll_replayed_into_the_gate_survives_the_hold() -> None:
 
 # ----------------------------------------------------------------- the plane side
 class FakeGate:
+    """Records the *order* of arm / feed / hold: replay-before-hold is the invariant."""
+
     def __init__(self) -> None:
         self.armed = 0
+        self.armed_state = False  # what gate.armed would be between arm() and a turn
         self.holds: list[float] = []
         self.fed = 0
+        self.interrupted = 0
+        self.speech_ms = 0.0
+        self.events: list[str] = []
 
     def arm(self, **_kwargs) -> None:
         self.armed += 1
+        self.armed_state = True
+        self.events.append("arm")
 
     def hold(self, ms: float) -> None:
         self.holds.append(ms)
+        self.events.append("hold")
 
     def feed(self, pcm: bytes, ts_ms: float = 0.0):  # noqa: ARG002
         self.fed += len(pcm)
+        self.events.append("feed")
         return None
 
 
@@ -220,8 +237,8 @@ def test_wake_replays_the_preroll_then_holds() -> None:
         plane.gate = gate  # type: ignore[assignment]
         adapter = FakeAdapter()
         plane.adapter = adapter  # type: ignore[assignment]
-        for _ in range(5):  # 5 x 20 ms of pre-wake audio
-            plane._keep_preroll(b"\x01\x00" * 320)
+        for i in range(5):  # 5 x 20 ms of pre-wake audio
+            plane._keep_preroll(b"\x01\x00" * 320, ts_ms=900.0 + i * 20)
         writer, connected = FakeWriter(), asyncio.Event()
         connected.set()
 
@@ -229,9 +246,14 @@ def test_wake_replays_the_preroll_then_holds() -> None:
 
         assert gate.armed == 1
         assert gate.fed == 5 * 640  # every pre-wake block reached the gate
+        assert gate.events == ["arm"] + ["feed"] * 5 + ["hold"], (
+            "replay must happen before the hold: those blocks are the person, not the cue"
+        )
         assert plane._preroll == type(plane._preroll)()  # ring consumed, not kept
         assert plane.preroll_replayed_ms == pytest.approx(100.0, abs=1.0)
-        assert gate.holds and gate.holds[0] == pytest.approx(160, abs=10)
+        # The tone itself plus the tail floor: the device's own buffer keeps sounding for
+        # ~300 ms after the last frame, so holding for exactly cue_ms opens the gate early.
+        assert gate.holds and gate.holds[0] == pytest.approx(160 + 250, abs=10)
         assert writer.written  # the wake event reached the control plane
         await asyncio.sleep(0.05)  # let the cue task run
         assert adapter.calls and adapter.calls[0][1] == plane.cfg.audio.playback.rate
@@ -267,7 +289,7 @@ def test_spoken_cue_holds_the_gate_for_its_length_plus_the_echo_window(tmp_path:
         plane.adapter = FakeAdapter()  # type: ignore[assignment]
         await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=0.0), FakeWriter(), asyncio.Event())
         assert plane.ack_mode_effective == "tts"
-        assert plane.gate.holds[0]  # type: ignore[index] == pytest.approx(500 + 1200, abs=15)
+        assert plane.gate.holds[0] == pytest.approx(500 + 1200, abs=15)
 
     asyncio.run(run())
 
@@ -322,8 +344,10 @@ class FakeTts:
     async def synthesize(self, text: str, voice: str = ""):  # noqa: ARG002
         self.calls += 1
         n = int(self.seconds * 16000)
+        t = np.arange(n) / 16000.0
+        pcm = (np.sin(2 * np.pi * 440 * t) * 12000).astype("<i2")
         for start in range(0, n, 1600):
-            yield np.zeros(min(1600, n - start), dtype="<i2").tobytes()
+            yield pcm[start : start + 1600].tobytes()
 
 
 def _wire_fake_tts(monkeypatch, seconds: float) -> FakeTts:
@@ -379,3 +403,124 @@ def test_ensure_ack_wav_does_nothing_for_the_tone_modes(tmp_path: Path, monkeypa
     note = asyncio.run(ensure_ack_wav(cfg))
 
     assert "tone" in note and fake.calls == 0
+
+
+def test_the_written_cue_contains_the_audio_the_provider_sent(tmp_path: Path, monkeypatch) -> None:
+    """A byte-swapped or wrong-rate file would pass a duration-only assertion."""
+    from house_ear.audio.wav import read_wav_mono
+    from house_ear.session.ack import ensure_ack_wav
+
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "nested" / "data")  # must be created
+    cfg.ack.mode = "tts"  # type: ignore[assignment]
+    cfg.ack.max_ms = 600
+    _wire_fake_tts(monkeypatch, 0.4)
+
+    note = asyncio.run(ensure_ack_wav(cfg))
+
+    path = ack.ack_wav_path(cfg)
+    audio, rate = read_wav_mono(path)
+    assert rate == cfg.audio.voice.rate, note
+    assert float(np.max(np.abs(audio))) > 0.1  # the sine survived, not zeros
+    leftovers = list(path.parent.glob("*.part"))
+    assert not leftovers, f"atomic write left {leftovers} behind"
+    assert not path.with_suffix(".wav.part").exists()
+
+
+def test_an_unwritable_data_dir_is_a_downgrade_not_an_outage(tmp_path: Path, monkeypatch) -> None:
+    """A read-only volume on the NAS must not take the control plane down at startup."""
+    from house_ear.session.ack import ensure_ack_wav
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    cfg = Config()
+    cfg.system.data_dir = str(blocker)  # data_dir is a file: writing ack.wav cannot work
+    cfg.ack.mode = "tts"  # type: ignore[assignment]
+    _wire_fake_tts(monkeypatch, 0.3)
+
+    note = asyncio.run(ensure_ack_wav(cfg))  # must not raise
+
+    assert "tone" in note or "cannot write" in note
+
+
+def test_a_stale_overlong_cue_is_removed(tmp_path: Path, monkeypatch) -> None:
+    from house_ear.session.ack import ensure_ack_wav
+
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    cfg.ack.mode = "tts"  # type: ignore[assignment]
+    cfg.ack.max_ms = 600
+    tone_wav(ack.ack_wav_path(cfg), 1.4)  # a file from a previous, longer setting
+    _wire_fake_tts(monkeypatch, 1.4)
+
+    note = asyncio.run(ensure_ack_wav(cfg))
+
+    assert not ack.ack_wav_path(cfg).exists(), "an over-cap file must not survive"
+    assert "cap" in note
+
+
+def test_a_second_wake_supersedes_the_cue_in_flight() -> None:
+    """Two wakes 100 ms apart must leave one cue playing, and say so in the counters."""
+
+    async def run() -> None:
+        plane = make_plane(Path("/tmp"))
+        plane.gate = FakeGate()  # type: ignore[assignment]
+        plane.adapter = FakeAdapter(slow_s=0.4)  # type: ignore[assignment]
+        writer, connected = FakeWriter(), asyncio.Event()
+        connected.set()
+        await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=0.0), writer, connected)
+        await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=100.0), writer, connected)
+        assert plane.ack_attempts == 2
+        assert plane.ack_skipped == 1
+        # arm() on top of an open turn throws that buffer away; it must be counted, not lost
+        assert plane.gate.interrupted == 1
+        assert plane._ack_task is not None
+        plane._ack_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await plane._ack_task
+
+    asyncio.run(run())
+
+
+def test_stop_audio_also_silences_the_cue() -> None:
+    """A cue is playback: the barge-in path must be able to stop it."""
+
+    async def run() -> None:
+        plane = make_plane(Path("/tmp"))
+        plane.gate = FakeGate()  # type: ignore[assignment]
+        plane.adapter = FakeAdapter(slow_s=1.0)  # type: ignore[assignment]
+        await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=0.0), FakeWriter(), asyncio.Event())
+        assert plane._ack_task is not None and not plane._ack_task.done()
+        await plane._stop_playback()
+        assert plane._ack_task is None
+        assert plane.ack_plays == 0  # it never finished, and the counters say so
+
+    asyncio.run(run())
+
+
+def test_the_wake_event_survives_the_wire_with_its_levels() -> None:
+    """These fields were silently dropped by pydantic until they existed on the model."""
+    from house_ear.audio.protocol import CONTROL, Wake, encode_json
+
+    payload = encode_json(
+        Wake(ts_ms=1234.0, keyword="你好小瑞", voice_rms_db=-33.5, ref_rms_db=-12.0,
+             ack_mode="earcon")
+    )
+    back = CONTROL.validate_json(payload[5:])
+    assert isinstance(back, Wake)
+    assert (back.voice_rms_db, back.ref_rms_db, back.ack_mode) == (-33.5, -12.0, "earcon")
+
+
+def test_a_preset_at_natural_length_keeps_its_own_duration() -> None:
+    """`chime_ms: 0` is the escape hatch back to the lengths the old room was tuned on."""
+    for name, preset in chime.PRESETS.items():
+        audio = chime.render(name, rate=16000, duration_ms=0)
+        assert audio.size / 16000 == pytest.approx(preset.natural_ms / 1000, abs=0.01), name
+
+
+def test_an_unknown_preset_is_rejected_by_the_config_not_at_runtime() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Config(**{"ack": {"chime": "no-such-preset"}})
+    assert Config(**{"ack": {"chime": "windchime"}}).ack.chime == "windchime"
