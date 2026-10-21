@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -33,6 +34,9 @@ from .protocol import (
 
 class AudioPlaneError(RuntimeError):
     pass
+
+
+log = logging.getLogger(__name__)
 
 
 class AudioPlaneClient:
@@ -161,6 +165,7 @@ class AudioPlaneSupervisor:
         self.device_id = device_id
         self.proc: asyncio.subprocess.Process | None = None
         self.client: AudioPlaneClient | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
         self.error = ""
 
     def _pick_device(self) -> str | None:
@@ -191,6 +196,7 @@ class AudioPlaneSupervisor:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
+        self._stderr_task = asyncio.create_task(self._pump_stderr(), name="plane-stderr")
         try:
             await self._greet(device, timeout_s)
         except Exception as exc:
@@ -201,14 +207,36 @@ class AudioPlaneSupervisor:
             raise
         return self
 
+    async def _pump_stderr(self) -> None:
+        """Read the plane's stderr for as long as it runs.
+
+        Not drained, a 64 KB pipe fills and the child blocks inside a log call - a frozen
+        capture loop with no crash and no message. And the plane's own lines (gate disarmed,
+        utterance discarded, playback finished) are the only way to explain a turn that
+        never landed: this is how "rounds 2-5 produced no turn" gets an answer instead of a
+        theory.
+        """
+        stderr = getattr(self.proc, "stderr", None)
+        if stderr is None:
+            return
+        try:
+            while True:
+                line = await stderr.readline()
+                if not line:
+                    return
+                log.info("plane: %s", line.decode(errors="replace").rstrip())
+        except (asyncio.CancelledError, OSError, ValueError):
+            return
+
     async def _greet(self, device: str, timeout_s: float) -> None:
         assert self.proc is not None
         deadline = asyncio.get_running_loop().time() + timeout_s
         while asyncio.get_running_loop().time() < deadline:
             if self.proc.returncode is not None:
-                err = (await self.proc.stderr.read()).decode(errors="replace") if self.proc.stderr else ""
+                # The stderr pump already printed whatever the child said; reading the pipe
+                # here would race with it.
                 raise AudioPlaneError(
-                    f"audio plane exited with {self.proc.returncode}: {err[-400:].strip()}"
+                    f"audio plane exited with {self.proc.returncode}"
                 )
             if self.socket_path.exists():
                 try:
@@ -247,6 +275,11 @@ class AudioPlaneSupervisor:
                 await asyncio.wait_for(self.proc.wait(), timeout=5)
             if self.proc.returncode is None:
                 self.proc.kill()
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._stderr_task
+            self._stderr_task = None
         self.proc = None
 
     @property

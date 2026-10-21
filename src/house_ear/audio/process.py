@@ -34,6 +34,7 @@ import numpy as np
 from ..config import Config, load_config
 from ..device import build_adapters
 from ..device.contract import AudioFrame, DeviceAdapter
+from ..log_setup import setup_logging
 from ..trace import now_ms
 from .ack import render_cached as render_ack
 from .aec import AecChain, AecUnavailable
@@ -732,6 +733,12 @@ def build_plane(cfg: Config, device_id: str, socket_path: Path | None = None) ->
     return AudioPlane(cfg, device_id, resolve_socket_path(socket_path or default_socket_path()))
 
 
+def _configure_logging(level: str) -> None:
+    """The plane is a separate process with its own stderr: without this, `system.log_level`
+    does nothing and every gate/playback diagnostic is invisible."""
+    setup_logging(level)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="house-ear-audio", description="house-ear audio plane")
     parser.add_argument("--config", required=True)
@@ -740,6 +747,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
+    _configure_logging(cfg.system.log_level)
     plane = build_plane(cfg, args.device, Path(args.socket) if args.socket else None)
     try:
         asyncio.run(plane.serve())
