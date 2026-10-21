@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..config.schema import ProvidersConfig
+from ..config.schema import AssistantConfig, ProvidersConfig
 from ..providers.base import ChatChunk
 from ..providers.chain import (
     StageFailure,
@@ -25,16 +25,15 @@ from ..providers.chain import (
     tts_chain,
 )
 from ..trace import TurnTrace
+from . import prompts
+from .text import clean_reply, has_markup, strip_wake
 
 log = logging.getLogger(__name__)
 
-# Taken from xiaoai-voice-entry's `assistant.persona` plus the spoken-output rules that its
-# prompts already enforced. Same assistant, same voice, so behaviour does not jump when the
-# backend changes.
-DEFAULT_PROMPT = (
-    "你是家里的小助理，叫小瑞。说话简短干脆，先给结论，不铺垫、不客套；不知道就说不知道。"
-    "你的回答会被直接念出来，所以只用中文口语，不要用列表、编号、星号、表情符号或括号补充。"
-)
+# The prompt now lives in `session/prompts.py`, assembled per turn (it carries the length
+# bands and the "no tools this round" note). Kept here as an alias so old imports do not
+# silently get a different prompt.
+DEFAULT_PROMPT = prompts.DEFAULT_SYSTEM_PROMPT
 
 SENTENCE_ENDINGS = "。！？!?；;\n"
 # A comma is a chance to start speaking: by the time the first clause is synthesised the
@@ -130,15 +129,60 @@ class TurnRunner:
         self,
         providers: ProvidersConfig,
         *,
-        system_prompt: str = DEFAULT_PROMPT,
+        system_prompt: str | None = None,
         sample_rate: int = 16000,
-        history_turns: int = 4,
+        history_turns: int = 6,
+        assistant: AssistantConfig | None = None,
+        wake_words: Sequence[str] = (),
+        tools_ok: bool = False,
     ) -> None:
         self.providers = providers
+        # None means "assemble per turn": the prompt carries the length bands and the
+        # no-tools note, and a long session must not keep a stale copy. A string is an
+        # explicit override, used by tests and by scripts that measure one prompt.
         self.system_prompt = system_prompt
+        self.assistant = assistant or AssistantConfig()
         self.sample_rate = sample_rate
         self.history_turns = history_turns
+        self.wake_words = tuple(wake_words)
+        self.tools_ok = tools_ok
         self.history: list[dict] = []
+
+    def build_prompt(self) -> str:
+        if self.system_prompt is not None:
+            return self.system_prompt
+        return prompts.build(self.assistant, tools_ok=self.tools_ok)
+
+    def history_messages(self, transcript: str) -> list[dict]:
+        """The last `history_turns` rounds, minus earlier copies of the question asked now.
+
+        Two things are deliberate here.
+
+        The window is empty when `history_turns` is 0 - `self.history[-2 * 0:]` is the whole
+        list, not nothing (found while measuring: the "no history" run reproduced 15
+        identical answers in a row and looked like the opposite of what it was).
+
+        An earlier copy of *this* question is dropped. A model that can see its own answer
+        to the same question imitates it: measured 20 rounds of one question, the answers
+        after round 9 came back nearly word for word, and the longer the window the earlier
+        the convergence. The question is still not fed twice: history is context, not a
+        transcript to copy.
+        """
+        if self.history_turns <= 0:
+            return []
+        window = self.history[-2 * self.history_turns:]
+        groups: list[list[dict]] = []
+        for message in window:
+            if message.get("role") == "user" or not groups:
+                groups.append([message])
+            else:
+                groups[-1].append(message)
+        out: list[dict] = []
+        for group in groups:
+            if group[0].get("content") == transcript:
+                continue
+            out.extend(group)
+        return out
 
     async def transcribe(self, pcm: bytes, trace: TurnTrace) -> tuple[str, StageReport | None]:
         trace.mark("end_of_speech")
@@ -198,17 +242,21 @@ class TurnRunner:
     ) -> TurnResult:
         result = TurnResult()
         transcript, asr_report = await self.transcribe(pcm, trace)
-        result.transcript = transcript
         if asr_report is not None:
             result.stages["asr"] = asr_report
+        # The wake pre-roll is replayed into the gate on purpose, so the transcript can
+        # start with the wake phrase. The model must see the request only.
+        transcript = strip_wake(transcript, self.wake_words)
+        result.transcript = transcript
         if not transcript.strip():
             result.error = "empty transcript"
             return result
 
         messages: list[dict] = []
-        if self.system_prompt:
-            messages.append({"role": "system", "content": self.system_prompt})
-        messages += self.history[-2 * self.history_turns:]
+        system_prompt = self.build_prompt()
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages += self.history_messages(transcript)
         messages.append({"role": "user", "content": transcript})
 
         try:
@@ -223,7 +271,7 @@ class TurnRunner:
 
         tts_provider: str | None = None
         buffer = ""
-        reply_parts: list[str] = []
+        spoken_parts: list[str] = []
 
         async def say(text: str) -> None:
             nonlocal tts_provider, result
@@ -247,15 +295,24 @@ class TurnRunner:
             if not chunk.delta:
                 continue
             buffer += chunk.delta
-            reply_parts.append(chunk.delta)
             sentences, buffer = split_sentences(buffer)
             for sentence in sentences:
+                # A model with no tools sometimes writes the tool call as text (DSML).
+                # Speaking it is the old build's 14-second bug; drop it here, per sentence,
+                # because the sentence has already been split for TTS.
+                if has_markup(sentence):
+                    continue
+                spoken_parts.append(sentence)
                 await say(sentence)
-        if buffer.strip():
+        if buffer.strip() and not has_markup(buffer):
+            spoken_parts.append(buffer.strip())
             await say(buffer.strip())
 
         trace.mark("llm_done")
-        result.reply = "".join(reply_parts)
+        # The reply is what was actually spoken, not the raw deltas: markup that never
+        # reached the speaker must not reach the API response or the next turn's history.
+        result.reply = clean_reply("".join(spoken_parts))
         self.history.append({"role": "user", "content": transcript})
-        self.history.append({"role": "assistant", "content": result.reply})
+        if result.reply:
+            self.history.append({"role": "assistant", "content": result.reply})
         return result

@@ -144,8 +144,17 @@ def test_empty_transcript_ends_the_turn_early(monkeypatch) -> None:
 
 
 def test_history_carries_context_between_turns(monkeypatch) -> None:
+    class TwoTurns(FakeAsr):
+        def __init__(self) -> None:
+            super().__init__("第一句")
+            self.texts = ["第一句", "第二句"]
+
+        async def transcribe(self, pcm: bytes, sample_rate: int) -> Transcript:
+            self.calls += 1
+            return Transcript(text=self.texts[self.calls - 1])
+
     llm = FakeLlm(["好的。", "再见。"])
-    patch_chains(monkeypatch, asr=FakeAsr("第一句"), llms=[llm], ttss=[FakeTts()])
+    patch_chains(monkeypatch, asr=TwoTurns(), llms=[llm], ttss=[FakeTts()])
     runner = TurnRunner(Config().providers)
 
     async def speak(pcm: bytes) -> None:
@@ -156,7 +165,86 @@ def test_history_carries_context_between_turns(monkeypatch) -> None:
     second = llm.seen[-1]
     roles = [m["role"] for m in second]
     assert roles[-3:] == ["user", "assistant", "user"]
-    assert second[-1]["content"] == "第一句"
+    assert second[-1]["content"] == "第二句"
+    # the first question is still context for the second one
+    assert any(m["content"] == "第一句" for m in second)
+
+
+def test_the_wake_word_from_the_preroll_never_reaches_the_model(monkeypatch) -> None:
+    """The pre-roll replay is deliberate, so the transcript can start with the wake word."""
+    llm = FakeLlm(["一点了。"])
+    patch_chains(monkeypatch, asr=FakeAsr("你好小瑞，现在几点了？"), llms=[llm], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers, wake_words=["你好小瑞"])
+
+    async def speak(pcm: bytes) -> None:
+        return None
+
+    result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
+    assert result.transcript == "现在几点了？"
+    assert llm.seen[-1][-1]["content"] == "现在几点了？"
+    # the model also gets a clean turn: only the request, no wake phrase
+    assert runner.history[0] == {"role": "user", "content": "现在几点了？"}
+
+
+def test_markup_is_never_spoken_nor_stored(monkeypatch) -> None:
+    """A tool call written as text would otherwise be read aloud (the old 14 s bug)."""
+    llm = FakeLlm(["好的。", '<|invoke name="web_search">', "十二度。"])
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("现在几度"), llms=[llm], ttss=[tts])
+
+    async def speak(pcm: bytes) -> None:
+        return None
+
+    runner = TurnRunner(Config().providers)
+    result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
+    assert tts.texts == ["好的。"]
+    assert result.reply == "好的。"
+    assert all("invoke" not in str(m["content"]) for m in runner.history)
+
+
+def test_the_prompt_is_assembled_per_turn_and_history_is_six_rounds(monkeypatch) -> None:
+    llm = FakeLlm(["好。"])
+    patch_chains(monkeypatch, asr=FakeAsr("好"), llms=[llm], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers, wake_words=["你好小瑞"])
+
+    async def speak(pcm: bytes) -> None:
+        return None
+
+    assert runner.history_turns == 6
+    asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
+    system = llm.seen[-1][0]
+    assert system["role"] == "system"
+    assert "不超过120个字" in system["content"]
+    assert "查证工具" in system["content"]
+    # a renamed assistant shows up in the next turn's prompt, not only at startup
+    runner.assistant.name = "小瑞二号"
+    asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
+    assert "小瑞二号" in llm.seen[-1][0]["content"]
+
+
+
+def test_history_window_shape_and_the_repeat_drop(monkeypatch) -> None:
+    """A repeated question must not come back to the model with its own answer attached."""
+    patch_chains(monkeypatch, asr=FakeAsr("好"), llms=[FakeLlm(["好。"] * 8)], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers, history_turns=3)
+    runner.history = [
+        {"role": "user", "content": "今天天气怎么样"},
+        {"role": "assistant", "content": "查不到。"},
+        {"role": "user", "content": "你都能做什么"},
+        {"role": "assistant", "content": "聊天。"},
+        {"role": "user", "content": "今天天气怎么样"},
+        {"role": "assistant", "content": "查不到天气。"},
+    ]
+    # both copies of the repeated question go: its own answer is what the model imitates
+    assert runner.history_messages("今天天气怎么样") == [
+        {"role": "user", "content": "你都能做什么"},
+        {"role": "assistant", "content": "聊天。"},
+    ]
+    # an unrelated question keeps the whole window as context (3 rounds = all 6 messages)
+    assert runner.history_messages("现在几点了") == runner.history
+    # history_rounds: 0 means no history at all (history[-0:] used to mean all of it)
+    runner.history_turns = 0
+    assert runner.history_messages("现在几点了") == []
 
 
 def test_missing_key_fails_the_stage_with_a_reason(monkeypatch) -> None:

@@ -268,6 +268,28 @@ class ToolsConfig(BaseModel):
     ha: HaConfig = Field(default_factory=HaConfig)
 
 
+class AssistantConfig(BaseModel):
+    """Who the assistant is and how long it may talk.
+
+    The old deployment kept these in `assistant.*`; the numbers are its production values,
+    because they were tuned against real answers, not guessed (`HANDOFF:522-536`: raising
+    the caps without changing the wording changed nothing, and changing the wording was
+    what made answers useful).
+    """
+
+    name: str = Field(default="小瑞", min_length=1, max_length=12)
+    # Appended to the built-in prompt, exactly as the old build appended `persona`.
+    persona: str = (
+        "你是家里的小助理，叫{name}。说话简短干脆，先给结论，不铺垫、不客套；"
+        "不知道就说不知道。"
+    )
+    # A full replacement, for the console. Empty means "use the built-in prompt".
+    system_prompt: str = ""
+    reply_max_chars: int = Field(default=120, ge=10, le=300)
+    reply_max_chars_search: int = Field(default=300, ge=40, le=600)
+    reply_max_chars_long: int = Field(default=900, ge=100, le=2000)
+
+
 class SessionConfig(BaseModel):
     """Conversation-level behaviour, as opposed to one cue or one turn."""
 
@@ -275,6 +297,10 @@ class SessionConfig(BaseModel):
     # used 12 s: long enough to cover one vendor dialog, short enough that a later
     # "你好小瑞" is not fighting a stale window.
     vendor_quiet_s: float = Field(default=12.0, ge=0.0, le=60.0)
+    # Rounds (a user+assistant pair each) handed to the model. The old build read this
+    # from `conversation.history_rounds` (6); house-ear had it hard-coded to 4, which is
+    # why a repeated question collapsed into its own previous answer.
+    history_rounds: int = Field(default=6, ge=0, le=12)
 
 
 class Config(BaseModel):
@@ -285,6 +311,7 @@ class Config(BaseModel):
     audio: AudioConfig = Field(default_factory=AudioConfig)
     ack: AckConfig = Field(default_factory=AckConfig)
     session: SessionConfig = Field(default_factory=SessionConfig)
+    assistant: AssistantConfig = Field(default_factory=AssistantConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
 

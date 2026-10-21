@@ -23,7 +23,7 @@ from ...device.registry import build_adapters
 from ...doctor import run_doctor
 from ...providers.chain import build_stage
 from ...session.ack import ensure_ack_wav
-from ...session.turn import DEFAULT_PROMPT, TurnRunner
+from ...session.turn import TurnRunner
 from ...session.vendor import VendorWindow
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
@@ -64,7 +64,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         runner = TurnRunner(
-            cfg.providers, sample_rate=cfg.audio.voice.rate, system_prompt=DEFAULT_PROMPT
+            cfg.providers,
+            sample_rate=cfg.audio.voice.rate,
+            assistant=cfg.assistant,
+            history_turns=cfg.session.history_rounds,
+            wake_words=[w for d in cfg.devices for w in d.wake_words],
+            # Tools are registered but not wired into a turn yet (S5e): the prompt must
+            # tell the model it cannot check anything live instead of asking it to search.
+            tools_ok=False,
         )
         app.state.runner = runner
         app.state.last_turn = None
