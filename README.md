@@ -11,6 +11,9 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 > are in place; ASR/LLM/TTS wiring is next (S4). v1 supports exactly one speaker model:
 > Xiaomi 小爱音箱 Pro (LX06).
 
+> **Picking this up mid-flight?** Read [`docs/HANDOFF.md`](docs/HANDOFF.md) first: current
+> state, the parameters inherited from the old project, known problems and the next steps.
+
 ## What works today
 
 - `house-ear doctor` — hardware probe: measured AEC real-time factor, configured
@@ -28,6 +31,11 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
   namespacing and a 50-tool cap
 - `house_ear.trace` — per-turn latency marks (`first_response_ms`,
   `silence_after_ms`) so every M1 step is measured, not estimated
+- A whole turn: utterance from the audio plane → ASR → streaming LLM → speech per clause →
+  PCM pushed to the speaker, with the provider per stage reported by `GET /api/v1/turns`
+- Providers: local sherpa-onnx SenseVoice (ASR, first in the chain), DeepSeek (`deepseek-flash`,
+  thinking off), 讯飞 websocket TTS (`x4_lingxiaowan_boy`) with SiliconFlow as the fallback for
+  both ASR and TTS; every stage is an ordered chain and a missing key is a fallback, not a crash
 - Audio plane as a child process behind framed Unix-socket IPC (JSON control +
   mono 16 kHz PCM), stateful 48 kHz -> 16 kHz FIR decimation, bounded ring with a
   drop counter, and `/api/v1/audio` for live numbers
@@ -67,6 +75,11 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 | AEC convergence | ~10 s of playback; first windows only 15-17 dB | same |
 | wake word on the LX06 with music playing | 18 wakes in 75 s (spoken ~every 4 s), 0 dropped frames | `scripts/measure_wake.py` |
 | audio plane rtf with AEC + KWS | 0.0935 at 16 kHz / 8 ch | same run |
+| local ASR, SenseVoice int8, 1.75 s clip | Mac 51-54 ms (rtf 0.03); NAS N100 210 ms at 2 threads (rtf 0.12) | `scripts/smoke_turn.py`, bench on the NAS |
+| cloud ASR, same clip | 384 / 1204 / 2464 ms, one 20 s timeout | same |
+| full turn, SiliconFlow TTS | first response p50 8713 ms, max 23541 ms (20 rounds) | `scripts/measure_turn_pipeline.py` |
+| full turn, 讯飞 TTS + deepseek-flash | first response p50 3563 ms, max 4197 ms, 20/20 replies | same |
+| turn breakdown (讯飞 run) | ASR 463 ms, LLM first token 1065 ms, TTS first byte 1591 ms (p50) | same |
 | config v1 -> v2 migration | loads, file untouched | `tests/test_config.py` |
 
 ## Quick start
