@@ -116,6 +116,8 @@ class Metrics(BaseModel):
     vad_enabled: bool = False
     utterances: int = 0
     playback_s: float = 0.0
+    voice_rms_db: float | None = None
+    ref_rms_db: float | None = None
     frames_in: int
     frames_out: int
     frames_dropped: int

@@ -97,6 +97,7 @@ def create_app(
             await supervisor.stop()
 
     app = FastAPI(title="house-ear", version=__version__, lifespan=lifespan)
+    app.state.trace_log = traces  # scripts and tests read the same log the API serves
 
     def auth(x_auth_token: str | None = Header(default=None)) -> None:
         if not cfg.web.auth_token:

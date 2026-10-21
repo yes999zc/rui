@@ -85,3 +85,45 @@ change that moves first response under 2 s. It needs a decision, not more measur
 - Barge-in silence: target ≤ 300 ms from the user talking over the speaker to the speaker
   going quiet. Needs the device and the `stop_play` path under load.
 - rtF of the full chain (AEC + KWS + VAD + ASR + TTS) under an 80 % volume music bed.
+
+## 20 rounds through the whole pipeline (no room, real vendors)
+
+`scripts/measure_turn_pipeline.py`: a fake speaker dials the real adapter, streams the wake
+word and then "今天天气怎么样" as 8 ch frames at device pace with a zero reference (a person
+talking to a silent speaker), and the reply comes back as PCM frames. Everything between is
+the production path: AEC → KWS → turn gate → local ASR → SiliconFlow LLM → SiliconFlow TTS →
+playback. 20 consecutive rounds, same request.
+
+```
+rounds 20, wake 20/20, transcript 20/20
+first response (wake -> first reply audio): p50 8713 ms, min 5641 ms, max 23541 ms
+ASR (local SenseVoice)          : 467-627 ms every round
+LLM first token                 : 1455-1776 ms every round
+TTS first byte                  : 3685, 3851, 4276, 4479, 4508, 4678, 5804, 5918, 6334, 6361,
+                                  7135, 7240, 10261, 12113, 13085, 14025, 14866, 16117, 18866, 21559
+```
+
+The shape is unambiguous: ASR and LLM are flat and predictable, **TTS first byte is the
+entire spread** — 3.7 s at its best, 21.6 s at its worst, and it degrades as rounds go on,
+which looks like vendor-side queueing rather than anything this code does (each request is a
+single sentence over one keep-alive connection, and a `curl` against the same endpoint shows
+1.1 s TTFB when the service is idle).
+
+Consequences for the design:
+
+- Speech recognition belongs on the box: local ASR is 467-627 ms including per-process load
+  and does not move.
+- A voice assistant cannot spend a median of 8.7 s before it makes a sound. SiliconFlow TTS
+  as the only TTS entry is the thing to change, not the rest of the pipeline.
+- Nothing in this run exercised acoustics. The wake word arrived as a clean digital stream
+  with no music bed and no echo path.
+
+## What could not be measured today
+
+The acoustic round (wake word played into the room, 80 % volume music bed) did not run: the
+Mac's default output (VX2762-4K over DDC) went silent mid-session, `afplay` began returning
+`AudioQueueStart failed (0xe00002ec)`, and switching output devices did not bring it back.
+Recovering it needs `coreaudiod` restarted with sudo, which this session does not have. The
+mic-side evidence is in the plane: `voice_rms_db` sat at -53 dBFS while `afplay` reported
+success, i.e. nothing reached the room. That is a host audio fault, not a house-ear fault,
+and the 18/18 wake measurement from the hardware window stands as the acoustic data point.

@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import hashlib
 import logging
+import math
 import os
 import signal
 import sys
@@ -62,6 +63,12 @@ PLAY_CHUNK_MS = 100
 log = logging.getLogger(__name__)
 
 
+def _dbfs(samples) -> float:
+    """Level of one block in dBFS. Floored at -100 so it survives a JSON round trip."""
+    peak = float(np.sqrt(np.mean(np.square(np.asarray(samples, dtype=np.float64)))))
+    return 20.0 * math.log10(max(peak, 1e-5))
+
+
 class AudioPlane:
     def __init__(self, cfg: Config, device_id: str, socket_path: Path) -> None:
         self.cfg = cfg
@@ -86,6 +93,10 @@ class AudioPlane:
         self.no_consumer = 0
         self.cpu_s = 0.0
         self.audio_s = 0.0
+        # Levels are the first thing to look at when "it hears nothing": a silent mic and a
+        # mic that hears but does not understand look identical from the counters alone.
+        self.voice_rms_db: float | None = None
+        self.ref_rms_db: float | None = None
         self.playback_s = 0.0
         self.playback_path = ""
         self.last_playback_error = ""
@@ -174,11 +185,14 @@ class AudioPlane:
             samples[:usable].reshape(-1, frame.channels).astype(np.float32) / 32768.0
         )
 
+        raw_mic = block[:, : frame.mic_channels]
         if self.aec is not None and frame.reference_channels > 0:
             ref = block[:, frame.mic_channels]
-            mono = self.aec.process(block[:, : frame.mic_channels], ref)
+            mono = self.aec.process(raw_mic, ref)
+            self.ref_rms_db = _dbfs(ref)
         else:
             mono = block[:, 0]
+        self.voice_rms_db = _dbfs(raw_mic.max(axis=1) if raw_mic.ndim > 1 else raw_mic)
         return np.clip(mono * 32768.0, -32768, 32767).astype("<i2").tobytes()
 
     async def _capture(self, connected: asyncio.Event, writer: asyncio.StreamWriter) -> None:
@@ -211,6 +225,8 @@ class AudioPlane:
                         erle_db=self.aec.erle_db if self.aec is not None else None,
                         ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
                         playback_s=round(self.playback_s, 1),
+            voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
+            ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
                     )
                     self.last_wake = event
                     if self.gate is not None:
@@ -366,6 +382,8 @@ class AudioPlane:
             if self.adapter is not None
             else False,
             playback_s=round(self.playback_s, 1),
+            voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
+            ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
             frames_in=self.frames_in,
             frames_out=self.frames_out,
             frames_dropped=self.frames_dropped,
