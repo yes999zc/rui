@@ -17,7 +17,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install .
+RUN pip install '.[kws]'
 COPY --from=web /web/dist /app/web/dist
 ENV HOUSE_EAR_WEB_DIR=/app/web/dist
 EXPOSE 8080

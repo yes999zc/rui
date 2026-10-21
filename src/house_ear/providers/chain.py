@@ -15,13 +15,17 @@ from typing import Any
 from ..config.schema import ProvidersConfig
 from .base import AsrProvider, LlmProvider, TtsProvider
 from .openai_compat import OpenAiCompatAsr, OpenAiCompatLlm, OpenAiCompatTts
+from .sherpa_asr import SherpaAsr
 
 log = logging.getLogger(__name__)
 
-# Everything is an API call: no local models, so a NAS deployment is just this container and
-# a key. kind exists so a provider with a different wire shape can be added beside this one.
+# kind -> stage -> builder. `sherpa` is the local ASR model (first in the chain, 50 ms warm);
+# `openai_compat` covers the cloud stages and the ASR fallback. TTS and LLM are API-only:
+# 9哥's call, and the numbers back it -- a local TTS would mean shipping a voice model and
+# giving up the `alex` voice he picked.
 _BUILDERS: dict[str, dict[str, Callable[..., Any]]] = {
     "openai_compat": {"asr": OpenAiCompatAsr, "tts": OpenAiCompatTts, "llm": OpenAiCompatLlm},
+    "sherpa": {"asr": SherpaAsr},
 }
 
 

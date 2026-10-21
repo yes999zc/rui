@@ -18,6 +18,7 @@ from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import redacted
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
+from ...providers.chain import build_stage
 from ...session.turn import DEFAULT_PROMPT, TurnRunner
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
@@ -53,6 +54,11 @@ def create_app(
         )
         app.state.runner = runner
         app.state.last_turn = None
+        for stage in ("asr", "tts", "llm"):
+            for _name, provider in build_stage(cfg.providers, stage):
+                warm = getattr(provider, "warm", None)
+                if warm is not None:
+                    await warm()
         if start_audio:
             supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
             try:

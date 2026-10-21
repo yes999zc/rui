@@ -48,6 +48,13 @@ audio:
 providers:
   # One catalog of named providers; each stage picks an ordered chain (primary first).
   catalog:
+    # Local ASR: `house-ear fetch-models` writes the model here (239 MB int8). First in the
+    # chain because it answers in ~50 ms warm; when the model is absent the chain falls
+    # through to the cloud entry and nothing else changes.
+    local_asr:
+      kind: sherpa
+      model: /data/models/sensevoice
+      threads: 2
     siliconflow:
       kind: openai_compat
       base_url: https://api.siliconflow.cn/v1
@@ -64,7 +71,7 @@ providers:
       voice: alex
       api_key_env: HOUSE_EAR_TTS_KEY
   asr:
-    chain: [siliconflow]
+    chain: [local_asr, siliconflow]
   tts:
     chain: [siliconflow_tts]
   llm:

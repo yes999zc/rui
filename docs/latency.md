@@ -8,8 +8,27 @@ blamed on the right component instead of guessed at.
 Machine: Mac Studio (arm64, 24 cores, 64 GB), Shenyang, China Unicom.
 `first response` = end of speech → first PCM ready to play.
 
-**Decision: all stages are API calls.** No local ASR, no local TTS — a NAS deployment is
-this container plus a key, and the same config works on any box.
+**Decisions (2026-10-21):**
+
+- **ASR runs locally, cloud as fallback.** The cloud endpoint is not just slower, it is
+  unpredictable; a local voice model is the only way to promise a first response at all.
+- **TTS stays API-only** (SiliconFlow `CosyVoice2-0.5B:alex`). No local voice model — the
+  voice was picked by ear, and shipping a TTS model to keep it is not worth it.
+- **LLM stays API.**
+
+## Local ASR on the NAS (Intel N100, 4 cores, fnOS)
+
+Same 1.75 s clip, `sherpa-onnx` SenseVoice int8, warm runs after one model load:
+
+| threads | model load | warm median | warm max | rtf |
+|---|---|---|---|---|
+| 1 | 1308 ms | 362 ms | 364 ms | 0.207 |
+| 2 | 1322 ms | 210 ms | 213 ms | 0.120 |
+| 4 | 1765 ms | 159 ms | 171 ms | 0.091 |
+
+Transcription correct in every run (`今天天气怎么样？`). Default is `threads: 2`: 210 ms for a
+command-length utterance while leaving two cores for the rest of the NAS. There is no
+run-to-run spread to speak of, which is the whole point — compare the cloud row below.
 
 ## Three identical turns, SiliconFlow only (all API)
 

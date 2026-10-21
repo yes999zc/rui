@@ -39,6 +39,59 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+SENSEVOICE_REPO = "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+SENSEVOICE_FILES = ("model.int8.onnx", "tokens.txt")
+
+
+def cmd_fetch_models(args: argparse.Namespace) -> int:
+    """Download the local ASR model to a data volume.
+
+    The image stays small and the model lives with the data: a fresh install fetches 239 MB
+    once, and a reinstall keeps it. Local ASR is the first entry in the ASR chain when this
+    has run; without it the chain falls through to the cloud entry.
+    """
+    import httpx
+
+    from .providers.sherpa_asr import model_paths
+
+    dest = Path(args.dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    base = args.base or f"https://hf-mirror.com/{SENSEVOICE_REPO}/resolve/main"
+    wanted = {
+        "model.int8.onnx": dest / "model.int8.onnx",
+        "tokens.txt": dest / "tokens.txt",
+    }
+    for name, target in wanted.items():
+        if target.exists() and not args.force:
+            print(f"have {name} ({target.stat().st_size / 1e6:.0f} MB)")
+            continue
+        url = f"{base}/{name}"
+        part = target.with_suffix(target.suffix + ".part")
+        print(f"fetching {url}")
+        with httpx.stream("GET", url, follow_redirects=True, timeout=None) as resp:
+            resp.raise_for_status()
+            total = int(resp.headers.get("content-length") or 0)
+            done = 0
+            with part.open("wb") as fh:
+                for block in resp.iter_bytes(1 << 20):
+                    fh.write(block)
+                    done += len(block)
+                    if total and done % (25 << 20) < (1 << 20):
+                        print(f"  {done / 1e6:6.1f} / {total / 1e6:.1f} MB", flush=True)
+        if total and done != total:
+            part.unlink(missing_ok=True)
+            print(f"incomplete download: {done} of {total} bytes")
+            return 1
+        part.replace(target)
+        print(f"  {name}: {done / 1e6:.1f} MB")
+    onnx, tokens = model_paths(dest)  # recompute: the int8 file did not exist before
+    if not onnx.exists() or not tokens.exists():
+        print(f"model incomplete in {dest}")
+        return 1
+    print(f"local asr ready in {dest} - keep it as providers.catalog.<name>.model")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -169,6 +222,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_audio.add_argument("--device", required=True)
     p_audio.add_argument("--socket")
     p_audio.set_defaults(func=cmd_audio)
+
+    p_fetch = _leaf("fetch-models", "download the local ASR model to a data volume")
+    p_fetch.add_argument("--dest", default="/data/models/sensevoice")
+    p_fetch.add_argument("--base", default="", help="override the download base URL")
+    p_fetch.add_argument("--force", action="store_true")
+    p_fetch.set_defaults(func=cmd_fetch_models)
 
     p_doc = _leaf("doctor", "probe hardware, network and audio headroom")
     p_doc.add_argument("--json", action="store_true")

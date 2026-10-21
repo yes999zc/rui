@@ -10,7 +10,7 @@ RAW="https://raw.githubusercontent.com/$REPO/$REF"
 
 mkdir -p "$DIR/config" "$DIR/data"
 
-echo "[1/4] compose file"
+echo "[1/5] compose file"
 # The deploy directory is never a git checkout: fetch the one file compose needs,
 # otherwise `docker compose up` fails with "no configuration file provided".
 if [ ! -f "$DIR/docker-compose.yml" ]; then
@@ -19,7 +19,7 @@ else
   echo "      keeping existing docker-compose.yml"
 fi
 
-echo "[2/4] config"
+echo "[2/5] config"
 if [ ! -f "$DIR/config/config.yaml" ]; then
   # `setup` writes schema defaults: no devices, so a fresh install never shows a
   # speaker that does not exist. Add your own under devices[] afterwards.
@@ -28,7 +28,7 @@ else
   echo "      keeping existing config.yaml"
 fi
 
-echo "[3/4] env"
+echo "[3/5] env"
 if [ ! -f "$DIR/.env" ]; then
   # One random secret per install, never printed except as a length.
   DEVICE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -45,7 +45,18 @@ else
   echo "      keeping existing .env"
 fi
 
-echo "[4/4] starting"
+echo "[4/5] local ASR model"
+# 239 MB, fetched once into the mounted data volume. Without it the ASR chain silently
+# falls back to the cloud entry, which is slower and has a longer tail, so this step is
+# loud when it fails but never blocks the install.
+if [ -f "$DIR/data/models/sensevoice/model.int8.onnx" ]; then
+  echo "      model already present"
+else
+  docker run --rm -v "$DIR/data:/data" "$IMAGE" fetch-models --dest /data/models/sensevoice \
+    || echo "      WARNING: model download failed; ASR will use the cloud provider"
+fi
+
+echo "[5/5] starting"
 cd "$DIR"
 HOUSE_EAR_IMAGE="$IMAGE" docker compose up -d
 

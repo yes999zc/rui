@@ -137,6 +137,7 @@ class ProviderConfig(BaseModel):
     timeout_s: float = Field(default=15.0, gt=0, le=120)
     # One retry beats one long wait: a 20 s timeout is worse than two 6 s attempts.
     retries: int = Field(default=0, ge=0, le=3)
+    threads: int = Field(default=2, ge=1, le=16)  # local models only
     voice: str = ""  # TTS voice name; ignored by ASR/LLM
     # A spoken reply is two sentences; a long answer is a latency bug, not a feature.
     max_tokens: int = Field(default=220, ge=16, le=4096)

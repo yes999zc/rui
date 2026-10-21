@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
-from house_ear.config.schema import Config
+import pytest
+
+from house_ear.config.schema import Config, ProviderConfig
 from house_ear.providers.base import ChatChunk, Transcript
 from house_ear.session.turn import TurnRunner, split_sentences
 from house_ear.trace import TurnTrace
@@ -199,3 +202,52 @@ def test_a_flaky_provider_is_retried_before_the_next_one(monkeypatch) -> None:
     assert flaky.calls == 2
     assert report.attempts[0]["error"].startswith("TimeoutError")
     assert report.attempts[1]["error"] == ""
+
+
+LOCAL_MODEL = Path("/data/models/sensevoice")
+MAC_MODEL = Path.home() / (
+    "AI_Workspace/03_Data/Models/sherpa-onnx/"
+    "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+)
+
+
+def sample_model_dir() -> Path | None:
+    for candidate in (LOCAL_MODEL, MAC_MODEL):
+        if (candidate / "model.int8.onnx").exists() or (candidate / "model.onnx").exists():
+            return candidate
+    return None
+
+
+@pytest.mark.skipif(sample_model_dir() is None, reason="sensevoice model not installed")
+def test_local_asr_reads_the_command_fixture() -> None:
+    from house_ear.providers.sherpa_asr import SherpaAsr
+
+    model = sample_model_dir()
+    assert model is not None
+    asr = SherpaAsr(ProviderConfig(kind="sherpa", model=str(model), threads=2))
+    import wave
+
+    with wave.open(str(Path(__file__).parent / "fixtures" / "command-weather.wav")) as w:
+        pcm = w.readframes(w.getnframes())
+    transcript = asyncio.run(asr.transcribe(pcm, 16000))
+    assert "天气" in transcript.text
+
+
+def test_a_missing_local_model_falls_back_to_the_cloud(monkeypatch) -> None:
+    """No model on disk must mean a cloud answer, not a dead assistant."""
+    from house_ear.providers.chain import call_stage
+    from house_ear.providers.sherpa_asr import SherpaAsr
+
+    monkeypatch.setattr(
+        "house_ear.providers.sherpa_asr.model_paths",
+        lambda _dir: (Path("/nonexistent/model.int8.onnx"), Path("/nonexistent/tokens.txt")),
+    )
+    local = SherpaAsr(ProviderConfig(kind="sherpa", model="/nonexistent"))
+    cloud = FakeAsr("云端兜底")
+    transcript, report = asyncio.run(
+        call_stage("asr", [("local", local), ("cloud", cloud)], "transcribe",
+                   b"\x00\x00" * 800, 16000)
+    )
+    assert transcript.text == "云端兜底"
+    assert report.used == "cloud"
+    assert "ModelMissing" in report.attempts[0]["error"]

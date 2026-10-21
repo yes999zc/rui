@@ -48,3 +48,30 @@ uv run house-ear serve
 - The console has no auth by default. `house-ear doctor` warns when it is bound to
   0.0.0.0 without a token; set `web.auth_token` before exposing it beyond the LAN.
 - Logs: `docker compose logs -f house-ear`. M2 adds a WebSocket log view.
+
+## Local ASR model (239 MB, fetched once)
+
+Local speech recognition is first in the ASR chain, and the model is **not** in the image:
+
+```sh
+# what install.sh does, and the only step that needs network beyond the image pull
+docker run --rm -v "$DIR/data:/data" "$IMAGE" fetch-models --dest /data/models/sensevoice
+```
+
+The model lands in the data volume, so a reinstall or an image upgrade keeps it. Config:
+
+```yaml
+providers:
+  catalog:
+    local_asr:
+      kind: sherpa
+      model: /data/models/sensevoice
+      threads: 2
+  asr:
+    chain: [local_asr, siliconflow]   # cloud entry is the fallback, not the default
+```
+
+If the model is missing, the chain falls through to the cloud entry and the assistant keeps
+working — slower, and with a longer tail, but not dead. `house-ear doctor` reports which
+entry answered.
+
