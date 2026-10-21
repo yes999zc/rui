@@ -158,15 +158,20 @@ def _unwrap_new_line(data) -> dict | None:
             return None
     if not isinstance(raw, dict):
         return None
-    line = raw.get("NewLine")
-    for _ in range(2):
+    line: Any = raw.get("NewLine", raw)
+    # Each level can be a string of JSON or a dict that wraps the next one; the old build
+    # unwrapped exactly twice and blew up on the third shape it met.
+    for _ in range(3):
         if isinstance(line, str):
             try:
                 line = json.loads(line)
             except (ValueError, TypeError):
                 return None
-        else:
-            break
+            continue
+        if isinstance(line, dict) and "NewLine" in line:
+            line = line["NewLine"]
+            continue
+        break
     return line if isinstance(line, dict) else None
 
 

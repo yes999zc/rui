@@ -125,7 +125,8 @@ async def silence(ws, ms: int, block_ms: int, speed: float = 1.0) -> None:
 
 
 async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, tail_ms: int,
-                     wait_s: float, speed: float = 1.0, wake_counter=None) -> dict:
+                     wait_s: float, speed: float = 1.0, wake_counter=None,
+                     turn_done=None) -> dict:
     started = time.monotonic()
     baseline = wake_counter() if wake_counter else 0
     watch = (lambda: wake_counter() > baseline) if wake_counter else None
@@ -144,12 +145,18 @@ async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, ta
     deadline = time.monotonic() + wait_s
     idle_since: float | None = None
     while time.monotonic() < deadline:
+        # --asr-only never produces reply audio, so waiting for "played then quiet" would
+        # sit out the whole --wait-s on every round. The turn result is the same signal.
+        if not played and turn_done is not None and turn_done():
+            break
         try:
             raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
         except TimeoutError:
             idle_since = idle_since or time.monotonic()
             # the reply arrives in chunks; stop only after it has gone quiet
             if played and time.monotonic() - idle_since > 2.0:
+                break
+            if not played and turn_done is not None and turn_done():
                 break
             continue
         idle_since = None
@@ -274,6 +281,7 @@ async def run(args: argparse.Namespace) -> int:
                         speed=args.speed,
                         wake_counter=(lambda: supervisor.client.wakes)
                         if supervisor is not None and supervisor.client is not None else None,
+                        turn_done=(lambda b=before: app.state.last_turn is not b),
                     )
                     # the turn runs in a task; give it a moment to publish the result
                     deadline = time.monotonic() + args.wait_s
