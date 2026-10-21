@@ -1,5 +1,21 @@
 # HANDOFF — house-ear
 
+> ## ⚠️ 动手之前，先读老项目（最重要的一条，必须严格执行）
+>
+> **重读 `~/AI_Workspace/01_Code/projects/xiaoai-voice-entry`：尤其是它的 `HANDOFF.md`
+> （1300+ 行）、`docs/`、`server/prompts.py`、`server/assistant_v3.py` 的相关段落、
+> 以及 `server/test_*.py` 全套。那里沉淀了大量真机实测数据、阈值、踩过的坑。**
+>
+> - 参数、人格、提示词、禁用项、去重/工具规则、超时/告别/filler 行为：**照抄**，只重测
+>   「新链路可能改变」的部分（例如 preroll 在新 IPC 下的表现）。
+> - **不要重复造轮子**，不要用自己 20 轮的小实验替代老项目的结论；要复核就拿老项目的数据
+>   对账，不一致时先解释差异，再决定改谁。
+> - 已经因此吃过一次亏：S5b 我自作聪明另写了一套去重/报数 guard，而老项目早在
+>   `server/prompts.py` 里用明确的工具规则解决编造，`clean_reply` 只管剥 DSML 标记，
+>   `conversation.history_rounds` 是 6。这些都没先读，浪费了时间。
+> - 检查顺序：`HANDOFF.md` 全文 → `docs/` → `prompts.py` → 与本次任务相关的 `test_*.py`
+>   → 最后才看 `assistant_v3.py` 的实现细节。
+
 写给下一个会话的自己（或另一个 agent）。读完这一页应当能直接开工，不必重新读一遍代码。
 
 ## 1. 这是什么
@@ -164,14 +180,19 @@ NAS（Bakey-NAS，Intel N100，`<LAN-IP>`，`yes999zc`）：pip 必须走
 凭据位置：`~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_APPID/API_KEY/API_SECRET`）。
 **只写变量名，不写值进任何文档、日志、聊天。**
 
-## 9. 交接时的现场状态（2026-10-21）
+## 9. 交接时的现场状态（2026-10-22 凌晨 01:5x）
 
-- 音箱已恢复旧入口 `ws://<LAN-IP>:4399`，与旧服务 ESTABLISHED；house-ear 全停，端口释放。
-- 最近提交 `5eb7dff`，CI 绿。工作树干净。
-- 配置样本与测量产物在 `~/.hermes/cache/scratch/house-ear-s4/`（24 h 后被清）：
-  `real-device.yaml`、`commands/*.wav`、`pipeline-xfyun-20.jsonl`、`device-token.txt`。
-  需要长期保留的东西要复制进仓库或 `04_Docs/`。
-- 下一步第一个动作：**S5b 回合质量**。三个已知症状按顺序：同句去重、禁止复读/抱怨、
-  无工具时禁止报具体数值。旧项目的对应实现看 `assistant_v3.py` 的 persona/复读处理与
-  `_is_ack_echo`（后者是「拿转写文本和应答文本比」的去重，S5a 还没搬）。
-- 真机验证还欠一条：厂家让位（`docs/vendor.md` 的 4 步）。
+- **S5a 已完成并提交**（`286b867` → `eef3b19`，共 6 个提交）：唤醒应答三档、preroll 回放、
+  hold 缓冲（不是聋窗）、`ack.max_ms` 强制执行、doctor 的 `wake_path`/`ack_wav`、
+  `fetch-models` 一并拉 silero、厂家让位（离线测试覆盖，真机未验）。
+- 测试 **164 passed**，ruff clean。CI 需要重跑一次确认三 job（本地没推之前先别当绿）。
+- S5a 实测：8 档 × 20 轮 = **140 轮**，数据在
+  `~/.hermes/cache/scratch/house-ear-s5a-run/`（24 h 会被清；结论已固化进 `docs/ack.md`）：
+  preroll 0 → 完整 0/20；preroll 500 + none/earcon（gap 0/150/300/500）→ 每档 20/20；
+  tts 应答在「唤醒后立刻说话」→ 0/20（整句被压麦窗口吃掉）。
+- 音箱：**全程没有切**，仍是旧入口 `ws://<LAN-IP>:4399`，今晚所有测试都用假音箱。
+- 未提交的东西：无（工作树干净）。今晚删掉了我自己写的 `session/quality.py`（未接线的
+  自造去重 guard，方向错了，见文件头那条规矩）。
+- 下一步第一个动作：**S5b**，按文件头规矩先读老项目（`prompts.py` / `clean_reply` /
+  `history_rounds` / `strip_wake` / 相关 `test_*.py`），先跑现状基线，再动手。
+- 真机还欠两条：厂家让位验证、打断 300 ms —— 都要 9哥 白天配合出声，按 §8 切换并还原。
