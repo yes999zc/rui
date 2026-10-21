@@ -20,6 +20,7 @@ from .protocol import (
     QueryMetrics,
     Ready,
     Shutdown,
+    Wake,
     encode_json,
     read_frame,
 )
@@ -40,6 +41,11 @@ class AudioPlaneClient:
         self.voice_bytes = 0
         self.voice_frames = 0
         self.last_voice_ms: float | None = None
+        self.wakes = 0
+        self.last_wake: Wake | None = None
+        # Debug aid: keep the exact mono stream the plane produced (what AEC/KWS saw).
+        self.record_voice = False
+        self.voice_audio = bytearray()
         self._metrics_event = asyncio.Event()
         self._read_task: asyncio.Task | None = None
 
@@ -58,6 +64,8 @@ class AudioPlaneClient:
                 self.voice_frames += 1
                 self.voice_bytes += max(0, len(payload) - 12)
                 self.last_voice_ms = now_ms()
+                if self.record_voice:
+                    self.voice_audio.extend(payload[12:])
                 continue
             if kind is not FrameType.CONTROL:
                 continue
@@ -65,6 +73,9 @@ class AudioPlaneClient:
             if isinstance(msg, Metrics):
                 self.metrics = msg
                 self._metrics_event.set()
+            elif isinstance(msg, Wake):
+                self.wakes += 1
+                self.last_wake = msg
             elif isinstance(msg, Ready):
                 self.ready = msg
 
@@ -228,4 +239,7 @@ class AudioPlaneSupervisor:
         if self.client is not None:
             out["voice_frames_received"] = self.client.voice_frames
             out["voice_bytes_received"] = self.client.voice_bytes
+            out["wake_count"] = self.client.wakes
+            if self.client.last_wake is not None:
+                out["last_wake"] = self.client.last_wake.model_dump()
         return out

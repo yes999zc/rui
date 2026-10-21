@@ -91,6 +91,12 @@ class VoiceConfig(BaseModel):
     vad_min_speech_ms: int = Field(default=200, ge=50, le=2000)
     vad_end_silence_ms: int = Field(default=600, ge=100, le=3000)
     barge_in: bool = True
+    # Wake word. Off unless a model directory is configured: the model is a download,
+    # not something a pip install can guess.
+    kws_enabled: bool = False
+    kws_model_dir: str = ""
+    kws_keywords_file: str = ""
+    kws_chunk: int = Field(default=8, ge=4, le=16)
 
     @property
     def frame_samples(self) -> int:

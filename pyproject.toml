@@ -17,6 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.5"]
+# Wake word. Optional because it is a 30 MB wheel and the plane degrades cleanly
+# (KWS off, everything else runs) when it is absent.
+kws = ["sherpa-onnx>=1.12"]
 
 [project.scripts]
 house-ear = "house_ear.__main__:main"

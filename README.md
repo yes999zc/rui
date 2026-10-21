@@ -6,10 +6,10 @@ Self-hosted voice endpoint for SSH-enabled smart speakers.
 wake word, speech, reasoning, and playback all run on your own box, and tools
 (Home Assistant, MCP servers, local commands) are exposed through one registry.
 
-> Status: **M1 in progress (S0–S2 done, S3 in progress)** — control plane, contracts,
-> latency ruler, the audio-plane process, the inbound LX06 adapter and echo
-> cancellation are in place; the wake word lands next. v1 supports exactly one
-> speaker model: Xiaomi 小爱音箱 Pro (LX06).
+> Status: **M1 in progress (S0–S3 done)** — control plane, contracts, latency ruler,
+> the audio-plane process, the inbound LX06 adapter, echo cancellation and the wake word
+> are in place; ASR/LLM/TTS wiring is next (S4). v1 supports exactly one speaker model:
+> Xiaomi 小爱音箱 Pro (LX06).
 
 ## What works today
 
@@ -45,6 +45,10 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 - `scripts/bench_aec.py` — offline ERLE and CPU for the real chain
 - `scripts/measure_erle.py` — hardware ERLE: plays a wav while recording the array on the
   same connection, then computes ERLE offline from the capture
+- wake word — sherpa-onnx KWS on the echo-cancelled stream, proven parameters (chunk 8,
+  boost 2.0, threshold 0.20), `Wake` events over the IPC seam
+- `scripts/measure_wake.py` — plays music, listens, prints every wake with its timestamp,
+  ERLE and reference state; `--save-voice` keeps the exact stream KWS saw
 
 ## Measured so far
 
@@ -61,6 +65,8 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 | AEC, 6 filters, 4096 taps, synthetic 200 ms room | ERLE 30.5 dB converged, rtf 0.066 | same |
 | AEC on the LX06, 30 s of music, ref −25.5 dBFS | ERLE 24.7-25.1 dB (second half), residual −39 dBFS, 0 clipped | `scripts/measure_erle.py` |
 | AEC convergence | ~10 s of playback; first windows only 15-17 dB | same |
+| wake word on the LX06 with music playing | 18 wakes in 75 s (spoken ~every 4 s), 0 dropped frames | `scripts/measure_wake.py` |
+| audio plane rtf with AEC + KWS | 0.0935 at 16 kHz / 8 ch | same run |
 | config v1 -> v2 migration | loads, file untouched | `tests/test_config.py` |
 
 ## Quick start

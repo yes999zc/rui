@@ -108,6 +108,9 @@ class Metrics(BaseModel):
     aec_channel: int = 0
     ref_active: bool = False
     speaker_connected: bool = False
+    wake_count: int = 0
+    kws_enabled: bool = False
+    kws_error: str = ""
     playback_s: float = 0.0
     frames_in: int
     frames_out: int
@@ -118,6 +121,17 @@ class Metrics(BaseModel):
     cpu_s: float
     audio_s: float
     rtf: float
+
+
+class Wake(BaseModel):
+    """plane -> control: the wake word fired. The turn clock starts here."""
+
+    type: Literal["wake"] = "wake"
+    ts_ms: float
+    keyword: str
+    erle_db: float | None = None
+    ref_active: bool = False
+    playback_s: float = 0.0
 
 
 class Error(BaseModel):
@@ -149,7 +163,7 @@ class QueryMetrics(BaseModel):
 
 
 ControlMessage = Annotated[
-    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Error | Shutdown,
+    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | Error | Shutdown,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

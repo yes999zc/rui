@@ -35,6 +35,7 @@ from ..device.contract import AudioFrame, DeviceAdapter
 from ..trace import now_ms
 from .aec import AecChain, AecUnavailable
 from .decimate import Decimator
+from .kws import KwsUnavailable, WakeWord
 from .protocol import (
     CONTROL,
     Error,
@@ -45,6 +46,7 @@ from .protocol import (
     QueryMetrics,
     Ready,
     StopAudio,
+    Wake,
     encode_json,
     encode_pcm,
     read_frame,
@@ -67,6 +69,10 @@ class AudioPlane:
         self.arrivals = ArrivalStats()
         self.aec: AecChain | None = None
         self.aec_error = ""
+        self.wake: WakeWord | None = None
+        self.kws_error = ""
+        self.wake_count = 0
+        self.last_wake: Wake | None = None
         self.frames_in = 0
         self.frames_out = 0
         self.frames_dropped = 0
@@ -108,6 +114,25 @@ class AudioPlane:
             self.aec_error = str(exc)
             log.warning("aec off: %s", exc)
 
+    def _build_kws(self) -> None:
+        voice = self.cfg.audio.voice
+        if not voice.kws_enabled:
+            return
+        if not voice.kws_model_dir:
+            self.kws_error = "kws_enabled but kws_model_dir is empty"
+            log.warning("kws off: %s", self.kws_error)
+            return
+        try:
+            self.wake = WakeWord(
+                model_dir=voice.kws_model_dir,
+                keywords_file=voice.kws_keywords_file or None,
+                chunk=voice.kws_chunk,
+                rate=voice.rate,
+            )
+        except KwsUnavailable as exc:
+            self.kws_error = str(exc)
+            log.warning("kws off: %s", exc)
+
     # ------------------------------------------------------------- pipeline
     def _frame_to_voice(self, frame: AudioFrame, decimator: Decimator) -> bytes:
         """Frame -> one mono voice-rate block, echo-cancelled when a reference exists."""
@@ -115,7 +140,13 @@ class AudioPlane:
             return b""
         samples = np.frombuffer(frame.pcm, dtype="<i2")
         usable = frame.frame_samples * frame.channels
-        block = decimator.process(samples[:usable].reshape(-1, frame.channels))
+        # Normalise before anything else: the decimator, the canceller and the KWS all
+        # work in [-1, 1]. Feeding them int16 magnitudes and multiplying back at the end
+        # clips every sample of the output - which sounds like noise to a wake word and
+        # is invisible in a byte count.
+        block = decimator.process(
+            samples[:usable].reshape(-1, frame.channels).astype(np.float32) / 32768.0
+        )
 
         if self.aec is not None and frame.reference_channels > 0:
             ref = block[:, frame.mic_channels]
@@ -124,10 +155,11 @@ class AudioPlane:
             mono = block[:, 0]
         return np.clip(mono * 32768.0, -32768, 32767).astype("<i2").tobytes()
 
-    async def _capture(self, connected: asyncio.Event) -> None:
+    async def _capture(self, connected: asyncio.Event, writer: asyncio.StreamWriter) -> None:
         assert self.adapter is not None
         info = await self.adapter.probe()
         self._build_aec(info.mic_channels, info.ref_channels)
+        self._build_kws()
         decimator = Decimator(
             factor=max(1, info.sample_rate // self.cfg.audio.voice.rate),
             channels=info.channels,
@@ -143,6 +175,23 @@ class AudioPlane:
                 self.arrivals.add(frame.ts_ms - last_ts)
             last_ts = frame.ts_ms
             pcm = self._frame_to_voice(frame, decimator)
+            if self.wake is not None and pcm:
+                for hit in self.wake.accept(pcm, ts_ms=frame.ts_ms):
+                    self.wake_count += 1
+                    event = Wake(
+                        ts_ms=hit.ts_ms,
+                        keyword=hit.keyword,
+                        erle_db=self.aec.erle_db if self.aec is not None else None,
+                        ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
+                        playback_s=round(self.playback_s, 1),
+                    )
+                    self.last_wake = event
+                    if connected.is_set():
+                        try:
+                            writer.write(encode_json(event))
+                            await writer.drain()
+                        except (ConnectionResetError, BrokenPipeError):
+                            connected.clear()
             if not connected.is_set():
                 self.no_consumer += 1
             elif not self.ring.push(frame.seq, now_ms(), pcm):
@@ -241,6 +290,9 @@ class AudioPlane:
             aec_erle_db=self.aec.erle_db if self.aec is not None else None,
             aec_channel=self.aec.selected if self.aec is not None else 0,
             ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
+            wake_count=self.wake_count,
+            kws_enabled=self.wake is not None,
+            kws_error=self.kws_error,
             speaker_connected=bool(getattr(self.adapter, "health", lambda: {})().get("connected"))
             if self.adapter is not None
             else False,
@@ -291,7 +343,7 @@ class AudioPlane:
             await writer.drain()
             connected.set()
             tasks = [
-                asyncio.create_task(self._capture(connected), name="capture"),
+                asyncio.create_task(self._capture(connected, writer), name="capture"),
                 asyncio.create_task(self._send_audio(writer, connected), name="send-audio"),
                 asyncio.create_task(self._metrics_loop(writer, connected), name="metrics"),
             ]
@@ -332,6 +384,9 @@ class AudioPlane:
                     await task
                 except (asyncio.CancelledError, Exception):  # noqa: BLE001
                     pass
+            if self.wake is not None:
+                self.wake.close()
+                self.wake = None
             if self.aec is not None:
                 self.aec.close()
                 self.aec = None

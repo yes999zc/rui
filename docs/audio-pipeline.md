@@ -100,6 +100,27 @@ Measure it (wake → mic energy floor) before believing the 300 ms number.
 
 Without a reference channel this cannot work. Say so in the UI.
 
+## Wake word
+
+sherpa-onnx keyword spotting on the echo-cancelled mono stream, with the parameters the
+old deployment ran in production: zipformer `chunk 8` (160 ms of context), boost 2.0,
+threshold `#0.20`, two threads. Not re-tuned - those values already wake reliably at high
+volume, and a new threshold would be a new experiment with a new regression surface.
+
+Measured on the LX06 with music playing (`scripts/measure_wake.py`, 75 s, wake word
+spoken about every 4 s): **18 wakes**, `rtf 0.0935` for AEC + KWS together, 0 dropped
+frames, reference active throughout.
+
+Two things the run showed:
+
+- **ERLE reported at wake time reads 6-13 dB, not the 21-28 dB the canceller reaches on
+  its own.** The person speaking adds energy to the microphone that the canceller is not
+  supposed to remove, so the ratio drops. ERLE is only meaningful on a stretch with no
+  speech; the live number is a health indicator, not a test result.
+- The offline tests need silence on both sides of the phrase, because the spotter needs
+  context before the first phoneme. Production never has this problem - the microphone is
+  already running when someone speaks.
+
 ## Latency marks
 
 `house_ear.trace` stamps the boundaries that cost time: `wake`,
