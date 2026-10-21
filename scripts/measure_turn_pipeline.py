@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from house_ear.config import load_config, save_config  # noqa: E402
 from house_ear.device.xiaoai import protocol  # noqa: E402
+from house_ear.log_setup import setup_logging  # noqa: E402
 from house_ear.web.api.app import create_app  # noqa: E402
 
 
@@ -158,10 +159,19 @@ async def _consume(ws, state: dict) -> None:
 
 async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, tail_ms: int,
                      wait_s: float, speed: float = 1.0, wake_counter=None,
-                     turn_done=None) -> dict:
+                     turn_done=None, reader: asyncio.Task | None = None,
+                     state: dict | None = None) -> dict:
     started = time.monotonic()
-    state: dict = {}
-    reader = asyncio.create_task(_consume(ws, state), name="consume")
+    own_reader = reader is None
+    if own_reader:
+        state = {}
+        reader = asyncio.create_task(_consume(ws, state), name="consume")
+    else:
+        # The caller owns one reader for the whole run: a gap with nobody reading fills the
+        # socket, the plane blocks writing the reply into it, and its device reader stops
+        # taking frames - which looks like "the gate stopped closing turns" and is really
+        # "nobody was listening for 1.3 s between rounds".
+        assert state is not None
     baseline = wake_counter() if wake_counter else 0
     watch = (lambda: wake_counter() > baseline) if wake_counter else None
     hit_after_wake = await stream(ws, wake, rate, 60, speed=speed, watch=watch)
@@ -180,9 +190,10 @@ async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, ta
         if turn_done is not None and turn_done():
             await asyncio.sleep(0.3)
             break
-    reader.cancel()
-    with contextlib.suppress(asyncio.CancelledError, Exception):
-        await reader
+    if own_reader:
+        reader.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await reader
     return {
         "audio_bytes": state.get("audio_bytes", 0),
         "wall_s": round(time.monotonic() - started, 1),
@@ -237,6 +248,7 @@ async def run(args: argparse.Namespace) -> int:
     cfg = load_config(run_config)
 
     app = create_app(cfg, config_path=run_config, start_audio=True)
+    setup_logging(cfg.system.log_level)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port + 1, log_level="info"))
     serve_task = asyncio.create_task(server.serve())
     while not server.started:
@@ -280,15 +292,21 @@ async def run(args: argparse.Namespace) -> int:
         if True:
             hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
             assert hello["Request"]["command"] == "start_recording", hello
+            # One reader for the whole run: a real client never stops reading, and neither
+            # does this one (see `play_round`).
+            shared: dict = {}
+            reader_task = asyncio.create_task(_consume(ws, shared), name="consume")
             with out.open("w", encoding="utf-8") as fh:
                 for i in range(1, args.rounds + 1):
                     before = app.state.last_turn
+                    audio_before = shared.get("audio_bytes", 0)
                     round_info = await play_round(
                         ws, wake, command, rate, args.gap_ms, args.tail_ms, args.wait_s,
                         speed=args.speed,
                         wake_counter=(lambda: supervisor.client.wakes)
                         if supervisor is not None and supervisor.client is not None else None,
                         turn_done=(lambda b=before: app.state.last_turn is not b),
+                        reader=reader_task, state=shared,
                     )
                     # the turn runs in a task; give it a moment to publish the result
                     deadline = time.monotonic() + args.wait_s
@@ -311,7 +329,7 @@ async def run(args: argparse.Namespace) -> int:
                         "gate_discarded": getattr(metrics, "gate_discarded", None),
                         "reply": turn.get("reply", ""),
                         "error": turn.get("error", ""),
-                        "audio_bytes": round_info["audio_bytes"],
+                        "audio_bytes": max(0, round_info["audio_bytes"] - audio_before),
                         "wall_s": round_info["wall_s"],
                         "wake_lag_ms": round_info["wake_lag_ms"],
                         "providers": {k: (v or {}).get("used") for k, v in (turn.get("stages") or {}).items()},
@@ -332,8 +350,29 @@ async def run(args: argparse.Namespace) -> int:
                           f"| {row['transcript']} -> {row['reply'][:20]}", flush=True)
                     await asyncio.sleep(args.between)
     finally:
+        task = locals().get("reader_task")
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         server.should_exit = True
         await serve_task
+
+    # The plane's stderr is a pipe nobody drains during the run, so anything it said is
+    # still sitting in the buffer. Print the tail: a gate that never closes a turn leaves no
+    # other trace, and "it printed nothing" is not a diagnosis.
+    supervisor = getattr(app.state, "audio", None)
+    proc = getattr(supervisor, "proc", None)
+    stderr = getattr(proc, "stderr", None)
+    if stderr is not None:
+        try:
+            raw = await asyncio.wait_for(stderr.read(), timeout=5)
+        except (TimeoutError, asyncio.CancelledError):
+            raw = b""
+        text = raw.decode(errors="replace").strip()
+        if text:
+            print("\n--- audio plane log (tail) ---")
+            print(text[-4000:])
 
     firsts = [r["first_response_ms"] for r in rows if r["first_response_ms"]]
     print("\n--- summary ---")
