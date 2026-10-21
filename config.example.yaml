@@ -35,6 +35,10 @@ audio:
     kws_threshold: 0.20
     vad_min_speech_ms: 200
     vad_end_silence_ms: 600
+    # Audio kept from before the KWS hit and replayed into the gate. The streaming KWS
+    # reports 150-200 ms after the wake word ends; without this the first word of a
+    # request spoken in one breath ("你好小瑞，现在几点") never reaches the transcriber.
+    wake_preroll_ms: 500
     barge_in: true
   playback:
     rate: 48000            # measured: S16_LE, 2 ch
@@ -45,6 +49,18 @@ audio:
   aec:
     enabled: true
     filter_len: 4096       # taps at voice.rate = 256 ms of echo tail
+ack:
+  # What the speaker does the instant the wake word fires.
+  # earcon = a 160 ms tone, no microphone loss. tts = a spoken word, but the LX06 mutes
+  # its microphone for ~1.2 s while it plays, so the cue is capped and falls back to the
+  # tone when the cap is exceeded.
+  mode: earcon           # none | earcon | tts
+  text: 我在。            # only used by mode: tts; rendered once at startup
+  chime: soft2           # soft2 | blip | marimba | glass | piano
+  chime_ms: 160
+  chime_trim: 1.0        # 0..1: the cue is already at the level the path likes
+  max_ms: 600            # a longer spoken cue is refused and the tone is used
+  echo_ignore_ms: 1200   # how long the box ignores its own spoken cue
 providers:
   # One catalog of named providers; each stage picks an ordered chain (primary first).
   catalog:

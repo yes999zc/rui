@@ -1,6 +1,7 @@
 """Control-plane API. The browser never sees a secret."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -13,12 +14,14 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from ... import __version__
+from ...audio.ack import ack_wav_path
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
 from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import redacted
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
 from ...providers.chain import build_stage
+from ...session.ack import ensure_ack_wav
 from ...session.turn import DEFAULT_PROMPT, TurnRunner
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
@@ -59,6 +62,16 @@ def create_app(
                 warm = getattr(provider, "warm", None)
                 if warm is not None:
                     await warm()
+        # Before the plane starts: with mode=tts the plane plays a file that must exist.
+        # The cap is enforced here, so a too-long cue is downgraded to a tone at startup
+        # instead of muting the microphone on every wake.
+        app.state.ack_note = ""
+        if cfg.ack.mode == "tts":
+            try:
+                app.state.ack_note = await asyncio.wait_for(ensure_ack_wav(cfg), timeout=20)
+            except TimeoutError:
+                app.state.ack_note = "tts timed out: the plane will use a tone"
+            log.info("ack: %s", app.state.ack_note)
         if start_audio:
             supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
             try:
@@ -117,6 +130,12 @@ def create_app(
             "devices": len(adapters),
             "device_errors": len(adapters.errors),
             "audio_plane": bool(supervisor is not None and supervisor.running),
+            # What the plane will actually play on a wake, and why, if it was downgraded.
+            "ack": {
+                "mode": cfg.ack.mode,
+                "note": getattr(app.state, "ack_note", ""),
+                "wav": str(ack_wav_path(cfg)) if cfg.ack.mode == "tts" else "",
+            },
         }
 
     @app.get("/api/v1/doctor", dependencies=[Depends(auth)])

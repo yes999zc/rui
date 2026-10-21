@@ -67,6 +67,7 @@ class UtteranceGate:
 
     def _reset_state(self) -> None:
         self._skipping = 0
+        self._hold_ms = 0.0
         self._preroll: deque[np.ndarray] = deque()
         self._preroll_samples = 0
         self._buf: list[np.ndarray] = []
@@ -76,17 +77,32 @@ class UtteranceGate:
         self._started = False
 
     # ------------------------------------------------------------------ state
-    def arm(self) -> None:
-        """A wake word just fired: ignore the phrase tail, then listen."""
+    def arm(self, *, start_after_ms: float = 0.0) -> None:
+        """A wake word just fired: ignore the phrase tail, then listen.
+
+        `start_after_ms` holds the gate shut for the acknowledgement: a spoken cue mutes
+        the device microphone, so anything the VAD sees meanwhile is the box's own voice.
+        The hold is spent in audio time, not wall time, so the same number means the same
+        thing at any feed speed.
+        """
         self._vad.reset()
         self._reset_state()
         self.armed = True
+        self._hold_ms = max(0.0, start_after_ms)
         self._skipping = int(self.rate * self.cfg.skip_after_wake_ms / 1000)
 
     def disarm(self) -> None:
         self.armed = False
         self._vad.reset()
         self._reset_state()
+
+    def hold(self, ms: float) -> None:
+        """Keep the gate shut for `ms` of audio: the speaker is still sounding.
+
+        Separate from `arm()` because the pre-wake replay belongs before the hold: those
+        blocks are the person's own words, captured while the microphone was still open.
+        """
+        self._hold_ms = max(0.0, ms)
 
     # ------------------------------------------------------------------ input
     def feed(self, pcm: bytes, ts_ms: float = 0.0) -> tuple[bytes, float] | None:
@@ -106,6 +122,13 @@ class UtteranceGate:
                 return None
 
         block_ms = samples.size * 1000.0 / self.rate
+
+        # The acknowledgement is still playing: the device mic is muted, so whatever the
+        # VAD hears is the box's own cue plus its tail. Spending the hold in audio time
+        # keeps `start_after_ms` meaningful when the frames arrive faster than real time.
+        if self._hold_ms > 0:
+            self._hold_ms -= block_ms
+            return None
 
         if not self._started:
             self._preroll.append(samples)

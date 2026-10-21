@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import wave
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -34,9 +35,10 @@ from ..config import Config, load_config
 from ..device import build_adapters
 from ..device.contract import AudioFrame, DeviceAdapter
 from ..trace import now_ms
+from .ack import render as render_ack
 from .aec import AecChain, AecUnavailable
 from .decimate import Decimator
-from .kws import KwsUnavailable, WakeWord
+from .kws import KwsUnavailable, WakeHit, WakeWord
 from .protocol import (
     CONTROL,
     Error,
@@ -57,6 +59,7 @@ from .protocol import (
 from .resample import resample
 from .ring import ArrivalStats, PcmRing
 from .vad import GateConfig, UtteranceGate, VadUnavailable
+from .wav import read_wav_mono
 
 METRICS_EVERY_S = 2.0
 PLAY_CHUNK_MS = 100
@@ -103,6 +106,20 @@ class AudioPlane:
         self._playback_task: asyncio.Task | None = None
         self.started = time.monotonic()
         self._stop = asyncio.Event()
+        # Pre-wake audio. The streaming KWS reports a hit ~0.5 s after the wake word ends,
+        # so "你好小瑞，现在几点" said in one breath loses 现在几点 unless the ring is
+        # replayed into the gate. Kept as int16 voice-rate blocks, oldest first.
+        self._preroll: deque[bytes] = deque()
+        self._preroll_samples = 0
+        self.preroll_replayed_ms = 0.0
+        self.preroll_replays = 0
+        # Wake acknowledgement (S5a). Fire-and-forget: awaiting it here would block the
+        # frame consumer for the cue's whole length and drop microphone audio.
+        self._ack_task: asyncio.Task | None = None
+        self._ack_cache: tuple[tuple[int, str], np.ndarray] | None = None
+        self.ack_plays = 0
+        self.ack_mode_effective = cfg.ack.mode
+        self.ack_error = ""
 
     # ---------------------------------------------------------------- adapter
     async def _open_adapter(self) -> DeviceAdapter:
@@ -216,42 +233,131 @@ class AudioPlane:
                 self.arrivals.add(frame.ts_ms - last_ts)
             last_ts = frame.ts_ms
             pcm = self._frame_to_voice(frame, decimator)
+            if pcm:
+                self._keep_preroll(pcm)
             if self.wake is not None and pcm:
                 for hit in self.wake.accept(pcm, ts_ms=frame.ts_ms):
                     self.wake_count += 1
-                    event = Wake(
-                        ts_ms=hit.ts_ms,
-                        keyword=hit.keyword,
-                        erle_db=self.aec.erle_db if self.aec is not None else None,
-                        ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
-                        playback_s=round(self.playback_s, 1),
-            voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
-            ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
-                    )
-                    self.last_wake = event
-                    if self.gate is not None:
-                        self.gate.arm()
-                    if connected.is_set():
-                        try:
-                            writer.write(encode_json(event))
-                            await writer.drain()
-                        except (ConnectionResetError, BrokenPipeError):
-                            connected.clear()
+                    await self._on_wake(hit, writer, connected)
             if self.gate is not None and pcm:
-                finished = self.gate.feed(pcm, ts_ms=frame.ts_ms)
-                if finished is not None and connected.is_set():
-                    utt, ts = finished
-                    self.utterances += 1
-                    try:
-                        writer.write(encode_pcm(FrameType.UTTERANCE_PCM, self.utterances, ts, utt))
-                        await writer.drain()
-                    except (ConnectionResetError, BrokenPipeError):
-                        connected.clear()
+                await self._feed_gate(pcm, frame.ts_ms, writer, connected)
             if not connected.is_set():
                 self.no_consumer += 1
             elif not self.ring.push(frame.seq, now_ms(), pcm):
                 self.frames_dropped += 1
             self.cpu_s += time.perf_counter() - t0
+
+    # ---------------------------------------------------- wake, preroll, ack
+    def _keep_preroll(self, pcm: bytes) -> None:
+        """Hold the last `wake_preroll_ms` of voice-rate audio for the next wake."""
+        limit = int(self.cfg.audio.voice.rate * self.cfg.audio.voice.wake_preroll_ms / 1000)
+        if limit <= 0:
+            return
+        self._preroll.append(pcm)
+        self._preroll_samples += len(pcm) // 2
+        while self._preroll_samples > limit and len(self._preroll) > 1:
+            self._preroll_samples -= len(self._preroll.popleft()) // 2
+
+    async def _on_wake(
+        self, hit: WakeHit, writer: asyncio.StreamWriter, connected: asyncio.Event
+    ) -> None:
+        """One KWS hit: cue the speaker, replay what came before, then listen.
+
+        Order is the whole point. The cue is chosen first because its length decides how
+        long the gate must stay shut; the pre-wake ring is replayed before the hold starts
+        because it is the user's own speech, captured before the microphone went quiet.
+        """
+        audio, mode, note = render_ack(self.cfg)
+        self.ack_mode_effective = mode
+        if note:
+            self.ack_error = note
+        cue_ms = audio.size * 1000.0 / self.cfg.audio.playback.rate if audio.size else 0.0
+        # A spoken cue mutes the device microphone; a tone only needs its own length.
+        hold_ms = cue_ms + float(self.cfg.ack.echo_ignore_ms) if mode == "tts" else cue_ms
+
+        event = Wake(
+            ts_ms=hit.ts_ms,
+            keyword=hit.keyword,
+            erle_db=self.aec.erle_db if self.aec is not None else None,
+            ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
+            playback_s=round(self.playback_s, 1),
+            voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
+            ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
+            ack_mode=mode,
+        )
+        self.last_wake = event
+
+        if self.gate is not None:
+            self.gate.arm()
+            replayed = 0
+            for block in list(self._preroll):
+                await self._feed_gate(block, hit.ts_ms, writer, connected)
+                replayed += len(block) // 2
+            self._preroll.clear()
+            self._preroll_samples = 0
+            self.preroll_replayed_ms = round(replayed * 1000.0 / self.cfg.audio.voice.rate, 1)
+            self.preroll_replays += 1
+            # From here on it is live audio, and the cue may still be sounding.
+            self.gate.hold(hold_ms)
+
+        if audio.size:
+            self._start_ack(audio)
+
+        if connected.is_set():
+            try:
+                writer.write(encode_json(event))
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError):
+                connected.clear()
+
+    async def _feed_gate(
+        self, pcm: bytes, ts_ms: float, writer: asyncio.StreamWriter, connected: asyncio.Event
+    ) -> None:
+        gate = self.gate
+        if gate is None:
+            return
+        finished = gate.feed(pcm, ts_ms=ts_ms)
+        if finished is None or not connected.is_set():
+            return
+        utt, ts = finished
+        self.utterances += 1
+        try:
+            writer.write(encode_pcm(FrameType.UTTERANCE_PCM, self.utterances, ts, utt))
+            await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            connected.clear()
+
+    def _start_ack(self, audio: np.ndarray) -> None:
+        """Fire and forget. Awaiting the cue here would block the frame consumer."""
+        if self._ack_task is not None and not self._ack_task.done():
+            return
+        self._ack_task = asyncio.create_task(self._play_ack(audio), name="ack")
+
+    async def _play_ack(self, audio: np.ndarray) -> None:
+        adapter = self.adapter
+        if adapter is None:
+            return
+        rate = self.cfg.audio.playback.rate
+        step = max(1, rate * PLAY_CHUNK_MS // 1000)
+        try:
+            for start in range(0, audio.size, step):
+                chunk = audio[start : start + step]
+                if self._stop.is_set():
+                    return
+                await adapter.play(
+                    np.round(chunk * 32767.0).astype("<i2").tobytes(),
+                    sample_rate=rate,
+                    channels=1,
+                )
+                self.playback_s += chunk.size / rate
+                if start + step < audio.size:
+                    await asyncio.sleep(chunk.size / rate)
+            self.ack_plays += 1
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a broken cue must not kill the plane
+            self.ack_error = f"{type(exc).__name__}: {exc}"
+            log.info("ack: %s", self.ack_error)
 
     async def _send_audio(self, writer: asyncio.StreamWriter, connected: asyncio.Event) -> None:
         """Consume the ring at real time and hand each block to the control plane."""
@@ -325,7 +431,15 @@ class AudioPlane:
                 break
 
     async def _speak_loop(self) -> None:
-        """Play PCM the control plane pushes, paced at the chunk's own duration."""
+        """Play the reply PCM the control plane pushes.
+
+        PLAY_PCM carries mono PCM at the *voice* rate - every TTS provider is built with
+        `voice.rate`. Handing that straight to a 48 kHz device plays each answer three
+        times too fast: byte counts, pacing stats and tests all look right, and only the
+        ear catches it. Resampled here, once, and paced by the resulting duration.
+        """
+        target = self.cfg.audio.playback.rate
+        source = self.cfg.audio.voice.rate
         while not self._stop.is_set():
             chunk = await self._speak_queue.get()
             if chunk is None:
@@ -333,12 +447,16 @@ class AudioPlane:
             adapter = self.adapter
             if adapter is None:
                 continue
+            audio = resample(
+                np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768.0, source, target
+            )
+            pcm = np.round(np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
             try:
-                await adapter.play(chunk, sample_rate=self.cfg.audio.playback.rate, channels=1)
+                await adapter.play(pcm, sample_rate=target, channels=1)
             except Exception as exc:  # noqa: BLE001 - the speaker may be gone
                 log.info("speak: %s", exc)
                 continue
-            seconds = len(chunk) / 2.0 / self.cfg.audio.playback.rate
+            seconds = audio.size / target
             self.playback_s += seconds
             await asyncio.sleep(seconds)
         # drain on shutdown
@@ -378,10 +496,17 @@ class AudioPlane:
             kws_error=self.kws_error,
             vad_enabled=self.gate is not None,
             utterances=self.utterances,
+            gate_armed=bool(self.gate.armed) if self.gate is not None else False,
+            gate_discarded=self.gate.discarded if self.gate is not None else 0,
             speaker_connected=bool(getattr(self.adapter, "health", lambda: {})().get("connected"))
             if self.adapter is not None
             else False,
             playback_s=round(self.playback_s, 1),
+            ack_mode=self.ack_mode_effective,
+            ack_plays=self.ack_plays,
+            ack_error=self.ack_error,
+            preroll_replayed_ms=self.preroll_replayed_ms,
+            preroll_replays=self.preroll_replays,
             voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
             ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
             frames_in=self.frames_in,
@@ -510,27 +635,6 @@ class AudioPlane:
         async with server:
             await self._stop.wait()
         self.socket_path.unlink(missing_ok=True)
-
-
-def read_wav_mono(path: Path) -> tuple[np.ndarray, int]:
-    """int16/24/32-bit wav of any channel count -> mono float32 in [-1, 1]."""
-    with wave.open(str(path)) as w:
-        channels, width, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()
-        raw = w.readframes(w.getnframes())
-    if width == 1:
-        data = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-    elif width == 2:
-        data = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
-    elif width == 3:
-        b = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
-        v = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
-        v = np.where(v >= 1 << 23, v - (1 << 24), v)
-        data = (v / float(1 << 23)).astype(np.float32)
-    else:
-        data = np.frombuffer(raw, dtype="<i4").astype(np.float32) / float(1 << 31)
-    if channels > 1:
-        data = data.reshape(-1, channels).mean(axis=1)
-    return data, rate
 
 
 def default_socket_path() -> Path:

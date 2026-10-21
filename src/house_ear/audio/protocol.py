@@ -115,7 +115,17 @@ class Metrics(BaseModel):
     kws_error: str = ""
     vad_enabled: bool = False
     utterances: int = 0
+    # Why a wake produced no turn: still listening, or gave the segment up (too short,
+    # nothing said). Without these two the console can only show "0".
+    gate_armed: bool = False
+    gate_discarded: int = 0
     playback_s: float = 0.0
+    # Wake acknowledgement (S5a). `ack_mode` is what actually played, not what was asked.
+    ack_mode: str = ""
+    ack_plays: int = 0
+    ack_error: str = ""
+    preroll_replayed_ms: float = 0.0
+    preroll_replays: int = 0
     voice_rms_db: float | None = None
     ref_rms_db: float | None = None
     frames_in: int
@@ -138,6 +148,13 @@ class Wake(BaseModel):
     erle_db: float | None = None
     ref_active: bool = False
     playback_s: float = 0.0
+    # Levels at the hit. Pydantic drops unknown fields silently, so these used to be
+    # built in the plane and then vanish on the wire - the console showed nothing.
+    voice_rms_db: float | None = None
+    ref_rms_db: float | None = None
+    # Which acknowledgement actually played ("none" / "earcon" / "tts"): the config asks
+    # for a mode, the plane reports what it could deliver.
+    ack_mode: str = ""
 
 
 class SpeakFinished(BaseModel):

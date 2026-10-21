@@ -57,6 +57,29 @@ def read_pcm(path: Path, rate: int) -> bytes:
         return w.readframes(w.getnframes())
 
 
+def trim_silence(pcm: bytes, rate: int, thresh_db: float = -45.0) -> bytes:
+    """Trim leading/trailing near-silence so two clips can be spoken in one breath.
+
+    Without this the fixtures carry 200-400 ms of digital silence at each edge, the turn
+    gate's 300 ms skip eats silence instead of speech, and the first-word-loss bug this
+    whole measurement exists for cannot reproduce. A person does not pause there.
+    """
+    x = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+    win = max(1, rate // 100)  # 10 ms
+    usable = x.size // win * win
+    if usable < win * 4:
+        return pcm
+    frames_ = x[:usable].reshape(-1, win)
+    rms = np.sqrt(np.square(frames_).mean(axis=1))
+    db = 20.0 * np.log10(np.maximum(rms, 1e-6))
+    loud = np.where(db > thresh_db)[0]
+    if loud.size == 0:
+        return pcm
+    start = max(0, (int(loud[0]) - 5) * win)
+    end = min(x.size, (int(loud[-1]) + 2) * win)
+    return (np.clip(x[start:end], -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
 def frames(pcm: bytes, ms: int = 60) -> list[np.ndarray]:
     """Split mono int16 into device-sized blocks."""
     samples = np.frombuffer(pcm, dtype="<i2")
@@ -81,25 +104,41 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-async def stream(ws, pcm: bytes, rate: int, block_ms: int, speed: float) -> None:
+async def stream(ws, pcm: bytes, rate: int, block_ms: int, speed: float,
+                 watch=None) -> float | None:
+    """Send blocks at device pace. `watch()` is polled after each block; the elapsed time
+    of the first truthy answer is returned (used to time the KWS hit)."""
+    started = time.monotonic()
+    hit_at: float | None = None
     for chunk in frames(pcm, block_ms):
         await ws.send(protocol.stream("record", to_device_block(chunk)))
         await asyncio.sleep(block_ms / 1000.0 / speed)
+        if watch is not None and hit_at is None and watch():
+            hit_at = time.monotonic() - started
+    return hit_at
 
 
-async def silence(ws, ms: int, block_ms: int) -> None:
+async def silence(ws, ms: int, block_ms: int, speed: float = 1.0) -> None:
     for _ in range(max(1, ms // block_ms)):
         await ws.send(protocol.stream("record", to_device_block(np.zeros(block_ms * 16, dtype="<i2"))))
-        await asyncio.sleep(block_ms / 1000.0)
+        await asyncio.sleep(block_ms / 1000.0 / speed)
 
 
 async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, tail_ms: int,
-                     wait_s: float) -> dict:
+                     wait_s: float, speed: float = 1.0, wake_counter=None) -> dict:
     started = time.monotonic()
-    await stream(ws, wake, rate, 60, speed=3.0)
-    await silence(ws, gap_ms, 60)
-    await stream(ws, command, rate, 60, speed=3.0)
-    await silence(ws, tail_ms, 60)
+    baseline = wake_counter() if wake_counter else 0
+    watch = (lambda: wake_counter() > baseline) if wake_counter else None
+    hit_after_wake = await stream(ws, wake, rate, 60, speed=speed, watch=watch)
+    await silence(ws, gap_ms, 60, speed=speed)
+    if hit_after_wake is None:
+        hit_after_wake = await stream(ws, command, rate, 60, speed=speed, watch=watch)
+        if hit_after_wake is not None:
+            hit_after_wake += len(wake) / 2 / rate + gap_ms / 1000.0
+    await silence(ws, tail_ms, 60, speed=speed) if hit_after_wake is not None else None
+    if hit_after_wake is None:
+        # the command stream was consumed above; nothing left to send
+        pass
 
     played = b""
     deadline = time.monotonic() + wait_s
@@ -130,7 +169,11 @@ async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, ta
             played += payload
         elif tag == "stop_play":
             break
-    return {"audio_bytes": len(played), "wall_s": round(time.monotonic() - started, 1)}
+    return {
+        "audio_bytes": len(played),
+        "wall_s": round(time.monotonic() - started, 1),
+        "wake_lag_ms": None if hit_after_wake is None else round(hit_after_wake * 1000),
+    }
 
 
 async def connect_with_retry(url: str, timeout_s: float = 20.0):
@@ -150,6 +193,12 @@ async def run(args: argparse.Namespace) -> int:
     load_env_file(Path(args.env))
     cfg = load_config(Path(args.config))
     rate = cfg.audio.voice.rate
+    if args.ack_mode:
+        cfg.ack.mode = args.ack_mode
+    if args.ack_text:
+        cfg.ack.text = args.ack_text
+    if args.preroll_ms is not None:
+        cfg.audio.voice.wake_preroll_ms = args.preroll_ms
     port = free_port()
     cfg.devices[0].listen_port = port
     os.environ[TOKEN_ENV] = "pipeline-token"
@@ -169,9 +218,34 @@ async def run(args: argparse.Namespace) -> int:
         await asyncio.sleep(0.1)
     supervisor = getattr(app.state, "audio", None)
     print(f"plane: {supervisor.status() if supervisor else 'not started'}", flush=True)
+    print(f"ack: mode={cfg.ack.mode} chime={cfg.ack.chime}/{cfg.ack.chime_ms}ms "
+          f"cap={cfg.ack.max_ms}ms preroll={cfg.audio.voice.wake_preroll_ms}ms "
+          f"speed={args.speed} gap={args.gap_ms}ms", flush=True)
+    if args.asr_only:
+        # First-word loss is an ASR question, not an LLM one. Stopping after the
+        # transcript keeps 20 rounds per configuration cheap enough to sweep gaps.
+        runner = app.state.runner
+        from house_ear.session.turn import TurnResult
+
+        async def transcribe_only(pcm: bytes, speak, trace) -> TurnResult:  # noqa: ARG001
+            result = TurnResult()
+            text, report = await runner.transcribe(pcm, trace)
+            result.transcript = text
+            if report is not None:
+                result.stages["asr"] = report
+            if not text.strip():
+                result.error = "empty transcript"
+            return result
+
+        app.state.runner.run = transcribe_only  # type: ignore[method-assign]
 
     wake = read_pcm(Path(args.wake), rate)
     command = read_pcm(Path(args.command), rate)
+    if args.tight:
+        wake = trim_silence(wake, rate)
+        command = trim_silence(command, rate)
+        print(f"tight: wake {len(wake) / 2 / rate:.2f}s, command "
+              f"{len(command) / 2 / rate:.2f}s (edges trimmed)", flush=True)
     rows: list[dict] = []
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -185,7 +259,10 @@ async def run(args: argparse.Namespace) -> int:
                 for i in range(1, args.rounds + 1):
                     before = app.state.last_turn
                     round_info = await play_round(
-                        ws, wake, command, rate, args.gap_ms, args.tail_ms, args.wait_s
+                        ws, wake, command, rate, args.gap_ms, args.tail_ms, args.wait_s,
+                        speed=args.speed,
+                        wake_counter=(lambda: supervisor.client.wakes)
+                        if supervisor is not None and supervisor.client is not None else None,
                     )
                     # the turn runs in a task; give it a moment to publish the result
                     deadline = time.monotonic() + args.wait_s
@@ -193,13 +270,24 @@ async def run(args: argparse.Namespace) -> int:
                         await asyncio.sleep(0.2)
                     turn = app.state.last_turn or {}
                     trace = (app.state.trace_log.recent(1) or [{}])[0]
+                    metrics = None
+                    if supervisor is not None and supervisor.client is not None:
+                        metrics = await supervisor.client.request_metrics(timeout_s=1.0)
                     row = {
                         "round": i,
                         "transcript": turn.get("transcript", ""),
+                        "ack_plays": getattr(metrics, "ack_plays", None),
+                        "ack_mode": getattr(metrics, "ack_mode", None),
+                        "ack_error": getattr(metrics, "ack_error", ""),
+                        "preroll_replayed_ms": getattr(metrics, "preroll_replayed_ms", None),
+                        "utterances": getattr(metrics, "utterances", None),
+                        "gate_armed": getattr(metrics, "gate_armed", None),
+                        "gate_discarded": getattr(metrics, "gate_discarded", None),
                         "reply": turn.get("reply", ""),
                         "error": turn.get("error", ""),
                         "audio_bytes": round_info["audio_bytes"],
                         "wall_s": round_info["wall_s"],
+                        "wake_lag_ms": round_info["wake_lag_ms"],
                         "providers": {k: (v or {}).get("used") for k, v in (turn.get("stages") or {}).items()},
                         "first_response_ms": trace.get("first_response_ms"),
                         "stages_ms": trace.get("stages_ms", {}),
@@ -223,6 +311,16 @@ async def run(args: argparse.Namespace) -> int:
     if firsts:
         print(f"first response: p50 {statistics.median(firsts):.0f} ms, min {min(firsts):.0f}, "
               f"max {max(firsts):.0f}, n={len(firsts)}/{len(rows)}")
+    if args.asr_only:
+        heard = [r for r in rows if r["transcript"].strip()]
+        same = [r for r in heard if r["transcript"].strip() == heard[0]["transcript"].strip()]
+        print(f"transcripts: {len(heard)}/{len(rows)} non-empty, "
+              f"{len(same)} identical to the first one")
+        for r in rows:
+            print(f"  {r['round']:2d} lag={r['wake_lag_ms']}ms utterances={r['utterances']} armed={r['gate_armed']} "
+                  f"discarded={r['gate_discarded']} "
+                  f"preroll={r['preroll_replayed_ms']}ms ack={r['ack_mode']} "
+                  f"/{r['ack_plays']} | {r['transcript']}")
     empty = [r["round"] for r in rows if not r["reply"]]
     if empty:
         print(f"rounds with no reply: {empty}")
@@ -235,8 +333,22 @@ def main() -> int:
     p.add_argument("--wake", default="tests/fixtures/wake-nihao-xiaorui.wav")
     p.add_argument("--command", required=True)
     p.add_argument("--rounds", type=int, default=20)
-    p.add_argument("--gap-ms", type=int, default=500)
-    p.add_argument("--tail-ms", type=int, default=900)
+    p.add_argument("--gap-ms", type=int, default=500,
+                   help="silence between the wake word and the request; 0 = one breath")
+    p.add_argument("--speed", type=float, default=1.0,
+                   help="frame feed rate; keep 1.0 when measuring ack timing")
+    p.add_argument("--ack-mode", choices=["none", "earcon", "tts"], default="")
+    p.add_argument("--ack-text", default="")
+    p.add_argument("--preroll-ms", type=int, default=None,
+                   help="override audio.voice.wake_preroll_ms (0 = no replay, the baseline)")
+    p.add_argument("--tight", action="store_true",
+                   help="trim clip edges so wake+request is one breath (reproduces the loss)")
+    p.add_argument("--asr-only", action="store_true",
+                   help="stop after transcription (first-word loss, no LLM/TTS cost)")
+    # The gate closes on `vad_end_silence_ms` (600) *of VAD-detected* silence, and Silero
+    # needs its own min_silence_duration before it reports silence at all: 900 ms of
+    # trailing quiet left the turn open, so every round scored 0 with no error anywhere.
+    p.add_argument("--tail-ms", type=int, default=1800)
     p.add_argument("--wait-s", type=float, default=25.0)
     p.add_argument("--between", type=float, default=1.0)
     p.add_argument("--out", default="/tmp/house-ear-pipeline.jsonl")

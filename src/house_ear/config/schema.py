@@ -99,6 +99,10 @@ class VoiceConfig(BaseModel):
     kws_chunk: int = Field(default=8, ge=4, le=16)
     # Turn segmentation. Empty path disables it (wake fires, nothing is transcribed).
     vad_model_path: str = ""
+    # Audio kept from *before* the KWS hit and replayed into the gate afterwards. The
+    # streaming KWS reports a hit ~0.5 s late, so without this the first words of a
+    # request spoken straight after the wake word never reach the transcriber.
+    wake_preroll_ms: int = Field(default=500, ge=0, le=1500)
 
     @property
     def frame_samples(self) -> int:
@@ -120,6 +124,28 @@ class AecConfig(BaseModel):
     enabled: bool = True
     # Taps at `voice.rate`: 4096 taps = 256 ms of echo tail at 16 kHz.
     filter_len: int = Field(default=4096, ge=256, le=16384)
+
+
+class AckConfig(BaseModel):
+    """What the speaker does the instant the wake word fires.
+
+    Kept out of `audio` because it is a conversational decision, not a DSP one: the same
+    plane serves a cue, a spoken word or silence depending on what the room prefers.
+
+    `max_ms` is the whole point of having a `tts` mode at all. A spoken acknowledgement
+    mutes the LX06 microphone for about 1.2 s plus its own length, so the cap is enforced
+    when the cue is rendered (anything longer is refused and the cue falls back to a
+    tone), not documented and hoped for.
+    """
+
+    mode: Literal["none", "earcon", "tts"] = "earcon"
+    text: str = "我在。"
+    chime: str = "soft2"
+    chime_ms: int = Field(default=160, ge=60, le=1000)
+    chime_trim: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_ms: int = Field(default=600, ge=100, le=3000)
+    # The box hears its own spoken cue. Ignore that tail before a turn may start.
+    echo_ignore_ms: int = Field(default=1200, ge=0, le=3000)
 
 
 class AudioConfig(BaseModel):
@@ -228,6 +254,7 @@ class Config(BaseModel):
     web: WebConfig = Field(default_factory=WebConfig)
     devices: list[DeviceConfig] = Field(default_factory=list)
     audio: AudioConfig = Field(default_factory=AudioConfig)
+    ack: AckConfig = Field(default_factory=AckConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
 
