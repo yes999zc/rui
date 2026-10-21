@@ -65,6 +65,26 @@ echo to cancel, and adapting a filter to silence only drifts it.
 `house-ear doctor` still prices AEC at rtf 0.004 because it measures the filter
 arithmetic alone; the 0.066 above is what running the real library costs.
 
+### On the speaker (LX06, 2026-10-21, `scripts/measure_erle.py`)
+
+Pink-noise-plus-tones at the speaker, 30 s, reference RMS −25.5 dBFS / peak −10.7 dBFS,
+no clipping, six microphones:
+
+| | value |
+|---|---|
+| raw microphone | −17.5 to −20.1 dBFS (the echo is the loudest thing in the room) |
+| residual after AEC | −38.6 to −39.9 dBFS |
+| ERLE over the whole run | 19.8 - 21.2 dB (includes convergence) |
+| ERLE over the second half | 24.7 - 25.1 dB |
+| ERLE per 5 s window, ch0 | 17.3, 15.1, 26.7, 23.5, 23.1, 29.3 dB |
+
+Inside the old deployment's 24-30 dB band once converged. The window-by-window curve
+carries the finding that matters operationally: **the filter needs ~10 s of continuous
+playback to converge**. A wake word spoken in the first seconds of a song sees 15-17 dB
+of cancellation, not 29 dB. Priming the filter on startup is a possible follow-up; for
+now the honest statement is that barge-in is strongest after the music has been playing
+for a while.
+
 ## Barge-in
 
 1. Playback runs through a queue of ~200 ms (`playback.queue_ms`).

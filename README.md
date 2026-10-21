@@ -43,6 +43,8 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 - `house-ear debug-play` — plays a local wav at the speaker (CLI only) so AEC and
   wake-word tests have something real to hear
 - `scripts/bench_aec.py` — offline ERLE and CPU for the real chain
+- `scripts/measure_erle.py` — hardware ERLE: plays a wav while recording the array on the
+  same connection, then computes ERLE offline from the capture
 
 ## Measured so far
 
@@ -57,6 +59,8 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 | LX06 hardware, 48 kHz/8 ch, 10 s | 246 frames, 1920 samples/ch, mic −45 dBFS, ref silent, 0 clipped | same |
 | AEC, 6 filters, 4096 taps, synthetic 50 ms room | ERLE 30.7 dB converged, rtf 0.066 | `scripts/bench_aec.py` |
 | AEC, 6 filters, 4096 taps, synthetic 200 ms room | ERLE 30.5 dB converged, rtf 0.066 | same |
+| AEC on the LX06, 30 s of music, ref −25.5 dBFS | ERLE 24.7-25.1 dB (second half), residual −39 dBFS, 0 clipped | `scripts/measure_erle.py` |
+| AEC convergence | ~10 s of playback; first windows only 15-17 dB | same |
 | config v1 -> v2 migration | loads, file untouched | `tests/test_config.py` |
 
 ## Quick start
