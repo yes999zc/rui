@@ -37,9 +37,13 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 | S2 | LX06 入站 adapter、设备线协议、fake speaker e2e | ✅ 真机采集 246 帧，mic RMS -45 dBFS |
 | S3 | speexdsp AEC（6 麦克风、4096 taps）+ debug 播放 + KWS | ✅ 真机 ERLE 19.8–21.2 dB（后半段 24.7–25.1）；放歌 75 s 唤醒 18/18 |
 | S4 | VAD 分段、回合编排（ASR→LLM→TTS→推流）、provider 链、trace 打点 | ✅ 20 轮 pipeline：20/20，首句出声 p50 3563 ms |
-| S5 | 唤醒应答、会话控制、控制台补齐、打断、工具执行 | ⬜ 下一步 |
+| S5a | 唤醒应答、preroll 回放、回声窗口 | ✅ 见 `docs/ack.md` |
+| S5b | 回合质量（去重、禁复读、无工具不许报数） | ⬜ 下一步 |
+| S5c | 会话控制（停止词、超时、告别语、filler）+ 厂家让位真机验证 | ⬜ |
+| S5d | 控制台补齐（旧项目 10 个分区 → 六页 Vue） | ⬜ |
+| S5e | 打断 300 ms + 工具执行 | ⬜ |
 
-测试 **130 passed**，ruff clean，CI 三 job（py3.11 / py3.12 / image）绿。
+测试 **164 passed**，ruff clean。S5a 之后 5 个提交（286b867 → 77bc6fc）。
 
 ## 4. 已定的决策（别推翻，改了先问 9哥）
 
@@ -54,6 +58,12 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
    拉 239 MB 到数据卷；`install.sh` 第 4 步调用，失败只警告、ASR 自动回落云端。
 5. **唤醒冲突先到先得**（200 ms 窗口，平局按 device id）；播放走服务端解码 + PCM 推流。
 6. **打断 ≤300 ms 的变量在设备 ALSA 缓冲**，只做本地 flush 永远差一截。
+7. **唤醒应答默认 160 ms 提示音**（`chime_ms: 0` 恢复旧项目的自然长度），TTS 应答上限
+   600 ms 在渲染时强制执行、超限回落提示音；喇叭播语音应答会压麦 ~1.2 s。
+8. **"回声窗口"不是聋窗**：hold 期间到达的音频进缓冲（保留最近 600 ms），闸门打开后
+   灌进 gate。旧项目用 `echo_tail_buf` 修过同一个错误，别再做成丢帧。
+9. **厂家唤醒 = 让位**（`session.vendor_quiet_s`，默认 12 s）：说「小爱同学」时不开我们的
+   会话、不说提示音，我们的唤醒词立刻接管。细节 `docs/vendor.md`。
 
 ## 5. 旧项目参数对照（照抄清单）
 
@@ -65,8 +75,8 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 | TTS 兜底 | 硅基 `charles` | ✅ 同 |
 | 人格 | 小瑞：简短干脆、先给结论、不客套、不知道就说不知道 | ✅ 同 |
 | 唤醒 | 你好小瑞 / 门限 0.20 / boost 2.0 / kws_chunk 8 | ✅ 门限同，boost 未暴露 |
-| 唤醒应答 | **默认 160 ms 提示音**（earcon），TTS 应答可选 | ⬜ 未实现 |
-| 会话 | 超时 10 s、history_rounds 6、停止词、告别语、filler 1.8 s | ⬜ 未实现 |
+| 唤醒应答 | 默认 160 ms 提示音（earcon），TTS 应答可选 | ✅ 三档 + `ack.max_ms` 强制执行 |
+| 会话 | 超时 10 s、history_rounds 6、停止词、告别语、filler 1.8 s | ⬜ S5c（代码里是 `history_turns=4`，要改） |
 | 音频 | tts_speed 1.05、echo_tail 0.7、music_volume 0.68、device_volume 0（不接管） | ⬜ 部分 |
 
 **「在呢」为什么会吞话**（旧项目注释里写死的事实）：TTS 应答播放期间麦克风被静音约 1.2 s，
@@ -80,24 +90,32 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
   这类自相矛盾的具体数值。工具只注册未执行。
 - **history 会让回复退化成复读**：同一句连问 20 轮，第 13 轮起连续 8 轮一字不差；另一次
   20 轮里语气逐步变冲（「再问我要罢工了哦」）。需要去重 + 禁止模仿上轮措辞。
-- **唤醒前 0.5 s 音频被丢**：「你好小瑞，现在几点」一口气说完时开头会缺，需要 preroll 回放。
+- ~~唤醒前 0.5 s 音频被丢~~ **已修（S5a）**：`voice.wake_preroll_ms: 500`，实测无回放时
+  20/20 丢首字（「天气怎么样？」），有回放时完整。KWS 命中延迟实测 1.09–1.22 s（从唤醒词
+  开头算），不是「0.5 s」。
+- **说「小爱同学」时两个助手一起答**：已实现让位（`docs/vendor.md`），离线测试覆盖解析与
+  窗口，**真机验证还没做**——需要在该窗口里说一次「小爱同学，今天天气怎么样」。
+- **回复曾以 3 倍速播放**（16 k PCM 当 48 k 播）：S4 起就存在，S5a 修在音频面重采样里。
+  记在这里是因为它只靠耳朵能发现，别再用「字节数/时长统计正常」当证据。
 - 打断链路（barge-in）未实现，`trace` 里的 `barge_in/silence` 阶段目前没有数据。
 - Mac 本机音频输出曾整机哑掉（`AudioQueueStart failed 0xe000002ec`，`voice_rms_db` 恒 -53 dBFS），
   恢复要 `sudo killall coreaudiod`。声学那组（放歌 + 20 次唤醒）因此没跑成。
 
-## 7. 后续计划（S5）
+## 7. 后续计划
 
 按收益排序，每步都要实测数字，不接受「已完成」：
 
-1. **S5a 唤醒应答**：`wake.ack_mode`（none/earcon/tts）、`ack_text`、`chime` preset、`ack_max_ms`；
-   本地 160 ms 双音合成、fire-and-forget、preroll 回放、回声忽略窗口。
-   验收：三档各 20 轮「唤醒后立刻说指令」，量化首字丢失率；TTS 应答 ≤600 ms 时丢失 0 次，
-   并给出 0.5 s vs 1.5 s 应答的对比数据（把「不能太长」变成配置上限）。
+0. ~~S5a~~ **已完成**（提交 286b867…77bc6fc）：三档应答、preroll 回放、hold 缓冲、
+   `ack.max_ms` 强制执行、doctor 的 `wake_path`/`ack_wav` 检查、`fetch-models` 拉 silero。
+   数据与复现命令在 `docs/ack.md`。
 2. **S5b 回合质量**：相同问句去重、禁止复读/抱怨、无工具时禁止报具体数值。
    验收：同句 20 轮回复不相同率、编造具体数值 0 次。
 3. **S5c 会话控制**：停止词、超时、告别语、filler。验收：停止词生效、超时后告别、filler 只在超阈值出现。
 4. **S5d 控制台补齐**：把旧项目 10 个分区的可配置项搬进六页 Vue，带恢复默认/备份/原子写。
 5. **S5e 打断 300 ms + 工具执行**：设备侧丢缓冲 + 停推；工具注册表接进回合。
+6. **厂家让位真机验证**（跨 adapter/IPC/session，代码已就绪）：说「小爱同学，今天天气怎么
+   样」，日志应只有 `xiaoai: vendor wake ...` 和厂家的回答，没有我们的 `[asr]`；随后
+   「你好小瑞」必须立刻接管。
 
 ## 8. 操作手册
 
@@ -110,6 +128,15 @@ cd web && npm run typecheck && npm run build && cd ..
 uv run python scripts/measure_turn_pipeline.py \
     --config ~/.hermes/cache/scratch/house-ear-s4/real-device.yaml \
     --command ~/.hermes/cache/scratch/house-ear-s4/commands/01-weather.wav --rounds 20
+
+# 唤醒应答 / preroll 扫描（假音箱、真 KWS/VAD/ASR，不需要房间）
+uv run python scripts/measure_turn_pipeline.py \
+    --config ~/.hermes/cache/scratch/house-ear-s4/real-device.yaml \
+    --command ~/.hermes/cache/scratch/house-ear-s4/commands/01-weather.wav \
+    --rounds 20 --gap-ms 0 --speed 1.0 --tight --asr-only \
+    --ack-mode earcon --preroll-ms 500 --gate-preroll-ms 350 \
+    --out ~/.hermes/cache/scratch/house-ear-s5a/earcon-gap0.jsonl
+uv run python scripts/summarize_ack.py ~/.hermes/cache/scratch/house-ear-s5a
 
 # 声学版（需要房间 + Mac 音频可用）
 uv run python scripts/measure_turns.py --url http://127.0.0.1:8091 \
@@ -144,5 +171,7 @@ NAS（Bakey-NAS，Intel N100，`<LAN-IP>`，`yes999zc`）：pip 必须走
 - 配置样本与测量产物在 `~/.hermes/cache/scratch/house-ear-s4/`（24 h 后被清）：
   `real-device.yaml`、`commands/*.wav`、`pipeline-xfyun-20.jsonl`、`device-token.txt`。
   需要长期保留的东西要复制进仓库或 `04_Docs/`。
-- 下一步第一个动作：**S5a**，先读旧项目 `server/assistant_v3.py` 的 `ack_sound()`、
-  `_ACK_ECHO` 和 preroll 回放那三段，再动手。
+- 下一步第一个动作：**S5b 回合质量**。三个已知症状按顺序：同句去重、禁止复读/抱怨、
+  无工具时禁止报具体数值。旧项目的对应实现看 `assistant_v3.py` 的 persona/复读处理与
+  `_is_ack_echo`（后者是「拿转写文本和应答文本比」的去重，S5a 还没搬）。
+- 真机验证还欠一条：厂家让位（`docs/vendor.md` 的 4 步）。
