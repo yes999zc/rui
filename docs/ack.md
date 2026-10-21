@@ -80,6 +80,48 @@ matching the room.
 
 ## Results
 
-_Filled in after the parameter scan; the raw jsonl and the summariser command above are
-the record. Numbers from the first sweep, which had a second bug mixed in, are in the
-commit message of the follow-up fix rather than quoted here as if they were final._
+Eight configurations, 20 rounds each, all through the real KWS, turn gate and ASR with the
+wake word and the request spoken **in one breath** (`--tight --gap-ms 0` unless stated).
+"Intact" means the transcript is exactly `今天天气怎么样？`.
+
+| config | preroll | gap | ack | intact | what was heard |
+|---|---|---|---|---|---|
+| base | 0 ms | 0 | none | **0/20** | `天气怎么样？` x12, `天天气怎么样？` x8 |
+| none | 500 ms | 0 | none | **20/20** | complete |
+| earcon | 500 ms | 0 | tone | **20/20** | complete |
+| earcon | 500 ms | 150 ms | tone | **20/20** | complete |
+| earcon | 500 ms | 300 ms | tone | **20/20** | complete |
+| earcon | 500 ms | 500 ms | tone | **20/20** | complete |
+| tts | 500 ms | 0 | spoken | **0/20** | nothing at all: 0 utterances |
+
+Three conclusions, in the order they cost the most:
+
+1. **The pre-wake replay is not optional.** Without it the first syllable is gone in every
+   round, and it is gone from the *audio*, not from the model's imagination: 20/20 rounds
+   lost 今天 or 今天+气.
+2. **The 160 ms tone costs nothing.** Gap 0/150/300/500 all came back complete: the cue and
+   its hold do not touch the request.
+3. **A spoken cue loses the whole request** when the person answers immediately - not part
+   of it, all of it: 0 utterances in 20 rounds. The LX06 mutes its microphone for ~1.2 s
+   while the speaker plays, so the 550 ms cue plus that window swallows a 1.15 s request
+   whole. This is why `mode: earcon` is the default and why the cap exists at all; the old
+   project recorded the same thing (`HANDOFF.md:1214`: "唤醒侧 preroll 只回放 0.5 秒，补不全").
+
+The KWS lag is a constant, not a distribution: **p50 1.09-1.62 s measured from the start of
+the wake clip** (the spread is the gap, not the model). Two independent causes then clip the
+first syllable, and both were fixed:
+
+- the replay length (`wake_preroll_ms`, 500 ms) - fixes the audio that never reached the gate;
+- the gate's own onset buffer (`vad_preroll_ms`, 200 → 350 ms) - fixes the syllable that the
+  VAD reported too late to include. Measured separately: 200 ms lost 今天 in 5/5 rounds,
+  350 ms and 500 ms lost it in 0/5.
+
+## What the measurement itself got wrong first
+
+Worth recording, because both mistakes made the numbers look better than reality:
+
+- the fixtures carry 200-400 ms of digital silence at each edge, so with a 500 ms gap the
+  300 ms post-wake skip ate silence instead of speech. `--tight` trims the edges.
+- the harness stopped reading the device socket as soon as a turn landed; the plane then
+  blocked in `writer.drain()` and the run died ~10 rounds in with `keepalive ping timeout`,
+  which reads like a crash. A real client always drains (`_consume` in the harness).
