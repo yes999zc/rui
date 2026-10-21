@@ -57,6 +57,7 @@ class XiaoaiAdapter(DeviceAdapter):
         self.rejected = 0
         self.connected_at = 0.0
         self.last_error = ""
+        self._playing = False
         self.info = DeviceInfo(
             id=dev.id,
             adapter="xiaoai",
@@ -122,6 +123,11 @@ class XiaoaiAdapter(DeviceAdapter):
         conn = self._conn
         if conn is None:
             raise RuntimeError("speaker is not connected")
+        if not self._playing:
+            # The client opens its player on request; without start_play the stream
+            # frames have nowhere to go and are silently dropped device-side.
+            await conn.send(protocol.request("start_play", protocol.playback_payload(sample_rate)))
+            self._playing = True
         bytes_per_chunk = max(2, sample_rate * PLAY_CHUNK_MS // 1000 * 2)
         for start in range(0, len(pcm), bytes_per_chunk):
             await conn.send(protocol.stream("play", pcm[start:start + bytes_per_chunk]))
@@ -134,6 +140,7 @@ class XiaoaiAdapter(DeviceAdapter):
         decides the 300 ms budget.
         """
         conn = self._conn
+        self._playing = False
         if conn is None:
             return
         await conn.send(protocol.request("stop_play"))
@@ -182,6 +189,7 @@ class XiaoaiAdapter(DeviceAdapter):
         finally:
             if self._conn is conn:
                 self._conn = None
+                self._playing = False
             log.info("xiaoai: speaker disconnected after %s frames", self.frames_received)
 
     def _token_ok(self, conn: ServerConnection) -> bool:

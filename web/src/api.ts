@@ -59,6 +59,12 @@ export interface Provider {
 export interface AudioMetrics {
   type: string
   uptime_s: number
+  aec_enabled: boolean
+  aec_erle_db: number | null
+  aec_channel: number
+  ref_active: boolean
+  speaker_connected: boolean
+  playback_s: number
   frames_in: number
   frames_out: number
   frames_dropped: number

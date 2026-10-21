@@ -41,13 +41,29 @@ If you change one thing in this repo, keep this one.
 
 ## Echo canceller
 
-MDF, 4096 taps, 16 kHz, one filter per mic channel. The reference arrives 2.4 ms
-before the microphones hear it, so alignment is a fixed delay, not a search.
+speexdsp MDF, 4096 taps (256 ms of tail at 16 kHz), one filter per microphone, fed
+128-sample speex frames from arbitrary block sizes. The reference arrives 2.4 ms before
+the microphones hear it, so alignment is a fixed delay, not a search.
 
-Measured on this box: **rtf 0.004 at six channels** — 0.4% of one core. The
-canceller is not the CPU problem; KWS and streaming ASR are. `house-ear doctor`
-recomputes the canceller cost with the real tap count and prints the per-device
-budget as an explicitly labelled assumption until M1 measures it.
+Same geometry the vendor front end uses (`speex_echo_state_init(0x80, 0x1000)`), which
+is why the measured behaviour matches the old deployment's 24-30 dB ERLE instead of
+being a filter we would have to tune from scratch.
+
+Offline benchmark (`scripts/bench_aec.py`, synthetic 50 ms and 200 ms rooms, six
+microphones, 20 s of music-like reference):
+
+| room tail | ERLE whole run | ERLE converged | CPU rtf (6 filters) |
+|---|---|---|---|
+| 50 ms | 22.9 dB | 30.7 dB | 0.066 |
+| 200 ms | 22.0 dB | 30.5 dB | 0.066 |
+
+The chain picks the microphone that survives best (hysteresis 6 dB) and refuses to
+return a residual louder than its input; a diverged filter resets instead of leaking
+garbage into KWS. While the reference is silent the canceller is bypassed - there is no
+echo to cancel, and adapting a filter to silence only drifts it.
+
+`house-ear doctor` still prices AEC at rtf 0.004 because it measures the filter
+arithmetic alone; the 0.066 above is what running the real library costs.
 
 ## Barge-in
 

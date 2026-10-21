@@ -64,6 +64,24 @@ onMounted(run)
         <span class="v" :class="audio.metrics.rtf <= 0.5 ? 'ok' : 'warn'">{{ audio.metrics.rtf }}</span>
       </div>
       <div class="row"><span class="k">已处理音频</span><span class="v">{{ audio.metrics.audio_s }} s</span></div>
+      <div class="row">
+        <span class="k">回声消除</span>
+        <span class="v" :class="audio.metrics.aec_enabled ? 'ok' : 'warn'">
+          {{ audio.metrics.aec_enabled ? '开启 · ch' + audio.metrics.aec_channel : '关闭' }}
+          <span v-if="audio.metrics.aec_erle_db !== null" class="tag">ERLE {{ audio.metrics.aec_erle_db }} dB</span>
+          <span v-else class="tag">参考静音，ERLE 无意义</span>
+        </span>
+      </div>
+      <div class="row"><span class="k">参考通道</span>
+        <span class="v" :class="audio.metrics.ref_active ? 'ok' : 'warn'">
+          {{ audio.metrics.ref_active ? '有信号（正在播放）' : '静音' }}
+        </span>
+      </div>
+      <div class="row"><span class="k">音箱连接</span>
+        <span class="v" :class="audio.metrics.speaker_connected ? 'ok' : 'warn'">
+          {{ audio.metrics.speaker_connected ? '已连接' : '未连接' }}
+        </span>
+      </div>
     </template>
   </div>
 

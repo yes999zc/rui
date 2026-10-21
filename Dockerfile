@@ -9,6 +9,11 @@ RUN npm run build
 
 FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+# libspeexdsp is the echo canceller the plane loads through ctypes. Without it the
+# plane still runs, but barge-in is gone - so it belongs in the image, not in a README.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libspeexdsp1 \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src

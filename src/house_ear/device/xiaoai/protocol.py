@@ -101,6 +101,23 @@ def start_recording_payload(
     }
 
 
+def playback_payload(rate: int, channels: int = 1) -> dict[str, Any]:
+    """What we ask the speaker's player to open: 60 ms period, 300 ms buffer.
+
+    The old deployment's geometry: big enough to absorb wifi jitter without
+    underruns, small enough that stopping still feels immediate.
+    """
+    period = max(1, rate * 60 // 1000)
+    return {
+        "pcm": "default",
+        "channels": channels,
+        "bits_per_sample": 16,
+        "sample_rate": rate,
+        "period_size": period,
+        "buffer_size": period * 5,
+    }
+
+
 def parse_reply(message: str) -> dict[str, Any] | None:
     """Response/Event body, or None for anything we do not handle yet."""
     try:

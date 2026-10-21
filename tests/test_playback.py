@@ -1,0 +1,113 @@
+"""Debug playback through the plane: the speaker must actually receive play frames."""
+from __future__ import annotations
+
+import asyncio
+import json
+import socket
+import wave
+
+import numpy as np
+from websockets.asyncio.client import connect
+
+from house_ear.audio.client import AudioPlaneSupervisor
+from house_ear.audio.protocol import PlayFile, StopAudio
+from house_ear.config import load_config
+from house_ear.device.xiaoai import protocol
+
+TOKEN_ENV = "HOUSE_EAR_PLAY_TOKEN"
+TOKEN = "play-token"
+
+
+def free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def write_tone(path, seconds: float = 0.4, rate: int = 16000) -> None:
+    t = np.arange(int(seconds * rate)) / rate
+    pcm = (np.sin(2 * np.pi * 440 * t) * 12000).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm.tobytes())
+
+
+def config_text(port: int) -> str:
+    return f"""\
+version: 2
+devices:
+  - id: living
+    adapter: xiaoai
+    host: <LAN-IP>
+    listen_port: {port}
+    token_env: {TOKEN_ENV}
+audio:
+  capture:
+    rate: 16000
+    channels: 8
+    mic_channels: 6
+    ref_channels: 2
+    mic_shift: 12
+    ref_shift: 16
+  voice:
+    rate: 16000
+    frame_ms: 20
+  playback:
+    rate: 16000
+    channels: 1
+  aec:
+    enabled: false        # playback test only; AEC has its own unit tests
+"""
+
+
+def test_play_file_reaches_the_speaker_and_stop_play_follows(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv(TOKEN_ENV, TOKEN)
+    monkeypatch.setenv("HOUSE_EAR_AUDIO_SOCK", str(tmp_path / "audio.sock"))
+    tone = tmp_path / "tone.wav"
+    write_tone(tone)
+    port = free_port()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(config_text(port), encoding="utf-8")
+
+    async def run() -> dict:
+        cfg = load_config(config_path)
+        supervisor = AudioPlaneSupervisor(cfg, config_path=config_path,
+                                          socket_path=tmp_path / "audio.sock")
+        await supervisor.start()
+        try:
+            async with connect(f"ws://127.0.0.1:{port}/?token={TOKEN}", max_size=None) as ws:
+                start_recording = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+                assert start_recording["Request"]["command"] == "start_recording"
+
+                client = supervisor.client
+                assert client is not None
+                metrics = await client.request_metrics()
+                assert metrics is not None and metrics.speaker_connected is True
+
+                await client.send(PlayFile(path=str(tone), loop=False, gain=0.5))
+                open_player = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+                assert open_player["Request"]["command"] == "start_play"
+                assert open_player["Request"]["payload"]["channels"] == 1
+                assert open_player["Request"]["payload"]["sample_rate"] == 16000
+
+                chunks = 0
+                while chunks < 2:
+                    tag, pcm = protocol.decode_stream(
+                        await asyncio.wait_for(ws.recv(), timeout=3)
+                    )
+                    assert tag == "play"
+                    assert len(pcm) > 0
+                    chunks += 1
+
+                await client.send(StopAudio())
+                stop = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+                assert stop["Request"]["command"] == "stop_play"
+                metrics = await client.request_metrics()
+                return {"metrics": metrics.model_dump() if metrics else {}}
+        finally:
+            await supervisor.stop()
+
+    result = asyncio.run(run())
+    assert result["metrics"].get("playback_s", 0) >= 0

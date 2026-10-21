@@ -65,17 +65,17 @@ async def run_scenario(rate: int = 48000) -> dict:
             await asyncio.wait_for(task, timeout=3)
 
 
-            # playback: what the adapter sends when the server speaks
+            # playback: the adapter must open the client's player first, then stream
             await adapter.play(b"\x00\x01" * 800, sample_rate=16000, channels=1)
+            open_player = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
             reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
-            received.append(reply)
             await adapter.stop_playback()
             stop = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
-            received.append(stop)
+            received.extend([open_player, reply, stop])
     finally:
         await adapter.close()
-    return {"first": received[0], "play": received[1], "stop": received[2],
-            "frames": frames, "health": adapter.health()}
+    return {"first": received[0], "start_play": received[1], "play": received[2],
+            "stop": received[3], "frames": frames, "health": adapter.health()}
 
 
 @pytest.fixture()
@@ -110,8 +110,13 @@ def test_adapter_asks_for_the_configured_layout_and_publishes_frames(device_toke
     assert result["health"]["bad_frames"] == 0
 
 
-def test_playback_frames_carry_the_play_tag_and_stop_play_follows(device_token) -> None:
+def test_playback_opens_the_player_streams_and_stops(device_token) -> None:
     result = asyncio.run(run_scenario(48000))
+    open_player = result["start_play"]
+    assert open_player["Request"]["command"] == "start_play"
+    assert open_player["Request"]["payload"]["channels"] == 1
+    assert open_player["Request"]["payload"]["sample_rate"] == 16000
+    assert open_player["Request"]["payload"]["buffer_size"] == 16000 * 300 // 1000
     play = result["play"]
     assert play["tag"] == "play"
     assert len(play["bytes"]) == 1600

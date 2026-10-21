@@ -6,10 +6,10 @@ Self-hosted voice endpoint for SSH-enabled smart speakers.
 wake word, speech, reasoning, and playback all run on your own box, and tools
 (Home Assistant, MCP servers, local commands) are exposed through one registry.
 
-> Status: **M1 in progress (S0–S2 done, real-device capture pending)** — control
-> plane, contracts, latency ruler, the separate audio-plane process and the inbound
-> LX06 adapter are in place. v1 supports exactly one speaker model: Xiaomi 小爱音箱
-> Pro (LX06).
+> Status: **M1 in progress (S0–S2 done, S3 in progress)** — control plane, contracts,
+> latency ruler, the audio-plane process, the inbound LX06 adapter and echo
+> cancellation are in place; the wake word lands next. v1 supports exactly one
+> speaker model: Xiaomi 小爱音箱 Pro (LX06).
 
 ## What works today
 
@@ -38,6 +38,11 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
   drops, jitter percentiles, CPU and rtf; every M1 claim comes from it
 - `scripts/measure_capture.py` — records raw frames through the adapter (per-channel
   RMS, frame intervals, WAV out); `--fake` synthesizes a speaker for desk checks
+- echo cancellation in the plane — speexdsp 4096 taps per mic, best-channel selection,
+  never-worse and divergence guards, ERLE reported only while the speaker is playing
+- `house-ear debug-play` — plays a local wav at the speaker (CLI only) so AEC and
+  wake-word tests have something real to hear
+- `scripts/bench_aec.py` — offline ERLE and CPU for the real chain
 
 ## Measured so far
 
@@ -50,6 +55,8 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 | same, frame interval | p50 24.4 ms, p99 24.7 ms (includes the fake client's JSON encode) | same run |
 | LX06 hardware, 16 kHz/8 ch, 60 s | 1494 frames, 640 samples/ch, mic −50 dBFS (peaks −20), ref silent, 0 clipped, interval p50 39.6/p99 84.5 ms | `scripts/measure_capture.py` |
 | LX06 hardware, 48 kHz/8 ch, 10 s | 246 frames, 1920 samples/ch, mic −45 dBFS, ref silent, 0 clipped | same |
+| AEC, 6 filters, 4096 taps, synthetic 50 ms room | ERLE 30.7 dB converged, rtf 0.066 | `scripts/bench_aec.py` |
+| AEC, 6 filters, 4096 taps, synthetic 200 ms room | ERLE 30.5 dB converged, rtf 0.066 | same |
 | config v1 -> v2 migration | loads, file untouched | `tests/test_config.py` |
 
 ## Quick start

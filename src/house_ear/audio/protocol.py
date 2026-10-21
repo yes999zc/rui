@@ -103,6 +103,12 @@ class Metrics(BaseModel):
 
     type: Literal["metrics"] = "metrics"
     uptime_s: float
+    aec_enabled: bool = False
+    aec_erle_db: float | None = None
+    aec_channel: int = 0
+    ref_active: bool = False
+    speaker_connected: bool = False
+    playback_s: float = 0.0
     frames_in: int
     frames_out: int
     frames_dropped: int
@@ -123,6 +129,19 @@ class Shutdown(BaseModel):
     type: Literal["shutdown"] = "shutdown"
 
 
+class PlayFile(BaseModel):
+    """control -> plane: play a local wav at the speaker (debug playback, CLI only)."""
+
+    type: Literal["play_file"] = "play_file"
+    path: str
+    loop: bool = False
+    gain: float = Field(default=1.0, ge=0.0, le=4.0)
+
+
+class StopAudio(BaseModel):
+    type: Literal["stop_audio"] = "stop_audio"
+
+
 class QueryMetrics(BaseModel):
     """control -> plane: send a fresh Metrics now (the periodic one is 2 s stale)."""
 
@@ -130,7 +149,7 @@ class QueryMetrics(BaseModel):
 
 
 ControlMessage = Annotated[
-    Hello | Ready | Metrics | QueryMetrics | Error | Shutdown,
+    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Error | Shutdown,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

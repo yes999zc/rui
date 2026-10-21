@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from . import __version__
@@ -68,6 +69,63 @@ def cmd_audio(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_debug_play(args: argparse.Namespace) -> int:
+    """Play a local wav at the speaker so AEC and wake-word tests have sound."""
+    import asyncio
+
+    from .audio.client import AudioPlaneError, AudioPlaneSupervisor
+    from .audio.protocol import PlayFile, StopAudio
+
+    path = _config_path(args)
+    cfg = load_config(path)
+    file = Path(args.file)
+    if not file.exists():
+        print(f"no such file: {file}")
+        return 2
+
+    async def run() -> int:
+        supervisor = AudioPlaneSupervisor(cfg, config_path=path, device_id=args.device)
+        try:
+            await supervisor.start()
+        except AudioPlaneError as exc:
+            print(f"audio plane did not start: {exc}")
+            return 2
+        try:
+            client = supervisor.client
+            assert client is not None
+            deadline = time.monotonic() + args.wait
+            while time.monotonic() < deadline:
+                metrics = await client.request_metrics()
+                if metrics is not None and metrics.speaker_connected:
+                    break
+                await asyncio.sleep(0.5)
+            else:
+                print("speaker did not connect (is its client pointed at this host?)")
+                return 3
+            await client.send(PlayFile(path=str(file), loop=args.loop, gain=args.gain))
+            print(f"playing {file.name} gain={args.gain} loop={args.loop}; ctrl-c to stop")
+            elapsed = 0.0
+            while elapsed < args.seconds:
+                await asyncio.sleep(min(1.0, args.seconds - elapsed))
+                elapsed += 1.0
+                metrics = await client.request_metrics()
+                if metrics is not None:
+                    print(
+                        f"  t={metrics.uptime_s:6.1f}s played={metrics.playback_s:6.1f}s "
+                        f"ref={metrics.ref_active} erle={metrics.aec_erle_db}",
+                        flush=True,
+                    )
+            await client.send(StopAudio())
+            return 0
+        finally:
+            await supervisor.stop()
+
+    try:
+        return asyncio.run(run())
+    except KeyboardInterrupt:
+        return 0
+
+
 def _config_parent(default: object) -> argparse.ArgumentParser:
     """A parent parser carrying --config with a chosen default.
 
@@ -97,6 +155,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--no-audio", action="store_true",
                          help="control plane only; do not spawn the audio plane")
     p_serve.set_defaults(func=cmd_serve)
+
+    p_play = _leaf("debug-play", "play a local wav at the speaker (test signal for AEC/KWS)")
+    p_play.add_argument("--device", required=True)
+    p_play.add_argument("--file", required=True)
+    p_play.add_argument("--seconds", type=float, default=10.0)
+    p_play.add_argument("--gain", type=float, default=1.0)
+    p_play.add_argument("--loop", action="store_true")
+    p_play.add_argument("--wait", type=float, default=60.0, help="seconds to wait for the speaker")
+    p_play.set_defaults(func=cmd_debug_play)
 
     p_audio = _leaf("audio", "run the audio plane in the foreground")
     p_audio.add_argument("--device", required=True)
