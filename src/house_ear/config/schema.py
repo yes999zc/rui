@@ -136,6 +136,8 @@ class ProviderConfig(BaseModel):
     api_key_env: str = ""
     timeout_s: float = Field(default=15.0, gt=0, le=120)
     voice: str = ""  # TTS voice name; ignored by ASR/LLM
+    # A spoken reply is two sentences; a long answer is a latency bug, not a feature.
+    max_tokens: int = Field(default=220, ge=16, le=4096)
 
 
 def _default_catalog() -> dict[str, ProviderConfig]:

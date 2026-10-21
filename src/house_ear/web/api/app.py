@@ -18,8 +18,9 @@ from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import redacted
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
+from ...session.turn import DEFAULT_PROMPT, TurnRunner
 from ...tools.registry import ToolRegistry
-from ...trace import TraceLog
+from ...trace import TraceLog, TurnTrace
 
 START = time.time()
 log = logging.getLogger(__name__)
@@ -47,6 +48,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        runner = TurnRunner(
+            cfg.providers, sample_rate=cfg.audio.voice.rate, system_prompt=DEFAULT_PROMPT
+        )
+        app.state.runner = runner
+        app.state.last_turn = None
         if start_audio:
             supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
             try:
@@ -63,6 +69,22 @@ def create_app(
                 supervisor.error = str(exc)
                 log.warning("audio plane did not start: %s", exc)
             app.state.audio = supervisor
+            client = supervisor.client
+            if client is not None:
+                async def on_utterance(pcm: bytes) -> None:
+                    trace = TurnTrace(device_id=client.ready.device_id if client.ready else "")
+                    if client.last_wake is not None:
+                        trace.mark("wake", at_ms=client.last_wake.ts_ms)
+                    try:
+                        result = await runner.run(pcm, client.speak, trace)
+                    except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
+                        log.warning("turn failed: %s", exc)
+                        return
+                    app.state.last_turn = result.to_dict()
+                    traces.add(trace)
+                    log.info("turn: %s", result.to_dict())
+
+                client.on_utterance = on_utterance
         yield
         supervisor = getattr(app.state, "audio", None)
         if supervisor is not None:
@@ -158,6 +180,11 @@ def create_app(
     @app.get("/api/v1/tools", dependencies=[Depends(auth)])
     async def tools() -> dict:
         return {"count": len(registry.names()), "names": registry.names()}
+
+    @app.get("/api/v1/turns", dependencies=[Depends(auth)])
+    async def last_turn() -> dict:
+        """The last turn as it ran: transcript, reply, per-stage provider and timing."""
+        return getattr(app.state, "last_turn", None) or {"error": "no turn yet"}
 
     @app.get("/api/v1/traces", dependencies=[Depends(auth)])
     async def recent_traces(limit: int = 20) -> dict:

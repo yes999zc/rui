@@ -53,10 +53,16 @@ class TurnTrace:
     meta: dict = field(default_factory=dict)
 
     def mark(self, stage: str, at_ms: float | None = None) -> float:
-        """Record one stage boundary. Returns ms since turn start."""
+        """Record one stage boundary. Returns ms since turn start.
+
+        First write wins: a turn can touch a boundary several times (one TTS call per
+        sentence), and the latency we care about is the first one. Re-marking is a no-op
+        rather than an overwrite, so `tts_first` cannot drift to the last sentence.
+        """
         ts = now_ms() if at_ms is None else at_ms
         if stage in self.marks:
-            log.debug("stage %s re-marked on turn %s", stage, self.turn_id)
+            log.debug("stage %s already marked on turn %s", stage, self.turn_id)
+            return round(self.marks[stage] - self.t0_ms, 1)
         self.marks[stage] = ts
         return round(ts - self.t0_ms, 1)
 

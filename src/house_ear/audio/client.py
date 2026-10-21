@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from ..config import Config
@@ -51,6 +52,8 @@ class AudioPlaneClient:
         self.voice_audio = bytearray()
         self.utterances = 0
         self.last_utterance: bytes = b""
+        # Set by the control plane: called (in a task) for every finished utterance.
+        self.on_utterance: Callable[[bytes], Awaitable[None]] | None = None
         self._metrics_event = asyncio.Event()
         self._read_task: asyncio.Task | None = None
 
@@ -69,6 +72,8 @@ class AudioPlaneClient:
                 _seq, _ts, pcm = decode_pcm(payload)
                 self.utterances += 1
                 self.last_utterance = pcm
+                if self.on_utterance is not None:
+                    asyncio.create_task(self.on_utterance(pcm), name="turn")
                 continue
             if kind is FrameType.VOICE_PCM:
                 self.voice_frames += 1
