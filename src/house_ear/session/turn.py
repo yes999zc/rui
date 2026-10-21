@@ -28,11 +28,12 @@ from ..trace import TurnTrace
 
 log = logging.getLogger(__name__)
 
+# Taken from xiaoai-voice-entry's `assistant.persona` plus the spoken-output rules that its
+# prompts already enforced. Same assistant, same voice, so behaviour does not jump when the
+# backend changes.
 DEFAULT_PROMPT = (
-    "你是一个家庭语音助手，你的回答会被直接念出来。"
-    "只用中文口语回答，一到两句，总共不超过六十个字。"
-    "绝对不要使用列表、编号、markdown、表情符号或括号补充。"
-    "不知道就直说不知道，不要介绍去哪里查。"
+    "你是家里的小助理，叫小瑞。说话简短干脆，先给结论，不铺垫、不客套；不知道就说不知道。"
+    "你的回答会被直接念出来，所以只用中文口语，不要用列表、编号、星号、表情符号或括号补充。"
 )
 
 SENTENCE_ENDINGS = "。！？!?；;\n"

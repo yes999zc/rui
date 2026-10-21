@@ -139,8 +139,16 @@ class ProviderConfig(BaseModel):
     retries: int = Field(default=0, ge=0, le=3)
     threads: int = Field(default=2, ge=1, le=16)  # local models only
     voice: str = ""  # TTS voice name; ignored by ASR/LLM
-    # A spoken reply is two sentences; a long answer is a latency bug, not a feature.
-    max_tokens: int = Field(default=220, ge=16, le=4096)
+    # Vendors that need more than a bearer key (讯飞 wants app_id + key + secret).
+    app_id_env: str = ""
+    api_secret_env: str = ""
+    # Defaults come from xiaoai-voice-entry's working setup: answers are spoken, so the
+    # budget is a ceiling rather than a target.
+    max_tokens: int = Field(default=220, ge=16, le=8192)
+    temperature: float = Field(default=0.4, ge=0.0, le=2.0)
+    # DeepSeek's reasoner spends 2-3x the latency and shares max_tokens with the answer;
+    # for a voice reply the reasoning buys nothing (measured on the live prompt).
+    thinking: str = ""  # "" = vendor default, "disabled" = ask for no chain of thought
 
 
 def _default_catalog() -> dict[str, ProviderConfig]:

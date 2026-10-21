@@ -251,3 +251,20 @@ def test_a_missing_local_model_falls_back_to_the_cloud(monkeypatch) -> None:
     assert transcript.text == "云端兜底"
     assert report.used == "cloud"
     assert "ModelMissing" in report.attempts[0]["error"]
+
+
+def test_chat_payload_carries_the_latency_knobs() -> None:
+    from house_ear.providers.openai_compat import chat_payload
+
+    cfg = ProviderConfig(model="deepseek-flash", max_tokens=3000, temperature=0.4,
+                         thinking="disabled")
+    payload = chat_payload(cfg, [{"role": "user", "content": "在吗"}], [{"name": "light_on"}])
+    assert payload["model"] == "deepseek-flash"
+    assert payload["max_tokens"] == 3000
+    assert payload["temperature"] == 0.4
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["stream"] is True
+    assert payload["tools"][0]["function"]["name"] == "light_on"
+
+    plain = chat_payload(ProviderConfig(model="x"), [], [])
+    assert "thinking" not in plain and "tools" not in plain

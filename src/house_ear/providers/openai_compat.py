@@ -83,17 +83,26 @@ class _HttpHolder:
             self._client = None
 
 
+def chat_payload(cfg: ProviderConfig, messages: list[dict], tools: list[dict]) -> dict:
+    """The request body, split out so the knobs that decide latency are testable."""
+    payload: dict = {
+        "model": cfg.model,
+        "messages": messages,
+        "stream": True,
+        "max_tokens": cfg.max_tokens,
+        "temperature": cfg.temperature,
+    }
+    if cfg.thinking == "disabled":
+        payload["thinking"] = {"type": "disabled"}
+    if tools:
+        payload["tools"] = [{"type": "function", "function": t} for t in tools]
+    return payload
+
+
 class OpenAiCompatLlm(_HttpHolder):
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[ChatChunk]:
-        payload: dict = {
-            "model": self.cfg.model,
-            "messages": messages,
-            "stream": True,
-            "max_tokens": self.cfg.max_tokens,
-        }
-        if tools:
-            payload["tools"] = [{"type": "function", "function": t} for t in tools]
+        payload = chat_payload(self.cfg, messages, tools)
         async with self.client.stream(
             "POST", _url(self.cfg, "/chat/completions"), json=payload,
             headers=_headers(self.cfg),

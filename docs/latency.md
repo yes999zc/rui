@@ -127,3 +127,33 @@ Recovering it needs `coreaudiod` restarted with sudo, which this session does no
 mic-side evidence is in the plane: `voice_rms_db` sat at -53 dBFS while `afplay` reported
 success, i.e. nothing reached the room. That is a host audio fault, not a house-ear fault,
 and the 18/18 wake measurement from the hardware window stands as the acoustic data point.
+
+## 20 rounds with the old project's actual parameters (讯飞 TTS + DeepSeek flash)
+
+Same harness, same request, 20 consecutive rounds. Config now mirrors what
+`xiaoai-voice-entry` runs in production instead of guesses:
+
+| layer | value | source |
+|---|---|---|
+| ASR | local sherpa SenseVoice int8, `num_threads=2`, `use_itn=True`, `language=zh` | old `build_asr()` |
+| LLM | `https://api.deepseek.com`, `deepseek-flash`, `temperature=0.4`, `max_tokens=3000`, `thinking: disabled` | old `assistant_v3.py` (thinking off measured 2-3x faster there) |
+| TTS | 讯飞 `x4_lingxiaowan_boy`, `aue=raw`, `audio/L16;rate=16000`, speed/volume/pitch 50 | old `config.local.yaml` + `xfyun_tts.py` |
+| TTS fallback | SiliconFlow `CosyVoice2-0.5B:charles` | old `config.local.yaml` |
+| persona | 小瑞, 简短干脆, 先给结论 | old `assistant.persona` |
+| wake | 你好小瑞, threshold 0.20 | old `config.local.yaml` |
+
+```
+rounds 20/20, empty replies 0
+first response : p50 3563 ms, min 3230 ms, max 4197 ms
+ASR            : p50 463 ms
+LLM first token: p50 1065 ms
+TTS first byte : p50 1591 ms (absolute; ~500 ms of it is the synthesis call itself)
+```
+
+Against the SiliconFlow-TTS run on the same harness: p50 8713 → **3563 ms**, max 23541 →
+4197 ms. The tail is gone; what remains is a flat ~3.5 s.
+
+Where the remaining 3.5 s goes: ASR 0.46 + first token 1.07 + waiting for a first clause
+(~0.3) + TTS ~0.5. The old project hides most of that behind an immediate "在呢" (0.52 s of
+audio) fired on wake, before ASR even starts. house-ear has no wake acknowledgement yet,
+which is the single biggest perceived-latency gap left.

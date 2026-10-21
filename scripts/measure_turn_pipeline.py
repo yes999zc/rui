@@ -35,6 +35,18 @@ from house_ear.config import load_config, save_config  # noqa: E402
 from house_ear.device.xiaoai import protocol  # noqa: E402
 from house_ear.web.api.app import create_app  # noqa: E402
 
+
+def load_env_file(path: Path) -> None:
+    """Provider keys live in ~/.hermes/.env; a harness must not depend on the caller's shell."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
 TOKEN_ENV = "HOUSE_EAR_DEVICE_TOKEN"
 
 
@@ -135,6 +147,7 @@ async def connect_with_retry(url: str, timeout_s: float = 20.0):
 
 
 async def run(args: argparse.Namespace) -> int:
+    load_env_file(Path(args.env))
     cfg = load_config(Path(args.config))
     rate = cfg.audio.voice.rate
     port = free_port()
@@ -227,6 +240,7 @@ def main() -> int:
     p.add_argument("--wait-s", type=float, default=25.0)
     p.add_argument("--between", type=float, default=1.0)
     p.add_argument("--out", default="/tmp/house-ear-pipeline.jsonl")
+    p.add_argument("--env", default=str(Path.home() / ".hermes/.env"))
     return asyncio.run(run(p.parse_args()))
 
 
