@@ -8,6 +8,7 @@ attributed instead of guessed at.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -166,16 +167,18 @@ class TurnRunner:
         for name, provider in chain:
             spoken = 0
             try:
-                stream = provider.synthesize(text, "")
-                async for chunk in stream:
-                    if not chunk:
-                        continue
-                    if spoken == 0:
-                        trace.mark("tts_first")
-                        if not trace.marks.get("play_start"):
-                            trace.mark("play_start")
-                    await speak(chunk)
-                    spoken += len(chunk)
+                # aclosing: an early exit mid-sentence must close the HTTP stream, otherwise
+                # the vendor keeps a half-read request open and the next turn queues behind it
+                async with contextlib.aclosing(provider.synthesize(text, "")) as stream:
+                    async for chunk in stream:
+                        if not chunk:
+                            continue
+                        if spoken == 0:
+                            trace.mark("tts_first")
+                            if not trace.marks.get("play_start"):
+                                trace.mark("play_start")
+                        await speak(chunk)
+                        spoken += len(chunk)
             except Exception as exc:  # noqa: BLE001 - fall through to the next vendor
                 attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
                 log.warning("tts: %s failed: %s", name, exc)
