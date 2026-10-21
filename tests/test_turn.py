@@ -170,3 +170,32 @@ def test_missing_key_fails_the_stage_with_a_reason(monkeypatch) -> None:
     result = asyncio.run(TurnRunner(cfg.providers).run(b"\x00\x00" * 800, speak, trace))
     assert result.transcript == ""
     assert result.error == "empty transcript"   # ASR failed, so the turn had nothing to say
+
+
+def test_a_flaky_provider_is_retried_before_the_next_one(monkeypatch) -> None:
+    """SiliconFlow ASR returns 400 ms or a 20 s stall for the same clip; one retry is cheaper."""
+    from house_ear.config.schema import ProviderConfig
+    from house_ear.providers.chain import call_stage
+
+    class Flaky(FakeAsr):
+        def __init__(self) -> None:
+            super().__init__("重试之后成功")
+            self.fail = True
+
+        async def transcribe(self, pcm: bytes, sample_rate: int) -> Transcript:
+            self.calls += 1
+            if self.fail:
+                self.fail = False
+                raise TimeoutError("first attempt stalls")
+            return Transcript(text=self.text)
+
+    flaky = Flaky()
+    flaky.cfg = ProviderConfig(retries=1)  # type: ignore[attr-defined]
+    transcript, report = asyncio.run(
+        call_stage("asr", [("flaky", flaky)], "transcribe", b"\x00\x00" * 800, 16000)
+    )
+    assert transcript.text == "重试之后成功"
+    assert report.used == "flaky"
+    assert flaky.calls == 2
+    assert report.attempts[0]["error"].startswith("TimeoutError")
+    assert report.attempts[1]["error"] == ""

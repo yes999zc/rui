@@ -15,15 +15,13 @@ from typing import Any
 from ..config.schema import ProvidersConfig
 from .base import AsrProvider, LlmProvider, TtsProvider
 from .openai_compat import OpenAiCompatAsr, OpenAiCompatLlm, OpenAiCompatTts
-from .sherpa_asr import SherpaAsr
 
 log = logging.getLogger(__name__)
 
-# kind -> (stage -> builder). A local model and a cloud endpoint are the same thing to the
-# chain: something that can answer for its stage and can fail loudly.
+# Everything is an API call: no local models, so a NAS deployment is just this container and
+# a key. kind exists so a provider with a different wire shape can be added beside this one.
 _BUILDERS: dict[str, dict[str, Callable[..., Any]]] = {
     "openai_compat": {"asr": OpenAiCompatAsr, "tts": OpenAiCompatTts, "llm": OpenAiCompatLlm},
-    "sherpa": {"asr": SherpaAsr},
 }
 
 
@@ -64,18 +62,22 @@ async def call_stage(
     """Call the first provider that works; collect why the others did not."""
     attempts: list[dict] = []
     for name, provider in chain:
-        started = time.perf_counter()
-        try:
-            result = await getattr(provider, method)(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001 - a fallback chain exists for exactly this
+        retries = getattr(getattr(provider, "cfg", None), "retries", 0)
+        for attempt in range(retries + 1):
+            started = time.perf_counter()
+            try:
+                result = await getattr(provider, method)(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - a fallback chain exists for exactly this
+                elapsed = round((time.perf_counter() - started) * 1000, 1)
+                attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}",
+                                 "elapsed_ms": elapsed})
+                log.warning("%s: %s attempt %d failed after %.0f ms: %s",
+                            stage, name, attempt + 1, elapsed, exc)
+                continue
             elapsed = round((time.perf_counter() - started) * 1000, 1)
-            attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}",
-                             "elapsed_ms": elapsed})
-            log.warning("%s: %s failed after %.0f ms: %s", stage, name, elapsed, exc)
-            continue
-        elapsed = round((time.perf_counter() - started) * 1000, 1)
-        attempts.append({"provider": name, "error": "", "elapsed_ms": elapsed})
-        return result, StageReport(stage=stage, used=name, attempts=attempts, elapsed_ms=elapsed)
+            attempts.append({"provider": name, "error": "", "elapsed_ms": elapsed})
+            return result, StageReport(stage=stage, used=name, attempts=attempts,
+                                       elapsed_ms=elapsed)
     raise StageFailure(stage, attempts)
 
 
