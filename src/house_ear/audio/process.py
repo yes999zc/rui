@@ -718,7 +718,14 @@ class AudioPlane:
             if not connected.is_set():
                 continue
             try:
-                writer.write(encode_json(self.metrics()))
+                snapshot = self.metrics()
+                # A number nobody can read is not a measurement: every threshold argument
+                # so far compared hit levels with nothing. Log the window's peak whenever
+                # there was speech in it, so "normal voice" has a value in the log.
+                if snapshot.voice_peak_db is not None and snapshot.voice_peak_db > -55.0:
+                    log.info("[level] voice peak %.1f dBFS over %.0f s",
+                             snapshot.voice_peak_db, METRICS_EVERY_S)
+                writer.write(encode_json(snapshot))
                 await writer.drain()
             except (ConnectionResetError, BrokenPipeError):
                 connected.clear()
