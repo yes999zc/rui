@@ -5,6 +5,7 @@ import asyncio
 import contextlib
 import logging
 import sys
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from .protocol import (
     Metrics,
     QueryMetrics,
     Ready,
+    ShellCommand,
+    ShellResult,
     Shutdown,
     SpeakFinished,
     VendorSignalMsg,
@@ -63,6 +66,7 @@ class AudioPlaneClient:
         self.last_utterance: bytes = b""
         # Set by the control plane: called (in a task) for every finished utterance.
         self.on_utterance: Callable[[bytes], Awaitable[None]] | None = None
+        self._shell_waiters: dict[str, asyncio.Future[str]] = {}
         self.last_vendor: VendorSignalMsg | None = None
         self._turns: set[asyncio.Task] = set()
         self._metrics_event = asyncio.Event()
@@ -132,6 +136,13 @@ class AudioPlaneClient:
             self.last_vendor = msg
             if self.on_vendor is not None:
                 self.on_vendor(msg.kind, msg.text)
+        elif isinstance(msg, ShellResult):
+            waiter = self._shell_waiters.pop(msg.request_id, None)
+            if waiter is not None and not waiter.done():
+                if msg.error:
+                    waiter.set_exception(RuntimeError(msg.error))
+                else:
+                    waiter.set_result(msg.stdout)
         elif isinstance(msg, Ready):
             self.ready = msg
 
@@ -145,6 +156,17 @@ class AudioPlaneClient:
             self.writer.write(encode_pcm(FrameType.PLAY_PCM, start // step, 0.0, pcm[start:start + step]))
         await self.writer.drain()
         await self.send(SpeakFinished())
+
+    async def shell(self, script: str, timeout_s: float = 3.0) -> str:
+        """Run a shell command on the speaker through the plane (device RPC)."""
+        request_id = str(uuid.uuid4())
+        waiter: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._shell_waiters[request_id] = waiter
+        try:
+            await self.send(ShellCommand(request_id=request_id, script=script))
+            return await asyncio.wait_for(waiter, timeout_s)
+        finally:
+            self._shell_waiters.pop(request_id, None)
 
     async def request_metrics(self, timeout_s: float = 3.0) -> Metrics | None:
         """Ask for a metrics snapshot instead of using the 2 s periodic one."""

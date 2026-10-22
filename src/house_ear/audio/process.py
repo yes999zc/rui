@@ -49,6 +49,8 @@ from .protocol import (
     PlayFile,
     QueryMetrics,
     Ready,
+    ShellCommand,
+    ShellResult,
     SpeakFinished,
     StopAudio,
     VendorSignalMsg,
@@ -810,6 +812,18 @@ class AudioPlane:
                             msg.voice_rate,
                             self.cfg.audio.voice.rate,
                         )
+                elif isinstance(msg, ShellCommand):
+                    stdout, error = "", ""
+                    try:
+                        if self.adapter is None:
+                            raise RuntimeError("no device connected")
+                        stdout = await self.adapter.shell(msg.script)
+                    except Exception as exc:  # noqa: BLE001 - report, never crash the plane
+                        error = f"{type(exc).__name__}: {exc}"
+                    writer.write(encode_json(ShellResult(
+                        request_id=msg.request_id, stdout=stdout, error=error,
+                    )))
+                    await writer.drain()
                 elif isinstance(msg, QueryMetrics):
                     writer.write(encode_json(self.metrics()))
                     await writer.drain()

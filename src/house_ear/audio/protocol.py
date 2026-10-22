@@ -223,9 +223,31 @@ class QueryMetrics(BaseModel):
     type: Literal["query_metrics"] = "query_metrics"
 
 
+class ShellCommand(BaseModel):
+    """control -> plane: run a shell command on the speaker and send back stdout.
+
+    The device is the only place some things can be read: the mixer value (`mysoftvol`)
+    decides loudness, `mphelper mute_stat` decides whether the vendor is playing. Without
+    this channel every such question was a guess.
+    """
+
+    type: Literal["shell"] = "shell"
+    request_id: str
+    script: str
+
+
+class ShellResult(BaseModel):
+    """plane -> control: the answer to one ShellCommand (or why there is none)."""
+
+    type: Literal["shell_result"] = "shell_result"
+    request_id: str
+    stdout: str = ""
+    error: str = ""
+
+
 ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | SpeakFinished
-    | VendorSignalMsg | Error | Shutdown,
+    | VendorSignalMsg | Error | Shutdown | ShellCommand | ShellResult,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

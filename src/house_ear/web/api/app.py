@@ -20,6 +20,7 @@ from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
+from ...audio.protocol import PlayFile
 from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
@@ -328,6 +329,62 @@ def create_app(
             # take effect without a restart - the console writes that section.
             runner.apply_session(updated.session)
         return redacted(updated)
+
+    @app.get("/api/v1/device/volume", dependencies=[Depends(auth)])
+    async def device_volume() -> dict:
+        """The speaker's own mixer value (mysoftvol, 0-255).
+
+        Not a duplicate of the config: `devices[].volume = 0` means the vendor owns it,
+        and the vendor rewrites it (old deployment: 160 -> 255 -> 160 within minutes). The
+        only way to know what the room is actually doing is to ask the device.
+        """
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if client is None:
+            raise HTTPException(status_code=409, detail="no audio plane connected")
+        try:
+            out = await client.shell(
+                "amixer -c 0 cget numid=177 | awk -F'[=,]' '/: values=/{print $2; exit}'"
+            )
+        except Exception as exc:  # noqa: BLE001 - the device may be gone
+            raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
+        try:
+            value = int(out.strip().splitlines()[0])
+        except (ValueError, IndexError) as exc:
+            raise HTTPException(status_code=502, detail=f"unreadable: {out!r}") from exc
+        return {"volume": value, "range": "0-255"}
+
+    @app.put("/api/v1/device/volume", dependencies=[Depends(auth)])
+    async def set_device_volume(patch: Annotated[dict, Body()]) -> dict:
+        """Write the mixer. Used by the tests that must know the volume they ran at."""
+        value = patch.get("value")
+        if not isinstance(value, int) or not 0 < value <= 255:
+            raise HTTPException(status_code=422, detail="value must be an int in 1..255")
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if client is None:
+            raise HTTPException(status_code=409, detail="no audio plane connected")
+        await client.shell(f"amixer -c 0 cset numid=177 {value} >/dev/null; echo ok")
+        log.info("device volume set to %d from the API", value)
+        return {"volume": value}
+
+    @app.post("/api/v1/debug/play", dependencies=[Depends(auth)])
+    async def debug_play(patch: Annotated[dict, Body()]) -> dict:
+        """Play a wav through the running plane (music for AEC/barge tests).
+
+        `house-ear debug-play` spawns its own plane and cannot be used while a server is
+        up, which is exactly when these tests run.
+        """
+        path = str(patch.get("file") or "")
+        if not Path(path).is_file():
+            raise HTTPException(status_code=404, detail=f"no such file: {path}")
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if client is None:
+            raise HTTPException(status_code=409, detail="no audio plane connected")
+        await client.send(PlayFile(path=path, loop=bool(patch.get("loop", False)),
+                                   gain=float(patch.get("gain", 1.0))))
+        return {"playing": path}
 
     @app.get("/api/v1/audio", dependencies=[Depends(auth)])
     async def audio_status() -> dict:
