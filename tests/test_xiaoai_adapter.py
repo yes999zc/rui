@@ -102,7 +102,7 @@ def test_adapter_asks_for_the_configured_layout_and_publishes_frames(device_toke
     assert payload["channels"] == 8
     assert payload["sample_rate"] == rate
     assert payload["bits_per_sample"] == 16
-    assert payload["mic_shift"] == 8 and payload["ref_shift"] == 13
+    assert payload["mic_shift"] == 12 and payload["ref_shift"] == 16
 
     frames = result["frames"]
     assert len(frames) == 10

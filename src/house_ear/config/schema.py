@@ -76,8 +76,11 @@ class CaptureConfig(BaseModel):
     mic_channels: int = Field(default=6, ge=1, le=16)
     ref_channels: int = Field(default=2, ge=0, le=16)
     bits: Literal[16, 32] = 32
-    mic_shift: int = Field(default=8, ge=0, le=31)
-    ref_shift: int = Field(default=13, ge=0, le=31)
+    # Production values from the two-day-old deployment: 4 bits of headroom on the
+    # mics and 6 dB on the reference. Level-matching (8/13) clips loud speech - a
+    # fresh install that never edits this file must not start there.
+    mic_shift: int = Field(default=12, ge=0, le=31)
+    ref_shift: int = Field(default=16, ge=0, le=31)
 
     @model_validator(mode="after")
     def _layout_adds_up(self) -> CaptureConfig:

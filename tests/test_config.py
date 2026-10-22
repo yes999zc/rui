@@ -20,8 +20,8 @@ REPO = Path(__file__).resolve().parents[1]
 def test_defaults_are_sane() -> None:
     cfg = Config()
     assert cfg.version == 2
-    assert cfg.audio.capture.mic_shift == 8
-    assert cfg.audio.capture.ref_shift == 13
+    assert cfg.audio.capture.mic_shift == 12
+    assert cfg.audio.capture.ref_shift == 16
     assert cfg.audio.capture.rate == 48000
     assert cfg.audio.voice.rate == 16000
     assert cfg.audio.playback.rate == 48000
@@ -143,7 +143,7 @@ def test_v1_config_is_migrated_in_memory(tmp_path) -> None:
     assert cfg.audio.capture.ref_channels == 2
     assert cfg.audio.voice.rate == 16000
     assert cfg.audio.voice.vad_end_silence_ms == 500
-    # shifts move from `aec` to `capture`
+    # shifts move from `aec` to `capture`, exactly as the v1 file wrote them
     assert cfg.audio.capture.ref_shift == 13
     # providers become catalog entries behind a one-name chain
     assert cfg.providers.llm.chain == ["llm"]
