@@ -53,3 +53,12 @@
 - **V2 三原语**：clarify（问回+谎报检测）、choose（三策略）、confirm（两档）——HA/MCP 装配时
   作为首个验证用例（choose=ask、danger=confirm 都在 HA 兑现）。
 - **V3 镜像**：ToolResult/filler 状态进 trace + 控制台 timeline + 剧本测试（并入 C-UI P3/P6）。
+
+## 6. 差距核对结论（2026-10-23 核对 agent）
+
+调研报告总体可信（核心声明 5/11 全对，其余为计数精度）。修正两条：①电台去重/taste 并非差距
+——新项目 `music/history.py` 本就是 dedup+taste 一体设计且已接入；②老项目谎报检测/动词反问
+有专门断言（test_llm_rounds.py:93-119）。**新发现的差距**（候选后续项）：LAN 只读工具
+（lan.py）、摄像头视觉问答（vision.py，Qwen3-VL）、固定设备动作白名单+远程 shell 工具、
+工具标记泄漏防线（clean_reply 剔标记）、**搜索/点歌多候选返回通道**（新 music 工具连候选列表
+都不给模型——比「多结果选择」更基础，choose 原语设计时一并解决）。
