@@ -152,6 +152,12 @@ class XiaoaiAdapter(DeviceAdapter):
             await self.call(
                 "start_play", protocol.playback_payload(sample_rate), timeout=2.0
             )
+            # The receipt only says the client spawned aplay - the ALSA device is not
+            # open yet, and first writes in that window block ~100 ms (device log:
+            # "[aplay] slow write 112 ms (3200 bytes)"), which is the swallowed first
+            # word. The old build slept the same 80 ms here: "let aplay open before
+            # the first chunk" (xiaoai-voice-entry server/session.py Sink.open).
+            await asyncio.sleep(0.08)
             self._playing = True
         bytes_per_chunk = max(2, sample_rate * PLAY_CHUNK_MS // 1000 * 2)
         for start in range(0, len(pcm), bytes_per_chunk):
