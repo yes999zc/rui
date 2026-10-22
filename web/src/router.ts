@@ -1,9 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
-  { path: '/', redirect: '/overview' },
-  { path: '/overview', component: () => import('./views/OverviewView.vue'), meta: { title: '概览' } },
-  { path: '/devices', component: () => import('./views/DevicesView.vue'), meta: { title: '设备' } },
+  // Registry-driven panels first (docs/console.md): the backend declares what
+  // exists, PanelHost renders it. Legacy hand-written views follow until each
+  // migrates into a PanelSpec.
+  { path: '/', redirect: '/panel/overview' },
+  { path: '/panel/:id', component: () => import('./views/PanelHost.vue') },
+  { path: '/overview', redirect: '/panel/overview' },
+  { path: '/devices', redirect: '/panel/devices' },
   { path: '/assistant', component: () => import('./views/AssistantView.vue'), meta: { title: '助手' } },
   { path: '/voice', component: () => import('./views/VoiceView.vue'), meta: { title: '语音' } },
   { path: '/models', component: () => import('./views/ModelsView.vue'), meta: { title: '模型' } },

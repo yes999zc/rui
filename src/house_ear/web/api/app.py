@@ -130,6 +130,87 @@ async def _never_sender(_msg: object) -> None:
     raise _NotWired("music sender used before the app was built")
 
 
+def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
+    """The PanelSpec table (docs/console.md). Expressions are deliberately tiny:
+    `$.path` lookups, `map` for enum wording, `enabled_when: "$.x=v"` equality."""
+    return [
+        {
+            "id": "overview", "title": "概览", "icon": "◎", "group": "status", "order": 10,
+            "enabled": True, "enabled_reason": "",
+            "source": "/health", "extra_sources": {"audio": "/api/v1/audio"},
+            "refresh_s": 5,
+            "blocks": [
+                {"type": "stats", "cards": [
+                    {"label": "服务", "value": "$.status", "tone": {"ok": "ok"}},
+                    {"label": "运行", "value": "$.uptime_s", "unit": "s"},
+                    {"label": "设备", "value": "$.devices"},
+                    {"label": "音频面", "value": "$.audio_plane",
+                     "map": {"true": "在线", "false": "离线"},
+                     "tone": {"true": "ok", "false": "warn"}},
+                ]},
+                {"type": "stats", "source": "audio", "title": "音频面", "cards": [
+                    {"label": "唤醒次数", "value": "$.metrics.wake_count"},
+                    {"label": "当前占用", "value": "$.metrics.output_owner",
+                     "map": {"": "空闲", "cue": "提示音", "dialogue": "对话",
+                             "reminder": "提醒", "music": "音乐"}},
+                    {"label": "回声抑制", "value": "$.metrics.aec_erle_db", "unit": "dB",
+                     "map": {"null": "—"}},
+                ]},
+                {"type": "actions", "title": "操作", "buttons": [
+                    {"id": "stop", "label": "停止出声", "method": "POST",
+                     "href": "/api/v1/debug/play", "body": {"stop": True}, "refresh": True},
+                ]},
+            ],
+        },
+        {
+            "id": "devices", "title": "设备", "icon": "⌸", "group": "status", "order": 20,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/devices", "refresh_s": 10,
+            "blocks": [
+                {"type": "list", "title": "在线设备", "items": "$",
+                 "item_title": "$.id", "item_sub": "$.adapter · $.model · $.status"},
+            ],
+        },
+        {
+            "id": "music", "title": "音乐", "icon": "♪", "group": "living", "order": 30,
+            "enabled": music_enabled,
+            "enabled_reason": "" if music_enabled
+            else f"music.enabled 未开启（配置的源：{music_source}）",
+            "source": "/api/v1/music", "refresh_s": 4,
+            "blocks": [
+                {"type": "stats", "cards": [
+                    {"label": "状态", "value": "$.state",
+                     "map": {"playing": "播放中", "paused": "已暂停", "idle": "空闲"},
+                     "tone": {"playing": "ok", "paused": "warn"}},
+                    {"label": "队列剩余", "value": "$.queue_left", "unit": "首"},
+                ]},
+                {"type": "now", "title": "$.track.title", "sub": "$.track.artist",
+                 "empty": "没有在播的歌"},
+                {"type": "actions", "buttons": [
+                    {"id": "prev", "label": "上一首", "method": "POST",
+                     "href": "/api/v1/music", "body": {"action": "prev"}, "refresh": True},
+                    {"id": "pause", "label": "暂停", "method": "POST",
+                     "href": "/api/v1/music", "body": {"action": "pause"}, "refresh": True,
+                     "enabled_when": "$.state=playing"},
+                    {"id": "resume", "label": "继续", "method": "POST",
+                     "href": "/api/v1/music", "body": {"action": "resume"}, "refresh": True,
+                     "enabled_when": "$.state=paused"},
+                    {"id": "next", "label": "下一首", "method": "POST",
+                     "href": "/api/v1/music", "body": {"action": "next"}, "refresh": True},
+                    {"id": "play", "label": "随便放点", "method": "POST",
+                     "href": "/api/v1/music", "body": {"action": "play"}, "refresh": True},
+                    {"id": "stop", "label": "停止", "method": "POST",
+                     "href": "/api/v1/music", "body": {"action": "stop"}, "refresh": True,
+                     "confirm": "停止并清空队列？", "danger": True},
+                ]},
+                {"type": "list", "title": "最近爱听", "items": "$.top",
+                 "item_title": "$.artist", "item_sub": "$.plays 次",
+                 "empty": "还没有播放记录", "max": 5},
+            ],
+        },
+    ]
+
+
 async def _music_transport(app: FastAPI, clean: str, runner, client, trace, traces) -> str | None:
     """Deterministic music transport words: pause/resume/next/prev, no model.
 
@@ -523,6 +604,10 @@ def create_app(
         app.state.music = music_service
     else:
         app.state.music = None
+    # The console registry (docs/console.md): panels are declared where their feature
+    # is assembled, the frontend renders them and never asks "does this exist".
+    app.state.panels = _build_panels(cfg.music.enabled, cfg.music.source)
+    app.state.panels_revision = f"{__version__}-{int(time.time())}"
 
     def auth(x_auth_token: str | None = Header(default=None)) -> None:
         if not cfg.web.auth_token:
@@ -754,6 +839,60 @@ def create_app(
             "top": [{"artist": a, "plays": n} for a, n in service.history.top(5)],
             "last": service.history.last(),
         }
+
+    @app.post("/api/v1/music", dependencies=[Depends(auth)])
+    async def music_control(patch: Annotated[dict, Body()]) -> dict:
+        """The console's buttons take the same path the voice transport words do.
+
+        `play` with no query starts the radio batch; with a query it goes through
+        the same intent pipeline the model's music_play tool uses.
+        """
+        service = getattr(app.state, "music", None)
+        if service is None:
+            raise HTTPException(status_code=409, detail="music is not enabled")
+        action = str(patch.get("action") or "")
+        if action == "play":
+            query = str(patch.get("query") or "").strip()
+            if query:
+                from ...music import query as q
+                from ...music.tools import _search
+                tracks = await _search(service.source, q.plan(query))
+            else:
+                tracks = await service.source.random(service.cfg.queue_batch)
+            started = await service.play(tracks)
+            if started is None:
+                raise HTTPException(status_code=502, detail="the library did not answer")
+        elif action in {"pause", "resume", "stop", "next", "prev"}:
+            await getattr(service, action)()
+        else:
+            raise HTTPException(
+                status_code=422, detail="action must be play/pause/resume/stop/next/prev")
+        return await music_status()
+
+    @app.get("/api/v1/music/search", dependencies=[Depends(auth)])
+    async def music_search(q: str = "") -> dict:
+        """Search without playing: the console's picker. Same pipeline as music_play."""
+        service = getattr(app.state, "music", None)
+        if service is None:
+            raise HTTPException(status_code=409, detail="music is not enabled")
+        from ...music import query as mq
+        from ...music.tools import _search
+        plan = mq.plan(q or "")
+        tracks = await service.source.random(20) if plan.random \
+            else await _search(service.source, plan)
+        return {"query": q, "tracks": [
+            {"id": t.id, "title": t.title, "artist": t.artist, "duration": t.duration}
+            for t in tracks[:20]]}
+
+    @app.get("/api/v1/panels", dependencies=[Depends(auth)])
+    async def panels() -> dict:
+        """The console's nav and pages, declared here (docs/console.md).
+
+        A new feature registers its PanelSpec where it is assembled and the console
+        grows a panel with no frontend change; `enabled: false` greys it out with
+        the reason instead of hiding it.
+        """
+        return {"revision": app.state.panels_revision, "panels": app.state.panels}
 
     @app.get("/api/v1/voice/threshold", dependencies=[Depends(auth)])
     async def voice_threshold() -> dict:
