@@ -96,8 +96,14 @@ Device log (`he-serve-b2n.log`, 9哥 on the speaker):
 19:30:23.284  turn: {'transcript': ..., 'reply': ...}   ← one answer, ours
 ```
 
-### Known gaps (each has a debugged answer in the old build)
+Replay it without anyone at the speaker (2026-10-22 19:48, automated): wake the vendor
+over SSH with `ubus call pnshelper event_notify '{"src":1,"event":0}'` (the client's
+`wake_up` helper, `speaker.rs:152`) — old project's `devshell.py` carries the credentials.
+Expect, within ~10 s: `vendor wake (...), we yield` → `led: off` → a `stop_play` in the
+device log → vendor `Playing` then `Idle`, and **no** `turn:` of ours in between;
+`/health` `vendor_wakes` increments by one.
 
+### Known gaps (each has a debugged answer in the old build)
 | # | gap | evidence | old build |
 |---|---|---|---|
 | V1 | We do not actively stop 小爱 when 你好小瑞 fires. Today it finishes its sentence because its replies are short | 19:30 log: vendor `Idle` 1.5 s after our wake | `vendor_stop_player()` `assistant_v3.py:2248`: `ubus call mediaplayer player_play_operation '{"action":"pause","media":"common"}'`, only when `mphelper mute_stat` is 1/3 (`player_stop` does not exist, rc=3). The heavier route is `abort_xiaoai()` (client `speaker.rs:143`, `/etc/init.d/mico_aivs_lab restart`) |
