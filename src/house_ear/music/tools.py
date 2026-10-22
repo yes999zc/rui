@@ -138,23 +138,24 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         ), music_play),
         (ToolSpec(
             name="local.music_pause", permission=Permission.WRITE,
-            description="暂停音乐（「暂停/停一下（在放歌时）」）",
+            description="音乐播放中说「暂停/停一下/先停这儿」时**必须调用本工具**真正暂停，"
+                        "禁止只口头说已暂停（实测模型会偷懒只回一句，音乐照播）。",
         ), music_pause),
         (ToolSpec(
             name="local.music_resume", permission=Permission.WRITE,
-            description="继续播放暂停着的音乐（「继续/接着放」）",
+            description="「继续/接着放/恢复播放」时**必须调用本工具**，禁止只口头确认。",
         ), music_resume),
         (ToolSpec(
             name="local.music_next", permission=Permission.WRITE,
-            description="切下一首（「下一首/换一首」）",
+            description="「下一首/换一首/切歌」时**必须调用本工具**，禁止只口头确认。",
         ), music_next),
         (ToolSpec(
             name="local.music_prev", permission=Permission.WRITE,
-            description="回上一首（「上一首」）",
+            description="「上一首/前一首」时**必须调用本工具**，禁止只口头确认。",
         ), music_prev),
         (ToolSpec(
             name="local.music_stop", permission=Permission.WRITE,
-            description="停止播放音乐（「别放了/停止播放/关掉音乐」）",
+            description="「别放了/停止播放/关掉音乐/不放了」时**必须调用本工具**真正停止。",
         ), music_stop),
         (ToolSpec(
             name="local.music_favorite", permission=Permission.WRITE,
