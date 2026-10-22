@@ -265,7 +265,7 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 21:20 收线）
+## 9. 现场状态（2026-10-22 22:55 自测收线）
 
 - 代码：HEAD `3be4825`；**344 passed**，ruff clean。服务在跑、音箱已连、音乐已停。
   今晚累计修复四件：自言自语 `3f8a93c`、退下吧双告别 `ec3815f`、音乐 0.4 s 复播致聋
@@ -318,5 +318,16 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   即刻说话所以没起歌词幻影 turn）——D1 接真音乐时 gate/owner 语义一起理；② 3-4 米远处唤醒
   未正式计数（今晚多轮唤醒全中，含 -10 dBFS 弱信号）；③ 长文本/新闻打断机制已具备
   （barge 20:50:08 实测），随 D1 真机细验。
-- **下一步**：C1 冷装 → D1 音乐（老项目 `MusicPlayer` 语义已映射，见上条老项目体系；接入时
-  连 gate/owner 遗留一起清）。
+- **下一步（22:55 更新，9哥 已去忙，全部自测完成）**：
+  1. **D1 音乐 ✅ 核心完成**（`a11bd00`..`2edec7b`，12 个 commit）：多源接口 + Navidrome 首源 +
+     队列服务 + 9 工具 + 确定性词直通 + 显式暂停 + 起歌压 vendor。**真机自测全通**：点歌（晴天/
+     林俊杰/陈奕迅…）/随机/暂停/继续/上下首/停止/搜索/口味；**自然播完 17ms 无缝切歌 + 队列自动
+     补齐**（soak3 22:27 实测）；对话压低答完自动续 ✓。设计 `docs/music.md`。
+  2. **控制台 P1 ✅**（`0ff8922`）：PanelSpec 注册表（后端声明、前端渲染、disabled 灰化不隐藏）+
+     `POST /api/v1/music`（与语音同路径）+ 搜索端点 + usePanels/PanelHost/四 block + 概览/设备/
+     音乐三面板。**打开 `http://127.0.0.1:8091/` 即见**（音乐面板：状态/正在播/六按钮/口味）。
+     设计 `docs/console.md`（含老项目调研全文与 P2–P4 分期）。
+  3. **遗留（不阻塞）**：远场 20 唤醒计数需 9哥；音量对账接入起歌点；farewell 静音续歌边角；
+     控制台 P2（form block/token 输入/日志页/对话面板）；在线兜底源只留接口位。
+  4. **最后一步 C1 冷装**：代码门槛全绿（367 passed、ruff、vue-tsc、镜像预检曾通），等 9哥
+     在场时做（30 分钟到第一句的验收需要他的耳朵和嘴）。
