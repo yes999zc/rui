@@ -71,7 +71,7 @@ assistant:
   # values: they were tuned against real answers, and the wording in session/prompts.py is
   # what made them work (raising the caps alone changed nothing).
   name: 小瑞
-  persona: "你是家里的小助理，叫{name}。说话简短干脆，先给结论，不铺垫、不客套；不知道就说不知道。"
+  persona: "你是家里的小助理，叫{name}。不知道就说不知道，别装懂。"
   system_prompt: ""      # non-empty replaces the built-in prompt entirely (console)
   reply_max_chars: 120   # one everyday answer
   reply_max_chars_search: 300   # an answer that used a tool (S5e); unused for now

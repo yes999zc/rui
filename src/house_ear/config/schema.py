@@ -188,9 +188,11 @@ class ProviderConfig(BaseModel):
     # Vendors that need more than a bearer key (讯飞 wants app_id + key + secret).
     app_id_env: str = ""
     api_secret_env: str = ""
-    # Defaults come from xiaoai-voice-entry's working setup: answers are spoken, so the
-    # budget is a ceiling rather than a target.
-    max_tokens: int = Field(default=220, ge=16, le=8192)
+    # The old deployment's ANSWER_MAX_TOKENS is 3000, and it is a ceiling, not a target:
+    # short replies stay short because the prompt says so. 220 was left here from an
+    # earlier experiment and silently cut every answer in the 900-character band
+    # (`assistant.reply_max_chars_long`), half-way through a sentence that TTS then spoke.
+    max_tokens: int = Field(default=3000, ge=16, le=8192)
     temperature: float = Field(default=0.4, ge=0.0, le=2.0)
     # DeepSeek's reasoner spends 2-3x the latency and shares max_tokens with the answer;
     # for a voice reply the reasoning buys nothing (measured on the live prompt).
@@ -278,11 +280,11 @@ class AssistantConfig(BaseModel):
     """
 
     name: str = Field(default="小瑞", min_length=1, max_length=12)
-    # Appended to the built-in prompt, exactly as the old build appended `persona`.
-    persona: str = (
-        "你是家里的小助理，叫{name}。说话简短干脆，先给结论，不铺垫、不客套；"
-        "不知道就说不知道。"
-    )
+    # Appended to the built-in prompt, exactly as the old build appended `persona`. Note
+    # what is *not* here: the old deployment's local override said 「说话简短干脆，先给结论，
+    # 不铺垫、不客套」, which it then appended after a prompt that says 「信息量优先，把话说
+    # 完整」 - the two pull in opposite directions and the later one wins. Identity only.
+    persona: str = "你是家里的小助理，叫{name}。不知道就说不知道，别装懂。"
     # A full replacement, for the console. Empty means "use the built-in prompt".
     system_prompt: str = ""
     reply_max_chars: int = Field(default=120, ge=10, le=300)

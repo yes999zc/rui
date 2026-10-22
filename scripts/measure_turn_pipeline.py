@@ -109,11 +109,21 @@ def free_port() -> int:
 async def stream(ws, pcm: bytes, rate: int, block_ms: int, speed: float,
                  watch=None) -> float | None:
     """Send blocks at device pace. `watch()` is polled after each block; the elapsed time
-    of the first truthy answer is returned (used to time the KWS hit)."""
+    of the first truthy answer is returned (used to time the KWS hit).
+
+    A send that takes more than a couple of seconds is not a slow network, it is the peer
+    not reading: say so out loud instead of hanging the whole run on it.
+    """
     started = time.monotonic()
     hit_at: float | None = None
+    sent = 0
     for chunk in frames(pcm, block_ms):
-        await ws.send(protocol.stream("record", to_device_block(chunk)))
+        try:
+            await asyncio.wait_for(ws.send(protocol.stream("record", to_device_block(chunk))), 2.0)
+        except TimeoutError:
+            print(f"!! record frame {sent} blocked >2 s: the plane stopped reading", flush=True)
+            raise
+        sent += 1
         await asyncio.sleep(block_ms / 1000.0 / speed)
         if watch is not None and hit_at is None and watch():
             hit_at = time.monotonic() - started
@@ -153,7 +163,10 @@ async def _consume(ws, state: dict) -> None:
                 state["audio_bytes"] = state.get("audio_bytes", 0) + len(payload)
     except (asyncio.CancelledError, OSError):
         return
-    except Exception:  # noqa: BLE001 - a closed socket ends the drain, it is not a failure
+    except Exception as exc:  # noqa: BLE001 - a closed socket ends the drain, it is not a failure
+        # Say it out loud: a reader that dies quietly leaves the socket filling up, and the
+        # next thing you see is the *sender* blocking with no explanation.
+        print(f"!! reader stopped: {type(exc).__name__}: {exc}", flush=True)
         return
 
 

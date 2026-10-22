@@ -197,8 +197,9 @@ def test_markup_is_never_spoken_nor_stored(monkeypatch) -> None:
 
     runner = TurnRunner(Config().providers)
     result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
-    assert tts.texts == ["好的。"]
-    assert result.reply == "好的。"
+    # the tag itself is dropped; the answer around it still gets spoken
+    assert tts.texts == ["好的。", "十二度。"]
+    assert result.reply == "好的。十二度。"
     assert all("invoke" not in str(m["content"]) for m in runner.history)
 
 

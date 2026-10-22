@@ -30,6 +30,34 @@ def has_markup(text: str) -> bool:
     return any(h in text for h in MARKUP_HINTS)
 
 
+_SPAN = re.compile(r"<[^>]{0,120}>?")
+_SPAN_TAIL = re.compile(r"[A-Za-z_]{2,}>")
+_MEANINGFUL = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]")
+
+
+def sanitize_spoken(text: str) -> str:
+    """Remove markup *inside* a piece that is about to be spoken.
+
+    `clean_reply` works per line, which is what the old build could do: it had the whole
+    answer in hand. Here the answer is split for streaming TTS first, so a markup tag can
+    land across two pieces and neither one carries a whole marker - measured on a real
+    DSML answer, the fragment `parameter>` was spoken. Anything left without a Chinese
+    character, letter or digit is not speech, so it is dropped.
+    """
+    if not text:
+        return ""
+    cleaned = text
+    for junk in ("<｜｜DSML｜｜ calls>", "<｜DSML｜>"):
+        cleaned = cleaned.replace(junk, " ")
+    cleaned = _SPAN.sub(" ", cleaned)
+    for token in MARKUP_HINTS:
+        cleaned = cleaned.replace(token, " ")
+    # A tag cut in half by the sentence split leaves its tail behind ("parameter>").
+    cleaned = _SPAN_TAIL.sub(" ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned if _MEANINGFUL.search(cleaned) else ""
+
+
 def clean_reply(text: str) -> str:
     """Drop any line carrying tool-call markup."""
     lines = [line for line in (text or "").splitlines() if not has_markup(line)]
@@ -69,7 +97,13 @@ def wake_pattern(wake_words: Sequence[str]) -> re.Pattern[str] | None:
     alternatives = []
     for word in words:
         tail = word.strip()[-2:] if len(word.strip()) >= 2 else word.strip()
-        alternatives.append("^" + _TAIL_ALIASES.get(tail, re.escape(tail)) + r"[，,。.！!？?\s]*")
+        tail_pattern = _TAIL_ALIASES.get(tail, re.escape(tail))
+        sep = r"[，,。.！!？?\s]*"
+        alternatives.append("^" + tail_pattern + sep)
+        # One character of junk in front: the old build's recorded case was 「王小智快几点了」,
+        # where ASR spliced a name fragment onto the wake word. Exactly one character, not
+        # "anywhere in the first 8": 「今天小瑞在吗」 has two in front and is a real question.
+        alternatives.append("^." + tail_pattern + sep)
         alternatives.append(_word_pattern(word))
     return re.compile("(?:" + "|".join(dict.fromkeys(alternatives)) + ")")
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,7 +27,7 @@ from ..providers.chain import (
 )
 from ..trace import TurnTrace
 from . import prompts
-from .text import clean_reply, has_markup, strip_wake
+from .text import clean_reply, sanitize_spoken, strip_wake
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +47,14 @@ SOFT_MIN_CHARS = 10
 # a reply with no punctuation at all cannot hold the speaker silent.
 MIN_SENTENCE_CHARS = 2
 MAX_SENTENCE_CHARS = 45
+
+# A follow-up whose whole meaning lives in the previous answer. Dropping that answer from
+# the window (see `history_messages`) would leave the model with 「再说一遍」 and nothing to
+# repeat, so these keep the earlier round.
+FOLLOW_UP = re.compile(
+    r"再说|再讲|再说一遍|继续|接着说|往下说|说下去|详细|展开|具体点|多说点|举个例子|举例|"
+    r"然后呢|后来呢|为什么|凭什么|重复|再念|说全|说完整|长一点|短一点|换个说法"
+)
 
 
 @dataclass
@@ -178,8 +187,12 @@ class TurnRunner:
             else:
                 groups[-1].append(message)
         out: list[dict] = []
+        follow_up = bool(FOLLOW_UP.search(transcript))
         for group in groups:
-            if group[0].get("content") == transcript:
+            # A follow-up ("再说一遍", "详细点") means nothing without the answer it refers
+            # to, so nothing is dropped for those. Only a self-contained question replaces
+            # its earlier copy.
+            if group[0].get("content") == transcript and not follow_up:
                 continue
             out.extend(group)
         return out
@@ -292,21 +305,29 @@ class TurnRunner:
         async for chunk in stream:
             chunks.append(chunk)
         for chunk in chunks:
+            if chunk.delta:
+                buffer += chunk.delta
+            if chunk.finish_reason == "length":
+                # The vendor stopped at max_tokens: the last sentence is cut and TTS spoke
+                # half of it. Without this line the cut is completely silent.
+                log.warning("llm: answer hit max_tokens and was cut mid-sentence")
+                result.error = result.error or "answer truncated at max_tokens"
             if not chunk.delta:
                 continue
-            buffer += chunk.delta
             sentences, buffer = split_sentences(buffer)
             for sentence in sentences:
-                # A model with no tools sometimes writes the tool call as text (DSML).
-                # Speaking it is the old build's 14-second bug; drop it here, per sentence,
-                # because the sentence has already been split for TTS.
-                if has_markup(sentence):
+                # A model with no tools sometimes writes the tool call as text (DSML), and
+                # the split for streaming can cut a tag in half - so sanitise each piece
+                # instead of testing for a whole marker that may no longer be there.
+                speakable = sanitize_spoken(sentence)
+                if not speakable:
                     continue
-                spoken_parts.append(sentence)
-                await say(sentence)
-        if buffer.strip() and not has_markup(buffer):
-            spoken_parts.append(buffer.strip())
-            await say(buffer.strip())
+                spoken_parts.append(speakable)
+                await say(speakable)
+        tail = sanitize_spoken(buffer) if buffer.strip() else ""
+        if tail:
+            spoken_parts.append(tail)
+            await say(tail)
 
         trace.mark("llm_done")
         # The reply is what was actually spoken, not the raw deltas: markup that never

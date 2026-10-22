@@ -7,7 +7,13 @@ from __future__ import annotations
 
 from house_ear.config.schema import AssistantConfig
 from house_ear.session import prompts
-from house_ear.session.text import clean_reply, has_markup, strip_wake, wake_pattern
+from house_ear.session.text import (
+    clean_reply,
+    has_markup,
+    sanitize_spoken,
+    strip_wake,
+    wake_pattern,
+)
 
 
 def test_prompt_carries_the_length_bands_and_the_no_tools_note() -> None:
@@ -65,12 +71,32 @@ def test_strip_wake_drops_a_wake_word_caught_by_the_preroll() -> None:
     assert strip_wake("你好，小瑞。现在几点了？", words) == "现在几点了？"
     # ASR mangles the splice; the tail alone is enough
     assert strip_wake("小瑞现在几点了", words) == "现在几点了"
+    # ... and one character of junk in front, which is the old build's recorded case
+    # (「王小智快几点了」). Exactly one: two characters is a real sentence.
+    assert strip_wake("王小瑞快几点了", words) == "快几点了"
+    assert strip_wake("喂小瑞，现在几点了", words) == "现在几点了"
     # a question that merely mentions the name later is a real question
     assert strip_wake("今天小瑞在吗", words) == "今天小瑞在吗"
     # only the wake word: nothing left to answer
     assert strip_wake("你好小瑞", words) == ""
     # no wake words configured -> untouched
     assert strip_wake("今天天气怎么样", []) == "今天天气怎么样"
+
+
+def test_sanitize_spoken_drops_markup_fragments_between_sentences() -> None:
+    """The streaming split can cut a DSML tag in half; the half must not be spoken."""
+    assert sanitize_spoken('<|invoke name="web_search">') == ""
+    assert sanitize_spoken("parameter>") == ""
+    assert sanitize_spoken("好的，parameter>") == "好的，"
+    assert sanitize_spoken("灯已经打开了。") == "灯已经打开了。"
+    assert sanitize_spoken("") == ""
+
+
+def test_the_token_budget_can_hold_the_long_band() -> None:
+    """max_tokens is a ceiling, not a target - but 220 cut the 900-character band in half."""
+    from house_ear.config.schema import ProviderConfig
+
+    assert ProviderConfig().max_tokens >= 1200
 
 
 def test_the_old_wake_word_still_works_for_the_old_homophones() -> None:

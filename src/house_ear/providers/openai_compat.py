@@ -123,6 +123,11 @@ class OpenAiCompatLlm(_HttpHolder):
                 text = delta.get("content") or ""
                 if text:
                     yield ChatChunk(delta=text)
+                finish = choices[0].get("finish_reason") or ""
+                if finish:
+                    # The last chunk often carries no text, only the reason. Passing it on
+                    # is what lets the caller notice "length" (answer cut at max_tokens).
+                    yield ChatChunk(delta="", finish_reason=finish)
 
 
 class OpenAiCompatAsr(_HttpHolder):

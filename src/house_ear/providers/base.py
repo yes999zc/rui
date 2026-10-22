@@ -17,6 +17,9 @@ class Transcript:
 class ChatChunk:
     delta: str
     done: bool = False
+    # "length" means the vendor stopped at the cap, i.e. the answer is cut mid-sentence.
+    # Without it a truncated reply is spoken as if it were finished.
+    finish_reason: str = ""
 
 
 class AsrProvider(Protocol):
