@@ -18,13 +18,12 @@ from pydantic import ValidationError
 
 from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
-from ...audio.ack_render import render_ack_wav
+from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
 from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
-from ...providers.chain import build_stage
 from ...session import rules
 from ...session.ack import ensure_ack_wav
 from ...session.text import strip_wake
@@ -89,15 +88,22 @@ def create_app(
         # Render the spoken wake cue now, not on the wake: synthesising it inside the wake
         # path cost the old build 1.5 s and swallowed the first request (\`ack_warmer\`).
         app.state.ack_task = asyncio.create_task(render_ack_wav(cfg), name="ack-render")
+
+        async def _warm_filler() -> None:
+            pcm = await render_filler_pcm(cfg)
+            runner.filler_pcm = pcm
+            app.state.filler_pcm = pcm
+
+        # Same reason as the ack: a filler that has to be synthesised when it is needed
+        # costs the latency it exists to hide.
+        app.state.filler_task = asyncio.create_task(_warm_filler(), name="filler-render")
         app.state.runner = runner
         app.state.last_turn = None
         vendor = VendorWindow(cfg.session.vendor_quiet_s)
         app.state.vendor = vendor
-        for stage in ("asr", "tts", "llm"):
-            for _name, provider in build_stage(cfg.providers, stage):
-                warm = getattr(provider, "warm", None)
-                if warm is not None:
-                    await warm()
+        # Warm the instances the turns will use. This used to build its own chain and
+        # warm that, which loaded the ASR model twice and left the real one cold.
+        await runner.warm()
         app.state.ack_note = ""
         if start_audio:
             supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)

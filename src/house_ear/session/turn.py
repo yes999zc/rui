@@ -155,11 +155,21 @@ class TurnRunner:
         wake_words: Sequence[str] = (),
         tools: Sequence[tuple[Any, Any]] = (),
         spoken: Any = None,
+        filler_pcm: bytes = b"",
         tool_timeout_s: float = 20.0,
         turn_timeout_s: float = 30.0,
         idle: IdleWatch | None = None,
     ) -> None:
         self.providers = providers
+        # Built once, not per call. `asr_chain()` constructs the provider, and the local
+        # SenseVoice provider loads its 1.1 GB model on first use - so rebuilding the
+        # chain every turn reloaded the model every turn. Measured on the speaker:
+        # 4.7-5.1 s of dead air between the wake word and the transcript, logged as
+        # "local asr ready" before every single turn. The providers section is not
+        # writable from the console, so these cannot go stale at runtime.
+        self._asr = asr_chain(providers)
+        self._llm = llm_chain(providers)
+        self._tts = tts_chain(providers, sample_rate)
         # None means "assemble per turn": the prompt carries the length bands, the tool
         # rules and the clock, and a long session must not keep a stale copy.
         self.system_prompt = system_prompt
@@ -180,6 +190,10 @@ class TurnRunner:
         self.tools = tuple(tools)
         # Shared with the control plane: what we said, so the mic cannot re-ask it.
         self.spoken = spoken
+        # Pre-rendered filler, filled in by the control plane once TTS has answered.
+        # Empty means "not ready yet" and the filler falls back to synthesising on the
+        # spot - the old behaviour, 0.5-0.9 s slower.
+        self.filler_pcm = filler_pcm
         self.tool_timeout_s = tool_timeout_s
         # A turn that hangs is worse than a turn that fails: the speaker is left waiting and
         # the session says nothing. The old build wrapped it in wait_for(30) for that reason.
@@ -200,6 +214,26 @@ class TurnRunner:
         if self.system_prompt is not None:
             return self.system_prompt
         return prompts.build(self.assistant, tools_ok=bool(self.tools))
+
+    async def warm(self) -> None:
+        """Load what the first turn would otherwise load on its own.
+
+        The local ASR provider pulls a 1.1 GB model on first use. Warming *these*
+        instances (not a throwaway chain) is what keeps the first request as fast as the
+        tenth: measured on the speaker, a cold first turn spent 5 s before the transcript.
+        """
+        seen: set[int] = set()
+        for chain in (self._asr, self._tts, self._llm):
+            for _name, provider in chain:
+                if id(provider) in seen:
+                    continue
+                seen.add(id(provider))
+                warm = getattr(provider, "warm", None)
+                if warm is not None:
+                    try:
+                        await warm()
+                    except Exception as exc:  # noqa: BLE001 - warming is never fatal
+                        log.warning("warm: %s: %s", type(exc).__name__, exc)
 
     def apply_session(self, session: SessionConfig) -> None:
         """Take a console-edited `session` section without a restart.
@@ -251,7 +285,7 @@ class TurnRunner:
         trace.mark("end_of_speech")
         try:
             transcript, report = await call_stage(
-                "asr", asr_chain(self.providers), "transcribe", pcm, self.sample_rate
+                "asr", self._asr, "transcribe", pcm, self.sample_rate
             )
         except StageFailure as exc:
             log.warning("turn: %s", exc)
@@ -368,7 +402,7 @@ class TurnRunner:
             # build's self-echo incident was exactly its own 「我想想」 coming back.
             if self.spoken is not None:
                 self.spoken.remember(text)
-            chain = tts_chain(self.providers, self.sample_rate)
+            chain = list(self._tts)
             if tts_provider is not None:
                 chain = [pair for pair in chain if pair[0] == tts_provider] + [
                     pair for pair in chain if pair[0] != tts_provider
@@ -408,6 +442,19 @@ class TurnRunner:
                 audio_started=trace.at("tts_first") is not None,
             ):
                 return
+            if self.filler_pcm:
+                # The whole point of the filler is to arrive early; synthesising it now
+                # adds the vendor's first byte to the wait it is hiding.
+                log.info("filler after %.1f s (cached): %s", delay, text)
+                if self.spoken is not None:
+                    self.spoken.remember(text)
+                if trace.at("tts_first") is None:
+                    trace.mark("tts_first")
+                if trace.at("play_start") is None:
+                    trace.mark("play_start")
+                await speak(self.filler_pcm)
+                result.audio_bytes += len(self.filler_pcm)
+                return
             log.info("filler after %.1f s: %s", delay, text)
             await say(text)
 
@@ -421,7 +468,7 @@ class TurnRunner:
             """
             round_started = time.perf_counter()
             (_name, first, stream), report = await open_stream_stage(
-                "llm", llm_chain(self.providers), "chat", messages, tools
+                "llm", self._llm, "chat", messages, tools
             )
             log.info("llm round: tools=%d first_token=%.0f ms", len(tools),
                      (time.perf_counter() - round_started) * 1000)
@@ -575,7 +622,7 @@ class TurnRunner:
     async def say(self, text: str, speak: Callable[[bytes], Awaitable[None]],
                   trace: TurnTrace) -> int:
         """Speak one canned line. No model, no round trip: session actions are decided."""
-        chain = tts_chain(self.providers, self.sample_rate)
+        chain = list(self._tts)
         if self.spoken is not None:
             self.spoken.remember(text)
         _used, spoken, _report, error = await self._speak_sentence(text, chain, speak, trace)

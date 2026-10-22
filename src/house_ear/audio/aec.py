@@ -24,6 +24,8 @@ import os
 
 import numpy as np
 
+from .frontend import ChannelMixer
+
 SPEEX_ECHO_SET_SAMPLING_RATE = 24
 SPEEX_FRAME = 128  # speex only speaks in 128-sample frames
 
@@ -227,7 +229,8 @@ class AecChain:
         self.cancellers = [EchoCanceller(taps=taps, rate=rate) for _ in range(channels)]
         self.mic_hp = [HighPass(hp_hz, rate) for _ in range(channels)]
         self.ref_hp = HighPass(hp_hz, rate)
-        self.selected = 0
+        self.mixer = ChannelMixer(channels)
+        self.selected = 0                  # loudest channel, for reporting only
         self._power = np.zeros(channels)   # EMA of post-cancellation power per channel
         self._mic_power = 0.0              # EMA of pre-cancellation power (selected ch)
         self._res_power = 0.0              # EMA of residual power (selected ch)
@@ -245,34 +248,48 @@ class AecChain:
 
         ref_hp = self.ref_hp.process(ref)
         self.ref_active = _rms(ref) > self.REF_ACTIVE_RMS
+
+        # Every channel's high-pass runs every block, played or not. Advancing only the
+        # selected one froze five filter states, and the first block after playback
+        # started carried their stale history as a click.
+        hp = np.empty_like(mic, dtype=np.float32)
+        for ch, filt in enumerate(self.mic_hp):
+            hp[:, ch] = filt.process(mic[:, ch])
+
+        # Weights come from the *microphone*, not the residual: while the speaker is
+        # emitting, the loudest residual is the channel that cancelled worst, so
+        # weighting towards it would amplify the echo we just removed. Frozen during
+        # playback for the old build's reason - the weights would otherwise chase the
+        # echo and change mid-word.
+        weights = self.mixer.update(hp, freeze=self.ref_active)
+        self.selected = int(np.argmax(weights))
+
         if not self.ref_active:
-            # Nothing playing: there is no echo to cancel, and adapting a filter to
-            # silence drifts it. Hand the microphone through untouched (still
-            # filtered) so a wake word in a silent room is heard exactly as recorded.
-            return self.mic_hp[self.selected].process(mic[:, self.selected])
+            # Nothing playing: no echo to cancel, and adapting a filter to silence
+            # drifts it. The microphones still get the array mix - handing through one
+            # channel threw away the only gain this speaker has.
+            self.blocks += 1
+            return self.mixer.mix(hp, weights)
 
         residuals = np.empty_like(mic, dtype=np.float32)
-        for ch, (canceller, hp) in enumerate(zip(self.cancellers, self.mic_hp, strict=True)):
-            m = hp.process(mic[:, ch])
-            residuals[:, ch] = canceller.process(m, ref_hp)
+        for ch, canceller in enumerate(self.cancellers):
+            residuals[:, ch] = canceller.process(hp[:, ch], ref_hp)
 
-        power = np.square(residuals.astype(np.float64)).mean(axis=0)
-        self._power = 0.85 * self._power + 0.15 * power
-        best = int(np.argmax(self._power))
-        current = self._power[self.selected]
-        if best != self.selected and self._power[best] > current * (10 ** (self.hysteresis_db / 10)):
-            self.selected = best
+        out = self.mixer.mix(residuals, weights)
+        mic_mix = self.mixer.mix(hp, weights)
+        # Never make it worse, now on the mixed signals: a residual louder than the
+        # microphone means the filter overshot or diverged on this block.
+        if _rms(out) > 1.05 * max(_rms(mic_mix), 1e-9):
+            out = mic_mix
 
-        out = residuals[:, self.selected]
-        if self.ref_active:
-            # ERLE only counts while the speaker is actually emitting: on silence every
-            # canceller "wins" trivially and the number is fiction.
-            self._mic_power = 0.9 * self._mic_power + 0.1 * float(
-                np.mean(np.square(mic[:, self.selected].astype(np.float64)))
-            )
-            self._res_power = 0.9 * self._res_power + 0.1 * float(
-                np.mean(np.square(out.astype(np.float64)))
-            )
+        # ERLE is measured on what actually leaves this stage, which is also how the old
+        # deployment measured it (on its mixed stream), so the two numbers compare.
+        self._mic_power = 0.9 * self._mic_power + 0.1 * float(
+            np.mean(np.square(mic_mix.astype(np.float64)))
+        )
+        self._res_power = 0.9 * self._res_power + 0.1 * float(
+            np.mean(np.square(out.astype(np.float64)))
+        )
         self.blocks += 1
         return out
 
@@ -288,6 +305,7 @@ class AecChain:
         for hp in self.mic_hp:
             hp.reset()
         self.ref_hp.reset()
+        self.mixer.reset()
         self._power = np.zeros(self.channels)
         self._mic_power = self._res_power = 0.0
 

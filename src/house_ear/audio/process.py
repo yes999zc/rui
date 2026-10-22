@@ -74,6 +74,8 @@ PLAY_CHUNK_MS = 100
 PREBUFFER_S = 0.30
 CATCHUP = 1.02
 MAX_LEAD_S = 1.00
+# A producer that ignores SpeakFinished cannot grow the queue without bound.
+MAX_SPEAK_QUEUE_S = 120.0
 
 
 class Pacer:
@@ -136,7 +138,13 @@ class AudioPlane:
         self.gate: UtteranceGate | None = None
         self.vad_error = ""
         self.utterances = 0
-        self._speak_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=200)
+        # Unbounded on purpose. The control plane hands a whole sentence over in a burst
+        # (TTS is much faster than real time), so a chunk-count limit truncates the
+        # sentence: the log said "speak queue full, dropping a chunk" a dozen times a
+        # turn and the listener heard the gaps. The budget below is seconds of audio,
+        # which is the thing that actually has a right answer.
+        self._speak_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self._speak_queued_s = 0.0
         self.frames_in = 0
         self.frames_out = 0
         self.frames_dropped = 0
@@ -548,6 +556,9 @@ class AudioPlane:
             chunk = await self._speak_queue.get()
             if chunk is None:
                 continue
+            self._speak_queued_s = max(
+                0.0, self._speak_queued_s - len(chunk) / 2 / self.cfg.audio.voice.rate
+            )
             adapter = self.adapter
             if adapter is None:
                 continue
@@ -578,6 +589,7 @@ class AudioPlane:
             self._speak_queue.get_nowait()
 
     def _flush_speech(self) -> None:
+        self._speak_queued_s = 0.0
         while not self._speak_queue.empty():
             try:
                 self._speak_queue.get_nowait()
@@ -689,10 +701,16 @@ class AudioPlane:
                 if kind is FrameType.PLAY_PCM:
                     seq, _ts, pcm = decode_pcm(payload)
                     if pcm:
-                        try:
+                        seconds = len(pcm) / 2 / self.cfg.audio.voice.rate
+                        if self._speak_queued_s + seconds > MAX_SPEAK_QUEUE_S:
+                            # Only reachable if a producer ignores SpeakFinished and keeps
+                            # pushing: a leak guard, not pacing.
+                            log.warning(
+                                "speak queue over %.0f s, dropping a chunk", MAX_SPEAK_QUEUE_S
+                            )
+                        else:
+                            self._speak_queued_s += seconds
                             self._speak_queue.put_nowait(pcm)
-                        except asyncio.QueueFull:
-                            log.warning("speak queue full, dropping a chunk")
                     continue
                 if kind is not FrameType.CONTROL:
                     continue
@@ -720,7 +738,8 @@ class AudioPlane:
                     self._flush_speech()
                     await self._stop_playback()
                 elif isinstance(msg, SpeakFinished):
-                    log.info("speak finished, %s chunks queued", self._speak_queue.qsize())
+                    log.info("speak finished, %s chunks still queued (%.1f s of audio)",
+                             self._speak_queue.qsize(), self._speak_queued_s)
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         except Exception as exc:  # noqa: BLE001 - reported to the client, then the process exits

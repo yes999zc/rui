@@ -84,9 +84,16 @@ class XiaoaiAdapter(DeviceAdapter):
         if not self.token:
             # Fail closed: an empty token used to mean "anyone on the LAN can open the
             # microphone and the speaker". A missing secret must stop us, not open us.
-            raise RuntimeError(
-                f"{self.dev.token_env} is empty: refusing to accept an unauthenticated "
-                "speaker connection"
+            if not self.dev.allow_no_token:
+                raise RuntimeError(
+                    f"{self.dev.token_env} is empty: refusing to accept an unauthenticated "
+                    "speaker connection"
+                )
+            log.warning(
+                "xiaoai: listening WITHOUT a token on :%s (devices.%s.allow_no_token) - "
+                "anyone on this network can open the microphone",
+                self.listen_port,
+                self.dev.id,
             )
         self._server = await serve(
             self._handle,
@@ -199,8 +206,11 @@ class XiaoaiAdapter(DeviceAdapter):
 
     def _token_ok(self, conn: ServerConnection) -> bool:
         path = getattr(getattr(conn, "request", None), "path", "") or ""
+        if not self.token:
+            # Only reachable when `allow_no_token` opened the listener above.
+            return bool(self.dev.allow_no_token)
         got = (parse_qs(urlparse(path).query).get("token") or [""])[0]
-        return bool(self.token) and hmac.compare_digest(got, self.token)
+        return hmac.compare_digest(got, self.token)
 
     def _on_text(self, message: str) -> None:
         reply = protocol.parse_reply(message)

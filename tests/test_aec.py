@@ -65,15 +65,40 @@ def test_output_never_gets_louder_than_the_microphone() -> None:
     assert power_db(out) <= power_db(mic[:, 0]) + 0.5
 
 
-def test_silent_reference_passes_the_microphone_through() -> None:
+def test_a_silent_reference_still_mixes_the_whole_array() -> None:
+    """Six channels, one stream - and a coherent voice keeps its level.
+
+    This used to hand one channel through, which is the array gain thrown away: the
+    device's microphones are correlated 0.93-0.97, so summing them preserves the voice
+    while independent noise adds up more slowly.
+    """
+    n = RATE * 2
+    t = np.arange(n) / RATE
+    voice = (0.02 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    gains = (1.0, 0.8, 0.7, 0.75, 0.6, 0.5)
+    mic = np.stack([voice * g for g in gains], axis=1)
+    ref = np.zeros(n, dtype=np.float32)
+
+    out, chain = run_chain(mic, ref)
+
+    assert chain.ref_active is False
+    assert chain.erle_db is None          # no echo, no ERLE claim
+    # The microphones hear the same voice at different gains, so the weighted mean sits
+    # below the loudest one - that loss is paid back by the noise averaging below.
+    assert power_db(out) == pytest.approx(power_db(mic[:, 0]), abs=4.0)
+
+
+def test_independent_room_noise_is_averaged_down() -> None:
+    """The array's only real gain: uncorrelated noise sums slower than coherent speech."""
     rng = np.random.default_rng(11)
     n = RATE * 2
     mic = rng.standard_normal((n, 6)).astype(np.float32) * 0.02
     ref = np.zeros(n, dtype=np.float32)
-    out, chain = run_chain(mic, ref)
-    assert chain.ref_active is False
-    assert chain.erle_db is None          # no echo, no ERLE claim
-    assert power_db(out) == pytest.approx(power_db(mic[:, 0]), abs=1.0)
+
+    out, _ = run_chain(mic, ref)
+
+    drop = power_db(mic[:, 0]) - power_db(out)
+    assert drop > 5.0, f"six independent channels only bought {drop:.1f} dB"
 
 
 def test_a_diverged_filter_resets_instead_of_passing_garbage() -> None:

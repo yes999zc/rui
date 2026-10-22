@@ -47,6 +47,11 @@ class DeviceConfig(BaseModel):
     # None means "adapter default". The token value lives in the environment only.
     listen_port: int | None = Field(default=None, ge=1, le=65535)
     token_env: str = "HOUSE_EAR_DEVICE_TOKEN"
+    # Development only. The LX06's boot script hands the client a bare
+    # ws://host:port with no query string, so a tokenless listener is the only way to
+    # test against a speaker whose boot script cannot be edited. Off by default and it
+    # says so in the log: anyone on the LAN can open the microphone while it is on.
+    allow_no_token: bool = False
 
     @field_validator("id")
     @classmethod

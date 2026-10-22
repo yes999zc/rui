@@ -21,7 +21,11 @@ def make_frame(rate: int, amplitude: float = 8000.0) -> AudioFrame:
     samples = rate // 50
     t = np.arange(samples) / rate
     block = np.zeros((samples, 8), dtype=np.int16)
-    block[:, 0] = (amplitude * np.sin(2 * np.pi * 1000 * t)).astype(np.int16)
+    # All six microphones, like the device: they are correlated 0.93-0.97, so the array
+    # mix preserves the level. A tone in one channel alone would be averaged down and
+    # the test would be measuring the mixer, not the scale.
+    tone = (amplitude * np.sin(2 * np.pi * 1000 * t)).astype(np.int16)
+    block[:, :6] = tone[:, None]
     return AudioFrame(
         device_id="living",
         seq=1,

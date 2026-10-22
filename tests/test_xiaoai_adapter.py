@@ -23,9 +23,10 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def make_adapter(port: int, *, rate: int = 48000) -> XiaoaiAdapter:
+def make_adapter(port: int, *, rate: int = 48000, allow_no_token: bool = False) -> XiaoaiAdapter:
     dev = DeviceConfig(
-        id="living", adapter="xiaoai", host="<LAN-IP>", listen_port=port, token_env=TOKEN_ENV
+        id="living", adapter="xiaoai", host="<LAN-IP>", listen_port=port,
+        token_env=TOKEN_ENV, allow_no_token=allow_no_token,
     )
     capture = CaptureConfig(rate=rate)
     return XiaoaiAdapter(dev, capture, VoiceConfig())
@@ -163,3 +164,25 @@ def test_open_fails_closed_without_a_token(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="refusing"):
         asyncio.run(run())
+
+
+def test_a_tokenless_listener_is_an_explicit_dev_switch(monkeypatch) -> None:
+    """The LX06 boot script cannot send a token, so a dev run has to open the door.
+
+    The switch must be opt-in per device and the connection must still be served: the
+    client is handed its start_recording request, exactly as with a token.
+    """
+    monkeypatch.delenv(TOKEN_ENV, raising=False)
+
+    async def run() -> bool:
+        port = free_port()
+        adapter = make_adapter(port, allow_no_token=True)
+        await adapter.open()
+        try:
+            async with connect(f"ws://127.0.0.1:{port}/", max_size=None) as ws:
+                message = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+                return message["Request"]["command"] == "start_recording"
+        finally:
+            await adapter.close()
+
+    assert asyncio.run(run()) is True

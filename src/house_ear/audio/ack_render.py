@@ -14,6 +14,7 @@ for a synthesis on every startup.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -93,6 +94,37 @@ async def render_ack_wav(cfg: Config) -> Path | None:
         return path
     log.warning("ack: every tts provider failed: %s", errors)
     return None
+
+
+async def render_filler_pcm(cfg: Config) -> bytes:
+    """Synthesise `assistant.filler_text` once, into memory.
+
+    The filler exists to cover a wait, so it cannot pay the vendor's first-byte latency
+    (measured 0.5-0.9 s on this box) at the moment it is needed: 1.8 s of silence plus
+    0.9 s of synthesis is the 2.5 s gap 9哥 hears. Rendering it at startup turns the
+    filler into a memcpy. Kept in memory, not a file, because only the control plane
+    speaks it.
+    """
+    text = (cfg.assistant.filler_text or "").strip()
+    if not text or cfg.assistant.filler_after_s <= 0:
+        return b""
+    for name, provider in tts_chain(cfg.providers, cfg.audio.voice.rate):
+        try:
+            buf = bytearray()
+            async with contextlib.aclosing(provider.synthesize(text, "")) as stream:
+                async for chunk in stream:
+                    if chunk:
+                        buf.extend(chunk)
+        except Exception as exc:  # noqa: BLE001 - a filler is never worth an outage
+            log.warning("filler: %s failed: %s", name, exc)
+            continue
+        if buf:
+            pcm = trim_silence(bytes(buf), cfg.audio.voice.rate)
+            log.info("filler: rendered %r with %s (%.2f s)", text, name,
+                     len(pcm) / 2 / cfg.audio.voice.rate)
+            return pcm
+    log.warning("filler: no provider produced audio; the gap stays")
+    return b""
 
 
 def pcm_of(path: Path) -> np.ndarray:
