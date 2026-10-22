@@ -136,3 +136,41 @@ def test_the_write_endpoint_refuses_what_it_does_not_own(tmp_path) -> None:
     # a value the schema rejects must not reach the disk
     assert c.put("/api/v1/config", json={"assistant": {"name": ""}}).status_code == 422
     assert c.put("/api/v1/config", json={"assistant": "nope"}).status_code == 400
+
+
+def test_a_key_can_be_typed_in_the_console_and_is_never_read_back(tmp_path) -> None:
+    """The key goes to secrets.yaml (0600) and only its presence is ever returned."""
+    import os
+    import stat
+
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    c = TestClient(create_app(cfg))
+
+    body = c.post("/api/v1/secrets", json={"name": "MY_SEARCH_KEY", "value": "sk-test-123"}).json()
+    assert body == {"name": "MY_SEARCH_KEY", "has_key": True}
+    path = tmp_path / "secrets.yaml"
+    assert path.exists()
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert "sk-test-123" in path.read_text()      # stored in the file, not in the config
+
+    # the listing has names, never values
+    listing = c.get("/api/v1/secrets").json()
+    assert listing["names"] == ["MY_SEARCH_KEY"]
+    assert "sk-test-123" not in str(listing)
+
+    # an unconfigured search reports has_key from the file, not only from the environment
+    search = c.get("/api/v1/config").json()["tools"]["search"]
+    assert search["api_key_env"] == "DEEPSEEK_API_KEY"
+    assert "has_key" in search
+
+    # an empty value deletes it again
+    assert c.post("/api/v1/secrets", json={"name": "MY_SEARCH_KEY", "value": ""}).json()["has_key"] is False
+    assert c.get("/api/v1/secrets").json()["names"] == []
+
+
+def test_a_bad_secret_name_is_refused(tmp_path) -> None:
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    c = TestClient(create_app(cfg))
+    assert c.post("/api/v1/secrets", json={"name": "lower case", "value": "x"}).status_code == 400

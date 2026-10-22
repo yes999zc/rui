@@ -130,15 +130,30 @@ def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
 
 
 def redacted(cfg: Config) -> dict:
-    """Config safe for the browser: no tokens, no keys, only their presence."""
+    """Config safe for the browser: no tokens, no keys, only their presence.
+
+    Presence is answered from both sources - the environment and the write-only secrets
+    file - because a key typed into the console lives in the file, and a page that says
+    "not configured" right after saving one would be lying.
+    """
+    from .. import secrets  # local import: secrets already imports this module's writer
+
     data = cfg.model_dump(mode="json")
     token = data.get("web", {}).pop("auth_token", "")
     data["web"]["auth_required"] = bool(token)
     for block in data.get("providers", {}).get("catalog", {}).values():
         env_name = block.get("api_key_env") or ""
         if env_name:
-            block["has_key"] = bool(os.environ.get(env_name))
+            block["has_key"] = bool(os.environ.get(env_name)) or secrets.has(env_name)
     for dev in data.get("devices", []):
         env_name = dev.get("token_env") or ""
-        dev["has_device_token"] = bool(env_name and os.environ.get(env_name))
+        dev["has_device_token"] = bool(env_name) and (
+            bool(os.environ.get(env_name)) or secrets.has(env_name)
+        )
+    # The search tool has its own key slot, and it is the one a person actually types in.
+    search = (data.get("tools") or {}).get("search") or {}
+    if search.get("api_key_env"):
+        search["has_key"] = bool(os.environ.get(search["api_key_env"])) or secrets.has(
+            search["api_key_env"]
+        )
     return data

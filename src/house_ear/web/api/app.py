@@ -303,6 +303,30 @@ def create_app(
             )
         return out
 
+    # ---------------------------------------------------------------- secrets
+    @app.get("/api/v1/secrets", dependencies=[Depends(auth)])
+    async def list_secrets() -> dict:
+        """Which keys are configured. Names only - there is no endpoint that returns a value."""
+        return {"names": secrets.stored_names()}
+
+    @app.post("/api/v1/secrets", dependencies=[Depends(auth)])
+    async def put_secret(payload: Annotated[dict, Body()]) -> dict:
+        """Store a key typed in the console. An empty value deletes it.
+
+        The value is never echoed, never logged, and never written into config.yaml: it
+        goes to `secrets.yaml` (0600) next to the runtime state, which the providers and the
+        search tool read through `secrets.get()`.
+        """
+        name = str(payload.get("name") or "").strip()
+        value = str(payload.get("value") or "").strip()
+        try:
+            secrets.put(name, value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Providers read the key at call time, so nothing needs rebuilding: the next search
+        # or LLM request sees it.
+        return {"name": name, "has_key": secrets.has(name)}
+
     @app.get("/api/v1/tools", dependencies=[Depends(auth)])
     async def tools() -> dict:
         return {"count": len(registry.names()), "names": registry.names()}
