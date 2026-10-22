@@ -265,24 +265,24 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 19:35）
+## 9. 现场状态（2026-10-22 20:15）
 
-- 代码：HEAD `b3da6ec` fix(vendor): pass kind to vendor_spoke in the text backstop；
-  A1–A4 + 灯环（B1）完成；**333 passed**，ruff clean，`vue-tsc`/`vite build` 通过。
-- **当前服务**：`uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools-4399-dev.yaml`
-  （设备口 4399、控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-b2n.log`，
-  Thu 2026-10-22 18:56:10 起）。重启前先按 **端口**杀干净（4399 和 8091 都要看）——只杀音频面
-  会留下旧的 serve 占住 8091，新进程绑不上控制台会直接退出（今天踩过一次）。
-- **设备**：`$SPEAKER_IP`，`sshpass -p "$SPEAKER_PASSWORD" ssh -o HostKeyAlgorithms=+ssh-rsa root@$SPEAKER_IP`；
-  客户端日志 **`/tmp/client.log`**（无时间戳，看 `[aplay]` / `underrun` 行序）；
-  `aplay --buffer-size 4800 --period-size 960 -r 16000` 常驻，跨应答不退出，长静默会排空。
-- **听感现状（9哥 2026-10-22 16:10 判定，三个故障全部关闭）**：首字不吞、句间衔接完美、告别不卡。
-- **今日数字（17:00）**：TTS 首字 p50 292 / p95 518 ms（10 句）；ASR 归一化 11 项测试；
-  提醒到点 408 ms 出声；30 s 音乐 `slow write` 0 / `underrun` 0；语音 20 s 回复 4 次慢写、0 underrun。
-- 门限的真实来源：`~/.hermes/cache/scratch/house-ear-s4/run/keywords-015.txt` 的 `#0.15`；
-  `config.audio.voice.kws_threshold` **已从 schema 删除**，控制台显示文件解析值（§6.2 关闭）。
-- **厂家让位（2026-10-22 19:30 实测通过，9哥）**：说 小爱同学 + 问句，小爱答，这时说 你好小瑞 →
-  一次只响一个答案（log `he-serve-b2n.log:19:30:15–23:28.4`）。已知缺项在 `docs/vendor.md` 
-  takeover 表 V1–V5（主动打断小爱、文本去重、vendor playing 时门限、音乐让渡、vendor 唤起自己的曲库）。
-- **下一步**：B2 一次真机 session（打断 ≤300 ms、220 档、灯效、唤醒端点 600 vs 1000）→ C1 冷装 
-  → D1 音乐（V1–V5 五个 gap 随 D1 一并实现）→ D2 记忆 → D3 放歌 20 次唤醒 → E1 P12。
+- 代码：HEAD `3b4648e` feat(vendor): pause xiaoai's player when our wake takes over the line；
+  **337 passed**，ruff clean。让位 V1（主动打断小爱）已实现**待真机复验**。
+- **起服务（正确方式，2026-10-22 20:14 起在用）**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh
+  > ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `~/.hermes/.env` 取 6 个 provider key，
+  **`set -a` 是关键行**——没有它 eval 出来的只是 shell 局部变量，子进程一个 key 都看不到（20:09–20:12
+  事故根因）；`HOUSE_EAR_DEVICE_TOKEN` 故意不设（dev 配置走 `allow_no_token`，音箱启动脚本发不了 token，
+  设了反而把音箱拒之门外）。重启先按端口杀 4399/8091。
+- **设备**：`$SPEAKER_IP`，SSH 用老项目 `server/devshell.py`（凭证 `~/.hermes/.secrets/lan_media.json`
+  的 `voice.device_host/device_ssh`，自带 ControlMaster 防 dropbear 限流）；客户端日志 `/tmp/client.log`。
+- **B2 第一阶段（19:52–19:54，真机）**：① 端点 600 ms（live 配置就是 600，schema 默认 1000）——
+  「帮我查一下（停 1 s）明天北京的天气」**整句保留**，未切后半句（1 样本）；② 连续会话「明天呢」免唤醒
+  追问成功，灯效 wake→thinking→speaking→listening 全对；③ **厂家让位失败**：小爱答天气时说你好小瑞，
+  小爱继续说了 11 s，且我们的 ASR 把小爱的话转成幻影指令（`'摄氏度到17摄氏度。'`）→ V1+V3 修复
+  `3b4648e`（唤醒时若小爱在播 → 老项目的 mphelper ubus pause 停它），**复验被 20:09 运维事故作废，
+  未验证**。
+- **下一步**：9哥 重测 ③（小爱同学问天气 → 小爱开口后说你好小瑞问时间；判据日志两行
+  `vendor takeover: pausing` + `vendor pause (wake takeover): before=1 after=2`，听觉判据小爱马上闭嘴、
+  只有小瑞答）→ 第二阶段放歌打断+220 档远处唤醒（`POST /api/v1/debug/play`
+  `{"file": "~/.hermes/cache/scratch/music-test.wav", "loop": true}`，音量已 220）→ C1 冷装 → D1 音乐。
