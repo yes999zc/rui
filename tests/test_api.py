@@ -97,3 +97,40 @@ def test_auth_is_enforced_when_configured() -> None:
 def test_traces_are_empty_before_the_audio_plane_exists() -> None:
     body = client().get("/api/v1/traces").json()
     assert body["turns"] == []
+
+
+def test_the_console_can_write_the_two_conversational_sections(tmp_path) -> None:
+    """PUT /api/v1/config: merge, validate, back up, and apply the prompt live."""
+    from house_ear.config.store import load_config, save_config
+
+    path = tmp_path / "config.yaml"
+    save_config(path, Config())
+    c = TestClient(create_app(Config(), config_path=path))
+
+    body = c.put("/api/v1/config", json={
+        "assistant": {"name": "小雷", "reply_max_chars": 80},
+        "session": {"history_rounds": 8},
+    }).json()
+    assert body["assistant"]["name"] == "小雷"
+    assert body["assistant"]["reply_max_chars"] == 80
+    # the sections that were not in the patch are untouched
+    assert body["assistant"]["reply_max_chars_long"] == 900
+    assert body["session"]["history_rounds"] == 8
+    written = load_config(path)
+    assert written.assistant.name == "小雷"
+    assert written.session.history_rounds == 8
+    # a backup of the previous file exists, so a bad edit is one cp away from undone
+    assert list(tmp_path.glob("config.yaml.bak-*"))
+
+
+def test_the_write_endpoint_refuses_what_it_does_not_own(tmp_path) -> None:
+    from house_ear.config.store import save_config
+
+    path = tmp_path / "config.yaml"
+    save_config(path, Config())
+    c = TestClient(create_app(Config(), config_path=path))
+    # providers carry keys and the audio section belongs to a running plane: not from here
+    assert c.put("/api/v1/config", json={"providers": {}}).status_code == 400
+    # a value the schema rejects must not reach the disk
+    assert c.put("/api/v1/config", json={"assistant": {"name": ""}}).status_code == 422
+    assert c.put("/api/v1/config", json={"assistant": "nope"}).status_code == 400

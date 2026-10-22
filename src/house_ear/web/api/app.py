@@ -9,16 +9,18 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 
 from ... import __version__
 from ...audio.ack import ack_wav_path
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
 from ...config.schema import CONFIG_VERSION, Config
-from ...config.store import redacted
+from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
 from ...providers.chain import build_stage
@@ -183,6 +185,58 @@ def create_app(
     @app.get("/api/v1/config", dependencies=[Depends(auth)])
     async def get_config() -> dict:
         return redacted(cfg)
+
+    # The two conversational sections are the ones a person tunes from the console. Audio
+    # and providers stay on disk: changing them under a running audio plane is a different
+    # problem (restart, device reconnect), not a text field.
+    WRITABLE = ("assistant", "session")
+
+    @app.put("/api/v1/config", dependencies=[Depends(auth)])
+    async def put_config(patch: Annotated[dict, Body()]) -> dict:
+        """Merge a patch into the sections people edit, then write it.
+
+        Three rules, each of them a bug if dropped:
+        - the file is re-read first, so a console page that never saw `providers` cannot
+          write a stale copy of it back over the real one;
+        - the merged result is validated as a whole `Config` before anything is written;
+        - the write is `save_config` (timestamped backup + atomic replace), never a
+          hand-rolled open/write.
+        """
+        unknown = sorted(set(patch) - set(WRITABLE))
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"only {list(WRITABLE)} can be written from the console, got {unknown}",
+            )
+        if config_path is None or not Path(config_path).exists():
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        try:
+            current = load_config(config_path)
+        except ConfigError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"config on disk is not readable: {exc}"
+            ) from exc
+        merged = current.model_dump(mode="json")
+        for section, values in patch.items():
+            if not isinstance(values, dict):
+                raise HTTPException(status_code=400, detail=f"{section} must be an object")
+            merged[section] = {**merged.get(section, {}), **values}
+        try:
+            updated = Config.model_validate(merged)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422, detail=exc.errors(include_url=False)
+            ) from exc
+        save_config(config_path, updated)
+        log.info("config written from the console: %s", sorted(patch))
+        # Applied live: the prompt is rebuilt per turn, so an edited persona or band takes
+        # effect on the next turn without a restart. Values that need a restart (audio,
+        # providers) are not writable here, which is why this is enough.
+        runner = getattr(app.state, "runner", None)
+        if runner is not None:
+            runner.assistant = updated.assistant
+            runner.history_turns = updated.session.history_rounds
+        return redacted(updated)
 
     @app.get("/api/v1/audio", dependencies=[Depends(auth)])
     async def audio_status() -> dict:

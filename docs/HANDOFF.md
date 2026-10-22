@@ -176,6 +176,53 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
 6. ~~厂家让位真机验证~~ **已完成（2026-10-22 08:33–08:36）**：见 `docs/vendor.md`。同一窗口顺带
    拿到打断基线（KWS 命中但不停播、开口到首音 4563 ms），已写进 §6。
 
+## 7.5 S5e 决策（侦察子 agent 2026-10-22 交表，9哥 已授权接工具）
+
+**照搬（5 条）**
+
+1 **时间分两层，两层都要（9哥 2026-10-22 纠正）**：老项目只有「注入」没有时间工具，那是它的
+   选择，不是天花板。往后做定时/倒计时/提醒，必然要一个能**写**时间的工具。
+   - **注入**（读时间，零延迟）：格式照 `assistant_v3.py:788-792`「现在是Y年M月D日 星期一 H点MM分。」
+     （无秒），每轮 `build_prompt()` 现算；显式 `ZoneInfo("Asia/Shanghai")`（容器默认 UTC，照抄差 8 小时）。
+   - **工具**（写时间）：`reminder`/`timer`，老项目 `server/tools/reminders.py` 已经解过一半——
+     `parse_at`（`+10m` / `+1h30m` / `HH:MM` / ISO）、`humanize`、`due()`、`postpone`、落盘
+     `.cache/reminders.json`、2 s 轮询发射（`assistant_v3.py:3629`）。全部可以借语义。
+   - **新东西（老项目也没有，必须自己设计）**：到点**主动出声**。house-ear 现在只有「回合内」发声，
+     没有会话外推流；要加 scheduler → 取设备写入锁 → `client.speak`，还要处理「正在放歌/正在对话时
+     到点」的排队与打断。这条留给 S5c 之后单独立项，不塞进 S5e 第一半。
+2 **提示词三句 + 删 `NO_TOOL_NOTE` 必须同一次改**：「问新闻、天气、实时信息时，用 news、
+   weather、web_search 工具去查，禁止说自己不能联网」/「没有真的调用工具并拿到成功结果，
+   就绝不能说已经做了」/「设备操作失败就说没成功，不要假装」。只做一半会二选一地坏。
+3 **两轮工具 → 强制作答，强制轮不带 `tools=`**；累计 ≥5 次工具调用立即强制作答
+   （`assistant_v3.py:947-1032`，`test_llm_rounds.py:160` 钉的就是「最后一轮必须丢 tools」）。
+4 **命中信息类工具后改写 `msgs[0]` 的 system 追加 `SEARCH_HINT`**，预算取
+   `assistant.reply_max_chars_search`（已 300）；天气**不计入**长预算（老项目 `INFO_TOOLS` 只有
+   web_search/news）。
+5 **`weather` 照原文搬**：open-meteo 免 key、默认沈阳 41.8057/123.4315、同城跳过 geocode、
+   geocode 6 s / forecast 8 s、`days` 夹 1–3、schema 无 required。坐标要挪进 config。
+
+**改而不照搬**
+
+- 工具失败串：老项目直接 `工具出错：<英文异常>`，模型看到英文异常更容易编数。house-ear 统一回
+  「XX 没查到，直接说查不到」这种祈使句。
+- `websearch._key()` 读 `~/.hermes/.env`：容器里没有，必须走 `providers.*.api_key_env`。
+- news 只搬 `general`（公网静态 JSON）；`hot/tech/ai/github` 依赖内网 RSSHub 与本机 AIHOT，不搬。
+
+**明确不采用**：`@@BRIEF` 直念（与「收完整个流再 TTS」冲突、也和打断验收打架）、
+`claims_device_success` 三支兜底（零设备工具，且正则里「温度/音量」会误伤天气问句）、
+`REQUIRED_HINTS("entity_id")`、`OFFLINE_NOTE`。
+
+**接之前必须先修我们自己这三个（与老项目无关）**
+
+1 `openai_compat.py` 只读 `delta.content`，`delta.tool_calls` 被丢弃，`ChatChunk` 也没有工具字段
+   → 挂上 `tools` 只会得到空回复。
+2 `tools/contract.py` 的 `as_llm_tool()` 输出 `input_schema`，而 `openai_compat` 需要的键是
+   `parameters` → 线上形状是错的，`tests/test_tools.py` 只测了注册表，没测形状。
+3 `TurnRunner.run()` 没有回合超时（老项目是 30 s `wait_for`）→ 工具 12 s 超时 ×2 就能拖死一轮。
+
+**待定**：网页搜索要不要接（DeepSeek 官方 `/v1/tools/search`，按次计费 $0.75/1000，需要单独配
+DeepSeek key）。时间 / 天气 / 新闻都不花钱，搜索是唯一付费项。
+
 ## 8. 操作手册
 
 ```bash
