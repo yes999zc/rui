@@ -265,11 +265,11 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 20:55）
+## 9. 现场状态（2026-10-22 21:20 收线）
 
-- 代码：HEAD 见 git log（自言自语修复 `3f8a93c`、双告别修复见最新 commit）；**341 passed**，
-  ruff clean。服务最新一次 20:5x 起在跑；旧日志含 20:16 自言自语事故证据，已轮转为
-  `he-serve-b3t.log.old-2016`。
+- 代码：HEAD `3be4825`；**344 passed**，ruff clean。服务在跑、音箱已连、音乐已停。
+  今晚累计修复四件：自言自语 `3f8a93c`、退下吧双告别 `ec3815f`、音乐 0.4 s 复播致聋
+  `2bfd356`、间隙冒头+停止词停乐 `3be4825`——全部真机复验通过（细节见下）。
 - **让位 V1 复验 ✅（20:38、20:41 两轮，真机）**：`vendor takeover: pausing` → pause RPC
   `before=1 {"code": 0}` → 厂家 `playing Idle` ≤0.2 s 且不再回来，小瑞独答；第二轮
   「你好小瑞，今天天气怎么样」端到端完整（ASR/天气工具/8.7 s 答句全对）。
@@ -309,7 +309,14 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   键打断不自动续 / 静默看门狗 4 s / 帧循环与 `speech_task` 分离否则 KWS 不跑（老 HANDOFF:254，我们
   已对）/ CREDIT 拉模式（已抄）/ 「全音量下只有厂家 AEC 听得清人声，小爱同学是打断音乐的方式」——
   我们 KWS 在 220 档 4/4 命中（probe -10~-15 dBFS），比老项目强，但人声段 VAD/ASR 质量以复验为准。
-- **下一步**：9哥 复测放歌打断（判据见上）→ 3-4 米远处唤醒（`POST /api/v1/debug/play`
-  `{"file": "<home>/.hermes/cache/scratch/music-test.wav", "loop": true}` **注意绝对路径，
-  接口不展开 `~`**）→ 五个数各一行写回 ROADMAP/HANDOFF → C1 冷装 → D1 音乐。长文本/新闻打断
-  机制上已具备（speech 独立 task + barge 20:50:08 实测），随 D1 一并真机验。
+- **B2 第二阶段（21:12–21:13 复验通过，音乐链路四轮）**：放歌循环中三轮「你好小瑞+问句」
+  全部：音乐即停（服务端 0-4 ms 下发）→ 话完整听到（转写一字不差）→ 答对 → **间隙无冒头**
+  （`2bfd356`+`3be4825` 生效：utterance 后到 ReplyFinished 之间音乐全程压着）→ 答完自动续。
+  第四轮「结束音乐」→ `stop intent` → **音乐停且不再回来**（停止词分流真机验证 ✓）。
+- **遗留到 D1（9哥 定：不查了，随音乐接入一并处理）**：① 音乐续播后 `follow-up gate open`
+  仍会出现（21:13:06/18，`_arm_followup_later` 的 owner 检查没拦住，原因未查；今晚四轮都
+  即刻说话所以没起歌词幻影 turn）——D1 接真音乐时 gate/owner 语义一起理；② 3-4 米远处唤醒
+  未正式计数（今晚多轮唤醒全中，含 -10 dBFS 弱信号）；③ 长文本/新闻打断机制已具备
+  （barge 20:50:08 实测），随 D1 真机细验。
+- **下一步**：C1 冷装 → D1 音乐（老项目 `MusicPlayer` 语义已映射，见上条老项目体系；接入时
+  连 gate/owner 遗留一起清）。
