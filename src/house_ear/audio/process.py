@@ -809,9 +809,11 @@ class AudioPlane:
                 if self._speak_queue.empty():
                     self._reply_open = False
                     # The lead is the number to read when a reply sounds rough; without
-                    # this line the only copy of it was the console, 2 s stale.
-                    log.info("reply: %d chunks, lead max %.0f ms",
-                             reply_chunks, reply_lead_max * 1000)
+                    # this line the only copy of it was the console, 2 s stale. Only when
+                    # something was actually spoken - the idle loop lands here too.
+                    if reply_chunks:
+                        log.info("reply: %d chunks, lead max %.0f ms",
+                                 reply_chunks, reply_lead_max * 1000)
                     reply_chunks = 0
                     reply_lead_max = 0.0
                     self._release("dialogue")
