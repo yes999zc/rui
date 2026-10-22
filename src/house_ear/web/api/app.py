@@ -129,6 +129,44 @@ async def _never_sender(_msg: object) -> None:
 
     raise _NotWired("music sender used before the app was built")
 
+
+async def _music_transport(app: FastAPI, clean: str, runner, client, trace, traces) -> str | None:
+    """Deterministic music transport words: pause/resume/next/prev, no model.
+
+    The model agreed with 「下一首」 in words and never called the tool (measured
+    22:06) - a transport that only *sounds* executed is worse than none, and these
+    four words never need a round trip. Returns the spoken line, or None when the
+    request is not a transport word (the turn proceeds normally).
+    """
+    service = getattr(app.state, "music", None)
+    action = rules.music_transport(clean) if service is not None else ""
+    if not action:
+        return None
+    # A transport word with nothing playing still deserves words, not silence.
+    fn = {"pause": service.pause, "resume": service.resume,
+          "next": service.next, "prev": service.prev}[action]
+    try:
+        track_or_ok = await fn()
+    except Exception as exc:  # noqa: BLE001 - a broken transport must not kill the app
+        log.info("music transport %s failed: %s", action, exc)
+        track_or_ok = False
+    if action in ("next", "prev"):
+        line = (f"好，《{track_or_ok.title}》。" if track_or_ok
+                else ("已经是最后一首了。" if action == "next" else "已经是第一首了。"))
+    else:
+        line = {"pause": "好，先停这儿。", "resume": "接着放。"}[action] if track_or_ok \
+            else ("现在没有在放的歌。" if action == "pause" else "现在没有暂停着的歌。")
+    runner.idle.touch()
+    spoken = await runner.say(line, _speaking(app, client), trace)
+    app.state.last_turn = {
+        "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
+        "tools": [f"music_{action}"], "stages": {},
+    }
+    traces.add(trace)
+    log.info("music transport: %r -> %s", clean, action)
+    return line
+
+
 def create_app(
     cfg: Config,
     config_path: Path | None = None,
@@ -301,6 +339,9 @@ def create_app(
                         }
                         traces.add(trace)
                         log.info("stop intent: %r -> session closed", clean)
+                        return
+                    if await _music_transport(app, clean, runner, client, trace,
+                                              traces) is not None:
                         return
                     _light(app, "thinking")
                     try:
@@ -644,6 +685,14 @@ def create_app(
             raise HTTPException(status_code=409, detail="a turn is already running")
         trace = TurnTrace(device_id="debug")
         _light(app, "thinking")
+        if await _music_transport(app, text, runner, client, trace, traces) is not None:
+            _light_after_audio(app, app.state.last_turn["audio_bytes"] or 0,
+                               cfg.audio.voice.rate)
+            return {
+                "reply": app.state.last_turn["reply"], "error": "", "tools":
+                    app.state.last_turn["tools"], "stages": {}, "audio_bytes":
+                    app.state.last_turn["audio_bytes"],
+            }
         result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
         await client.reply_finished()
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate)

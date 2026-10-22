@@ -60,6 +60,30 @@ def is_dismiss(transcript: str) -> bool:
     return any(word in t for word in DISMISS_WORDS)
 
 
+# Music transport: deterministic words that must reach the player without a model
+# round trip. Measured 22:06: the model agreed with 「下一首」 in words
+# (「切到下一首了。」) and never called the tool - a transport that only *sounds*
+# executed is worse than none. Short-only, like stop_intent: 「暂停以后告诉我天气」
+# is a compound request and belongs to the model.
+MUSIC_TRANSPORT: dict[str, tuple[str, ...]] = {
+    "pause": ("暂停", "停一下", "先停这儿", "停会儿", "停住", "停在这"),
+    "resume": ("继续", "接着放", "接着播", "恢复播放"),
+    "next": ("下一首", "换一首", "切歌", "切一首", "换歌"),
+    "prev": ("上一首", "前一首"),
+}
+
+
+def music_transport(transcript: str) -> str:
+    """One of pause/resume/next/prev when the whole request is a transport word."""
+    t = normalize(transcript)
+    if not t or len(t) > 6:
+        return ""
+    for action, words in MUSIC_TRANSPORT.items():
+        if any(word in t for word in words):
+            return action
+    return ""
+
+
 def normalize(text: str) -> str:
     """Strip punctuation and spaces so 「停 止。」 and 「停止」 compare equal."""
     return _PUNCT.sub("", text or "")
