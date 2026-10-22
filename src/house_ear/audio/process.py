@@ -80,6 +80,10 @@ CATCHUP = 1.02
 MAX_LEAD_S = 0.35
 # A producer that ignores SpeakFinished cannot grow the queue without bound.
 MAX_SPEAK_QUEUE_S = 120.0
+# 12 ms of ramp at the start of playback. Speech that begins on a hard sample boundary
+# clicks, and on this speaker a click reads as a stray 「叮」 at the front of the answer.
+# 12 ms is short enough to be inaudible as a fade and long enough to remove the step.
+FADE_IN_MS = 12
 
 
 class Pacer:
@@ -111,6 +115,16 @@ class Pacer:
         self.target = min(self.target + (self.catchup - 1.0) * seconds, self.max_lead)
         self.lead = self.due - now
         return max(0.0, self.due - self.target - now)
+
+
+def fade_in(samples: np.ndarray, rate: int, ms: float = FADE_IN_MS) -> np.ndarray:
+    """Ramp the first `ms` of a playback session; a hard onset clicks."""
+    n = min(int(rate * ms / 1000), samples.size)
+    if n <= 1:
+        return samples
+    out = samples.copy()
+    out[:n] *= np.linspace(0.0, 1.0, n, dtype=np.float32)
+    return out
 
 
 # The device buffer keeps sounding after the last frame is sent (~300 ms at 48 kHz), so a
@@ -190,6 +204,7 @@ class AudioPlane:
         self._file_position = 0
         self._file_cfg: tuple[Path, bool, float] | None = None
         self._speech_paused = False
+        self._reply_open = False
         self.started = time.monotonic()
         self._stop = asyncio.Event()
         # Pre-wake audio. The streaming KWS reports a hit ~0.5 s after the wake word ends,
@@ -538,6 +553,13 @@ class AudioPlane:
             # wake but sounds two seconds later, that gap is the device, not us.
             log.info("cue: %.0f ms of audio handed over in %.0f ms",
                      audio.size * 1000.0 / rate, (time.monotonic() - started) * 1000)
+            # Hold the speaker for the cue's *duration*: releasing when the last byte was
+            # sent let a fast reply start writing 100 ms later, and the two came out of
+            # the speaker together.
+            played_for = time.monotonic() - started
+            remaining = audio.size / rate - played_for
+            if remaining > 0:
+                await asyncio.sleep(remaining)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - a broken cue must not kill the plane
@@ -604,6 +626,9 @@ class AudioPlane:
             offset = int(min(max(offset, 0), max(audio.size - 1, 0)))
             audio = audio[offset:]
             self._file_position = offset
+        else:
+            audio = fade_in(audio, target)
+            self._file_position = 0
         log.info("playback: %s %.1f s at %s Hz (from %.1f s)", path.name,
                  audio.size / target, target, offset / target)
         try:
@@ -664,12 +689,18 @@ class AudioPlane:
                 # back. Checking only after a send missed the case where the last chunk
                 # was already out and the loop sat waiting.
                 if self._speak_queue.empty():
+                    self._reply_open = False
                     self._release("dialogue")
                     self._resume_after_speech()
+                    # Silence for half a second: the client closes an idle player, and a
+                    # later stream without start_play would sit in its socket unseen. Drop
+                    # our flag so the next sound re-opens it.
+                    forget = getattr(self.adapter, "forget_player", None)
+                    if forget is not None:
+                        forget()
                 continue
             if chunk is None:
                 continue
-            log.info("reply: first chunk at %d Hz", target)
             # A reply owns the device stream while it speaks; the song waits where it is.
             # A cue in flight is 320 ms: wait for it rather than cut it, but never wait
             # forever - an owner that is not releasing is a bug, not a reason to go silent.
@@ -691,6 +722,10 @@ class AudioPlane:
             audio = resample(
                 np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768.0, source, target
             )
+            if not self._reply_open:
+                audio = fade_in(audio, target)
+                self._reply_open = True
+                log.info("reply: first chunk at %d Hz", target)
             pcm = np.round(np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
             try:
                 await adapter.play(pcm, sample_rate=target, channels=1)

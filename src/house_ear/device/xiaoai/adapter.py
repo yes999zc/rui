@@ -152,6 +152,16 @@ class XiaoaiAdapter(DeviceAdapter):
         for start in range(0, len(pcm), bytes_per_chunk):
             await conn.send(protocol.stream("play", pcm[start:start + bytes_per_chunk]))
 
+    def forget_player(self) -> None:
+        """The device's player is gone (idle): the next play() must say start_play again.
+
+        `_playing` used to stay True forever after the first stream, so every later sound
+        skipped start_play. If the client had closed its player in the meantime, those
+        frames sat in its socket instead of being played - heard as the cue arriving with
+        the answer instead of at the wake.
+        """
+        self._playing = False
+
     async def stop_playback(self, fade_ms: int = 120) -> None:
         """Tell the device to drop what it has buffered.
 
