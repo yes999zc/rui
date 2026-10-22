@@ -123,6 +123,58 @@ class Pacer:
         return max(0.0, self.due - self.target - now)
 
 
+class Credit:
+    """How far ahead of the speaker playback may run, counted in blocks.
+
+    ``sent - acked`` is the queue depth from the device's point of view: the client
+    reports every block it has handed to aplay, so this follows the speaker's own clock
+    instead of ours. The wall-clock Pacer kept a fixed *duration* ahead and ignored the
+    device; when the device's clock ran a little fast that duration became a full pipe,
+    and a write that blocks past its timeout is dropped - heard as roughness. The old
+    deployment paced on exactly this number (window=2) and measured the difference:
+    11 blocked writes in 14 s before, none after.
+    """
+
+    def __init__(self, window: int = 2, timeout: float = 1.5) -> None:
+        self.window = window
+        self.timeout = timeout
+        self.sent = 0
+        self.acked = 0
+        self.dead = False
+        self.lead = 0.0
+
+    def reset(self) -> None:
+        self.sent = 0
+        self.acked = 0
+        self.dead = False
+        self.lead = 0.0
+
+    def ack(self, n: int) -> None:
+        # Clamped to what was sent: a report from the previous player (arriving after a
+        # reset) must not open a window that does not exist.
+        self.acked = max(self.acked, min(int(n), self.sent))
+
+    def note_sent(self, seconds: float) -> None:
+        self.sent += 1
+        self.lead = (self.sent - self.acked) * seconds
+
+    async def wait(self, adapter: DeviceAdapter, seconds: float) -> bool:
+        """Block until one more block may go out. False when the device stopped reporting."""
+        while not self.dead and self.sent - self.acked >= self.window:
+            got = await adapter.wait_consumed(self.acked, self.timeout)
+            if got <= self.acked:
+                # One timeout is enough: waiting 1.5 s per block would make playback
+                # fifteen times slower in silence. Fall back to the clock for this
+                # player instead (a device that cannot report does the same from the start).
+                self.dead = True
+                log.info("credit: no play-head report for %.1f s, pacing by the clock",
+                         self.timeout)
+                return False
+            self.ack(got)
+        self.lead = (self.sent - self.acked) * seconds
+        return not self.dead
+
+
 def fade_in(samples: np.ndarray, rate: int, ms: float = FADE_IN_MS) -> np.ndarray:
     """Ramp the first `ms` of a playback session; a hard onset clicks."""
     n = min(int(rate * ms / 1000), samples.size)
@@ -170,6 +222,11 @@ class AudioPlane:
         # turn and the listener heard the gaps. The budget below is seconds of audio,
         # which is the thing that actually has a right answer.
         self._speak_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        # Device-reported pacing (0c): the plane never runs more than `window` blocks
+        # ahead of the newest report. Shared by speech and file playback - one speaker,
+        # one owner, so only one of them is writing at a time.
+        self._credit = Credit()
+        self._credit_generation = 0
         # Armed by SpeakStart, consumed by the next PLAY_PCM frame: the one declared
         # sentence boundary in the current reply. The old source of truth - seq == 0 -
         # fired on every speak() call, i.e. on every TTS chunk, and faded mid-word.
@@ -620,6 +677,31 @@ class AudioPlane:
         )
         return msg.path
 
+    def _credit_sync(self, adapter: DeviceAdapter) -> bool:
+        """True when the device reports its play head and the credit is still usable."""
+        if not getattr(adapter, "reports_consumption", False):
+            return False
+        generation = getattr(adapter, "sink_generation", 0)
+        if generation != self._credit_generation:
+            # A new player restarted the device's chunk count at 1.
+            self._credit_generation = generation
+            self._credit.reset()
+        return not self._credit.dead
+
+    async def _credit_wait(self, adapter: DeviceAdapter, seconds: float) -> bool:
+        """Wait until the device has drained enough for one more block."""
+        if not self._credit_sync(adapter):
+            return False
+        return await self._credit.wait(adapter, seconds)
+
+    def _credit_note(self, adapter: DeviceAdapter, seconds: float) -> bool:
+        """Record one block sent (after play(), which may have opened a new player)."""
+        if not self._credit_sync(adapter):
+            return False
+        self._credit.note_sent(seconds)
+        self.playback_lead_s = self._credit.lead
+        return True
+
     async def _play_file(self, path: Path, loop: bool, gain: float,
                          offset: int = 0) -> None:
         try:
@@ -660,23 +742,30 @@ class AudioPlane:
                 if self._stop.is_set():
                     return
                 chunk = audio[start:start + step]
+                seconds = chunk.size / target
+                credited = await self._credit_wait(adapter, seconds)
                 await adapter.play(
                     np.round(chunk * 32767.0).astype("<i2").tobytes(),
                     sample_rate=target,
                     channels=1,
                 )
-                self.playback_s += chunk.size / target
+                self.playback_s += seconds
                 self._file_position += chunk.size
                 if loop and audio.size:
                     # A looping file's position is measured against the track, not a
                     # running total: resuming a 20 s snippet "at 37 s" played nothing.
                     self._file_position %= audio.size
-                # Same prebuffer as replies: a file paced at exactly 1.0x starves the
-                # device buffer, and a song is long enough for that to be audible.
-                now = time.monotonic()
-                wait = pacer.sleep_for(now, chunk.size / target)
-                self.playback_lead_s = pacer.lead
-                await asyncio.sleep(wait)
+                if credited:
+                    # A song is long enough that the open-loop clock does drift; the
+                    # device's own report is what keeps its pipe from filling.
+                    self._credit_note(adapter, seconds)
+                else:
+                    # Same prebuffer as replies: a file paced at exactly 1.0x starves the
+                    # device buffer, and a song is long enough for that to be audible.
+                    now = time.monotonic()
+                    wait = pacer.sleep_for(now, seconds)
+                    self.playback_lead_s = pacer.lead
+                    await asyncio.sleep(wait)
             if not loop:
                 break
 
@@ -751,24 +840,30 @@ class AudioPlane:
                     await adapter.stop_playback()
                     log.info("reply: first chunk at %d Hz", target)
             pcm = np.round(np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+            seconds = audio.size / target
+            # Pace by the device's play head when it reports one; the wall clock is only
+            # the fallback (a device that cannot report, or one that stopped reporting).
+            credited = await self._credit_wait(adapter, seconds)
             try:
                 await adapter.play(pcm, sample_rate=target, channels=1)
             except Exception as exc:  # noqa: BLE001 - the speaker may be gone
                 log.info("speak: %s", exc)
                 continue
-            seconds = audio.size / target
             self.playback_s += seconds
-            # Pace against a deadline: sending costs 1-3 ms per chunk, and adding that to
-            # every chunk drifts a 20 s answer half a second past what the device plays.
-            # The prebuffer is the lead the device keeps in hand; CATCHUP makes it grow
-            # 2 % per chunk so it cannot drain to zero; MAX_LEAD stops a long answer from
-            # running so far ahead that a barge-in is heard late.
-            now = time.monotonic()
-            wait = pacer.sleep_for(now, seconds)
-            self.playback_lead_s = pacer.lead
-            # Waiting until the buffer would drop to the target, not until it is empty:
-            # that wait is the whole fix.
-            await asyncio.sleep(wait)
+            if credited:
+                self._credit_note(adapter, seconds)
+            else:
+                # Pace against a deadline: sending costs 1-3 ms per chunk, and adding that
+                # to every chunk drifts a 20 s answer half a second past what the device
+                # plays. The prebuffer is the lead the device keeps in hand; CATCHUP makes
+                # it grow 2 % per chunk so it cannot drain to zero; MAX_LEAD stops a long
+                # answer from running so far ahead that a barge-in is heard late.
+                now = time.monotonic()
+                wait = pacer.sleep_for(now, seconds)
+                self.playback_lead_s = pacer.lead
+                # Waiting until the buffer would drop to the target, not until it is
+                # empty: that wait is the whole fix.
+                await asyncio.sleep(wait)
             if self._speak_queued_s <= 0.0 and self._speak_queue.empty():
                 # One short grace period: a sentence boundary is not the end of the answer,
                 # and resuming the song between two sentences would be worse than a pause.
@@ -782,6 +877,9 @@ class AudioPlane:
     def _flush_speech(self) -> None:
         self._release("dialogue")
         self._speak_queued_s = 0.0
+        # The queue is gone; the device's count for the old player is meaningless now.
+        # The next reply opens a fresh player (and resets the credit again by generation).
+        self._credit.reset()
         while not self._speak_queue.empty():
             try:
                 self._speak_queue.get_nowait()

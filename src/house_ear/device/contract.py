@@ -160,3 +160,21 @@ class DeviceAdapter(Protocol):
         return []
 
     async def set_led(self, effect: str, color: str = "") -> None: ...
+
+    # --- optional play-head report ------------------------------------------------
+    # A device that reports every chunk it has handed to its own sink ("consumed")
+    # lets the plane pace by that clock instead of ours. The plane never runs more
+    # than `window` chunks ahead of the newest report, which is what keeps the pipe
+    # from filling and a block from blocking past its write timeout.
+    #
+    # Adapters that cannot report one leave `reports_consumption` False; the plane
+    # then paces itself (wall clock) exactly as before. `sink_generation` increments
+    # whenever a new player is opened, because the device restarts its chunk count
+    # at 1 and the credit must reset with it.
+    reports_consumption: bool = False
+    consumed: int = 0
+    sink_generation: int = 0
+
+    async def wait_consumed(self, since: int, timeout: float) -> int:
+        """Newest consumed chunk index (> since), or `since` if none arrived in time."""
+        return since

@@ -69,6 +69,12 @@ class XiaoaiAdapter(DeviceAdapter):
         self.connected_at = 0.0
         self.last_error = ""
         self._playing = False
+        # Play-head reports: the client sends {"event":"consumed","n":<chunk>} for every
+        # block it hands to aplay. The plane paces by this instead of a wall clock.
+        self.reports_consumption = True
+        self.consumed = 0
+        self.sink_generation = 0
+        self._consumed_event = asyncio.Event()
         self.info = DeviceInfo(
             id=dev.id,
             adapter="xiaoai",
@@ -158,6 +164,11 @@ class XiaoaiAdapter(DeviceAdapter):
             # word. The old build slept the same 80 ms here: "let aplay open before
             # the first chunk" (xiaoai-voice-entry server/session.py Sink.open).
             await asyncio.sleep(0.08)
+            # A fresh player restarts the device's chunk numbering at 1; the plane's
+            # credit resets on this generation change, so the two counts agree.
+            self.consumed = 0
+            self._consumed_event.clear()
+            self.sink_generation += 1
             self._playing = True
         bytes_per_chunk = max(2, sample_rate * PLAY_CHUNK_MS // 1000 * 2)
         for start in range(0, len(pcm), bytes_per_chunk):
@@ -172,6 +183,28 @@ class XiaoaiAdapter(DeviceAdapter):
         the answer instead of at the wake.
         """
         self._playing = False
+
+    async def wait_consumed(self, since: int, timeout: float) -> int:
+        """Wait for a consumed report newer than `since`; return it, or `since` on timeout.
+
+        Cleared before the second check so a report arriving between the check and the
+        wait cannot be missed (the client reports once per chunk, ~10 times a second).
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            if self.consumed > since:
+                return self.consumed
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return since
+            self._consumed_event.clear()
+            if self.consumed > since:
+                return self.consumed
+            try:
+                await asyncio.wait_for(self._consumed_event.wait(), remaining)
+            except TimeoutError:
+                return since
 
     async def stop_playback(self, fade_ms: int = 120) -> None:
         """Tell the device to drop what it has buffered.
@@ -286,6 +319,18 @@ class XiaoaiAdapter(DeviceAdapter):
             return
         if "Event" in reply:
             event = reply["Event"]
+            if event.get("event") == "consumed":
+                # The client has handed chunk n to aplay. This is the only rate signal
+                # that follows the speaker's own clock; the old build paced on it too.
+                data = event.get("data") or event
+                try:
+                    n = int(data.get("n") or 0)
+                except (TypeError, ValueError):
+                    return
+                if n > self.consumed:
+                    self.consumed = n
+                    self._consumed_event.set()
+                return
             signal = protocol.parse_vendor_signal(event, ts=now_ms())
             if signal is not None:
                 # Vendor signals are not audio: the plane forwards them to the session,
