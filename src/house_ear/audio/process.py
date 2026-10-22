@@ -39,7 +39,7 @@ from ..trace import now_ms
 from .ack import render_cached as render_ack
 from .aec import AecChain, AecUnavailable
 from .decimate import Decimator
-from .kws import KwsUnavailable, WakeHit, WakeWord
+from .kws import KwsUnavailable, WakeHit, WakeProbe, WakeWord
 from .protocol import (
     CONTROL,
     Error,
@@ -132,6 +132,8 @@ class AudioPlane:
         self.aec: AecChain | None = None
         self.aec_error = ""
         self.wake: WakeWord | None = None
+        self.probe: WakeProbe | None = None
+        self.probe_hits = 0
         self.kws_error = ""
         self.wake_count = 0
         self.last_wake: Wake | None = None
@@ -297,6 +299,12 @@ class AudioPlane:
                 self.arrivals.add(frame.ts_ms - last_ts)
             last_ts = frame.ts_ms
             pcm = self._frame_to_voice(frame, decimator)
+            if self.probe is not None and pcm:
+                for _ in self.probe.accept(pcm, ts_ms=frame.ts_ms, rms_db=self.voice_rms_db):
+                    # Counted so the console can show "the probe heard it, production did
+                    # not" - that gap is what a threshold change fixes; both missing means
+                    # the audio never got there.
+                    self.probe_hits += 1
             if self.wake is not None and pcm:
                 for hit in self.wake.accept(pcm, ts_ms=frame.ts_ms):
                     self.wake_count += 1
@@ -656,6 +664,7 @@ class AudioPlane:
             playback_s=round(self.playback_s, 1),
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
             barge_count=self.barges,
+            probe_hits=self.probe_hits,
             ack_mode=self.ack_mode_effective,
             ack_attempts=self.ack_attempts,
             ack_plays=self.ack_plays,

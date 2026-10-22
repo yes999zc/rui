@@ -107,6 +107,11 @@ class VoiceConfig(BaseModel):
     kws_enabled: bool = False
     kws_model_dir: str = ""
     kws_keywords_file: str = ""
+    # A second spotter on the same stream with a lower threshold, which only logs. The old
+    # deployment needed it to tell "the threshold is too high" from "the audio is too
+    # quiet" - the two failures look identical from the outside, and guessing between them
+    # costs a device session each time.
+    kws_probe_file: str = ""
     kws_chunk: int = Field(default=8, ge=4, le=16)
     # Turn segmentation. Empty path disables it (wake fires, nothing is transcribed).
     vad_model_path: str = ""

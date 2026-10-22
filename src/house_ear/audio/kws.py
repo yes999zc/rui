@@ -45,6 +45,68 @@ def model_files(model_dir: Path, chunk: int = 8) -> dict[str, str]:
     return {name: str(path) for name, path in files.items()}
 
 
+class WakeProbe:
+    """A second spotter at a lower threshold that never triggers a turn.
+
+    Same model, same stream, its own decoder state: feeding the *production* stream twice
+    would corrupt it, so the probe needs its own. `boost`/threshold live in the keywords
+    file (the old build shipped `:3.00 #0.10` for exactly this).
+    """
+
+    def __init__(
+        self,
+        model_dir: Path | str,
+        keywords_file: Path | str,
+        chunk: int = 8,
+        num_threads: int = 1,
+        rate: int = 16000,
+    ) -> None:
+        import sherpa_onnx
+
+        model_dir = Path(model_dir)
+        files = model_files(model_dir, chunk)
+        self.rate = rate
+        self.hits = 0
+        self._spotter = sherpa_onnx.KeywordSpotter(
+            tokens=files["tokens"],
+            encoder=files["encoder"],
+            decoder=files["decoder"],
+            joiner=files["joiner"],
+            num_threads=num_threads,
+            keywords_file=str(keywords_file),
+            provider="cpu",
+        )
+        self._stream = self._spotter.create_stream()
+        self._pending = np.zeros(0, dtype=np.float32)
+
+    def accept(self, pcm: bytes, ts_ms: float = 0.0, rms_db: float | None = None) -> list[str]:
+        if not pcm or self._stream is None:
+            return []
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        self._pending = np.concatenate([self._pending, samples])
+        out: list[str] = []
+        step = self.rate // 50
+        while self._pending.size >= step:
+            block, self._pending = self._pending[:step], self._pending[step:]
+            self._stream.accept_waveform(self.rate, block)
+            while self._spotter.is_ready(self._stream):
+                self._spotter.decode_stream(self._stream)
+                result = self._spotter.get_result(self._stream)
+                if result:
+                    self.hits += 1
+                    out.append(result)
+                    log.info(
+                        "kws probe (not triggering): %s at ts=%.0f ms, voice %s dBFS",
+                        result, ts_ms, "?" if rms_db is None else f"{rms_db:.1f}",
+                    )
+                    self._spotter.reset_stream(self._stream)
+        return out
+
+    def close(self) -> None:
+        self._stream = None
+        self._spotter = None
+
+
 class WakeWord:
     """Streaming spotter over 16-bit mono PCM at the voice rate."""
 
