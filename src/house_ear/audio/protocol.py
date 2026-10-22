@@ -127,6 +127,7 @@ class Metrics(BaseModel):
     playback_lead_ms: float = 0.0
     barge_count: int = 0
     probe_hits: int = 0
+    voice_peak_db: float | None = None
     # Wake acknowledgement (S5a). `ack_mode` is what actually played, not what was asked.
     ack_mode: str = ""
     ack_attempts: int = 0

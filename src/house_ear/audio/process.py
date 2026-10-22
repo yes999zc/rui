@@ -156,6 +156,11 @@ class AudioPlane:
         # Levels are the first thing to look at when "it hears nothing": a silent mic and a
         # mic that hears but does not understand look identical from the counters alone.
         self.voice_rms_db: float | None = None
+        # Peak of the last 10 s of the KWS input: "how loud is he actually talking" had
+        # no answer anywhere, so every threshold discussion was a guess. Cleared on read
+        # by the metrics snapshot so each window is a fresh measurement.
+        self.voice_peak_db: float | None = None
+        self._peak_hold: float = 0.0
         self.ref_rms_db: float | None = None
         self.playback_s = 0.0
         self.playback_lead_s = 0.0
@@ -285,6 +290,9 @@ class AudioPlane:
         else:
             mono = block[:, 0]
         self.voice_rms_db = _dbfs(raw_mic.max(axis=1) if raw_mic.ndim > 1 else raw_mic)
+        if mono.size:
+            peak = float(np.abs(mono).max())
+            self._peak_hold = max(self._peak_hold, peak)
         return np.clip(mono * 32768.0, -32768, 32767).astype("<i2").tobytes()
 
     async def _capture(self, connected: asyncio.Event, writer: asyncio.StreamWriter) -> None:
@@ -653,6 +661,11 @@ class AudioPlane:
                 log.info("playback: stop failed: %s", exc)
 
     def metrics(self) -> Metrics:
+        snapshot = self._build_metrics()
+        self._peak_hold = 0.0
+        return snapshot
+
+    def _build_metrics(self) -> Metrics:
         return Metrics(
             uptime_s=round(time.monotonic() - self.started, 1),
             aec_enabled=self.aec is not None,
@@ -672,6 +685,10 @@ class AudioPlane:
             else False,
             playback_s=round(self.playback_s, 1),
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
+            voice_peak_db=(
+                None if self._peak_hold <= 1e-6
+                else round(20.0 * float(np.log10(self._peak_hold)), 1)
+            ),
             barge_count=self.barges,
             probe_hits=self.probe_hits,
             ack_mode=self.ack_mode_effective,
