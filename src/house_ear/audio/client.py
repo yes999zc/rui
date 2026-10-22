@@ -67,8 +67,9 @@ class AudioPlaneClient:
         # The control plane decides what a vendor wake means; the client only delivers it.
         self.on_vendor: Callable[[str, str], object] | None = None
         self.on_wake: Callable[[Wake], object] | None = None
-        # One non-looping file reached its natural end (the music queue advances here).
-        self.on_playback_finished: Callable[[str], object] | None = None
+        # One non-looping file reached its natural end (the music queue advances
+        # here); async because advancing resolves the next track.
+        self.on_playback_finished: Callable[[str], Awaitable[None]] | None = None
         # Debug aid: keep the exact mono stream the plane produced (what AEC/KWS saw).
         self.record_voice = False
         self.voice_audio = bytearray()
@@ -149,7 +150,13 @@ class AudioPlaneClient:
                 self.on_vendor(msg.kind, msg.text)
         elif isinstance(msg, PlayFinished):
             if self.on_playback_finished is not None:
-                self.on_playback_finished(msg.path)
+                # A coroutine, unlike the sync wake/vendor hooks: advancing the queue
+                # resolves the next track (network). Measured 22:19: calling it
+                # directly left the coroutine unawaited and the queue stuck.
+                task = asyncio.create_task(self.on_playback_finished(msg.path),
+                                           name="music-advance")
+                self._turns.add(task)
+                task.add_done_callback(self._turns.discard)
         elif isinstance(msg, DeviceVolumeResult):
             for waiter in self._volume_waiters:
                 if not waiter.done():
