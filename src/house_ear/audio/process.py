@@ -758,6 +758,10 @@ class AudioPlane:
             pcm, rate = read_wav_mono(path)
         except (OSError, wave.Error) as exc:
             log.warning("playback: cannot read %s: %s", path, exc)
+            self.last_playback_error = str(exc)
+            # The claim must die with the task: a file that cannot be read once left
+            # owner=music forever, and every later reply waited on a dead player.
+            self._release("music")
             return
         target = self.cfg.audio.playback.rate
         audio = np.clip(resample(pcm, rate, target) * float(gain), -1.0, 1.0)

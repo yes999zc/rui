@@ -60,7 +60,9 @@ class NavidromeSource:
     def __init__(self, secrets_path: Path, cache_dir: Path, cache_tracks: int = 8,
                  transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._secrets_path = secrets_path
-        self._cache_dir = cache_dir
+        # expanduser twice over: the config accepts `~` (a literal ~ directory was
+        # created under the repo before this, measured 22:02).
+        self._cache_dir = cache_dir.expanduser()
         self._cache_max = cache_tracks
         # Injection point for tests: a MockTransport answers without a NAS.
         self._transport = transport
@@ -194,9 +196,11 @@ class NavidromeSource:
 
     @staticmethod
     def _transcode(src: Path, dst: Path) -> None:
+        # A wav container, not raw s16le: the plane's play_file reads RIFF headers
+        # (measured 22:02: "file does not start with RIFF id" on a raw pcm).
         subprocess.run(
             ["ffmpeg", "-v", "error", "-y", "-i", str(src), "-ar", "16000",
-             "-ac", "1", "-f", "s16le", str(dst)],
+             "-ac", "1", "-acodec", "pcm_s16le", "-f", "wav", str(dst)],
             check=True, timeout=TRANSCODE_TIMEOUT_S,
         )
 
