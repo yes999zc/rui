@@ -702,11 +702,9 @@ class AudioPlane:
                     self._reply_open = False
                     self._release("dialogue")
                     self._resume_after_speech()
-                    # Do NOT drop the player flag on silence. The device keeps aplay
-                    # alive between streams; a start_play it does not need kills and
-                    # respawns aplay, and every frame written in that window is lost -
-                    # that was the swallowed first character. stop_play is the only thing
-                    # that closes the player, and it clears the flag itself.
+                    # The player is deliberately left alone here: the next reply closes
+                    # it and opens a fresh one (see the first-chunk branch below). Closing
+                    # it now would cut the tail still playing out of the device buffer.
                 continue
             if chunk is None:
                 continue
@@ -742,6 +740,15 @@ class AudioPlane:
                 audio = fade_in(audio, target)
                 if not self._reply_open:
                     self._reply_open = True
+                    # Open a fresh player for every reply, as the old build does (one Sink
+                    # per speak_stream). A kept-alive aplay underruns during the silence
+                    # before an answer - measured on the device: "underrun!!! (at least
+                    # 5373.550 ms long)" exactly at the cue-to-answer gap - and the first
+                    # block written into a drained device is eaten by its restart, heard
+                    # as a swallowed first syllable plus a click. Closing the player here
+                    # makes the first play() below issue start_play, which respawns aplay
+                    # and settles 80 ms before the first chunk (0b).
+                    await adapter.stop_playback()
                     log.info("reply: first chunk at %d Hz", target)
             pcm = np.round(np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
             try:

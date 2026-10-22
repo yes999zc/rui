@@ -208,11 +208,15 @@ class FakeAdapter:
     def __init__(self, slow_s: float = 0.0) -> None:
         self.calls: list[tuple[int, int, int]] = []
         self.slow_s = slow_s
+        self.stops = 0
 
     async def play(self, pcm: bytes, *, sample_rate: int, channels: int) -> None:
         self.calls.append((len(pcm), sample_rate, channels))
         if self.slow_s:
             await asyncio.sleep(self.slow_s)
+
+    async def stop_playback(self, fade_ms: int = 120) -> None:
+        self.stops += 1
 
 
 class FakeWriter:
