@@ -78,7 +78,7 @@ MIT，私有仓 `yes999zc/house-ear`（main），本地 `~/AI_Workspace/01_Code/
 | S8 | 6 麦加权混音前端（`audio/frontend.py`） | ✅ 加权混音 + 放音冻结权重；真机唤醒 **6/6、4/4**（门限 0.15，`keywords-015.txt`） |
 | S9 | 设备 shell 通道 + 音量读写 | ✅ `run_shell` + `read_volume`/`set_volume`（`0646fe6`）；`GET/PUT /api/v1/device/volume`；真机 mysoftvol **220/255**（numid=177）；默认不接管（`devices[].volume: 0` = 归原厂，当前无自动写入路径） |
 | S10 | 说话/放歌互斥（ducking：暂停并续播） | ✅ 回复期间暂停音乐并记位，说完续播（rewind 0.55 s = 老项目 `PLAY_LAG_SECONDS`）；打断也走暂停（`e8994f2`/`eae1a24`）；修了循环文件位置累加、最后一句后不续播 |
-| S12 | 播放链路修复（首字 / 接缝 / 控速） | 🔴 **调查完成、修复未做**，见 `docs/playback-path.md`；三个根因：start_play 后缺 80 ms 静置、per-chunk 淡入（今天自己引入）、墙钟控速未接设备 `consumed` 回报 |
+| S12 | 播放链路修复（首字 / 接缝 / 控速） | 🟡 **听感两项已验收，控速未做**：0a 句级边界+350 ms 真静音（`c555e1d`）、0b 80 ms 静置（`9991773`）、每轮回答新起播放器治长静默 underrun（`68b9876`）→ 9哥 16:10 判定「首字不吞、句间完美、告别不卡」；**剩 0c**：接设备 `consumed` 授信控速、删墙钟 Pacer（`slow write` 现仍十余次 80–120 ms）。细节 `docs/playback-path.md` |
 | S13 | 播放仲裁 + 会话收尾修正 | ✅ 喇叭单一 owner（P0 提示音 > P1 回答 > P2 提醒 > P3 音乐，`487cdcf`）；提示音占住播放权到播完（`2e56b9c`）；播放期间不吃空闲计时、告别只说一次（`a5d141d`/`8955a7c`） |
 | S14 | filler 按意图选词 + 按工具计时 | ✅ 三条短语启动预渲染（我查一下/我想想/好的我看看），从"模型决定调工具"起算 0.6 s（`e498148`/`b5ad748`） |
 | S11 | NAS 冷装验收（v1 门槛） | ⬜ 未开始：30 分钟到第一句、20 次唤醒 ≥19（0.15 门限） |
@@ -139,18 +139,19 @@ AEC/唤醒的数字已补进 `docs/audio-latency.md` §3.5/§3.6。
 
 ## 6. 已知问题（按严重度，全部有实测出处或明确写「未测」）
 
-0. **播放链路三个故障（最痛，根因已定位、未修）**——细节全在 `docs/playback-path.md`：
-   a) **每轮第一个字被吞/卡**（`现在几点`、新闻，连报三轮）。`start_play` 回执在
-      `Command::spawn(aplay)` 后立刻返回，ALSA 设备还没开；老项目 `Sink.open()`
-      在 start_play 后 `await asyncio.sleep(0.08)`。设备日志证据：
-      `[aplay] slow write 112 ms (3200 bytes)`。
-   b) **句子/分块衔接处爆破音、整段发毛**。`turn.py` 按讯飞**每块**调 `speak(chunk)`，
-      `client.speak()` 每次 `seq` 从 0 起，音频面把 `seq==0` 当句首做 12 ms 淡入 →
-      每 300–500 ms 一次淡入，且只淡入不淡出 = 电平阶跃。**这是今天 `2e56b9c`/`b5ad748`
-      自己引入的**，老项目一个淡化都不做。
-   c) **告别语卡且连说三遍**。连说三遍已在 `8955a7c` 修（busy 把已关闭会话重新打开）；
-      卡是 (a)+(b) 的叠加。
-   修法顺序：句级边界+静音 → 80 ms 静置 → 接 `consumed` 授信控速 → 块长对齐 60 ms。
+0. **播放链路：听感已验收，剩控速（0c）**——细节全在 `docs/playback-path.md`。
+   a) **首字被吞**（连报三轮）已修，根因两层：`start_play` 回执 ≠ ALSA 就绪（补 80 ms 静置，
+      `9991773`）；保活的 aplay 在提示音→答案的 5.5 s 静默里排空（设备日志
+      `underrun!!! (at least 5373.550 ms long)`），第一块被重启吃掉——改为每轮回答新起播放器
+      （`68b9876`）。验收：`reply: first chunk` 与 `start_play` 同一毫秒，`chunk 1 at 88–93 ms`。
+   b) **句间爆破音**已修：per-chunk 淡入（`2e56b9c`/`b5ad748` 自己引入）改为声明式
+      `SpeakStart`（`c555e1d`），句后 350 ms 真静音。9哥：「衔接处完美，顺利」。
+   c) **告别卡/连说三遍**已修（`8955a7c` + a/b）。9哥：「不卡，顺利」。
+   d) **未做：0c 控速**。设备每写一块回 `consumed`，我们仍在忽略，靠墙钟 `Pacer`；新闻播放
+      仍有 `slow write` 十余次（80–120 ms）、`TIMEOUT` 0。照抄老项目 `Credit(window=2)`
+      的完整形状（clamp/reset/超时 dead/abort）写在 `docs/playback-path.md` §4。
+   e) 小口子：提示音有时复用上一轮排空的播放器（`16:09:41.939` 的 cue 无前置 `start_play`），
+      同一个机制但 320 ms 听不出来，0c 时顺手收。
 1. **220 档（接近满音量）下唤醒仍需靠近**。0.15 门限的 4/4 是「开窗、平时音量、近处」；
    220 档只验到「放歌时近距离命中一次」。原因量出了一半：AEC 在 220 档 ERLE 22.8 dB，但参考是
    -12.3 dBFS，按 ERLE 定义推算回声残差电平 ≈**-35.1 dBFS**；170 档是 **-48.5 dBFS**
@@ -246,29 +247,23 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 15:40）
+## 9. 现场状态（2026-10-22 16:10）
 
-- 代码：HEAD `8955a7c`（`fix(xiaoai)` start_play 等回执 / 不再重启空闲播放器 / 不再喂爆管道）；
-  **289 passed**，ruff clean。今天下午的提交序列：
-  `487cdcf` 喇叭单一 owner → `e498148` filler 三条短语 + cue 打点 → `2e56b9c` cue 占权到播完 +
-  淡入 + 空闲播放器重开 → `b5ad748` filler 从工具决策计时 + 每句淡入 → `a5d141d` 播放不算闲置 +
-  450 ms 提前量 → `8955a7c` start_play 回执 / 去掉 forget_player / 1.00× 不追帧。
+- 代码：HEAD 见 `git log -1`（本文更新时已含 `c555e1d` 句级边界 / `9991773` 80 ms 静置 /
+  `68b9876` 每轮新起播放器）；**289 passed**，ruff clean。
 - **当前服务**：`uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools-4399-dev.yaml`
-  （设备口 4399，控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-a2.log`）。重启前先
-  `lsof -nP -iTCP:4399 -t` 杀干净——上一轮残留进程会占住端口，新服务静默退出，然后你会对着
-  旧进程的指标下结论（今天已经中过一次）。
+  （设备口 4399，控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-p7b-b.log`）。重启前先
+  `lsof -nP -iTCP:4399 -t` 杀干净——残留进程占端口会让新服务静默退出，然后你会对着旧进程的
+  指标下结论（已经中过一次）。
 - **设备**：`<LAN-IP>`，`sshpass -p 'open-xiaoai' ssh -o HostKeyAlgorithms=+ssh-rsa root@...`；
-  客户端日志 **`/tmp/client.log`**（无时间戳，看 `[aplay]` 行序）；`aplay --buffer-size 4800
-  --period-size 960 -r 16000` 常驻，跨应答不退出。
-- **今日实测**（`docs/audio-latency.md` §1/§3、`docs/playback-path.md` §5）：
-  唤醒 0.15 门限 4/4；ASR 51–90 ms；filler 0.73 s 预渲染；打断丢排队 7.6 s；
-  AEC 23.5 dB@170 / 22.8 dB@220；设备音量 220/255；
-  **播放链路基线（1.00× 无追帧、提前量 250 ms）：35 s 连续播放 slow write 17 次（80–107 ms）、
-  TIMEOUT 0 次**。
-- **听感现状（9哥 2026-10-22 15:30 判定）**：提示音时序已对；`现在几点`/新闻**首字仍被吞**；
-  新闻**整段不顺畅、句间有爆破音**；告别语**卡**且此前连说三遍（连说已修，卡未修）。
-  全部归到 `docs/playback-path.md` 的 A/B/C 三个根因。
+  客户端日志 **`/tmp/client.log`**（无时间戳，看 `[aplay]` / `underrun` 行序）；
+  `aplay --buffer-size 4800 --period-size 960 -r 16000` 常驻，跨应答不退出，长静默会排空。
+- **听感现状（9哥 2026-10-22 16:10 判定，三个故障全部关闭）**：首字不吞（伴的那声「叮」
+  随 underrun 一起消失）、句间衔接完美、告别不卡。
+- **播放数字**：答案首块与 `start_play` 同毫秒；`chunk 1 at 88–93 ms`；新闻约 35 s 播放
+  `slow write` 十余次（80–120 ms）、`TIMEOUT` 0；句间 350 ms 静音处有
+  `underrun 371 ms`（听感无损，短 underrun 不吞音）。
 - 门限文件：`~/.hermes/cache/scratch/house-ear-s4/run/keywords-015.txt` 的 `#0.15`；
   `config.audio.voice.kws_threshold` 运行时不生效（§6.2）。
-- **下一步第一件事**：`docs/playback-path.md` §4 的第 3、2 条（句级边界 + 80 ms 静置），
-  再做第 1 条（设备 `consumed` 授信控速）。**等 9哥 点头再动代码。**
+- **下一步第一件事**：0c 接 `consumed` 授信控速、删墙钟 `Pacer`，验收 `slow write → ~0`
+  （照抄清单在 `docs/playback-path.md` §4）。之后按 `docs/ROADMAP.md` §2 走 P9/P10/P11 收尾。
