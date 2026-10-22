@@ -47,6 +47,18 @@ _PUNCT = re.compile(r"[\s。，、！？；：,.!?;:…—\-]")
 # ends the session, 「关掉客厅灯」 is a device command (S5e's problem, not this one).
 _STOP_MAX_CHARS = 6
 
+# A stop word said while music plays means two different things: 「退下吧」 dismisses
+# the conversation and leaves the song running, 「停止」「别放」 ends the sound. The old
+# build split these between the conversation stop and the music tools; until those land
+# (D1) the caller uses this to decide whether a stop intent also stops the player.
+DISMISS_WORDS = ("退下吧", "退下", "不聊了", "关机")
+
+
+def is_dismiss(transcript: str) -> bool:
+    """True when the stop word sends the assistant away rather than the sound."""
+    t = normalize(transcript)
+    return any(word in t for word in DISMISS_WORDS)
+
 
 def normalize(text: str) -> str:
     """Strip punctuation and spaces so 「停 止。」 and 「停止」 compare equal."""

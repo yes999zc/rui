@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from pathlib import Path
 
 import numpy as np
@@ -220,6 +221,54 @@ def test_the_song_waits_out_the_whole_turn(tmp_path: Path) -> None:
             await asyncio.sleep(0.8)
             assert plane._speech_paused is False, "the music never came back after the turn"
             assert plane._playback_task is not None and not plane._playback_task.done()
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            if plane._playback_task is not None:
+                plane._playback_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await plane._playback_task
+
+    asyncio.run(run())
+
+
+def test_the_song_stays_down_between_the_question_and_the_answer(tmp_path: Path) -> None:
+    """Measured 21:07: the gate closes when the utterance ends, and "gate closed" alone
+    let the song blip back in for the ASR+LLM second before the answer. A live turn
+    (utterance fired, reply not finished) keeps it down; ReplyFinished brings it back
+    at the drain, and a turn that never answers gives it back after the grace."""
+    async def run() -> None:
+        plane, _ = make_plane(tmp_path)
+        gate = StubGate(armed=True)
+        plane.gate = gate  # type: ignore[assignment]
+        song = tmp_path / "song.wav"
+        write_wav(song, seconds=0.3)
+        plane._file_cfg = (song, True, 1.0)
+        plane._speech_paused = True
+        plane._file_position = 0
+        # the user spoke; the turn is alive, the gate closed with the utterance
+        plane._turn_pending = True
+        plane._turn_pending_ts = time.monotonic()
+        gate.armed = False
+
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            await asyncio.sleep(0.8)   # one empty-queue tick
+            assert plane._speech_paused is True, "the song blipped in before the answer"
+
+            plane._reply_finished = True   # ReplyFinished: the drain may resume now
+            await asyncio.sleep(0.8)
+            assert plane._speech_paused is False, "the song never came back after the reply"
+            assert plane._playback_task is not None and not plane._playback_task.done()
+
+            # the grace: a turn that died without a reply still gives the music back
+            plane._speech_paused = True
+            plane._file_cfg = (song, True, 1.0)
+            plane._turn_pending = True
+            plane._turn_pending_ts = time.monotonic() - 10.0
+            await asyncio.sleep(0.8)
+            assert plane._speech_paused is False, "a dead turn kept the song down forever"
         finally:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

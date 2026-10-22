@@ -226,6 +226,18 @@ def create_app(
                         log.info("noise, no turn: %r", clean)
                         return
                     if rules.stop_intent(clean, cfg.session.end_words):
+                        # A stop word with a song owning the speaker stops the sound;
+                        # 「退下吧」 only dismisses the conversation and the song keeps
+                        # playing - the old build split these between the conversation
+                        # stop and the music tools, which land in D1. Measured 21:10:
+                        # 「停止」 answered 好。 and the music played on.
+                        metrics = client.metrics
+                        if (metrics is not None and metrics.output_owner == "music"
+                                and not rules.is_dismiss(clean)):
+                            try:
+                                await client.send(StopAudio())
+                            except Exception as exc:  # noqa: BLE001 - never crash the app
+                                log.info("stop music failed: %s", exc)
                         # dismiss() closes the session before the reply: the idle clock
                         # used to keep running behind it and the farewell said goodbye a
                         # second time 15 s later (measured 20:42:16 -> 20:42:34).

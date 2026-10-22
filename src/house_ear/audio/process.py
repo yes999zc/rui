@@ -92,6 +92,10 @@ MAX_SPEAK_QUEUE_S = 120.0
 # clicks, and on this speaker a click reads as a stray 「叮」 at the front of the answer.
 # 12 ms is short enough to be inaudible as a fade and long enough to remove the step.
 FADE_IN_MS = 12
+# A turn that ends without a reply (a failed LM round, a dead tool) still gives the
+# music back after this long - the old build's silent-wake watchdog used 4 s for the
+# same "do not keep the song down forever" rule.
+NO_REPLY_RESUME_S = 4.0
 
 
 class Pacer:
@@ -280,6 +284,14 @@ class AudioPlane:
         self._file_position = 0
         self._file_cfg: tuple[Path, bool, float] | None = None
         self._speech_paused = False
+        # An utterance fired since the music was paused for a wake, and no reply has
+        # finished since. The turn is alive between end-of-speech and the answer
+        # (ASR + LLM + tools), and the music must stay down through it - the gate is
+        # already disarmed there, so "gate closed" alone cannot tell this window from
+        # the end of a turn (measured 21:07: the song blipped back in for 0.9 s
+        # between the question and 现在是晚上9点07分).
+        self._turn_pending = False
+        self._turn_pending_ts = 0.0
         self._reply_open = False
         self.started = time.monotonic()
         self._stop = asyncio.Event()
@@ -601,6 +613,9 @@ class AudioPlane:
             return
         utt, ts = finished
         self.utterances += 1
+        # The duck now belongs to this turn: the reply (or its failure) ends it.
+        self._turn_pending = True
+        self._turn_pending_ts = time.monotonic()
         try:
             writer.write(encode_pcm(FrameType.UTTERANCE_PCM, self.utterances, ts, utt))
             await writer.drain()
@@ -860,12 +875,20 @@ class AudioPlane:
                     # "speech over", so the music came back 0.4 s after the wake - over
                     # the user's request, and the resumed music then closed the freshly
                     # armed gate (measured 20:54:03: wake, cue, resume, deaf). It comes
-                    # back when the gate has closed: the reply drained, or the no-speech
-                    # disarm - the old build's silent-wake watchdog, vendor_silence_
-                    # watchdog() at assistant_v3.py:2185, with the session timeout as
-                    # its clock.
+                    # back only when the gate has closed AND the turn is over: the reply
+                    # drained (ReplyFinished clears the pending flag), the wake heard no
+                    # speech at all, or the no-reply grace ran out - a turn that died
+                    # without an answer must not keep the music down forever (the old
+                    # build's vendor_silence_watchdog, assistant_v3.py:2185).
+                    if finished_reply:
+                        self._turn_pending = False
                     if self.gate is None or not self.gate.armed:
-                        self._resume_after_speech()
+                        waiting = (
+                            self._turn_pending
+                            and time.monotonic() - self._turn_pending_ts < NO_REPLY_RESUME_S
+                        )
+                        if not waiting:
+                            self._resume_after_speech()
                     # The player is deliberately left alone here: the next reply closes
                     # it and opens a fresh one (see the first-chunk branch below). Closing
                     # it now would cut the tail still playing out of the device buffer.
@@ -1065,6 +1088,7 @@ class AudioPlane:
             return
         path, loop, gain = self._file_cfg
         self._speech_paused = False
+        self._turn_pending = False
         # The claim was released with the dialogue; the resumed song owns the speaker
         # again, otherwise a cue would not know it is interrupting music.
         self._claim("music")
@@ -1090,6 +1114,7 @@ class AudioPlane:
         self._playback_task = None
         self._speech_paused = False
         self._file_cfg = None
+        self._turn_pending = False
         if self.adapter is not None:
             try:
                 await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)

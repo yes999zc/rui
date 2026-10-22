@@ -125,6 +125,14 @@ def test_session_rules_keep_noise_and_stop_words_out_of_the_model() -> None:
     assert not rules.stop_intent("现在几点了")
     assert rules.stop_reply(0) != rules.stop_reply(1)
 
+    # while music plays, 停止/别放 stops the sound; 退下吧 only dismisses the talk
+    from house_ear.session.rules import is_dismiss
+
+    assert is_dismiss("退下吧")
+    assert is_dismiss("不聊了。")
+    assert not is_dismiss("停止音乐")
+    assert not is_dismiss("别放了")
+
 
 def test_what_we_just_said_cannot_become_a_turn() -> None:
     """Ported from the old build's `_is_self_echo`, whose filler case started this."""
