@@ -84,6 +84,7 @@ MIT，私有仓 `yes999zc/house-ear`（main），本地 `~/AI_Workspace/01_Code/
 | S14 | filler 按意图选词 + 按工具计时 | ✅ 三条短语启动预渲染（我查一下/我想想/好的我看看），从"模型决定调工具"起算 0.6 s（`e498148`/`b5ad748`） |
 | S11 | NAS 冷装验收（v1 门槛） | ⬜ 未开始：30 分钟到第一句、20 次唤醒 ≥19（0.15 门限） |
 | 真机欠账 | 厂家让位验证、打断停推 ≤300 ms、220 档远处唤醒 | ⬜ 都要 9哥 出声配合 |
+| P13b 灯环 | 设备层 + 四态映射 + 配置 | ✅ 2026-10-22 17:59 七效果真机确认（`710a97e`/`d8fce27`）；`music`/`music_paused` 颜色已备，待 D1 |
 
 **289 passed**（2026-10-22 15:40，HEAD `8955a7c`；此前 270/1 的 jitter 失败是当时 load 10.8 造成的假红，清掉孤儿 Chrome 进程后单跑通过）。那次失败的是 `tests/test_audio_plane.py` 的 jitter 断言
 （`test_plane_decimates_a_mock_device_over_a_socket`，23.1 ms vs 20±3）：当时 load 10.8（一堆孤儿 Chrome
