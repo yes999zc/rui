@@ -253,8 +253,10 @@ def test_thinking_fades_in_and_then_breathes_in_one_script() -> None:
     asyncio.run(go())
     assert len(shell.scripts) == 1
     script = shell.scripts[0]
-    assert duration_of(script) == pytest.approx(0.135 + 18 * 0.120)
-    assert script.count("sleep 0.120") == 18
+    # 25 ms per frame in the runtime path: the answer may start 1.2 s later and the
+    # animation must be finished, or its blue frames overwrite the speaking cyan.
+    assert duration_of(script) == pytest.approx(0.135 + 18 * 0.025)
+    assert script.count("sleep 0.025") == 18
     assert script.endswith(frame((0, 0, 96), 0.9, level=1.9))
 
 
@@ -355,5 +357,27 @@ def test_a_repaint_only_touches_the_state_it_names() -> None:
         ring.repaint("listening")
         await asyncio.sleep(0.01)
         assert len(scripts) == before
+
+    asyncio.run(run())
+
+
+def test_the_thinking_animation_finishes_before_an_answer_can_start() -> None:
+    """The answer starts ~1.2 s after thinking; a longer animation paints blue over cyan."""
+    import asyncio
+
+    import house_ear.device.xiaoai.led as led_mod
+
+    scripts: list[str] = []
+
+    async def fake_shell(script: str, timeout: float) -> str:
+        scripts.append(script)
+        return ""
+
+    ring = led_mod.LedRing(fake_shell, enabled=True, clock=lambda: 12)
+
+    async def run() -> None:
+        ring.set_state("thinking")
+        await asyncio.sleep(0.01)
+        assert led_mod.duration_of(scripts[0]) < 1.0
 
     asyncio.run(run())

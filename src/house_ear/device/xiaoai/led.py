@@ -470,7 +470,14 @@ class LedRing:
         if name == "thinking":
             # The old build ran set_state("thinking") and start_breathing() as two
             # scripts. One script keeps the fade and the rotation in order.
-            parts.append(breathe_script(rgb, level=level, path=self.device_path))
+            # 18 frames at 25 ms, not the old build's 120 ms: the answer can start
+            # 1.2 s after thinking, and a 2.16 s breathe keeps writing blue over the
+            # speaking cyan (9哥 saw the whole answer blue). Scripts run concurrently on
+            # the device and the last write wins, so the thinking animation must finish
+            # before the first spoken block.
+            parts.append(
+                breathe_script(rgb, level=level, path=self.device_path, frame_ms=25)
+            )
         return "; ".join(parts)
 
     def _fade_parts(self, prev: Color, rgb: Color, duration_ms: float, level: float) -> list[str]:
