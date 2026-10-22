@@ -355,6 +355,13 @@ class XiaoaiAdapter(DeviceAdapter):
                     self.consumed = n
                     self._consumed_event.set()
                 return
+            kind = str(event.get("event") or "")
+            if kind == "instruction":
+                line = protocol._unwrap_new_line(event.get("data")) or {}
+                header = line.get("header") or {}
+                log.info("xiaoai: instruction %s.%s", header.get("namespace"), header.get("name"))
+            elif kind not in {"consumed"}:
+                log.info("xiaoai: event %s %s", kind, str(event.get("data"))[:80])
             signal = protocol.parse_vendor_signal(event, ts=now_ms())
             if signal is not None:
                 # Vendor signals are not audio: the plane forwards them to the session,
