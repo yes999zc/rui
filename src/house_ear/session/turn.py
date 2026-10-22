@@ -13,6 +13,7 @@ import contextlib
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,6 +32,7 @@ from . import prompts
 from .text import clean_reply, sanitize_spoken, strip_wake
 
 log = logging.getLogger(__name__)
+
 
 # The prompt now lives in `session/prompts.py`, assembled per turn (it carries the length
 # bands and the "no tools this round" note). Kept here as an alias so old imports do not
@@ -335,9 +337,12 @@ class TurnRunner:
             A round that decides to call a tool produces no text, so speaking on the way
             through costs nothing and keeps the first-sentence latency of S4 intact.
             """
+            round_started = time.perf_counter()
             (_name, first, stream), report = await open_stream_stage(
                 "llm", llm_chain(self.providers), "chat", messages, tools
             )
+            log.info("llm round: tools=%d first_token=%.0f ms", len(tools),
+                     (time.perf_counter() - round_started) * 1000)
             result.stages["llm"] = report
             trace.mark("llm_first")
             chunks = [first]
@@ -370,6 +375,9 @@ class TurnRunner:
             if tail:
                 parts.append(tail)
                 await say(tail)
+            log.info("llm round done: %.0f ms, %d chars spoken, %d tool calls",
+                     (time.perf_counter() - round_started) * 1000, sum(len(p) for p in parts),
+                     len(calls))
             return "".join(parts), calls
 
         try:
