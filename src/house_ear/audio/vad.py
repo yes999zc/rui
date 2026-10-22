@@ -31,8 +31,8 @@ class GateConfig:
     skip_after_wake_ms: int = 300     # the tail of the wake phrase itself
     preroll_ms: int = 200             # kept before the first detected speech
     min_speech_ms: int = 200          # anything shorter is a cough, not a request
-    end_silence_ms: int = 600         # this much quiet closes the turn
-    max_utterance_ms: int = 10000     # hard cap, whatever the VAD thinks
+    end_silence_ms: int = 1000        # old build's first-segment value
+    max_utterance_ms: int = 45000     # old build: 45 s, one 43.28 s segment measured
     max_wait_ms: int = 5000           # wake with nothing said: give up
     threshold: float = 0.5
     # How much of the acknowledgement window is kept for the moment it lifts: enough for
@@ -206,6 +206,14 @@ class UtteranceGate:
         if trim and trim < audio.size:
             audio = audio[: audio.size - trim]
         speech_ms = self._speech_ms
+        # The old build logged every segment's level, and that line is how its 0.25/0.8
+        # ASR normalisation was tuned. Without it, an end-point or ASR A/B has to be
+        # judged by ear or by keeping wav files. rms/peak are on the [-1, 1] scale the
+        # ASR sees, not dBFS.
+        rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+        log.info("[seg] %.2f s rms=%.4f peak=%.4f speech=%.2f s",
+                 audio.size / self.rate, rms, peak, speech_ms / 1000.0)
         self.disarm()
         if speech_ms < self.cfg.min_speech_ms:
             log.info("utterance discarded: %.0f ms of speech", speech_ms)

@@ -105,7 +105,7 @@ class XfyunTts:
 
         # close_timeout: the server answers the close handshake ~1 s late, and waiting for it
         # would add that second to every sentence even though the audio is already complete.
-        async with websockets.connect(url, close_timeout=0.5, max_size=None) as ws:
+        async with websockets.connect(url, close_timeout=0.1, max_size=None) as ws:
             await ws.send(payload)
             while True:
                 raw = await asyncio.wait_for(ws.recv(), timeout=self.cfg.timeout_s)

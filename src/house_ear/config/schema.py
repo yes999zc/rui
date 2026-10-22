@@ -98,7 +98,11 @@ class VoiceConfig(BaseModel):
     rate: int = Field(default=16000, ge=8000, le=48000)
     frame_ms: int = Field(default=20, ge=10, le=40)
     vad_min_speech_ms: int = Field(default=200, ge=50, le=2000)
-    vad_end_silence_ms: int = Field(default=600, ge=100, le=3000)
+    # The old deployment closes the first request after a wake at 1.0 s, and only
+    # later turns at 0.5 s. Every turn here is wake-initiated (the gate disarms
+    # after one segment), so the first-segment value is the only one that applies;
+    # 600 ms cut a person who pauses mid-sentence (old incident 15:53:54).
+    vad_end_silence_ms: int = Field(default=1000, ge=100, le=3000)
     # Audio kept before the *detected* onset. Silero reports speech a little late, so a
     # small value clips the first syllable: measured 20 rounds, "今天天气怎么样" arrived as
     # "天天气怎么样" in 20/20 at 200 ms, and 0/20 at 350 ms and 500 ms.
