@@ -151,6 +151,7 @@ class TurnRunner:
         assistant: AssistantConfig | None = None,
         wake_words: Sequence[str] = (),
         tools: Sequence[tuple[Any, Any]] = (),
+        spoken: Any = None,
         tool_timeout_s: float = 20.0,
         turn_timeout_s: float = 30.0,
     ) -> None:
@@ -163,6 +164,8 @@ class TurnRunner:
         self.history_turns = history_turns
         self.wake_words = tuple(wake_words)
         self.tools = tuple(tools)
+        # Shared with the control plane: what we said, so the mic cannot re-ask it.
+        self.spoken = spoken
         self.tool_timeout_s = tool_timeout_s
         # A turn that hangs is worse than a turn that fails: the speaker is left waiting and
         # the session says nothing. The old build wrapped it in wait_for(30) for that reason.
@@ -325,6 +328,10 @@ class TurnRunner:
 
         async def say(text: str) -> None:
             nonlocal tts_provider, result
+            # Everything that leaves the speaker is remembered, filler included: the old
+            # build's self-echo incident was exactly its own 「我想想」 coming back.
+            if self.spoken is not None:
+                self.spoken.remember(text)
             chain = tts_chain(self.providers, self.sample_rate)
             if tts_provider is not None:
                 chain = [pair for pair in chain if pair[0] == tts_provider] + [
@@ -337,6 +344,28 @@ class TurnRunner:
             if error:
                 result.error = error
             result.audio_bytes += spoken
+
+        async def filler() -> None:
+            """Say something small if the turn is still silent.
+
+            Waiting 9 s in silence reads as "it did not hear me" - measured on the real
+            speaker, where a tool-grounded answer takes 9-11 s to first audio. The old
+            build did the same at 1.8 s. Cancelled the moment real audio starts, so a fast
+            turn never hears it.
+            """
+            delay = self.assistant.filler_after_s
+            if delay <= 0 or not self.assistant.filler_text:
+                return
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                return
+            if trace.at("tts_first") is not None:
+                return
+            log.info("filler after %.1f s: %s", delay, self.assistant.filler_text)
+            await say(self.assistant.filler_text)
+
+        filler_task = asyncio.create_task(filler(), name="filler")
 
         async def answer(tools: list[dict]) -> tuple[str, list[dict]]:
             """One LLM round: speak text as it streams, return (spoken text, tool calls).
@@ -352,13 +381,21 @@ class TurnRunner:
                      (time.perf_counter() - round_started) * 1000)
             result.stages["llm"] = report
             trace.mark("llm_first")
-            chunks = [first]
-            async for chunk in stream:
-                chunks.append(chunk)
             buffer = ""
             parts: list[str] = []
             calls: list[dict] = []
-            for chunk in chunks:
+            first_sentence_ms = [0.0]
+
+            def ingest(chunk: Any) -> list[str]:
+                """Turn one streamed chunk into the sentences that are now complete.
+
+                Everything here is synchronous and cheap. It must stay that way: this used
+                to be a loop that drained the whole stream into a list first, which meant a
+                short answer the vendor delivers in 0.9 s (measured) did not reach TTS until
+                the last token arrived - a 4-5 s first-sentence latency, and the log blamed
+                the model for it.
+                """
+                nonlocal buffer
                 calls.extend(chunk.tool_calls or [])
                 if chunk.finish_reason == "length":
                     # The vendor stopped at max_tokens: the last sentence is cut and TTS
@@ -366,9 +403,10 @@ class TurnRunner:
                     log.warning("llm: answer hit max_tokens and was cut mid-sentence")
                     result.error = result.error or "answer truncated at max_tokens"
                 if not chunk.delta:
-                    continue
+                    return []
                 buffer += chunk.delta
                 sentences, buffer = split_sentences(buffer)
+                out: list[str] = []
                 for sentence in sentences:
                     # A model without a tool layer writes the call as text (DSML), and the
                     # split for streaming can cut a tag in half - so sanitise each piece
@@ -377,14 +415,46 @@ class TurnRunner:
                     if not speakable:
                         continue
                     parts.append(speakable)
-                    await say(speakable)
-            tail = sanitize_spoken(buffer) if buffer.strip() else ""
-            if tail:
-                parts.append(tail)
-                await say(tail)
-            log.info("llm round done: %.0f ms, %d chars spoken, %d tool calls",
+                    if self.spoken is not None:
+                        self.spoken.remember(speakable)
+                    out.append(speakable)
+                if out and not first_sentence_ms[0]:
+                    first_sentence_ms[0] = (time.perf_counter() - round_started) * 1000
+                return out
+
+            # Synthesis and playback run on their own task: a sentence with six characters
+            # takes 0.2-0.8 s to synthesise, and doing that inline here would stall the
+            # reader that is still pulling tokens out of the vendor's stream.
+            queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+            async def speak_worker() -> None:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        return
+                    await say(item)
+
+            worker = asyncio.create_task(speak_worker(), name="tts")
+            try:
+                for sentence in ingest(first):
+                    queue.put_nowait(sentence)
+                async for chunk in stream:
+                    for sentence in ingest(chunk):
+                        queue.put_nowait(sentence)
+                tail = sanitize_spoken(buffer) if buffer.strip() else ""
+                if tail:
+                    parts.append(tail)
+                    if self.spoken is not None:
+                        self.spoken.remember(tail)
+                    queue.put_nowait(tail)
+            finally:
+                queue.put_nowait(None)
+                with contextlib.suppress(Exception):
+                    await worker
+            log.info("llm round done: %.0f ms (stream), %d chars, %d tool calls, "
+                     "first sentence queued at %.0f ms",
                      (time.perf_counter() - round_started) * 1000, sum(len(p) for p in parts),
-                     len(calls))
+                     len(calls), first_sentence_ms[0])
             return "".join(parts), calls
 
         try:
@@ -441,6 +511,10 @@ class TurnRunner:
         except StageFailure as exc:
             result.error = str(exc)
             return result
+        finally:
+            filler_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await filler_task
 
         trace.mark("llm_done")
         # The reply is what was actually spoken, not the raw deltas: markup that never
@@ -455,6 +529,8 @@ class TurnRunner:
                   trace: TurnTrace) -> int:
         """Speak one canned line. No model, no round trip: session actions are decided."""
         chain = tts_chain(self.providers, self.sample_rate)
+        if self.spoken is not None:
+            self.spoken.remember(text)
         _used, spoken, _report, error = await self._speak_sentence(text, chain, speak, trace)
         if error:
             log.warning("canned line failed: %s", error)

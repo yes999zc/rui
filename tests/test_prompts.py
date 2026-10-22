@@ -124,3 +124,21 @@ def test_session_rules_keep_noise_and_stop_words_out_of_the_model() -> None:
     assert not rules.stop_intent("把灯关掉以后告诉我天气怎么样")
     assert not rules.stop_intent("现在几点了")
     assert rules.stop_reply(0) != rules.stop_reply(1)
+
+
+def test_what_we_just_said_cannot_become_a_turn() -> None:
+    """Ported from the old build's `_is_self_echo`, whose filler case started this."""
+    from house_ear.session.rules import SpokenMemory
+
+    m = SpokenMemory()
+    m.remember("我想想。")                     # the incident: our own filler came back
+    assert m.is_echo("我想想")
+    assert not m.is_echo("今天天气怎么样")
+
+    m.remember("沈阳今天晴，气温1到15度，降水概率是零，不会下雨。")
+    assert m.is_echo("沈阳今天晴，气温1到15度降。")   # the device log, verbatim
+    assert m.is_echo("降水概率是零不会下雨")           # a fragment is still ours
+    # the window closes: a person asking about the answer is not an echo
+    import time as _time
+
+    assert not m.is_echo("我想想", now=_time.monotonic() + 30)

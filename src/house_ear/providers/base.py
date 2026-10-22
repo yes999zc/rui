@@ -30,7 +30,9 @@ class AsrProvider(Protocol):
 
 
 class TtsProvider(Protocol):
-    async def synthesize(self, text: str, voice: str = "") -> AsyncIterator[bytes]:
+    # An async generator, so `async for` over the call directly - declaring this `async def`
+    # made every caller look like it had to await a coroutine before iterating.
+    def synthesize(self, text: str, voice: str = "") -> AsyncIterator[bytes]:
         """Yields PCM or encoded chunks; first chunk must arrive fast."""
         ...
 

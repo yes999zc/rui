@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from house_ear.config.schema import Config, ProviderConfig
+from house_ear.config.schema import AssistantConfig, Config, ProviderConfig
 from house_ear.providers.base import ChatChunk, Transcript
 from house_ear.session.turn import TurnRunner, split_sentences
 from house_ear.trace import TurnTrace
@@ -455,3 +455,33 @@ def test_a_failing_tool_becomes_a_sentence_not_an_exception(monkeypatch) -> None
     result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
     assert result.reply == "天气查不到。"
     assert "工具出错了" in llm.seen[1]["messages"][-1]["content"]
+
+
+def test_a_slow_turn_says_something_small_first(monkeypatch) -> None:
+    """1.8 s of silence reads as "it did not hear me" (measured: 9-11 s with tools)."""
+    import time as _time
+
+    class SlowLlm(FakeLlm):
+        async def chat(self, messages: list[dict], tools: list[dict]):
+            if self.fail:
+                raise RuntimeError("llm down")
+            self.seen.append(messages)
+            await asyncio.sleep(0.08)
+            for c in self.chunks:
+                yield ChatChunk(delta=c)
+
+    llm = SlowLlm(["沈阳今天晴。"])
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("今天天气怎么样"), llms=[llm], ttss=[tts])
+    assistant = AssistantConfig(filler_after_s=0.01, filler_text="我查一下。")
+    runner = TurnRunner(Config().providers, assistant=assistant)
+
+    async def speak(pcm: bytes) -> None:
+        return None
+
+    started = _time.monotonic()
+    result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
+    assert tts.texts[0] == "我查一下。", tts.texts
+    assert "沈阳今天晴。" in tts.texts
+    assert result.reply  # the real answer still landed
+    assert _time.monotonic() - started < 2.0

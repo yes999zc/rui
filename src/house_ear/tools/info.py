@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -102,6 +103,10 @@ async def _geocode(city: str, timeout: float) -> tuple[float, float, str] | None
     return float(first["latitude"]), float(first["longitude"]), first.get("name") or city
 
 
+_FORECAST_TTL_S = 300.0
+_FORECAST_CACHE: dict[tuple, tuple[float, str]] = {}
+
+
 async def weather(cfg: Config, args: dict) -> str:
     """Today's (or a few days') forecast from open-meteo. No key, no quota."""
     conf = cfg.tools.weather
@@ -120,6 +125,10 @@ async def weather(cfg: Config, args: dict) -> str:
         if found is None:
             return f"没有找到城市「{city}」，直接说没查到这个地方。"
         lat, lon, place = found
+    key = (round(lat, 3), round(lon, 3), days)
+    hit = _FORECAST_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < _FORECAST_TTL_S:
+        return hit[1]
     try:
         data = await _get_json(
             "https://api.open-meteo.com/v1/forecast"
@@ -148,7 +157,9 @@ async def weather(cfg: Config, args: dict) -> str:
         if rain is not None:
             bits.append(f"降水概率{round(rain)}%")
         lines.append("，".join(bits))
-    return f"{place}：" + "；".join(lines) + "。"
+    answer = f"{place}：" + "；".join(lines) + "。"
+    _FORECAST_CACHE[key] = (time.monotonic(), answer)
+    return answer
 
 
 async def news(cfg: Config, args: dict) -> str:

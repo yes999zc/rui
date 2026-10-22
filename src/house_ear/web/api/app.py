@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
+from ...audio.ack_render import render_ack_wav
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
 from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import ConfigError, load_config, redacted, save_config
@@ -74,6 +75,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        spoken = rules.SpokenMemory()
         runner = TurnRunner(
             cfg.providers,
             sample_rate=cfg.audio.voice.rate,
@@ -81,7 +83,12 @@ def create_app(
             history_turns=cfg.session.history_rounds,
             wake_words=[w for d in cfg.devices for w in d.wake_words],
             tools=info_tools,
+            spoken=spoken,
         )
+        app.state.spoken = spoken
+        # Render the spoken wake cue now, not on the wake: synthesising it inside the wake
+        # path cost the old build 1.5 s and swallowed the first request (\`ack_warmer\`).
+        app.state.ack_task = asyncio.create_task(render_ack_wav(cfg), name="ack-render")
         app.state.runner = runner
         app.state.last_turn = None
         vendor = VendorWindow(cfg.session.vendor_quiet_s)
@@ -125,6 +132,11 @@ def create_app(
                     if not clean.strip():
                         # Only the wake word arrived: the wake residue case, not a request.
                         log.info("utterance was wake residue only; no turn")
+                        return
+                    if app.state.spoken.is_echo(clean):
+                        # Our own answer came back through the arrays: measured 2026-10-22,
+                        # the speaker answered itself once per weather question.
+                        log.info("own voice heard back, no turn: %r", clean)
                         return
                     if rules.is_noise(clean):
                         # 「嗯。」 after the wake word: measured on the real speaker, and it
@@ -264,6 +276,11 @@ def create_app(
         # effect on the next turn without a restart).
         cfg.assistant = updated.assistant
         cfg.session = updated.session
+        # A new acknowledgement text or voice has to exist as audio before the next wake.
+        previous = getattr(app.state, "ack_task", None)
+        if previous is not None and not previous.done():
+            previous.cancel()
+        app.state.ack_task = asyncio.create_task(render_ack_wav(updated), name="ack-render")
         runner = getattr(app.state, "runner", None)
         if runner is not None:
             runner.assistant = updated.assistant

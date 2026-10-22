@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import time
 
 # From the old build's `conversation.stop_words`, plus the two it added later.
 STOP_WORDS = (
@@ -90,3 +91,54 @@ def stop_intent(transcript: str) -> bool:
 
 def stop_reply(index: int = 0) -> str:
     return STOP_REPLIES[index % len(STOP_REPLIES)]
+
+
+
+class SpokenMemory:
+    """What we have said recently, so the microphone cannot turn it into a user turn.
+
+    Read from the old build (`assistant_v3.py:2005`, fixed there on 2026-10-22 10:11:47):
+    its array heard its own filler 「我想想」 through the echo gate and answered
+    「行，想好了再说。」 - the assistant talking to itself. AEC gives 19-21 dB of echo return
+    loss on this speaker, not silence, so the tail is speech-shaped and ASR transcribes it.
+
+    Two things the old build got right that a "compare with the last reply" guard does not:
+    it remembers **everything** spoken (answers, acknowledgements, fillers - the filler is
+    the case that actually fired), and it keeps a short rolling list instead of one entry,
+    because a reply is spoken as several sentences.
+
+    The 10 s window is theirs. Longer would eat real interruptions ("你说今天晴？" asked
+    while the answer is still playing is a person, not an echo); shorter would let a long
+    answer's own tail back in.
+    """
+
+    WINDOW_S = 10.0
+    MAX_ITEMS = 12
+
+    def __init__(self, window_s: float = WINDOW_S) -> None:
+        self.window_s = window_s
+        self._spoken: list[tuple[float, str]] = []
+
+    def remember(self, text: str, now: float | None = None) -> None:
+        t = normalize(text)
+        if not t:
+            return
+        self._spoken.append((now if now is not None else time.monotonic(), t))
+        del self._spoken[: -self.MAX_ITEMS]
+
+    def is_echo(self, transcript: str, now: float | None = None) -> bool:
+        t = normalize(transcript)
+        if not t:
+            return False
+        now = now if now is not None else time.monotonic()
+        for ts, said in reversed(self._spoken):
+            if now - ts > self.window_s:
+                break
+            if t == said:
+                return True
+            if len(t) >= 3 and (t in said or said in t):
+                return True
+        return False
+
+    def clear(self) -> None:
+        self._spoken.clear()

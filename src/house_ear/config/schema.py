@@ -325,6 +325,10 @@ class AssistantConfig(BaseModel):
     persona: str = "你是家里的小助理，叫{name}。不知道就说不知道，别装懂。"
     # A full replacement, for the console. Empty means "use the built-in prompt".
     system_prompt: str = ""
+    # A turn that has not produced audio in this long says something small first: waiting
+    # 9 s in silence reads as "it did not hear me". Old build: filler_after_seconds 1.8.
+    filler_after_s: float = Field(default=1.8, ge=0.0, le=10.0)
+    filler_text: str = "我查一下。"
     reply_max_chars: int = Field(default=120, ge=10, le=300)
     reply_max_chars_search: int = Field(default=300, ge=40, le=600)
     reply_max_chars_long: int = Field(default=900, ge=100, le=2000)
