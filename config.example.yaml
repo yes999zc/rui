@@ -9,11 +9,11 @@ web:
 devices:
   - id: living
     adapter: xiaoai
-    host: <LAN-IP>     # the speaker, reached over SSH for probing
+    host: speaker.local    # the speaker's LAN name or IP (mDNS is enough here)
     room: 客厅
     wake_words: ["你好小瑞"]
     volume: 60
-    listen_port: 4400      # the speaker's client dials us here; None = adapter default
+    listen_port: 4412      # the speaker's client dials us here; None = adapter default
     token_env: HOUSE_EAR_DEVICE_TOKEN
 audio:
   # Measured on LX06 1.94.13 - do not copy these numbers to another speaker, measure it.

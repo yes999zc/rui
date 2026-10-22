@@ -78,7 +78,7 @@ Two things to keep in mind when reading that table:
 ## Lifecycle and failure modes
 
 - The adapter is **inbound**: `open()` starts a websocket server on
-  `devices[].listen_port` (default 4400) and waits. Nothing to connect to means the
+  `devices[].listen_port` (default 4412) and waits. Nothing to connect to means the
   audio plane simply yields no frames.
 - The device's client holds one connection. A second connection replaces the first
   (code 1012) instead of being silently ignored.

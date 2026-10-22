@@ -135,8 +135,8 @@
 grep -E "wake: |cue: |reply: first|player: start_play|turn \{" ~/.hermes/cache/scratch/he-serve-*.log | tail -20
 
 # 设备端：写入是否被阻塞、是否掉块（无时间戳，看行序与 chunk N at X ms）
-sshpass -p 'open-xiaoai' ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa \
-  root@<LAN-IP> "grep -nE 'start_play|stop_play|slow write|TIMEOUT|underrun|chunk 1 ' /tmp/client.log | tail -20"
+sshpass -p "$SPEAKER_PASSWORD" ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa \
+  "root@$SPEAKER_IP" "grep -nE 'start_play|stop_play|slow write|TIMEOUT|underrun|chunk 1 ' /tmp/client.log | tail -20"
 
 # 音频面指标：谁占着喇叭、缓冲余量、参考电平、ERLE
 curl -s localhost:8091/api/v1/audio | python3 -c \

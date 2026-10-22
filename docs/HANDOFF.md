@@ -109,7 +109,7 @@ AEC/唤醒的数字已补进 `docs/audio-latency.md` §3.5/§3.6。
    不播提示音；我们的唤醒词立刻接管。细节 `docs/vendor.md`。
 9. **公开仓库硬约束**：不许硬编码私人信息（API key、Mac 路径、内网 IP、默认城市）。
    密钥只走环境变量或 `secrets.yaml`（0600、写-only），API 只回 `has_key`。
-   审计：`grep -rn "/Users/\|192\.168\.\|sk-\|Bearer " src/ docs/ README.md config.example.yaml`。
+   审计：`grep -rnE "/User[s]/|192\.168\.|sk-[A-Za-z0-9]{16}|Bearer [A-Za-z0-9_-]{20}" src/ docs/ README.md config.example.yaml`。
 10. **第二款音箱**只留 adapter 接口（`device/contract.py` + registry），真机调试留到 v1 发布后。
 11. **AEC 消在混音后**（`audio.aec.cancel: mix`，默认）：一个 speexdsp 滤波器消 6 麦加权混音，与老项目同构。
     实测 170/220 = 23.5/22.8 dB，旧 6 滤波器 21.2/16.3，rtf 0.066→0.011；`per_channel` 只留给诊断用
@@ -238,14 +238,14 @@ export HOUSE_EAR_DEVICE_TOKEN="$(cat ~/.hermes/cache/scratch/house-ear-s4/device
 uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml   # 控制台 :8091
 ```
 
-**真机切换**（LX06，`root@<LAN-IP>`，密码 `<redacted>`，必须
+**真机切换**（LX06，`root@$SPEAKER_IP`，密码从 `$SPEAKER_PASSWORD` 读，必须
 `-o HostKeyAlgorithms=+ssh-rsa`；dropbear 限流，被拒等 40–60 s）：
 
 1. 先起 house-ear（`listen_port: 4412`）。**先确认 4399/4400 上是谁**——今天 4399 是我们自己
    临时接管（§9），不是旧服务；按本节流程前先把它停掉/改回 4412。
 2. 备份 `client-run.sh`、`server.txt` 为 `*.bak-houseear`，URL 改成
-   `ws://<LAN-IP>:4412/?token=<TOKEN>`，kill 客户端，等看门狗 30 s 拉起。
-3. `lsof -nP -iTCP:4412` 看到 `<LAN-IP>` ESTABLISHED 才算连上。
+   `ws://$SERVER_IP:4412/?token=<TOKEN>`，kill 客户端，等看门狗 30 s 拉起。
+3. `lsof -nP -iTCP:4412` 看到 `$SPEAKER_IP` ESTABLISHED 才算连上。
 4. **测完立刻还原**两个 `.bak-houseear`，kill 客户端，确认 `:4399` ESTABLISHED。
 
 **注意**：SSH 命令里不要出现 `pkill -f "/data/open-xiaoai/client"` 这种字面量——它会匹配到
@@ -262,7 +262,7 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   （设备口 4399，控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-p7b-b.log`）。重启前先
   `lsof -nP -iTCP:4399 -t` 杀干净——残留进程占端口会让新服务静默退出，然后你会对着旧进程的
   指标下结论（已经中过一次）。
-- **设备**：`<LAN-IP>`，`sshpass -p 'open-xiaoai' ssh -o HostKeyAlgorithms=+ssh-rsa root@...`；
+- **设备**：`$SPEAKER_IP`，`sshpass -p "$SPEAKER_PASSWORD" ssh -o HostKeyAlgorithms=+ssh-rsa root@$SPEAKER_IP`；
   客户端日志 **`/tmp/client.log`**（无时间戳，看 `[aplay]` / `underrun` 行序）；
   `aplay --buffer-size 4800 --period-size 960 -r 16000` 常驻，跨应答不退出，长静默会排空。
 - **听感现状（9哥 2026-10-22 16:10 判定，三个故障全部关闭）**：首字不吞（伴的那声「叮」

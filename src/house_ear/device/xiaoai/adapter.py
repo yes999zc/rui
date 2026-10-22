@@ -38,7 +38,7 @@ from . import protocol
 
 log = logging.getLogger(__name__)
 
-DEFAULT_LISTEN_PORT = 4400
+DEFAULT_LISTEN_PORT = 4412  # 4399/4400 belong to the old deployment
 PLAY_CHUNK_MS = 100
 
 
