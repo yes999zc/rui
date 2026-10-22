@@ -701,6 +701,10 @@ class AudioPlane:
                 continue
             if chunk is None:
                 continue
+            if isinstance(chunk, tuple):
+                chunk, segment = chunk
+            else:  # a raw block: treat it as a sentence start
+                segment = True
             # A reply owns the device stream while it speaks; the song waits where it is.
             # A cue in flight is 320 ms: wait for it rather than cut it, but never wait
             # forever - an owner that is not releasing is a bug, not a reason to go silent.
@@ -722,10 +726,14 @@ class AudioPlane:
             audio = resample(
                 np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768.0, source, target
             )
-            if not self._reply_open:
+            if segment:
+                # Each sentence begins on a hard sample boundary, and the junction between
+                # the cached filler and the answer was one too: that step is the click 9哥
+                # heard as 「像是叮，也可能是吞音」 at the front of the answer.
                 audio = fade_in(audio, target)
-                self._reply_open = True
-                log.info("reply: first chunk at %d Hz", target)
+                if not self._reply_open:
+                    self._reply_open = True
+                    log.info("reply: first chunk at %d Hz", target)
             pcm = np.round(np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
             try:
                 await adapter.play(pcm, sample_rate=target, channels=1)
@@ -968,7 +976,10 @@ class AudioPlane:
                             )
                         else:
                             self._speak_queued_s += seconds
-                            self._speak_queue.put_nowait(pcm)
+                            # seq == 0 marks the first frame of a speak() call, i.e. a
+                            # sentence (or the cached filler). It is the only boundary
+                            # the plane can see, and the only place a ramp belongs.
+                            self._speak_queue.put_nowait((pcm, seq == 0))
                     continue
                 if kind is not FrameType.CONTROL:
                     continue

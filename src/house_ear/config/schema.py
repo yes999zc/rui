@@ -346,7 +346,12 @@ class AssistantConfig(BaseModel):
     system_prompt: str = ""
     # A turn that has not produced audio in this long says something small first: waiting
     # 9 s in silence reads as "it did not hear me". Old build: filler_after_seconds 1.8.
+    # This is the cap for a slow *model* with no tool; the tool case uses the field below.
     filler_after_s: float = Field(default=1.8, ge=0.0, le=10.0)
+    # How long a *tool* may run before the filler speaks, counted from the moment the
+    # model asks for it. Keyed to the question it fired 30 ms before a 1.03 s news tool
+    # finished - covering nothing, and pushing the answer back by its own length.
+    filler_after_tool_s: float = Field(default=0.6, ge=0.0, le=10.0)
     filler_text: str = "我查一下。"
     reply_max_chars: int = Field(default=120, ge=10, le=300)
     reply_max_chars_search: int = Field(default=300, ge=40, le=600)

@@ -294,12 +294,13 @@ class ScriptedLlm:
             yield chunk
 
 
-def _slow_tool_turn(monkeypatch, tool_name: str, transcript: str = "随便") -> FakeTts:
+def _slow_tool_turn(monkeypatch, tool_name: str, transcript: str = "随便",
+                    tool_s: float = 0.25, filler_tool_s: float = 0.05) -> FakeTts:
     """A turn whose first round calls `tool_name`, and whose tool takes 250 ms."""
     spec = ToolSpec(name=f"local.{tool_name}", description="x", permission=Permission.READ)
 
     async def handler(args: dict) -> str:
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(tool_s)
         return "ok"
 
     call = ChatChunk(
@@ -312,7 +313,8 @@ def _slow_tool_turn(monkeypatch, tool_name: str, transcript: str = "随便") -> 
     runner = TurnRunner(
         Config().providers,
         tools=[(spec, handler)],
-        assistant=AssistantConfig(filler_after_s=0.05, filler_text="我查一下。"),
+        assistant=AssistantConfig(filler_after_s=0.05, filler_after_tool_s=filler_tool_s,
+                                  filler_text="我查一下。"),
     )
     result = asyncio.run(runner.run(b"\x00\x00" * 800, _discard, TurnTrace(device_id="living")))
     assert result.tools == [tool_name]
@@ -337,3 +339,20 @@ def test_the_filler_follows_the_request_not_one_fixed_line(monkeypatch) -> None:
     assert _slow_tool_turn(monkeypatch, "weather", transcript="帮我把客厅灯打开").texts[0] == "好的，我看看。"
     assert _slow_tool_turn(monkeypatch, "weather", transcript="讲个笑话").texts[0] == "我想想。"
     assert _slow_tool_turn(monkeypatch, "weather", transcript="今天新闻").texts[0] == "我查一下。"
+
+
+def test_the_filler_lands_inside_the_tool_wait_not_on_the_answer(monkeypatch) -> None:
+    """Measured 2026-10-22: the news tool answered at 1.77 s and the filler fired at 1.80 s.
+
+    The filler counts from the model's tool decision now. A tool that outlives
+    `filler_after_tool_s` gets covered; one that finishes first does not get a filler at
+    all, because there was no wait to cover.
+    """
+    covered = _slow_tool_turn(monkeypatch, "news", transcript="今天新闻", tool_s=0.6,
+                              filler_tool_s=0.1)
+    assert covered.texts[0] == "我查一下。", covered.texts
+
+    # A 40 ms tool finishes long before the 100 ms mark: silence, then the answer.
+    fast = _slow_tool_turn(monkeypatch, "news", transcript="今天新闻", tool_s=0.04,
+                           filler_tool_s=0.1)
+    assert "我查一下。" not in fast.texts, fast.texts

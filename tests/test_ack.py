@@ -324,7 +324,7 @@ def test_reply_pcm_is_resampled_from_the_voice_rate() -> None:
         voice = plane.cfg.audio.voice.rate
         pcm = np.zeros(voice // 5, dtype="<i2").tobytes()  # 200 ms at the voice rate
         task = asyncio.create_task(plane._speak_loop())
-        await plane._speak_queue.put(pcm)
+        await plane._speak_queue.put((pcm, True))
         await asyncio.sleep(0.1)
         plane._stop.set()
         await plane._speak_queue.put(None)

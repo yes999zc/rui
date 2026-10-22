@@ -431,8 +431,15 @@ class TurnRunner:
                 result.error = error
             result.audio_bytes += spoken
 
+        # Set the moment the model asks for a tool. The filler must not run on a timer
+        # from the start of the turn: measured 2026-10-22, the news tool answered at 1.77 s
+        # and the filler fired at 1.80 s - 30 ms before the answer, so it covered nothing
+        # and pushed the answer back by its own length. It now waits for the decision, then
+        # a short beat.
+        tools_pending = asyncio.Event()
+
         async def filler() -> None:
-            """Say something small if the turn is still silent.
+            """Say something small while a tool is actually running.
 
             Waiting 9 s in silence reads as "it did not hear me" - measured on the real
             speaker, where a tool-grounded answer takes 9-11 s to first audio. The old
@@ -448,7 +455,14 @@ class TurnRunner:
             if delay <= 0 or not text.strip():
                 return
             try:
+                # Two waits, whichever comes first. The useful one is "a tool is running":
+                # that is a wait the turn cannot shorten. The other is the old turn-level
+                # cap for a model that is simply slow with no tool at all.
+                await asyncio.wait_for(tools_pending.wait(), timeout=delay)
+                delay = self.assistant.filler_after_tool_s
                 await asyncio.sleep(delay)
+            except TimeoutError:
+                pass  # no tool decision: the cap above has already elapsed
             except asyncio.CancelledError:
                 return
             if not should_speak_filler(
@@ -469,10 +483,9 @@ class TurnRunner:
                 log.info("filler after %.1f s (cached): %s", delay, text)
                 if self.spoken is not None:
                     self.spoken.remember(text)
-                if trace.at("tts_first") is None:
-                    trace.mark("tts_first")
-                if trace.at("play_start") is None:
-                    trace.mark("play_start")
+                # Not tts_first: the filler is not the answer, and marking it there made
+                # every slow turn look fast in the metrics.
+                trace.mark("filler")
                 await speak(cached)
                 result.audio_bytes += len(cached)
                 return
@@ -576,6 +589,10 @@ class TurnRunner:
                      "first sentence queued at %.0f ms",
                      (time.perf_counter() - round_started) * 1000, sum(len(p) for p in parts),
                      len(calls), first_sentence_ms[0])
+            if calls:
+                # The next thing that happens is a tool call, so from here the turn is
+                # waiting on something outside itself: that is when a filler helps.
+                tools_pending.set()
             return "".join(parts), calls
 
         try:

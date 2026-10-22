@@ -57,7 +57,7 @@ def queue_seconds(plane: AudioPlane, seconds: float) -> None:
     chunk = np.zeros(int(16000 * 0.1), dtype="<i2").tobytes()
     for _ in range(int(seconds / 0.1)):
         plane._speak_queued_s += 0.1
-        plane._speak_queue.put_nowait(chunk)
+        plane._speak_queue.put_nowait((chunk, True))
 
 
 def run_wake(plane: AudioPlane) -> list[dict]:
