@@ -47,6 +47,31 @@ StopCapture, the window and the counters). The device half needs the real window
 `GET /health` reports `vendor.vendor_wakes`, `vendor.yielded_turns` and `vendor.muted_for`,
 so a silent speaker can be explained without reading logs.
 
+## Verified on the device (2026-10-22 08:33–08:36)
+
+First real-device run of the yield path, LX06 on `:4412`, restored to `:4399` afterwards.
+
+```
+08:33:57  xiaoai: vendor wake ('今天天气怎么样'), we yield
+          → no [asr], no turn: the vendor answered alone
+08:34:16  kws: wake: 你好小瑞     ← our wake word, inside the 12 s window, took over at once
+GET /health → vendor_wakes=1, yielded_turns=0
+```
+
+`yielded_turns=0` is the correct reading here, not a miss: no session of ours was open
+when the vendor woke, so there was nothing to mute. What matters is the pair of lines
+above - the vendor's dialog was left alone, and our own wake word was not blocked by the
+open window.
+
+Two things the same run found, both outside this document:
+
+- 「嗯。」 after the wake word became a whole turn (`reply: 嗯，你说。`). A 200 ms minimum
+  speech length is not enough to keep a noise from becoming a request; that belongs with
+  S5c's session rules.
+- The vendor's own answer was not transcribed by us: the first `[asr]` line comes 20 s
+  later, after our wake word. The AEC kept the room's audio separate from the vendor's
+  speech well enough for that.
+
 ## Not done yet
 
 - The window does not pause our music (the old build paused the song for a vendor dialog so
