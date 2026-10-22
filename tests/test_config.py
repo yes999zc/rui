@@ -179,3 +179,10 @@ def test_led_yaml_off_key_is_accepted() -> None:
 
     led = LedConfig.model_validate({"colors": {False: "#000000", "thinking": "#000060"}})
     assert led.colors["off"] == "#000000"
+
+
+def test_exit_words_cover_the_old_build_set() -> None:
+    """A session must be dismissable by voice, with the old build's 11 words plus ours."""
+    words = set(Config().session.end_words)
+    assert {"停止", "别说了", "不听了", "退出", "结束", "再见", "拜拜", "睡了", "睡吧", "晚安",
+            "退下吧"} <= words

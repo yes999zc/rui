@@ -68,7 +68,7 @@ def is_noise(transcript: str) -> bool:
     return bool(len(t) <= 2 and all(ch in "嗯啊呃哦噢唉诶哎哟呀吧呢哈嘿" for ch in t))
 
 
-def stop_intent(transcript: str) -> bool:
+def stop_intent(transcript: str, words: tuple[str, ...] | list[str] | None = None) -> bool:
     """True when the request is "stop / dismiss" rather than a question.
 
     Only short utterances and only when the stop word covers the whole request: 「停止播放」
@@ -80,7 +80,7 @@ def stop_intent(transcript: str) -> bool:
     if not t or len(t) > _STOP_MAX_CHARS:
         return False
     t = ALIASES.get(t, t)
-    for word in sorted(STOP_WORDS, key=len, reverse=True):
+    for word in sorted(words or STOP_WORDS, key=len, reverse=True):
         if word in t:
             return True
         if 3 <= len(word) <= 4 and len(t) <= len(word) + 1:

@@ -815,13 +815,16 @@ class AudioPlane:
                     if reply_chunks:
                         log.info("reply: %d chunks, lead max %.0f ms",
                                  reply_chunks, reply_lead_max * 1000)
+                    finished_reply = reply_chunks > 0
                     reply_chunks = 0
                     reply_lead_max = 0.0
                     self._release("dialogue")
                     # Keep the microphone open for the next sentence, the way the old
-                    # build did inside a session: 0.5 s end point, no wake word. It
-                    # disarms itself after `max_wait_ms` if nobody speaks.
-                    if self.gate is not None and not self.gate.armed:
+                    # build did inside a session: 0.5 s end point, no wake word. Only
+                    # after a reply that actually spoke - this branch also runs on every
+                    # idle timeout, and re-arming there left the gate open forever
+                    # (measured: a turn 42 s after the last one, with no wake word).
+                    if finished_reply and self.gate is not None and not self.gate.armed:
                         self.gate.arm(followup=True)
                     self._resume_after_speech()
                     # The player is deliberately left alone here: the next reply closes

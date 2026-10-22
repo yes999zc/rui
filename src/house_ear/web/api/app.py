@@ -195,7 +195,7 @@ def create_app(
                         # used to become a whole turn ("嗯，你说。").
                         log.info("noise, no turn: %r", clean)
                         return
-                    if rules.stop_intent(clean):
+                    if rules.stop_intent(clean, cfg.session.end_words):
                         spoken = await runner.say(rules.stop_reply(), _speaking(app, client), trace)
                         _light(app, "off")
                         app.state.last_turn = {

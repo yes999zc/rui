@@ -447,6 +447,14 @@ class SessionConfig(BaseModel):
     farewell: Literal["off", "short", "full"] = "short"
     farewell_text: str = "没事的话，我先下啦。"
     farewell_text_full: str = "我先下啦，有事喊我。"
+    # "Dismiss" words: a short request that contains one of these ends the session.
+    # The old build kept 11 (`conversation.end_words`); ours adds the stop-playing
+    # family because v1 has no music, so "停止" can only mean "stop listening".
+    end_words: list[str] = Field(default_factory=lambda: [
+        "停止", "停下来", "停下", "停一下", "停掉", "别说了", "别放", "关掉", "关闭",
+        "暂停", "别唱", "不听了", "退下吧", "退下", "关机", "不聊了", "够了",
+        "退出", "结束", "再见", "拜拜", "睡了", "睡吧", "晚安",
+    ])
     # Rounds (a user+assistant pair each) handed to the model. The old build read this
     # from `conversation.history_rounds` (6); house-ear had it hard-coded to 4, which is
     # why a repeated question collapsed into its own previous answer.
