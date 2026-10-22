@@ -717,6 +717,15 @@ class AudioPlane:
             return msg.path
         if self._playback_task is not None and not self._playback_task.done():
             self._playback_task.cancel()
+        # Our song outranks a running vendor dialog, same as our wake does (old build:
+        # vendor_stop_player before every audible start). Fire-and-forget: playback
+        # must not wait on a shell RPC.
+        adapter = self.adapter
+        if (adapter is not None
+                and getattr(adapter, "vendor_playing", False)
+                and time.monotonic() - getattr(adapter, "vendor_playing_ts", 0.0) < 90.0):
+            log.info("vendor takeover: pausing the vendor player for our music")
+            asyncio.create_task(adapter.pause_vendor_player("music start"))
         self.playback_path = msg.path
         self._file_position = 0
         self._file_cfg = (Path(msg.path), msg.loop, msg.gain)
