@@ -204,6 +204,13 @@ def create_app(
                         trace.mark("wake", at_ms=client.last_wake.ts_ms)
                     text, asr_report = await runner.transcribe(pcm, trace)
                     clean = strip_wake(text, runner.wake_words)
+                    if "小爱同学" in clean or clean.strip() in {"小爱", "小爱小爱"}:
+                        # Text-level backstop for the vendor wake: its StartCapture signal
+                        # may be missing on some client builds, and its final transcript
+                        # arrives after our own ASR has already decided to answer.
+                        log.info("vendor wake word in our transcript; yielding: %r", clean)
+                        vendor.vendor_spoke()
+                        return
                     if not clean.strip():
                         # Only the wake word arrived: the wake residue case, not a request.
                         log.info("utterance was wake residue only; no turn")

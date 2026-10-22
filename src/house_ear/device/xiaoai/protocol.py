@@ -198,6 +198,11 @@ def parse_vendor_signal(event: dict, ts: float = 0.0) -> VendorSignal | None:
         # Only a final recognition means the vendor wake fired; StopCapture is its dialog
         # ending and would re-trigger us in the middle of a session.
         return VendorSignal(kind="wake", text=text, ts=ts) if text else None
+    if name == "StartCapture":
+        # The vendor's recognizer opens the microphone the moment its wake fires. This
+        # arrives before its final transcription, which was too late: both assistants
+        # answered the same sentence (9哥, 2026-10-22 18:51).
+        return VendorSignal(kind="wake", ts=ts)
     if name == "StopCapture":
         return VendorSignal(kind="dialog_end", ts=ts)
     return None
