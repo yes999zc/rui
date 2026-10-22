@@ -1,74 +1,167 @@
 # Architecture
 
-Six layers. Each one talks to the next through an interface, never through globals.
+**One rule decides every question in this document: adding a speaker must touch one new
+module and one registry line — nothing else.** Where the code does not meet that yet, it is
+listed in §6 as a debt with a name, not left as an intention.
+
+## 0. Invariants
 
 ```
-L6 console + REST/WS        web/ (Vue 3 + TS)
-L5 orchestration            providers/ (asr, tts, llm)
-L4 capabilities             tools/ (local + MCP + Home Assistant)
-L3 session                  session/ (state machine, wake arbitration)
-L2 audio plane              audio/ (decimation, AEC, KWS, VAD, playback)
-L1 devices                  device/ (adapter contract, one adapter per speaker)
+1. Only the audio plane touches the microphone or the speaker. The control plane never
+   writes audio to a device.
+2. Only the coordinator decides who is allowed to make sound. The plane executes a claim
+   and refuses a second writer; it does not weigh priorities itself.
+3. A tool never touches a device. To speak it asks the coordinator for playback; to use
+   hardware it goes through DeviceServices, and a device that cannot do it says so.
+4. The device dials in. The control plane does not connect out — except through the shell
+   channel the device's own client exposes (today: reading mysoftvol, nothing else).
+5. A layer knows the layer below only through an interface. No layer above L6 knows a
+   vendor name, an ALSA numid, or a model string.
 ```
 
-## Why the split
-
-- **L1 is the only place that knows a vendor exists.** A new speaker adds one
-  adapter; nothing above it changes.
-- **L2 runs in its own process.** The echo canceller is a tight per-frame loop;
-  keeping it out of the HTTP process means a slow request cannot cause dropped
-  audio frames. This is also the seam where a future Rust/C++ replacement drops
-  in without touching the rest.
-- **L3 is a state machine, not a pile of flags.** Barge-in is a transition from
-  `speaking` to `interrupted` to `listening`; illegal transitions raise.
-- **L4 has one tool shape.** A local function, an MCP tool and a Home Assistant
-  entity all become `ToolSpec` with a namespaced name and a permission level.
-- **L5 keeps vendors swappable per stage.** ASR, TTS and LLM can come from three
-  different providers; nothing assumes one vendor.
-
-## Process model
+## 1. Layers
 
 ```
-house-ear serve
-├─ control plane (FastAPI, asyncio)
-│   ├─ REST: /health /api/v1/*  (config, devices, tools, doctor, traces, audio)
-│   ├─ static console
-│   └─ supervisor  ──────────────┐  spawns, greets, restarts
-└─ audio plane (child process, asyncio)
-    ├─ device transport (adapter; inbound socket for an LX06)
-    ├─ decimation 48 kHz -> 16 kHz (stateful FIR per channel)
-    ├─ bounded ring (200 ms) -> voice-rate PCM out
-    └─ S3: AEC -> KWS -> VAD      S5: playback queue
-                                   ↑
-        unix socket: type|len|payload frames, JSON control + mono PCM
+┌────────────────────────────────────────────────────────────────────────────┐
+│ L7 users + hardware          LX06 · the next speaker · any box that can SSH  │
+└───────────────────────────────┬────────────────────────────────────────────┘
+                     the device dials ws://<us>:<port>
+┌───────────────────────────────▼────────────────────────────────────────────┐
+│ L6 device = the socket      device/{contract,registry}.py                   │
+│                             device/xiaoai/{adapter,protocol}.py             │
+│   adapter   speaks the wire protocol, converts frames, declares a profile    │
+│   contract  DeviceInfo · Capability · DeviceServices (optional per device)   │
+│   registry  name -> class; an unknown name becomes AdapterSet.errors, not a  │
+│             crash, so the console can still explain what is wrong            │
+│   ⚠ the only place a vendor name appears                                    │
+└───────────────────────────────┬────────────────────────────────────────────┘
+          frames (N channels + reference) ↑        ↓ PCM · device commands
+┌───────────────────────────────▼────────────────────────────────────────────┐
+│ L5 audio plane (own process)  audio/{process,decimate,frontend,aec,kws,vad,  │
+│                                      ack,chime,protocol}.py                  │
+│   decimate → 90 Hz high-pass → array mix → AEC → KWS (+probe) → VAD          │
+│   playback: one owner at a time, paced with a 200/350 ms buffer              │
+│   ⚠ the only holder of the microphone and the speaker                       │
+│   ⚠ every DSP stage is gated on a Capability, never on an assumption         │
+└───────────────────────────────┬────────────────────────────────────────────┘
+     up:   wake · utterance · metrics · vendor_signal · shell_result
+     down: speak(claim) · play_file(claim) · release · stop · shell · query
+┌───────────────────────────────▼────────────────────────────────────────────┐
+│ L4 coordinator = the layer that decides     web/api/app.py                  │
+│   ① turn boundaries        session/turn.py                                   │
+│   ② session state          session/state.py  (SessionStateMachine)           │
+│   ③ playback arbitration   Output (claim/release)  ← to build               │
+│   ④ rules and policy       session/{rules,idle,filler,vendor,text,prompts}   │
+└──────────────┬────────────────────────────────────────────┬─────────────────┘
+     ToolSpec  │                                            │ config/log/trace
+┌──────────────▼───────────────┐             ┌──────────────▼─────────────────┐
+│ L3 application  tools/       │             │ L2 capabilities  providers/     │
+│  info (weather/news/search)  │             │  chain: per-stage fallback       │
+│  reminders (tools+scheduler) │             │  openai_compat · xfyun_tts      │
+│  music (not built; will ask  │             │  sherpa_asr · siliconflow        │
+│         for a playback claim)│             │                                  │
+│  HA via MCP (not wired)      │             │                                  │
+└──────────────────────────────┘             └──────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│ L1 infrastructure   config/{schema,store} · secrets · log_setup · trace ·    │
+│                     doctor · Dockerfile · deploy/ · scripts/                 │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The seam is `audio/protocol.py`: a header (`type`, `length`) followed by either a
-Pydantic control message or a PCM block carrying its own sequence number and
-timestamp. One rule, no delimiter scanning, and a Rust or C++ plane only has to
-reproduce that file plus the message models.
+The console (`web/`) is a view over L4, not a layer of its own: it may call only the REST
+API, and every write goes through the same validation the CLI uses.
 
-Why not in-process threads: the GIL is not the problem (numpy and speexdsp release
-it), the *blast radius* is. A stalled HTTP handler or a body-parsing bug in the
-control plane must not be able to pause the audio loop; a separate process makes
-that a fact instead of a hope. The supervisor also gets to restart the plane without
-dropping the console.
+## 2. Process model
+
+```
+house-ear serve                      house-ear audio (child)
+├─ FastAPI: REST + console           ├─ adapter: the inbound ws (mic + speaker)
+├─ supervisor: spawns/restarts       ├─ DSP: decimate → HP → mix → AEC → KWS → VAD
+├─ coordinator: turn + session       ├─ playback: speak / play_file / cue (one owner)
+│               + Output (claims)    └─ events up: wake, utterance, metrics, shell
+└─ timers: idle 1 s, reminders 1 s
+```
+
+The split exists for one reason: the echo canceller is a tight per-frame loop, and a slow
+HTTP request must not be able to starve it. It is also the seam where a native
+implementation could replace the Python one without anything above noticing.
+
+The seam is `audio/protocol.py`: a header (`type`, `length`) followed by either a Pydantic
+control message or a PCM block carrying its own sequence number and timestamp. One rule, no
+delimiter scanning; a Rust or C++ plane only has to reproduce that file and the models.
 
 Layout is per frame, not per config: `AudioFrame` says its own channels, rate and
 `reference_channels`, so an LX06 (48 kHz / 8 ch / 6 mic + 2 ref) and a future ESP32
-(16 kHz / 1 ch / no reference) share the same plane code. `audio.capture` in config
-is what the doctor expects, not something the plane bakes in.
+(16 kHz / 1 ch / no reference) share the same plane code. `audio.capture` is what a device
+is asked for, not what the plane bakes in.
 
-## Data flow of one turn
+## 3. Playback arbitration
 
-1. Device streams 8 interleaved channels, 32-bit.
-2. Adapter scales per channel (mics `>>8`, reference `>>13`) and emits frames.
-3. The plane decimates the speech channel(s) to 16 kHz.
-4. AEC subtracts the reference from each mic channel (S3).
-5. KWS fires → L3 acquires the turn (first frame wins across devices).
-6. VAD closes the utterance → ASR → LLM (+ tools) → TTS.
-7. Playback pushes PCM with a fade-in; a new wake starts a fade-out in ≤300 ms.
+Four things want the speaker at the same time: the wake cue, a reply, a reminder that came
+due, and a song. Without one owner they interleave their PCM into a single device player —
+measured 2026-10-22: a reply spoken over 嘻唰唰 came out stuttering.
 
-## Non-goals
+```
+P0 cue        wake acknowledgement, ~320 ms; preempts everything, releases on its own
+P1 dialogue   one answer; preempts P2/P3; cancelled by a barge
+P2 reminder   a due reminder; waits for P1, preempts P3
+P3 music      a file/song; paused (never killed) by anything above, resumed after
+```
 
-Cloud service, firmware flashing, general-purpose assistant platform.
+Forty lines, not two hundred: an owner string and a priority number in the plane, a
+claim/release wrapper in the coordinator. No lease, no TTL, no queue — the only queue the
+project actually needs is "a reminder waits for the turn to end", and that is one `await`.
+
+Rules that come from measured failures:
+
+- Preempting P3 pauses and remembers the position, rewound by 0.55 s (`PLAY_LAG_SECONDS`,
+  the audio already in the device). Resuming at the last *sent* sample skips that much.
+- Preempting P1 cancels and flushes, and tells the control plane to abandon the answer it
+  is still synthesising — otherwise the flushed queue refills and talks over the new turn.
+- `StopAudio` is an explicit stop: release and do not resume.
+- The arbiter's state is a metric (`owner`, `lead_ms`, `paused_sources`), not a log line.
+
+## 4. Adding a speaker — the goal, as a checklist
+
+| # | What the new device supplies | Where | Touches core? |
+|---|---|---|---|
+| 1 | `adapter.py`: dial-in protocol, frame conversion, `DeviceInfo` + `Capability` | `device/<name>/` | no |
+| 2 | `DeviceServices`: shell/volume/led if it has them; omit what it does not | `device/<name>/` | no |
+| 3 | one registry entry: `"name": "module:Class"` | `device/registry.py` | one line |
+| 4 | `devices[].audio` overrides if its layout differs from the defaults | config file | no |
+
+Acceptance test: a second fake adapter (4 microphones, no reference channel, no playback)
+must run from its own module plus one registry line, with **zero changes under `src/`
+anywhere else**. That test is the architecture; if it goes red, a layer still knows a vendor.
+
+## 5. Data flow of one turn
+
+1. Device streams N interleaved channels, 32-bit; the client applies the per-channel shift.
+2. Adapter converts to floats and emits `AudioFrame`s with their own layout.
+3. The plane decimates to the voice rate, high-passes, mixes the array.
+4. AEC subtracts the reference (skipped when the device has no reference channel).
+5. KWS fires → the coordinator opens a session; the pre-wake ring is replayed into the VAD.
+6. VAD closes the utterance → ASR → LLM (+ tools) → streamed sentences → TTS.
+7. Playback claims P1 and pushes PCM with the pacer; a barge releases it and pauses music.
+
+## 6. Debts that break the checklist today
+
+| Debt | Where | Why it breaks the goal |
+|---|---|---|
+| `AdapterName = Literal["xiaoai","mock"]` | `config/schema.py` | config validation rejects any adapter outside the literal, so a registered device cannot even be configured |
+| `registry._build()` if/elif | `device/registry.py` | every new device edits a core file |
+| `audio.capture/voice/playback` are global | `config/schema.py` | two devices with different layouts cannot coexist; a 4-mic speaker changes the global shape |
+| DSP assumes 8 ch + 2 reference + playback | `audio/process.py` | a device without a reference channel cannot use the AEC path safely |
+| `amixer -c 0 cget numid=177` in the API | `web/api/app.py` | a vendor detail above the device layer |
+| `SessionStateMachine` is never constructed | `session/state.py` | the real state is three scattered places; the diagram would lie |
+| no playback owner | `audio/process.py` | the same interleaving bug returns with music, reminders and cues |
+
+## 7. Non-goals
+
+- **Not a general voice-assistant framework.** One household, one speaker at a time for
+  playback. Multi-room is a different product.
+- **Not cloud-first.** Recognition runs locally; the network is a fallback, not the path.
+- **No wake-word training.** One model, one keyword file; a different word is a different
+  keyword line, not a new pipeline.
+- **No streaming ASR re-architecture for v1.** The VAD cuts the utterance and it is decoded
+  in one shot; 51–90 ms measured is good enough to answer.
