@@ -30,7 +30,7 @@ from ...session.ack import ensure_ack_wav
 from ...session.text import strip_wake
 from ...session.turn import TurnRunner
 from ...session.vendor import VendorWindow
-from ...tools.info import build_tools
+from ...tools import build_local_tools, build_scheduler
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
 
@@ -54,10 +54,11 @@ def create_app(
 ) -> FastAPI:
     secrets.configure(cfg.system.data_dir)
     registry = ToolRegistry()
-    # The information tools exist here, once: the console lists them from the registry and
-    # the turn loop gets the same specs plus their handlers.
-    info_tools = build_tools(cfg)
-    for spec, _handler in info_tools:
+    # One assembly for everything local: information tools and reminders. Reminders used
+    # to be reachable only through tools.reminders.build_tools, which nothing imported -
+    # the tools existed, the scheduler existed, and the model could never call them.
+    local_tools = build_local_tools(cfg)
+    for spec, _handler in local_tools:
         registry.register(spec)
     adapters = build_adapters(cfg)
     traces = TraceLog()
@@ -82,7 +83,7 @@ def create_app(
             assistant=cfg.assistant,
             history_turns=cfg.session.history_rounds,
             wake_words=[w for d in cfg.devices for w in d.wake_words],
-            tools=info_tools,
+            tools=local_tools,
             spoken=spoken,
             session=cfg.session,
         )
@@ -224,6 +225,50 @@ def create_app(
 
         app.state.idle_task = asyncio.create_task(idle_watch(), name="idle-watch")
 
+        # P10. The reminders were a complete island: tools with 44 tests, a scheduler
+        # that walks due items, and no caller anywhere. One tick fires them, one queue
+        # speaks them. A due reminder must not talk over a turn or over whatever already
+        # owns the speaker (a cue, an answer, a song): it waits, because its fired state
+        # is already on disk and waiting loses nothing.
+        reminder_queue: asyncio.Queue[str] = asyncio.Queue()
+        scheduler = build_scheduler(cfg)
+        scheduler.add_listener(lambda item: reminder_queue.put_nowait(item.text))
+        app.state.reminders = scheduler
+
+        async def reminder_tick() -> None:
+            while True:
+                await asyncio.sleep(1.0)
+                try:
+                    for item in scheduler.collect_due():
+                        log.info("reminder due: %s", item.text)
+                        reminder_queue.put_nowait(item.text)
+                except Exception as exc:  # noqa: BLE001 - a tick must not die
+                    log.exception("reminders: tick failed: %s", exc)
+
+        async def reminder_speak() -> None:
+            while True:
+                text = await reminder_queue.get()
+                waited = 0.0
+                spoken = False
+                while waited < 120.0:
+                    supervisor = getattr(app.state, "audio", None)
+                    client = supervisor.client if supervisor is not None else None
+                    metrics = client.metrics if client is not None else None
+                    owner = metrics.output_owner if metrics is not None else ""
+                    if client is not None and not runner.busy and not owner:
+                        await runner.say(
+                            text, client.speak, TurnTrace(device_id="reminder")
+                        )
+                        spoken = True
+                        break
+                    await asyncio.sleep(0.5)
+                    waited += 0.5
+                if not spoken:
+                    log.warning("reminder not spoken (no free speaker): %s", text)
+
+        app.state.reminder_tick = asyncio.create_task(reminder_tick(), name="reminder-tick")
+        app.state.reminder_task = asyncio.create_task(reminder_speak(), name="reminder-speak")
+
         # The cue is rendered *after* the plane is up and in the background: it is a nicety,
         # and a vendor that hangs must not delay /health or the speaker's reconnect. The
         # plane re-reads ack.wav on every wake, so a file that lands a second later is
@@ -236,11 +281,18 @@ def create_app(
             cue_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await cue_task
+        for name in ("reminder_tick", "reminder_task"):
+            task = getattr(app.state, name, None)
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
         supervisor = getattr(app.state, "audio", None)
         if supervisor is not None:
             await supervisor.stop()
 
     app = FastAPI(title="house-ear", version=__version__, lifespan=lifespan)
+    app.state.tools = registry  # the console and tests read the same registry turns use
     app.state.trace_log = traces  # scripts and tests read the same log the API serves
 
     def auth(x_auth_token: str | None = Header(default=None)) -> None:

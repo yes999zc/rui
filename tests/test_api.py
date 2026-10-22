@@ -176,3 +176,27 @@ def test_a_bad_secret_name_is_refused(tmp_path) -> None:
     cfg.system.data_dir = str(tmp_path)
     c = TestClient(create_app(cfg))
     assert c.post("/api/v1/secrets", json={"name": "lower case", "value": "x"}).status_code == 400
+
+
+def test_reminder_tools_are_registered_for_the_turn_loop() -> None:
+    """P10 was written but never wired.
+
+    `tools.reminders` had 44 tests and a scheduler, but the app imported only
+    `tools.info.build_tools` and nothing ever constructed `build_scheduler`. The model
+    could not see the reminder tools at all. This is the regression guard: the registry
+    the turn loop and the console share must contain them.
+    """
+    app = create_app(Config())
+    names = set(app.state.tools.names())
+    assert {"local.set_reminder", "local.list_reminders", "local.cancel_reminder"} <= names
+
+
+def test_the_scheduler_starts_with_the_app(tmp_path) -> None:
+    """A due reminder needs a tick and a speaker; both live in the lifespan now."""
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    app = create_app(cfg)
+    with TestClient(app):
+        assert app.state.reminders is not None
+        assert app.state.reminder_tick is not None
+        assert app.state.reminder_task is not None

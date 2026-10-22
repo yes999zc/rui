@@ -370,6 +370,11 @@ class TurnRunner:
             return name, spoken, StageReport("tts", name, attempts, 0.0), ""
         return "", 0, None, f"tts failed for every provider: {attempts}"
 
+    @property
+    def busy(self) -> bool:
+        """True while a turn is running - the reminder layer waits for it."""
+        return self._in_turn
+
     async def run(
         self,
         pcm: bytes,
