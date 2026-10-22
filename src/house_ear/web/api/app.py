@@ -20,7 +20,7 @@ from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
-from ...audio.protocol import PlayFile
+from ...audio.protocol import PlayFile, StopAudio
 from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
@@ -375,13 +375,16 @@ def create_app(
         `house-ear debug-play` spawns its own plane and cannot be used while a server is
         up, which is exactly when these tests run.
         """
-        path = str(patch.get("file") or "")
-        if not Path(path).is_file():
-            raise HTTPException(status_code=404, detail=f"no such file: {path}")
         supervisor = getattr(app.state, "audio", None)
         client = supervisor.client if supervisor is not None else None
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
+        if patch.get("stop"):
+            await client.send(StopAudio())
+            return {"playing": None}
+        path = str(patch.get("file") or "")
+        if not Path(path).is_file():
+            raise HTTPException(status_code=404, detail=f"no such file: {path}")
         await client.send(PlayFile(path=path, loop=bool(patch.get("loop", False)),
                                    gain=float(patch.get("gain", 1.0))))
         return {"playing": path}
