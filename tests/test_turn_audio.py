@@ -205,3 +205,14 @@ def test_followup_closes_sooner_and_skips_nothing() -> None:
     first = UtteranceGate(GateConfig(end_silence_ms=1000, end_silence_followup_ms=500), MODEL)
     first.arm()
     assert feed(first) is False
+
+
+@needs_vad
+def test_a_followup_window_can_outlast_the_wake_wait() -> None:
+    """The session timeout, not the 5 s wake wait, bounds the follow-up window."""
+    gate = UtteranceGate(GateConfig(), MODEL)
+    gate.arm(followup=True, max_wait_ms=15000)
+    for _ in range(300):  # 6 s of quiet
+        gate.feed(silence(20))
+    assert gate.armed is True
+    assert gate.discarded == 0

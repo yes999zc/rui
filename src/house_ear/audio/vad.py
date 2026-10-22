@@ -93,6 +93,7 @@ class UtteranceGate:
         self._waited_ms = 0.0
         self._started = False
         self._end_silence_ms = self.cfg.end_silence_ms
+        self._max_wait_ms = self.cfg.max_wait_ms
 
     @property
     def speech_ms(self) -> float:
@@ -100,7 +101,8 @@ class UtteranceGate:
         return self._speech_ms
 
     # ------------------------------------------------------------------ state
-    def arm(self, *, start_after_ms: float = 0.0, followup: bool = False) -> None:
+    def arm(self, *, start_after_ms: float = 0.0, followup: bool = False,
+            max_wait_ms: int | None = None) -> None:
         """A wake word just fired: ignore the phrase tail, then listen.
 
         `start_after_ms` holds the gate shut for the acknowledgement: a spoken cue mutes
@@ -118,6 +120,9 @@ class UtteranceGate:
         self._end_silence_ms = (
             self.cfg.end_silence_followup_ms if followup else self.cfg.end_silence_ms
         )
+        # A follow-up window lasts as long as the session, not the 5 s "nobody spoke
+        # after the wake" limit: 9哥 said 退下吧 six seconds in and the gate had shut.
+        self._max_wait_ms = max_wait_ms if max_wait_ms is not None else self.cfg.max_wait_ms
 
     def disarm(self) -> None:
         self.armed = False
@@ -191,7 +196,7 @@ class UtteranceGate:
                 self._preroll_samples -= self._preroll.popleft().size
             if not speaking:
                 self._waited_ms += block_ms
-                if self._waited_ms >= self.cfg.max_wait_ms:
+                if self._waited_ms >= self._max_wait_ms:
                     log.info("wake with no speech after %.0f ms; disarming", self._waited_ms)
                     self.discarded += 1
                     self.disarm()
