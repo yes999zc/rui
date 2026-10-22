@@ -209,7 +209,7 @@ def create_app(
                         # may be missing on some client builds, and its final transcript
                         # arrives after our own ASR has already decided to answer.
                         log.info("vendor wake word in our transcript; yielding: %r", clean)
-                        vendor.vendor_spoke()
+                        vendor.vendor_spoke("wake", clean)
                         return
                     if not clean.strip():
                         # Only the wake word arrived: the wake residue case, not a request.
