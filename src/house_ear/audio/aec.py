@@ -220,13 +220,25 @@ class AecChain:
         taps: int = 4096,
         hp_hz: float = 90.0,
         hysteresis_db: float = 6.0,
+        cancel: str = "mix",
     ) -> None:
         if channels < 1:
             raise ValueError("channels must be >= 1")
         self.channels = channels
         self.rate = rate
         self.hysteresis_db = hysteresis_db
-        self.cancellers = [EchoCanceller(taps=taps, rate=rate) for _ in range(channels)]
+        # `mix` reproduces the old deployment's topology, which measured 25.2 dB ERLE at
+        # mysoftvol 170 on this speaker: one speexdsp canceller on the *array mix*, where
+        # the filter sees the best SNR the six microphones can give. Per-channel filters
+        # (six of them, rtf 0.066) measured 20.9 dB at the same volume - each one adapts
+        # against a noisier single microphone. Kept as an option because the per-channel
+        # residuals are what the diagnostic ERLE per channel needs.
+        self.cancel = cancel
+        self.cancellers = (
+            [EchoCanceller(taps=taps, rate=rate) for _ in range(channels)]
+            if cancel == "per_channel" else []
+        )
+        self.mix_canceller = EchoCanceller(taps=taps, rate=rate) if cancel == "mix" else None
         self.mic_hp = [HighPass(hp_hz, rate) for _ in range(channels)]
         self.ref_hp = HighPass(hp_hz, rate)
         self.mixer = ChannelMixer(channels)
@@ -271,12 +283,14 @@ class AecChain:
             self.blocks += 1
             return self.mixer.mix(hp, weights)
 
-        residuals = np.empty_like(mic, dtype=np.float32)
-        for ch, canceller in enumerate(self.cancellers):
-            residuals[:, ch] = canceller.process(hp[:, ch], ref_hp)
-
-        out = self.mixer.mix(residuals, weights)
         mic_mix = self.mixer.mix(hp, weights)
+        if self.mix_canceller is not None:
+            out = self.mix_canceller.process(mic_mix, ref_hp)
+        else:
+            residuals = np.empty_like(mic, dtype=np.float32)
+            for ch, canceller in enumerate(self.cancellers):
+                residuals[:, ch] = canceller.process(hp[:, ch], ref_hp)
+            out = self.mixer.mix(residuals, weights)
         # Never make it worse, now on the mixed signals: a residual louder than the
         # microphone means the filter overshot or diverged on this block.
         if _rms(out) > 1.05 * max(_rms(mic_mix), 1e-9):
@@ -302,6 +316,8 @@ class AecChain:
     def reset(self) -> None:
         for canceller in self.cancellers:
             canceller.reset()
+        if self.mix_canceller is not None:
+            self.mix_canceller.reset()
         for hp in self.mic_hp:
             hp.reset()
         self.ref_hp.reset()
@@ -312,8 +328,11 @@ class AecChain:
     def close(self) -> None:
         for canceller in self.cancellers:
             canceller.close()
+        if self.mix_canceller is not None:
+            self.mix_canceller.close()
 
     # ------------------------------------------------------------------ factory
     @classmethod
-    def from_config(cls, channels: int, rate: int, taps: int) -> AecChain:
-        return cls(channels=channels, rate=rate, taps=taps)
+    def from_config(cls, channels: int, rate: int, taps: int,
+                    cancel: str = "mix") -> AecChain:
+        return cls(channels=channels, rate=rate, taps=taps, cancel=cancel)

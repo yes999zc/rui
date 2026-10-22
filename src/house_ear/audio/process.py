@@ -226,6 +226,7 @@ class AudioPlane:
                 channels=mic_channels,
                 rate=self.cfg.audio.voice.rate,
                 taps=self.cfg.audio.aec.filter_len,
+                cancel=self.cfg.audio.aec.cancel,
             )
         except AecUnavailable as exc:
             self.aec_error = str(exc)

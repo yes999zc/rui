@@ -140,6 +140,10 @@ class AecConfig(BaseModel):
     enabled: bool = True
     # Taps at `voice.rate`: 4096 taps = 256 ms of echo tail at 16 kHz.
     filter_len: int = Field(default=4096, ge=256, le=16384)
+    # "mix" = one canceller on the array mix (the old deployment's topology, 25.2 dB at
+    # mysoftvol 170); "per_channel" = six cancellers, better diagnostics, worse ERLE and
+    # 6x the CPU. Measured on this speaker 2026-10-22.
+    cancel: Literal["mix", "per_channel"] = "mix"
 
 
 class AckConfig(BaseModel):
