@@ -191,6 +191,8 @@ class TurnRunner:
         # None means "assemble per turn": the prompt carries the length bands, the tool
         # rules and the clock, and a long session must not keep a stale copy.
         self.system_prompt = system_prompt
+        # Per-turn prompt addition (HA entities today, memory in D2).
+        self.extra_context: Callable[[], str] | None = None
         self.assistant = assistant or AssistantConfig()
         # Session-level decisions: how long silence may last and what the goodbye says.
         # Held as the model (not copied into fields) so a console edit is one
@@ -237,13 +239,21 @@ class TurnRunner:
         return [spec.as_llm_tool() for spec, _ in self.tools]
 
     def build_prompt(self) -> str:
-        if self.system_prompt is not None:
-            return self.system_prompt
-        return prompts.build(
-            self.assistant,
-            tools_ok=bool(self.tools),
-            tool_names=[getattr(spec, "name", "") for spec, _handler in self.tools],
-        )
+        text = self.system_prompt
+        if text is None:
+            text = prompts.build(
+                self.assistant,
+                tools_ok=bool(self.tools),
+                tool_names=[getattr(spec, "name", "") for spec, _handler in self.tools],
+            )
+        # One hook, many tenants: HA's entity list today, memory's recall in D2.
+        # A callable so the content is as fresh as the turn that uses it.
+        if self.extra_context is not None:
+            with contextlib.suppress(Exception):
+                extra = self.extra_context()
+                if extra:
+                    text = f"{text}\n{extra}"
+        return text
 
     def abort(self) -> None:
         """Stop speaking the current answer (barge-in)."""

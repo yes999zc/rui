@@ -46,6 +46,13 @@ DEFAULTS: dict[str, str] = {
     # --- turn-level degrade (the system layer's own fallbacks) ---------------
     "turn.failed": "我没弄成，你再说一遍？",
     "turn.stuck": "我这卡了一下，你再说一遍。",
+    # --- devices over HA (V2's first application) ----------------------------
+    "device.done": "好，{device}{action}。",
+    "device.unreachable": "{device}这会儿连不上，没能执行，别当我成功了。",
+    "device.excluded": "{device}这类操作我不做。",
+    "device.missing_target": "没听清要操作哪个设备。",
+    "ha.entity_list": "家里的设备（名字=实体ID，状态要现查，别用过期状态）：\n{list}\n{note}",
+    "ha.list_stale": "（这份清单是上次缓存的，控制可能失败。）",
 }
 
 _MISSING = object()

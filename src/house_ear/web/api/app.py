@@ -35,6 +35,7 @@ from ...session.turn import TurnRunner
 from ...session.vendor import VendorWindow
 from ...tools import build_local_tools, build_scheduler
 from ...tools.contract import ToolResult
+from ...tools.ha import HaBridge
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
 
@@ -102,6 +103,23 @@ def _speaking(app: FastAPI, live: object):
         await live.speak(pcm, **kwargs)  # type: ignore[attr-defined]
 
     return say
+
+
+def _ha_context(ha: HaBridge):
+    """The runner's hook is sync; the fetch is async. A background task keeps
+    the entity block warm (5 min cadence), the hook hands over the text."""
+    import asyncio as _aio
+
+    state = {"text": ""}
+
+    async def _refresh() -> None:
+        while True:
+            with contextlib.suppress(Exception):
+                state["text"] = await ha.entity_context()
+            await _aio.sleep(300)
+
+    _aio.get_running_loop().create_task(_refresh(), name="ha-context")
+    return lambda: state["text"]
 
 
 def _music_sender(app: FastAPI):
@@ -363,8 +381,29 @@ def create_app(
         app.state.last_turn = None
         vendor = VendorWindow(cfg.session.vendor_quiet_s)
         app.state.vendor = vendor
+        # HA over MCP (V2's first application): connect, register the whitelisted
+        # tools, inject the entity list per turn. A dead HA degrades its tools -
+        # the rest of the assistant never notices (old build's rule).
+        ha: HaBridge | None = None
+        if cfg.tools.ha.base_url:
+            ha = HaBridge(cfg.tools.ha, Path(cfg.system.data_dir))
+            if await ha.start():
+                for spec, handler in ha.tool_specs():
+                    registry.register(spec)
+                    local_tools.append((spec, handler))
+                runner._handlers = {spec.llm_name: handler
+                                    for spec, handler in local_tools}
+                runner._interactions = {spec.llm_name: spec.interaction
+                                        for spec, _ in local_tools}
+                runner.extra_context = _ha_context(ha)
+                app.state.ha = ha
+                log.info("ha: %d tools registered", len(ha.tool_specs()))
+            else:
+                log.warning("ha: MCP connect failed (%s) - device tools degrade",
+                            ha.client.last_error)
+                app.state.ha = ha
         # Warm the instances the turns will use. This used to build its own chain and
-        # warm that, which loaded the ASR model twice and left the real one cold.
+        # warm that, which loaded the real one cold.
         await runner.warm()
         app.state.ack_note = ""
         app.state.led_tasks = set()
@@ -918,6 +957,31 @@ def create_app(
             raise HTTPException(
                 status_code=422, detail="action must be play/pause/resume/stop/next/prev")
         return await music_status()
+
+    @app.post("/api/v1/debug/tool", dependencies=[Depends(auth)])
+    async def debug_tool(patch: Annotated[dict, Body()]) -> dict:
+        """Call one registered tool and render it - silently.
+
+        The console's dry-run (docs/console.md mirror table) and the silent
+        self-tests both need the exact path a model's call takes, minus the
+        speaker: handler -> ToolResult -> InteractionSpec -> PhraseBook.
+        """
+        runner = app.state.runner
+        name = str(patch.get("name") or "")
+        args = patch.get("args") or {}
+        handler = runner._handlers.get(name)
+        if handler is None:
+            raise HTTPException(status_code=404, detail=f"no such tool: {name}")
+        from ...tools.contract import ToolResult
+        result = await handler(args if isinstance(args, dict) else {})
+        rendered = runner._render_tool_result(name, result) \
+            if isinstance(result, ToolResult) else str(result)
+        return {
+            "name": name,
+            "status": result.status if isinstance(result, ToolResult) else "str",
+            "payload": result.payload if isinstance(result, ToolResult) else {},
+            "rendered": rendered,
+        }
 
     @app.get("/api/v1/music/search", dependencies=[Depends(auth)])
     async def music_search(q: str = "") -> dict:
