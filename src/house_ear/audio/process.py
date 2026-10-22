@@ -228,6 +228,15 @@ class AudioPlane:
                 chunk=voice.kws_chunk,
                 rate=voice.rate,
             )
+            if voice.kws_probe_file:
+                # Its own decoder state: one stream cannot be fed to two spotters.
+                self.probe = WakeProbe(
+                    model_dir=voice.kws_model_dir,
+                    keywords_file=voice.kws_probe_file,
+                    chunk=voice.kws_chunk,
+                    rate=voice.rate,
+                )
+                log.info("kws probe on: %s", voice.kws_probe_file)
         except KwsUnavailable as exc:
             self.kws_error = str(exc)
             log.warning("kws off: %s", exc)
