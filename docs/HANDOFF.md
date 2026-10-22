@@ -331,3 +331,24 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
      控制台 P2（form block/token 输入/日志页/对话面板）；在线兜底源只留接口位。
   4. **最后一步 C1 冷装**：代码门槛全绿（367 passed、ruff、vue-tsc、镜像预检曾通），等 9哥
      在场时做（30 分钟到第一句的验收需要他的耳朵和嘴）。
+
+## 10. 无声开发期（2026-10-23 凌晨起，9哥 定：音箱全程不出声，出声验证统一排队）
+
+- **模式**：dev 配置 `voice.kws_enabled: false`（无唤醒→无提示音/无应答，控制台照常在线）；
+  音乐/试一说全程未碰。**统一验收时恢复 `kws_enabled: true` 并重启。**
+- **V1 语音交互系统层 ✅ `5821ccd`**：PhraseBook（全局话术表）+ ToolResult 结构化 +
+  InteractionSpec 声明协议 + `_call_tool` 渲染路径 + 轮级 degrade（turn.failed 不再沉默）。
+  音乐 9 工具全部迁移，AST 扫描测试证明工具代码零中文字面话术。验收：每工具话术出自
+  PhraseBook 的 pytest 全绿。
+- **D1b ✅**：① gate-over-music 根因修复 `50d2d32`——grace 分支过早调 `_resume_after_speech`
+  时 claim 失败但状态被消耗，音乐无主播放、follow-up 门开在「空」speaker 上（21:13 生产案
+  例完整复现为测试）；② V4/V5 反向让位 `6ca7ed4`——vendor 唤醒或其播放器（键114同一事件）起
+  时停驻我方歌（StopAudio 保留停驻位置），其对话结束（idle+0.6s）或 4s 静默看门狗还回；
+  ③ 音量对账 `ada5fa0`——devices[].volume 百分比目标在 metrics 周期读上对账 mysoftvol（0=不管）；
+  ④ farewell 避开还回窗口；⑤ filler 音乐跳过随 D1 工具注册自动生效；⑥ V2（vendor 转写我方
+  唤醒词）由既有 12s 静默窗覆盖。
+- **统一验收排队清单**（恢复出声后按序）：音乐 V1 话术真机听感（放歌/暂停/继续的 PhraseBook
+  句式）；V4 让位（小爱唤醒→歌停→还回，ubus 注入法见 vendor.md）；远场 20 唤醒计数；灯环
+  音乐态；B2 收尾数字；最后 C1 冷装。
+- **下一步**：HA-MCP（多服务器 MCP 客户端 + HA 经 MCP + V2 三原语 clarify/choose/confirm，
+  HA 为首个验证用例；设计 docs/interaction.md §3/§5、老项目方案行号在差距报告）→ C-UI P2。
