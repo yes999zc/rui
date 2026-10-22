@@ -9,6 +9,7 @@ Version history:
 """
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -74,6 +75,9 @@ class LedConfig(BaseModel):
         unknown = set(self.colors) - set(LED_STATES)
         if unknown:
             raise ValueError(f"unknown LED states: {sorted(unknown)}; use {list(LED_STATES)}")
+        for name, value in self.colors.items():
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+                raise ValueError(f"led.colors.{name} must be #RRGGBB, got {value!r}")
         return self
 
     @field_validator("colors", mode="before")

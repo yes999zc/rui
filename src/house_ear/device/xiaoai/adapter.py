@@ -35,8 +35,15 @@ from ...config.schema import CaptureConfig, DeviceConfig, VoiceConfig
 from ...trace import now_ms
 from ..contract import AudioFrame, Capability, DeviceAdapter, DeviceInfo, Transport
 from . import protocol
+from .led import LedRing
 
 log = logging.getLogger(__name__)
+
+def _rgb(value: str) -> tuple[int, int, int]:
+    """`#RRGGBB` from config to the tuple the ring wants."""
+    raw = value.lstrip("#")
+    return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+
 
 DEFAULT_LISTEN_PORT = 4412  # 4399/4400 belong to the old deployment
 PLAY_CHUNK_MS = 100
@@ -61,6 +68,13 @@ class XiaoaiAdapter(DeviceAdapter):
         from .services import XiaoaiServices
 
         self.services = XiaoaiServices(self)  # type: ignore[assignment]
+        self.led = LedRing(
+            self.services.shell,
+            colors={name: _rgb(value) for name, value in dev.led.colors.items()},
+            gain=dev.led.gain, night_factor=dev.led.night_factor,
+            night_start=dev.led.night_start, night_end=dev.led.night_end,
+            fade_ms=dev.led.fade_ms, enabled=dev.led.enabled,
+        )
         self.device_volume: int | None = None
         self.frames_received = 0
         self.frames_dropped = 0
@@ -82,7 +96,7 @@ class XiaoaiAdapter(DeviceAdapter):
             host=dev.host,
             room=dev.room,
             capabilities=frozenset(
-                {Capability.MIC_ARRAY, Capability.REFERENCE, Capability.PLAYBACK}
+                {Capability.MIC_ARRAY, Capability.REFERENCE, Capability.PLAYBACK, Capability.LED}
             ),
             transport=Transport.INBOUND,
             channels=capture.channels,
@@ -258,7 +272,15 @@ class XiaoaiAdapter(DeviceAdapter):
         self.device_volume = volume
 
     async def set_led(self, effect: str, color: str = "") -> None:
-        raise NotImplementedError("LED control lands with the device shell channel (S5)")
+        """Hand an effect to the ring. Synchronous inside: it schedules and returns.
+
+        The app names the wake effect "wake"; the ring plays its outward sweep for it and
+        records listening afterwards, because the script itself ends on the green.
+        """
+        if effect == "wake":
+            self.led.wake_ring()
+        else:
+            self.led.set_state(effect)
 
     # -------------------------------------------------------------------- inbound
     async def _handle(self, conn: ServerConnection) -> None:

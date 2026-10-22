@@ -22,7 +22,7 @@ from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
 from ...audio.kws import keyword_meta
 from ...audio.protocol import PlayFile, StopAudio
-from ...config.schema import CONFIG_VERSION, Config
+from ...config.schema import CONFIG_VERSION, LED_STATES, Config
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
@@ -528,6 +528,19 @@ def create_app(
             "stages": result.stages,
             "audio_bytes": result.audio_bytes,
         }
+
+    @app.post("/api/v1/debug/led", dependencies=[Depends(auth)])
+    async def debug_led(patch: Annotated[dict, Body()]) -> dict:
+        """Paint the ring directly. The only way to check colours without waking the box."""
+        effect = str(patch.get("effect") or "")
+        if effect not in LED_STATES:
+            raise HTTPException(status_code=422, detail=f"effect must be one of {list(LED_STATES)}")
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if client is None:
+            raise HTTPException(status_code=409, detail="no audio plane connected")
+        await client.set_led(effect)
+        return {"effect": effect}
 
     @app.get("/api/v1/voice/threshold", dependencies=[Depends(auth)])
     async def voice_threshold() -> dict:
