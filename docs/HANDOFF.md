@@ -297,7 +297,19 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   的 `voice.device_host/device_ssh`，自带 ControlMaster 防 dropbear 限流）；客户端日志 `/tmp/client.log`。
 - **B2 第一阶段（19:52–19:54，真机）**：① 端点 600 ms 整句保留（1 样本）✅；② 连续追问+灯效 ✅；
   ③ 厂家让位 ❌→修复 `3b4648e`→**复验 ✅（见上）**。
-- **下一步**：B2 第二阶段放歌打断+220 档远处唤醒
-  （`POST /api/v1/debug/play` `{"file": "~/.hermes/cache/scratch/music-test.wav", "loop": true}`，
-  音量已 220；放歌期间日志应出现 `follow-up gate stays shut: music owns the speaker`，歌词不进
-  ASR）→ 五个数各一行写回 ROADMAP/HANDOFF → C1 冷装 → D1 音乐。
+- **B2 第二阶段首轮（20:53–20:56，失败→已修 `2bfd356` 待复验）**：放歌循环期间 4 次唤醒全部
+  「只响提示音、音乐不停、听不到说话」。链条：唤醒暂停音乐 ✓ → speak_loop 空队列 tick 0.5 s 一跳
+  把「队列空」当「说完」→ **0.4 s 后音乐复播**压住用户说话 → 复播的 `_play_file` 又 disarm 了
+  唤醒刚 arm 的 gate → 小瑞变聋。修复照老项目 `MusicPlayer` 语义（`assistant_v3.py:1690-2200`）：
+  **歌等完整个 turn**——只有 gate 关了才续（回复播完，或 no-speech 超时 disarm，即老项目
+  `vendor_silence_watchdog` 的角色）；另 `_pause_for_speech` 幂等（双重 pause 曾把位置 5.5→4.9 s
+  回退两次）。**复验判据**：放歌中唤醒 → 音乐停、提示音、说话有 [seg]、答完音乐自动续；不说话
+  则 15 s 后音乐自动续。
+- **老项目音乐打断体系（9哥 指路，已核）**：`pause(for_speech)` 说话压低+对话完续 / `paused_by_barge`
+  键打断不自动续 / 静默看门狗 4 s / 帧循环与 `speech_task` 分离否则 KWS 不跑（老 HANDOFF:254，我们
+  已对）/ CREDIT 拉模式（已抄）/ 「全音量下只有厂家 AEC 听得清人声，小爱同学是打断音乐的方式」——
+  我们 KWS 在 220 档 4/4 命中（probe -10~-15 dBFS），比老项目强，但人声段 VAD/ASR 质量以复验为准。
+- **下一步**：9哥 复测放歌打断（判据见上）→ 3-4 米远处唤醒（`POST /api/v1/debug/play`
+  `{"file": "<home>/.hermes/cache/scratch/music-test.wav", "loop": true}` **注意绝对路径，
+  接口不展开 `~`**）→ 五个数各一行写回 ROADMAP/HANDOFF → C1 冷装 → D1 音乐。长文本/新闻打断
+  机制上已具备（speech 独立 task + barge 20:50:08 实测），随 D1 一并真机验。
