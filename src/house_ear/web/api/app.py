@@ -121,14 +121,13 @@ def _music_sender(app: FastAPI):
 
 
 async def _never_sender(_msg: object) -> None:
-    """Placeholder until the app exists; replaced by `_music_sender` two lines after
+    """Placeholder until the app exists; replaced by `_music_sender` right after
     FastAPI() is built. A call before that would be a wiring bug worth an exception."""
 
     class _NotWired(RuntimeError):
         pass
 
     raise _NotWired("music sender used before the app was built")
-
 
 def create_app(
     cfg: Config,
@@ -155,7 +154,7 @@ def create_app(
         )
         history = PlayHistory(
             Path(cfg.system.data_dir) / "music_history.json", keep=cfg.music.history_max)
-        music_service = MusicService(source, history, _never_sender(), cfg.music)
+        music_service = MusicService(source, history, _never_sender, cfg.music)
         for spec, handler in build_music_tools(cfg, music_service):
             registry.register(spec)
             local_tools.append((spec, handler))
