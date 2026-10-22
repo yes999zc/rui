@@ -1,11 +1,21 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, type AudioStatus, type DoctorReport } from '../api'
 
 const report = ref<DoctorReport | null>(null)
 const audio = ref<AudioStatus | null>(null)
 const busy = ref(false)
 const error = ref('')
+
+/**
+ * The buffer lead is only meaningful while something is playing: the plane reports 0 when
+ * idle, so a bare `0 < 150` test would paint an idle speaker as a fault. Warn only when
+ * audio is actually flowing and the lead has collapsed below ~half the 300 ms target.
+ */
+const leadThin = computed(() => {
+  const m = audio.value?.metrics
+  return !!m && m.playback_lead_ms > 0 && m.playback_lead_ms < 150
+})
 
 async function run() {
   busy.value = true
@@ -54,6 +64,32 @@ onMounted(run)
       </span>
     </div>
     <template v-if="audio.metrics">
+      <div class="row">
+        <span class="k">唤醒引擎</span>
+        <span class="v" :class="audio.metrics.kws_enabled ? 'ok' : 'fail'">
+          {{ audio.metrics.kws_enabled ? '已加载' : '未加载' }}
+          <span v-if="!audio.metrics.kws_enabled && audio.metrics.kws_error" class="tag">
+            {{ audio.metrics.kws_error }}
+          </span>
+        </span>
+      </div>
+      <div class="row"><span class="k">已成段</span>
+        <span class="v">{{ audio.metrics.utterances }} 段 <span class="tag">唤醒之后才算</span></span>
+      </div>
+      <div class="row"><span class="k">唤醒后丢弃的段</span>
+        <span class="v">{{ audio.metrics.gate_discarded }} 段 <span class="tag">没人说话 / 说话太短</span></span>
+      </div>
+      <div class="row"><span class="k">应答被跳过</span>
+        <span class="v">{{ audio.metrics.ack_skipped }} 次 <span class="tag">上一次应答没播完又唤醒了</span></span>
+      </div>
+      <div class="row">
+        <span class="k">播放缓冲余量</span>
+        <span class="v" :class="leadThin ? 'warn' : ''">
+          {{ audio.metrics.playback_lead_ms }} ms
+          <span v-if="leadThin" class="tag">缓冲见底</span>
+          <span v-else-if="audio.metrics.playback_lead_ms === 0" class="tag">空闲 / 未在播报</span>
+        </span>
+      </div>
       <div class="row"><span class="k">帧（进 / 出 / 丢）</span>
         <span class="v">{{ audio.metrics.frames_in }} / {{ audio.metrics.frames_out }} / {{ audio.metrics.frames_dropped }}</span>
       </div>
@@ -82,6 +118,11 @@ onMounted(run)
           {{ audio.metrics.speaker_connected ? '已连接' : '未连接' }}
         </span>
       </div>
+      <p class="note">
+        唤醒 → 成段 → 回合是三步，各有自己的计数器：唤醒引擎没加载时「已成段」永远是 0（上面那行会写原因）；
+        「唤醒后丢弃」说明叫醒了但没人说话或话太短。「播放缓冲余量」是说话人缓冲领先实时的时间，
+        播报时应稳定在 300–1000 ms，一直贴着 0 就是卡顿——空闲时报 0 属正常。
+      </p>
     </template>
   </div>
 

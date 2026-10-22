@@ -79,7 +79,7 @@ const sessionFields: Field[] = [
     max: 60,
     step: 0.5,
     unit: '秒',
-    hint: '音箱自己的助手答完之后，我们保持安静多久，免得抢话。老项目生产值 12 秒。',
+    hint: '音箱自己的助手答完之后，我们保持安静多久，免得抢话。老项目生产值 12 秒。注意：这个值在控制面启动时读取，保存后要重启服务才生效；上面 assistant 的字段下一回合就生效。',
   },
   {
     key: 'history_rounds',
@@ -271,6 +271,7 @@ onMounted(load)
   <h1>助手</h1>
   <p class="sub">
     它是谁、能说多长、记多少轮。这些字段写进 <code>assistant.*</code> 与 <code>session.*</code>，保存后下一回合生效，不用重启。
+    <code>vendor_quiet_s</code> 是例外：静默窗口在控制面启动时读取，改完要重启才生效。
   </p>
 
   <p v-if="loading" class="empty">读取配置…</p>

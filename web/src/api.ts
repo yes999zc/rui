@@ -126,6 +126,20 @@ export interface AudioMetrics {
   aec_channel: number
   ref_active: boolean
   speaker_connected: boolean
+  /** False means the wake model never loaded: `kws_error` says why, wake_count is 0. */
+  kws_enabled: boolean
+  kws_error: string
+  /** Segments handed to the control plane. A wake is not yet a segment. */
+  utterances: number
+  /** Wakes that ended with no segment: nobody spoke, or the speech was too short. */
+  gate_discarded: number
+  /** Cues cancelled because a new wake arrived before the previous one finished. */
+  ack_skipped: number
+  /**
+   * How far ahead of real time the speaker's buffer is being fed. The speak loop
+   * targets 300 ms and caps at 1000 ms; 0 while idle, near-zero while talking = underrun.
+   */
+  playback_lead_ms: number
   playback_s: number
   frames_in: number
   frames_out: number
@@ -162,7 +176,16 @@ export interface Capture {
 export interface Voice {
   rate: number
   frame_ms: number
+  /**
+   * In the schema and returned by the API, but read by nothing at runtime: the real
+   * threshold is the `#0.20` suffix inside the keywords file. Kept typed so the console
+   * can name it in a note instead of silently pretending it is a control.
+   */
   kws_threshold: number
+  kws_enabled: boolean
+  kws_model_dir: string
+  /** Empty means `<kws_model_dir>/keywords.txt`; the file's contents are not exposed. */
+  kws_keywords_file: string
   vad_min_speech_ms: number
   vad_end_silence_ms: number
   barge_in: boolean
