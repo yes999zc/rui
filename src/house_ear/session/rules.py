@@ -127,6 +127,15 @@ class SpokenMemory:
         del self._spoken[: -self.MAX_ITEMS]
 
     def is_echo(self, transcript: str, now: float | None = None) -> bool:
+        """True when the transcript is something we said within the window.
+
+        Exact and containment cover a clean hearing and a fragment of it. The fuzzy pass
+        covers the ASR slip that let the 2026-10-22 20:16 self-talk through: the spoken
+        「…我先下啦」 came back as 「…我先下吧」 - one tone apart, no shared substring.
+        The 0.75 tolerance is the stop-word one (`stop_intent`): one slip in four
+        characters, two in eight. A real question about the answer ("明天呢") sits far
+        below it.
+        """
         t = normalize(transcript)
         if not t:
             return False
@@ -137,6 +146,8 @@ class SpokenMemory:
             if t == said:
                 return True
             if len(t) >= 3 and (t in said or said in t):
+                return True
+            if len(t) >= 4 and difflib.SequenceMatcher(None, t, said).ratio() >= 0.75:
                 return True
         return False
 

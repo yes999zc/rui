@@ -738,6 +738,9 @@ class AudioPlane:
         adapter = self.adapter
         if adapter is None:
             return
+        # A song asked for while a follow-up window is open would hand its lyrics to the
+        # gate as the next request - same hole as the farewell, without the race.
+        self._disarm_gate_for_our_audio()
         if offset:
             offset = int(min(max(offset, 0), max(audio.size - 1, 0)))
             audio = audio[offset:]
@@ -892,6 +895,9 @@ class AudioPlane:
                 audio = fade_in(audio, target)
                 if not self._reply_open:
                     self._reply_open = True
+                    # Whatever we are about to sound - an answer, the farewell, a reminder -
+                    # must close a gate the previous turn left open (see below).
+                    self._disarm_gate_for_our_audio()
                     # Open a fresh player for every reply, as the old build does (one Sink
                     # per speak_stream). A kept-alive aplay underruns during the silence
                     # before an answer - measured on the device: "underrun!!! (at least
@@ -950,10 +956,32 @@ class AudioPlane:
         except asyncio.CancelledError:
             raise
         gate = self.gate
+        if self._owner is not None:
+            # A song resumed behind the reply, or a reminder took the line: the follow-up
+            # window must not open over our own audio, or its lyrics become the next
+            # request. The wake word is the way in while anything owns the speaker.
+            log.info("follow-up gate stays shut: %s owns the speaker", self._owner)
+            return
         if gate is not None and not gate.armed and not self._stop.is_set():
             log.info("follow-up gate open (%.1f s after the last block)", delay)
             gate.arm(followup=True,
                      max_wait_ms=int(self.cfg.session.timeout_s * 1000) or None)
+
+    def _disarm_gate_for_our_audio(self) -> None:
+        """Our own playback closes an armed follow-up gate.
+
+        The delayed re-arm in `_speak_loop` protects the window a reply *opens*; it says
+        nothing about the window the *previous* reply left open when a farewell or a
+        reminder starts sounding 15 s later. Measured 2026-10-22 20:16: the goodbye's
+        echo survived the AEC residual, VAD closed a segment on it, ASR heard it as
+        「没事的话，我先下吧。」 and the model answered its own farewell. Disarm rather
+        than hold: a held gate replays its buffer when it lifts, and the newest 600 ms of
+        a two-second goodbye is still our voice.
+        """
+        gate = self.gate
+        if gate is not None and gate.armed:
+            gate.disarm()
+            log.info("gate: disarmed, our own audio is about to sound")
 
     async def _apply_led(self, effect: str, repaint: bool = False) -> None:
         adapter = self.adapter

@@ -138,6 +138,13 @@ def test_what_we_just_said_cannot_become_a_turn() -> None:
     m.remember("沈阳今天晴，气温1到15度，降水概率是零，不会下雨。")
     assert m.is_echo("沈阳今天晴，气温1到15度降。")   # the device log, verbatim
     assert m.is_echo("降水概率是零不会下雨")           # a fragment is still ours
+
+    # 2026-10-22 20:16: the farewell's own echo, one tone-slip away from the spoken line
+    m.remember("没事的话，我先下啦。")
+    assert m.is_echo("没事的话，我先下吧。")
+    # a real question about a fresh topic is not an echo, fuzzy pass included
+    assert not m.is_echo("明天天气怎么样")
+
     # the window closes: a person asking about the answer is not an echo
     import time as _time
 
