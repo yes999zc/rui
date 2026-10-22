@@ -125,6 +125,7 @@ class Metrics(BaseModel):
     # that collapses) is what an underrun looks like from here; the speak loop aims for
     # PREBUFFER_S of lead and never more than MAX_LEAD_S.
     playback_lead_ms: float = 0.0
+    barge_count: int = 0
     # Wake acknowledgement (S5a). `ack_mode` is what actually played, not what was asked.
     ack_mode: str = ""
     ack_attempts: int = 0
@@ -156,6 +157,11 @@ class Wake(BaseModel):
     erle_db: float | None = None
     ref_active: bool = False
     playback_s: float = 0.0
+    # True when this wake stopped audio that was still coming out of the speaker.
+    # The control plane must then drop the rest of the answer it was synthesising:
+    # without it the flushed queue refills and the speaker talks over the new turn.
+    barge: bool = False
+    barged_s: float = 0.0
     # Levels at the hit. Pydantic drops unknown fields silently, so these used to be
     # built in the plane and then vanish on the wire - the console showed nothing.
     voice_rms_db: float | None = None

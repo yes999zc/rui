@@ -194,6 +194,11 @@ class TurnRunner:
         # Empty means "not ready yet" and the filler falls back to synthesising on the
         # spot - the old behaviour, 0.5-0.9 s slower.
         self.filler_pcm = filler_pcm
+        # Set when the speaker reports a barge-in: the user said the wake word while we
+        # were still talking, so the rest of this answer must not be spoken. Checked
+        # between sentences and between TTS chunks - the plane has already dropped what
+        # it had queued, and pushing more would talk over the new turn.
+        self._abort = asyncio.Event()
         self.tool_timeout_s = tool_timeout_s
         # A turn that hangs is worse than a turn that fails: the speaker is left waiting and
         # the session says nothing. The old build wrapped it in wait_for(30) for that reason.
@@ -214,6 +219,10 @@ class TurnRunner:
         if self.system_prompt is not None:
             return self.system_prompt
         return prompts.build(self.assistant, tools_ok=bool(self.tools))
+
+    def abort(self) -> None:
+        """Stop speaking the current answer (barge-in)."""
+        self._abort.set()
 
     async def warm(self) -> None:
         """Load what the first turn would otherwise load on its own.
@@ -313,6 +322,8 @@ class TurnRunner:
                 # the vendor keeps a half-read request open and the next turn queues behind it
                 async with contextlib.aclosing(provider.synthesize(text, "")) as stream:
                     async for chunk in stream:
+                        if self._abort.is_set():
+                            return name, spoken, None, ""
                         if not chunk:
                             continue
                         if spoken == 0:
@@ -347,6 +358,7 @@ class TurnRunner:
         twice and eat the whole budget.
         """
         try:
+            self._abort.clear()
             self._in_turn = True
             return await asyncio.wait_for(
                 self._run(pcm, speak, trace, transcript=transcript), self.turn_timeout_s
@@ -526,6 +538,10 @@ class TurnRunner:
                     item = await queue.get()
                     if item is None:
                         return
+                    if self._abort.is_set():
+                        # Barge-in: keep draining so the producer is never blocked, but
+                        # say nothing more.
+                        continue
                     await say(item)
 
             worker = asyncio.create_task(speak_worker(), name="tts")
@@ -533,6 +549,8 @@ class TurnRunner:
                 for sentence in ingest(first):
                     queue.put_nowait(sentence)
                 async for chunk in stream:
+                    if self._abort.is_set():
+                        break
                     for sentence in ingest(chunk):
                         queue.put_nowait(sentence)
                 tail = sanitize_spoken(buffer) if buffer.strip() else ""

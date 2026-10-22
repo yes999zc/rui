@@ -71,9 +71,9 @@ PLAY_CHUNK_MS = 100
 # So: hand it PREBUFFER_S of audio up front, keep writing CATCHUP faster than real time
 # so the lead can only grow, and clamp so a long answer never runs a second ahead (a
 # barge-in would then take that long to be heard).
-PREBUFFER_S = 0.30
+PREBUFFER_S = 0.20
 CATCHUP = 1.02
-MAX_LEAD_S = 1.00
+MAX_LEAD_S = 0.35
 # A producer that ignores SpeakFinished cannot grow the queue without bound.
 MAX_SPEAK_QUEUE_S = 120.0
 
@@ -157,6 +157,8 @@ class AudioPlane:
         self.ref_rms_db: float | None = None
         self.playback_s = 0.0
         self.playback_lead_s = 0.0
+        self.barges = 0
+        self.last_barge_s = 0.0
         self.playback_path = ""
         self.last_playback_error = ""
         self._playback_task: asyncio.Task | None = None
@@ -350,6 +352,19 @@ class AudioPlane:
         long the gate must stay shut; the pre-wake ring is replayed before the hold starts
         because it is the user's own speech, captured before the microphone went quiet.
         """
+        # Barge-in first: a wake while the speaker is still talking means "stop".
+        # Everything already handed to the device (up to MAX_LEAD_S) cannot be recalled,
+        # and the client's own ALSA buffer sits behind that - the old build measured the
+        # same lag and hard-coded it as PLAY_LAG_SECONDS = 0.55.
+        barged = self._speak_queued_s > 0.0 or self._playback_active()
+        barged_s = self._speak_queued_s
+        if barged:
+            self.barges += 1
+            self.last_barge_s = barged_s
+            log.info("barge: %d wake during playback, dropped %.1f s queued", self.barges, barged_s)
+            self._flush_speech()
+            await self._stop_playback()
+
         audio, mode, note = render_ack(self.cfg)
         self.ack_mode_effective = mode
         # Cleared on success: an error that sticks forever makes the console report a
@@ -371,6 +386,8 @@ class AudioPlane:
             voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
             ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
             ack_mode=mode,
+            barge=barged,
+            barged_s=round(barged_s, 2),
         )
         self.last_wake = event
 
@@ -588,6 +605,12 @@ class AudioPlane:
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
 
+    def _playback_active(self) -> bool:
+        for task in (self._playback_task, self._ack_task):
+            if task is not None and not task.done():
+                return True
+        return False
+
     def _flush_speech(self) -> None:
         self._speak_queued_s = 0.0
         while not self._speak_queue.empty():
@@ -635,6 +658,7 @@ class AudioPlane:
             else False,
             playback_s=round(self.playback_s, 1),
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
+            barge_count=self.barges,
             ack_mode=self.ack_mode_effective,
             ack_attempts=self.ack_attempts,
             ack_plays=self.ack_plays,

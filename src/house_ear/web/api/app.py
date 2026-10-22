@@ -171,7 +171,17 @@ def create_app(
 
                 client.on_utterance = on_utterance
                 client.on_vendor = vendor.vendor_spoke
-                client.on_wake = lambda _msg: vendor.ours_spoke()
+                def on_wake(msg: object) -> None:
+                    vendor.ours_spoke()
+                    if getattr(msg, "barge", False):
+                        # The plane already stopped the speaker and dropped its queue;
+                        # this stops the answer that is still being synthesised from
+                        # refilling it.
+                        log.info("barge-in: %.1f s of queued speech dropped",
+                                 getattr(msg, "barged_s", 0.0))
+                        runner.abort()
+
+                client.on_wake = on_wake
         # The cue is rendered *after* the plane is up and in the background: it is a nicety,
         # and a vendor that hangs must not delay /health or the speaker's reconnect. The
         # plane re-reads ack.wav on every wake, so a file that lands a second later is
