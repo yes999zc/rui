@@ -153,7 +153,10 @@ class AckConfig(BaseModel):
     text: str = "我在。"
     chime: str = "soft2"
     # 0 = the preset's natural length (soft2 500 ms, woodblock 120, windchime 700).
-    chime_ms: int = Field(default=160, ge=0, le=1200)
+    # 320 ms, not 160: the client fills a 300 ms buffer before it starts playing, so a
+    # shorter cue sat silent until the reply arrived and then played together with it
+    # (heard on the real speaker, 2026-10-22). The old build shipped 500 ms.
+    chime_ms: int = Field(default=320, ge=0, le=1200)
     # The floor is 0.5, as in the old console: 0 would be a silent cue that still reports
     # "earcon", which reads as a dead speaker rather than a typo.
     chime_trim: float = Field(default=1.0, ge=0.5, le=1.0)

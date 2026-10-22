@@ -36,10 +36,14 @@ def tone_wav(path: Path, seconds: float, rate: int = 16000) -> None:
 
 
 # ----------------------------------------------------------------------- the cue
-def test_default_cue_is_160_ms_at_the_playback_rate() -> None:
+def test_the_cue_is_long_enough_for_the_device_to_start_playing() -> None:
+    """160 ms did not fill the client's 300 ms buffer: it sat silent, then came out
+    together with the answer (heard on the real speaker, 2026-10-22)."""
     audio = chime.render(rate=48000)
     assert audio.dtype == np.float32
-    assert audio.size / 48000 == pytest.approx(0.160, abs=0.005)
+    seconds = audio.size / 48000
+    assert audio.size / 48000 == pytest.approx(Config().ack.chime_ms / 1000, abs=0.005)
+    assert seconds >= 0.30, "shorter than the client's start threshold"
     # normalised to the level that sits below the knee of the device playback path
     assert float(np.max(np.abs(audio))) == pytest.approx(chime.PEAK, rel=0.01)
     # a second render is identical: no noise, no RNG, no drift between wakes
@@ -81,7 +85,7 @@ def test_missing_spoken_cue_falls_back_to_the_tone(tmp_path: Path) -> None:
     audio, mode, note = ack.render(cfg)
     assert mode == "earcon"
     assert "unreadable" in note
-    assert audio.size / cfg.audio.playback.rate == pytest.approx(0.160, abs=0.01)
+    assert audio.size / cfg.audio.playback.rate == pytest.approx(cfg.ack.chime_ms / 1000, abs=0.01)
 
 
 def test_oversized_spoken_cue_is_refused(tmp_path: Path) -> None:
@@ -94,7 +98,7 @@ def test_oversized_spoken_cue_is_refused(tmp_path: Path) -> None:
     audio, mode, note = ack.render(cfg)
     assert mode == "earcon"
     assert "over the 600 ms cap" in note
-    assert audio.size / cfg.audio.playback.rate == pytest.approx(0.160, abs=0.01)
+    assert audio.size / cfg.audio.playback.rate == pytest.approx(cfg.ack.chime_ms / 1000, abs=0.01)
 
 
 def test_spoken_cue_within_the_cap_is_resampled_to_the_playback_rate(tmp_path: Path) -> None:
@@ -253,7 +257,8 @@ def test_wake_replays_the_preroll_then_holds() -> None:
         assert plane.preroll_replayed_ms == pytest.approx(100.0, abs=1.0)
         # The tone itself plus the tail floor: the device's own buffer keeps sounding for
         # ~300 ms after the last frame, so holding for exactly cue_ms opens the gate early.
-        assert gate.holds and gate.holds[0] == pytest.approx(160 + 250, abs=10)
+        cue_ms = plane.cfg.ack.chime_ms
+        assert gate.holds and gate.holds[0] == pytest.approx(cue_ms + 250, abs=10)
         assert writer.written  # the wake event reached the control plane
         await asyncio.sleep(0.05)  # let the cue task run
         assert adapter.calls and adapter.calls[0][1] == plane.cfg.audio.playback.rate

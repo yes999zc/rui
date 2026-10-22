@@ -460,7 +460,6 @@ class AudioPlane:
             return
         rate = self.cfg.audio.playback.rate
         step = max(1, rate * PLAY_CHUNK_MS // 1000)
-        due = time.monotonic()
         try:
             for start in range(0, audio.size, step):
                 chunk = audio[start : start + step]
@@ -472,10 +471,10 @@ class AudioPlane:
                     channels=1,
                 )
                 self.playback_s += chunk.size / rate
-                # Absolute deadline, so the time spent sending is absorbed instead of
-                # added to every chunk.
-                due += chunk.size / rate
-                await asyncio.sleep(max(0.0, due - time.monotonic()))
+            # No pacing. A cue is 320 ms and exists to be heard *now*: paced at real time
+            # it took 320 ms to arrive, and while the device's buffer was under its 300 ms
+            # start threshold it stayed silent - then came out together with the answer
+            # (2026-10-22). Bursting fills the buffer in milliseconds.
             self.ack_plays += 1
         except asyncio.CancelledError:
             raise

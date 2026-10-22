@@ -24,9 +24,14 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-PEAK = 0.05          # digital peak every preset is normalised to
+# Digital peak every preset is normalised to. 0.05 was inherited from the old build, where
+# it sat under a playback path with its own gain; here the cue goes out beside full-scale
+# TTS audio, and 9哥 heard it as "too quiet" (2026-10-22). 0.12 is just under the 0.14
+# knee the old build measured, so it is ~7.6 dB louder without touching the saturation
+# the speaker already showed above it.
+PEAK = 0.12
 MAX_TRIM = 1.0       # never above PEAK: the playback path saturates past ~0.14
-DEFAULT_MS = 160     # the default acknowledgement length
+DEFAULT_MS = 320     # the shipped length: see AckConfig.chime_ms for why
 
 
 @dataclass(frozen=True)
