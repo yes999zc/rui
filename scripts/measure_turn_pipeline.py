@@ -107,7 +107,7 @@ def free_port() -> int:
 
 
 async def stream(ws, pcm: bytes, rate: int, block_ms: int, speed: float,
-                 watch=None) -> float | None:
+                 watch=None, state: dict | None = None) -> float | None:
     """Send blocks at device pace. `watch()` is polled after each block; the elapsed time
     of the first truthy answer is returned (used to time the KWS hit).
 
@@ -124,15 +124,20 @@ async def stream(ws, pcm: bytes, rate: int, block_ms: int, speed: float,
             print(f"!! record frame {sent} blocked >2 s: the plane stopped reading", flush=True)
             raise
         sent += 1
+        if state is not None:
+            state["frames_sent"] = state.get("frames_sent", 0) + 1
         await asyncio.sleep(block_ms / 1000.0 / speed)
         if watch is not None and hit_at is None and watch():
             hit_at = time.monotonic() - started
     return hit_at
 
 
-async def silence(ws, ms: int, block_ms: int, speed: float = 1.0) -> None:
+async def silence(ws, ms: int, block_ms: int, speed: float = 1.0,
+                  state: dict | None = None) -> None:
     for _ in range(max(1, ms // block_ms)):
         await ws.send(protocol.stream("record", to_device_block(np.zeros(block_ms * 16, dtype="<i2"))))
+        if state is not None:
+            state["frames_sent"] = state.get("frames_sent", 0) + 1
         await asyncio.sleep(block_ms / 1000.0 / speed)
 
 
@@ -175,6 +180,7 @@ async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, ta
                      turn_done=None, reader: asyncio.Task | None = None,
                      state: dict | None = None) -> dict:
     started = time.monotonic()
+    entry_frames = state.get("frames_sent", 0) if state else 0
     own_reader = reader is None
     if own_reader:
         state = {}
@@ -187,14 +193,21 @@ async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, ta
         assert state is not None
     baseline = wake_counter() if wake_counter else 0
     watch = (lambda: wake_counter() > baseline) if wake_counter else None
-    hit_after_wake = await stream(ws, wake, rate, 60, speed=speed, watch=watch)
-    await silence(ws, gap_ms, 60, speed=speed)
-    if hit_after_wake is None:
-        hit_after_wake = await stream(ws, command, rate, 60, speed=speed, watch=watch)
-        if hit_after_wake is not None:
-            hit_after_wake += len(wake) / 2 / rate + gap_ms / 1000.0
+    hit_after_wake = await stream(ws, wake, rate, 60, speed=speed, watch=watch, state=state)
+    await silence(ws, gap_ms, 60, speed=speed, state=state)
+    # The request is always spoken, hit or no hit yet: a person does not stop talking
+    # because the keyword spotter was quick. Skipping it when the hit landed inside the
+    # wake clip meant the request never reached the microphone at all, and the gate
+    # correctly produced no turn - which read as "only the first round ever lands".
+    command_hit = await stream(ws, command, rate, 60, speed=speed, watch=watch, state=state)
+    if hit_after_wake is None and command_hit is not None:
+        hit_after_wake = command_hit + len(wake) / 2 / rate + gap_ms / 1000.0
+    print(f"   [round] wake_clip={len(frames(wake, 60))} gap={max(1, gap_ms // 60)} "
+          f"cmd_clip={len(frames(command, 60))} tail={max(1, tail_ms // 60)} "
+          f"hit={'yes' if hit_after_wake is not None else 'NO'} "
+          f"wake_counter={wake_counter() if wake_counter else '-'}", flush=True)
     if hit_after_wake is not None:
-        await silence(ws, tail_ms, 60, speed=speed)
+        await silence(ws, tail_ms, 60, speed=speed, state=state)
 
     # Wait for the turn to land, then give the reply a moment to start arriving.
     deadline = time.monotonic() + wait_s
@@ -207,7 +220,9 @@ async def play_round(ws, wake: bytes, command: bytes, rate: int, gap_ms: int, ta
         reader.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await reader
+    print(f"   [sent] this round = {state.get('frames_sent', 0) - entry_frames}", flush=True)
     return {
+        "frames_sent": state.get("frames_sent", 0),
         "audio_bytes": state.get("audio_bytes", 0),
         "wall_s": round(time.monotonic() - started, 1),
         # Wall-clock elapsed scaled back to audio time: --speed changes the feed rate, and
@@ -313,6 +328,7 @@ async def run(args: argparse.Namespace) -> int:
                 for i in range(1, args.rounds + 1):
                     before = app.state.last_turn
                     audio_before = shared.get("audio_bytes", 0)
+                    frames_before = shared.get("frames_sent", 0)
                     round_info = await play_round(
                         ws, wake, command, rate, args.gap_ms, args.tail_ms, args.wait_s,
                         speed=args.speed,
@@ -342,6 +358,13 @@ async def run(args: argparse.Namespace) -> int:
                         "gate_discarded": getattr(metrics, "gate_discarded", None),
                         "reply": turn.get("reply", ""),
                         "error": turn.get("error", ""),
+                        "frames_sent": max(0, round_info["frames_sent"] - frames_before),
+                        "client_wakes": getattr(supervisor.client, "wakes", None)
+                        if supervisor is not None and supervisor.client is not None else None,
+                        "client_voice_frames": getattr(supervisor.client, "voice_frames", None)
+                        if supervisor is not None and supervisor.client is not None else None,
+                        "client_id": id(supervisor.client)
+                        if supervisor is not None and supervisor.client is not None else None,
                         "audio_bytes": max(0, round_info["audio_bytes"] - audio_before),
                         "wall_s": round_info["wall_s"],
                         "wake_lag_ms": round_info["wake_lag_ms"],
@@ -359,6 +382,8 @@ async def run(args: argparse.Namespace) -> int:
                           f"asr={row['stages_ms'].get('asr_done')} "
                           f"llm={row['stages_ms'].get('llm_first')} "
                           f"tts={row['stages_ms'].get('tts_first')} "
+                          f"frames={row['frames_sent']} wakes={row['client_wakes']} "
+                          f"voice={row['client_voice_frames']} "
                           f"audio={row['audio_bytes'] / 2 / play_rate:.1f}s "
                           f"| {row['transcript']} -> {row['reply'][:20]}", flush=True)
                     await asyncio.sleep(args.between)

@@ -140,15 +140,14 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
   所以它答「现在几点」不靠工具——house-ear 要不要照抄这条，S5e 接工具时一起定。
 - **`ack.mode: tts` 的文本级回声去重没移植**（老项目 `_is_ack_echo`）：默认是 160 ms 提示音，
   而语音应答实测整句被吞（0/20），所以现在没有可去重的回声；等 tts 应答重新启用时再移植。
-- **单连接多回合端到端跑不通（S5b 发现，且 pre-S5b 一样）**：`measure_turn_pipeline.py`
-  5 轮里只有第 1 轮真的落回合。证据（`~/.hermes/cache/scratch/house-ear-s5b/e2e-5b.log`）：
-  第 2–5 轮 KWS 都命中（lag 1.25–1.31 s）、提示音都播了（ack_plays 5）、gate 都 arm 了，
-  但 `utterances` 始终 =1；每次唤醒时音频面报 `wake while a turn was open: 900 ms discarded`，
-  整条连接 325 帧（每轮只送出 ~3.9 s）；且每轮之间隔 55 s（两处 `wait_s` 25 s 各超时一次）。
-  **A/B 结论**：`git stash` 回到 S5a 代码，同一条命令结果一模一样 —— 不是 S5b 引入的。
-  已排除：harness 轮间不读 socket（已改成整段一个 reader，结果不变）、音频面日志缺失（已修）。
-  下一步：给 harness 记每轮送帧/收帧数，重点查「回复播放期间设备侧读取是否被拖住」。
-  **S5c（超时/告别/filler）与 S5e（打断/工具）的多轮验收都依赖它，先修再往下走。**
+- ~~单连接多回合端到端跑不通~~ **已修（2026-10-22 10:3x，根因在测量器，不在产品）**：
+  `measure_turn_pipeline.py` 只在「唤醒词音频播完还没命中 KWS」时才送命令音频；一旦 KWS 报得早
+  （命中落在唤醒词片段内），命令就整段被跳过 —— 请求从没进过麦克风，gate 当然不交回合。
+  症状伪装成产品故障：第 2 轮起 `utterances` 不涨、每轮只送 59 帧（21 唤醒 + 8 间隔 + 30 尾静音，
+  正常是 89）、每次唤醒都报 `wake while a turn was open`。真人不会因为 KWS 快就不说话，所以改成
+  「唤醒词 + 间隔 + 命令 + 尾静音」永远照发。修完 3 轮 3 个回合、每轮 89 帧。
+  **教训**：A/B（`git stash` 回 S5a）早就证明不是我引入的，但那不等于「产品没问题」；
+  判断「是产品还是测量器」要看帧数在两侧是否一致（本次音频面收到 148 = 我送出 89+59，一帧没丢）。
 - **`system.log_level` 以前根本没生效**：没有一处调用 `logging.basicConfig`，音频面所有
   `log.info`（gate 放弃、utterance 丢弃、播放结束）全部不输出，控制面的 `turn:` 也没有。
   S5b 已加 `house_ear/log_setup.py` 并在 `serve` 与音频面进程里调用；同时把音频面的 stderr
@@ -168,8 +167,8 @@ MIT，私有仓 `yes999zc/house-ear`，本地 `~/AI_Workspace/01_Code/projects/h
    验收数字：同句 20 轮不相同率 **85–95%**（原 40–65%），最长一字不差 **1–2 轮**（原 8–12），
    编造数值 **0/20**，抱怨/威胁 **0**。数据与复现命令在 `docs/turn-quality.md`。
    **先决条件**：多回合端到端还没修（见 §6），S5b 用的是 `scripts/measure_reply_quality.py`。
-3. **S5c 会话控制**：停止词、超时、告别语、filler。验收：停止词生效、超时后告别、filler 只在超阈值出现。
-   **开工前先修 §6 的多回合端到端**，否则验收跑不起来。
+3. **S5c 会话控制**：停止词、超时、告别语、filler、短噪声不成轮。验收：停止词生效、超时后告别、
+   filler 只在超阈值出现、说「嗯。」不出回合。多回合端到端已修（§6），可以按 20 轮验收。
 4. **S5d 控制台补齐**：把旧项目 10 个分区的可配置项搬进六页 Vue，带恢复默认/备份/原子写。
 5. **S5e 打断 300 ms + 工具执行**：设备侧丢缓冲 + 停推；工具注册表接进回合
    （`weather`/`news`/`web_search` 直接借老项目的 schema 与 open-meteo，免 key）。

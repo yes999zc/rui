@@ -28,6 +28,7 @@ onMounted(async () => {
         <RouterLink to="/voice">语音</RouterLink>
         <RouterLink to="/models">模型</RouterLink>
         <RouterLink to="/tools">工具</RouterLink>
+        <RouterLink to="/secrets">密钥</RouterLink>
         <RouterLink to="/health">体检</RouterLink>
         <RouterLink to="/logs">日志</RouterLink>
       </nav>

@@ -349,8 +349,12 @@ class AudioPlane:
             try:
                 writer.write(encode_json(event))
                 await writer.drain()
+                log.debug("wake event sent to the control plane")
             except (ConnectionResetError, BrokenPipeError):
+                log.warning("wake event NOT sent: the control plane socket is gone")
                 connected.clear()
+        else:
+            log.warning("wake event NOT sent: no control plane connected")
 
     async def _feed_gate(
         self, pcm: bytes, ts_ms: float, writer: asyncio.StreamWriter, connected: asyncio.Event
@@ -425,7 +429,8 @@ class AudioPlane:
             self.cpu_s += time.perf_counter() - t0
             try:
                 await writer.drain()
-            except (ConnectionResetError, BrokenPipeError):
+            except (ConnectionResetError, BrokenPipeError) as exc:
+                log.warning("voice pump stopped: %s", exc)
                 connected.clear()
                 return
 

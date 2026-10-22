@@ -205,6 +205,29 @@ export type ConfigPatch = {
   session?: Record<string, string | number | boolean | null>
 }
 
+/**
+ * `tools.search` — the one key slot a person actually types in.
+ *
+ * `has_key` is computed server-side from the environment *or* `secrets.yaml`; it is the only
+ * thing the console ever learns about a key. No endpoint returns a value.
+ */
+export interface SearchConfig {
+  api_key_env: string
+  has_key?: boolean
+  [k: string]: unknown
+}
+
+/** What `GET /api/v1/secrets` says: names that hold a value on the server's disk. */
+export interface SecretNames {
+  names: string[]
+}
+
+/** What `POST /api/v1/secrets` answers. Echoes the name, never the value. */
+export interface SecretPutResult {
+  name: string
+  has_key: boolean
+}
+
 export interface Config {
   version: number
   assistant: AssistantConfig
@@ -223,7 +246,12 @@ export interface Config {
     tts: { chain: string[] }
     llm: { chain: string[] }
   }
-  tools: { expose: string; whitelist: string[]; mcp_servers: { name: string; transport: string; url: string }[] }
+  tools: {
+    expose: string
+    whitelist: string[]
+    mcp_servers: { name: string; transport: string; url: string }[]
+    search?: SearchConfig
+  }
 }
 
 export const api = {
@@ -244,5 +272,15 @@ export const api = {
     request<Config>('/api/v1/config', { method: 'PUT', body: JSON.stringify(patch) }),
   devices: () => request<Device[]>('/api/v1/devices'),
   tools: () => request<{ count: number; names: string[] }>('/api/v1/tools'),
+  /** Names that hold a value on the server. There is no read-back endpoint, by design. */
+  secrets: () => request<SecretNames>('/api/v1/secrets'),
+  /**
+   * Store one key, or delete it by sending an empty value.
+   *
+   * The value only ever travels one way. Callers must clear their own input afterwards and
+   * must not keep it in storage, a store, or a log line.
+   */
+  putSecret: (name: string, value: string) =>
+    request<SecretPutResult>('/api/v1/secrets', { method: 'POST', body: JSON.stringify({ name, value }) }),
   traces: () => request<{ limit: number; turns: unknown[] }>('/api/v1/traces'),
 }

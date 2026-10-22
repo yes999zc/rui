@@ -76,45 +76,64 @@ class AudioPlaneClient:
         return await read_frame(self.reader)
 
     async def pump(self) -> None:
-        """Consume everything the plane sends; latest metrics wins."""
+        """Consume everything the plane sends; latest metrics wins.
+
+        The loop is guarded because it is the only reader: if one message raises, the task
+        dies and every symptom afterwards looks like the plane went quiet - no wake
+        counter, no utterance, no reply - while the plane keeps running happily. That is
+        exactly what "only the first turn lands" looked like (2026-10-22).
+        """
         while True:
-            kind, payload = await self.read_frame()
-            if kind is FrameType.UTTERANCE_PCM:
-                _seq, _ts, pcm = decode_pcm(payload)
-                self.utterances += 1
-                self.last_utterance = pcm
-                if self.on_utterance is not None:
-                    # Keep a reference: the loop only holds these weakly, and a turn that
-                    # gets collected mid-flight shows up as "utterance counted, no reply".
-                    task = asyncio.create_task(self.on_utterance(pcm), name="turn")
-                    self._turns.add(task)
-                    task.add_done_callback(self._turns.discard)
+            try:
+                kind, payload = await self.read_frame()
+            except (asyncio.CancelledError, GeneratorExit):
+                raise
+            except Exception as exc:  # noqa: BLE001 - the socket is gone; say so
+                log.warning("audio plane reader stopped: %s: %s", type(exc).__name__, exc)
+                return
+            try:
+                self._dispatch(kind, payload)
+            except Exception:  # noqa: BLE001 - one bad message must not end the session
+                log.exception("audio plane message dropped (kind=%s)", kind)
                 continue
-            if kind is FrameType.VOICE_PCM:
-                self.voice_frames += 1
-                self.voice_bytes += max(0, len(payload) - 12)
-                self.last_voice_ms = now_ms()
-                if self.record_voice:
-                    self.voice_audio.extend(payload[12:])
-                continue
-            if kind is not FrameType.CONTROL:
-                continue
-            msg = CONTROL.validate_json(payload)
-            if isinstance(msg, Metrics):
-                self.metrics = msg
-                self._metrics_event.set()
-            elif isinstance(msg, Wake):
-                self.wakes += 1
-                self.last_wake = msg
-                if self.on_wake is not None:
-                    self.on_wake(msg)
-            elif isinstance(msg, VendorSignalMsg):
-                self.vendor_signals += 1
-                self.last_vendor = msg
-                if self.on_vendor is not None:
-                    self.on_vendor(msg.kind, msg.text)
-            elif isinstance(msg, Ready):
-                self.ready = msg
+
+    def _dispatch(self, kind: FrameType, payload: bytes) -> None:
+        if kind is FrameType.UTTERANCE_PCM:
+            _seq, _ts, pcm = decode_pcm(payload)
+            self.utterances += 1
+            self.last_utterance = pcm
+            if self.on_utterance is not None:
+                # Keep a reference: the loop only holds these weakly, and a turn that gets
+                # collected mid-flight shows up as "utterance counted, no reply".
+                task = asyncio.create_task(self.on_utterance(pcm), name="turn")
+                self._turns.add(task)
+                task.add_done_callback(self._turns.discard)
+            return
+        if kind is FrameType.VOICE_PCM:
+            self.voice_frames += 1
+            self.voice_bytes += max(0, len(payload) - 12)
+            self.last_voice_ms = now_ms()
+            if self.record_voice:
+                self.voice_audio.extend(payload[12:])
+            return
+        if kind is not FrameType.CONTROL:
+            return
+        msg = CONTROL.validate_json(payload)
+        if isinstance(msg, Metrics):
+            self.metrics = msg
+            self._metrics_event.set()
+        elif isinstance(msg, Wake):
+            self.wakes += 1
+            self.last_wake = msg
+            if self.on_wake is not None:
+                self.on_wake(msg)
+        elif isinstance(msg, VendorSignalMsg):
+            self.vendor_signals += 1
+            self.last_vendor = msg
+            if self.on_vendor is not None:
+                self.on_vendor(msg.kind, msg.text)
+        elif isinstance(msg, Ready):
+            self.ready = msg
 
     def start_pump(self) -> None:
         self._read_task = asyncio.create_task(self.pump(), name="audio-plane-read")
