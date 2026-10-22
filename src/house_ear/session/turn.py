@@ -691,7 +691,8 @@ class TurnRunner:
         return line
 
     async def check_idle(self, speak: Callable[[bytes], Awaitable[None]],
-                         trace: TurnTrace, *, now: float | None = None) -> str:
+                         trace: TurnTrace, *, now: float | None = None,
+                         busy: Callable[[], bool] | None = None) -> str:
         """Poll the idle window; say goodbye if it has just closed.
 
         The caller needs no timer of its own: call this from whatever loop already runs
@@ -700,8 +701,17 @@ class TurnRunner:
 
         A turn in flight is not idle, however long it takes: this is a poller and may run
         while `run()` is still awaiting a tool, so the goodbye waits for the answer.
+
+        Neither is a turn whose audio is still coming out of the speaker, and least of all
+        a song. The old deployment hit exactly this: a five-minute news read or a record
+        playing, nobody speaking, and 「我先下啦」 cutting in over it. `busy` is the
+        playback state, polled rather than inferred, and while it is true the window keeps
+        being pushed forward - so the countdown starts when the sound actually stops.
         """
         if self._in_turn:
+            return ""
+        if busy is not None and busy():
+            self.idle.touch()
             return ""
         if not self.idle.tick(now=now):
             return ""

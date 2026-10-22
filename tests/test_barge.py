@@ -94,11 +94,13 @@ def test_a_wake_in_silence_is_not_a_barge() -> None:
     assert wake["barge"] is False
 
 
-def test_the_lead_is_small_enough_for_300_ms_to_be_reachable() -> None:
-    # Everything already handed to the device has to play out; the old build measured
-    # its own lag as 0.55 s. Keeping our lead under 0.35 s leaves the device buffer as
-    # the only thing between a barge and silence.
+def test_the_lead_is_bounded_and_the_barge_flushes_the_device() -> None:
+    # The lead used to be kept under 0.35 s on the theory that it was barge latency, but
+    # it is not: stop_play makes the client drop what it holds (measured 420 ms end to
+    # end). The lead's job is the opposite - the client only opens its player at ~300 ms,
+    # and a 200 ms lead stuttered on the first word. So: fill past the start threshold,
+    # and keep the cap tight enough that a long answer never runs a second ahead.
     from house_ear.audio.process import MAX_LEAD_S, PREBUFFER_S
 
-    assert PREBUFFER_S <= 0.25
-    assert MAX_LEAD_S <= 0.35
+    assert PREBUFFER_S >= 0.35
+    assert MAX_LEAD_S <= 0.65

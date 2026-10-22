@@ -356,3 +356,38 @@ def test_the_filler_lands_inside_the_tool_wait_not_on_the_answer(monkeypatch) ->
     fast = _slow_tool_turn(monkeypatch, "news", transcript="今天新闻", tool_s=0.04,
                            filler_tool_s=0.1)
     assert "我查一下。" not in fast.texts, fast.texts
+
+
+def test_a_long_news_read_is_not_an_idle_session(monkeypatch) -> None:
+    """The old build's bug: 15 s of playback, nobody speaking, and 「我先下啦」 cuts in.
+
+    Playback is not silence. While the speaker is busy the window is pushed forward, so
+    the countdown starts when the sound stops - not when the user last spoke.
+    """
+    clock = FakeClock(0.0)
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("在吗"), llms=[FakeLlm(["在。"])], ttss=[tts])
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner.idle.start()
+
+    playing = True
+    for _ in range(30):          # a minute of playback, polled every second
+        clock.advance(1.0)
+        said = asyncio.run(
+            runner.check_idle(
+                _discard, TurnTrace(device_id="living"), busy=lambda: playing
+            )
+        )
+        assert said == "", "the goodbye interrupted playback"
+    assert tts.texts == []
+
+    # The sound stops; the window starts from here, not from an hour ago.
+    playing = False
+    clock.advance(14.0)
+    assert asyncio.run(
+        runner.check_idle(_discard, TurnTrace(device_id="living"), busy=lambda: playing)
+    ) == ""
+    clock.advance(1.5)
+    assert asyncio.run(
+        runner.check_idle(_discard, TurnTrace(device_id="living"), busy=lambda: playing)
+    ) == "没事的话，我先下啦。"

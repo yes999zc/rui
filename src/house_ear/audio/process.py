@@ -75,9 +75,12 @@ PLAY_CHUNK_MS = 100
 # So: hand it PREBUFFER_S of audio up front, keep writing CATCHUP faster than real time
 # so the lead can only grow, and clamp so a long answer never runs a second ahead (a
 # barge-in would then take that long to be heard).
-PREBUFFER_S = 0.20
+# 0.45 rather than the old 0.20: the speaker's client only starts its player once it holds
+# ~300 ms, so a 200 ms lead left the first word playing into a buffer that never reached
+# the threshold - heard as a stutter on the first character. The old build ran 0.55.
+PREBUFFER_S = 0.45
 CATCHUP = 1.02
-MAX_LEAD_S = 0.35
+MAX_LEAD_S = 0.60
 # A producer that ignores SpeakFinished cannot grow the queue without bound.
 MAX_SPEAK_QUEUE_S = 120.0
 # 12 ms of ramp at the start of playback. Speech that begins on a hard sample boundary

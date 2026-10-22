@@ -206,8 +206,16 @@ def create_app(
                 client = getattr(live, "client", None) if live is not None else None
                 if client is None:
                     continue
+                # Playback is not silence: a 15 s news read or a song must not be
+                # interrupted by the goodbye (the old build hit this and fixed it).
+                def busy(state=live) -> bool:
+                    metrics = getattr(getattr(state, "client", None), "metrics", None)
+                    return bool(metrics is not None and metrics.output_owner)
+
                 try:
-                    line = await runner.check_idle(client.speak, TurnTrace(device_id="session"))
+                    line = await runner.check_idle(
+                        client.speak, TurnTrace(device_id="session"), busy=busy
+                    )
                 except Exception as exc:  # noqa: BLE001 - a watchdog must not die
                     log.warning("idle watch: %s", exc)
                     continue

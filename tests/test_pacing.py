@@ -29,14 +29,20 @@ def test_one_block_alone_still_leaves_a_block_in_hand() -> None:
     assert simulate(1)[0] == pytest.approx(CHUNK)
 
 
+# Blocks needed to hand over the target depth, plus a couple to settle into the pace.
+FILL = int(PREBUFFER_S / CHUNK) + 2
+
+
 def test_the_buffer_is_filled_to_the_prebuffer_within_a_few_blocks() -> None:
-    depths = simulate(4)
+    depths = simulate(FILL)
     assert depths[-1] >= PREBUFFER_S
 
 
 def test_the_buffer_never_drains_again() -> None:
-    steady = simulate(400)[3:]
-    assert min(steady) >= PREBUFFER_S
+    # Measured after the buffer is full: from there it only has to stay above the target
+    # minus the block being written, never near empty.
+    steady = simulate(400)[FILL:]
+    assert min(steady) >= PREBUFFER_S - CHUNK
 
 
 def test_the_lead_is_capped_so_a_barge_is_heard_promptly() -> None:
