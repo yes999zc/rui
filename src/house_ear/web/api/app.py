@@ -226,7 +226,10 @@ def create_app(
                         log.info("noise, no turn: %r", clean)
                         return
                     if rules.stop_intent(clean, cfg.session.end_words):
-                        spoken = await runner.say(rules.stop_reply(), _speaking(app, client), trace)
+                        # dismiss() closes the session before the reply: the idle clock
+                        # used to keep running behind it and the farewell said goodbye a
+                        # second time 15 s later (measured 20:42:16 -> 20:42:34).
+                        spoken = await runner.dismiss(_speaking(app, client), trace)
                         # No reply_finished here: the session is closing, so the plane
                         # must not open a follow-up window after the goodbye.
                         _light_after_audio(app, spoken, cfg.audio.voice.rate, "off")

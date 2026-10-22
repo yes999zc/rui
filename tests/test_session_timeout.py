@@ -230,6 +230,25 @@ def test_the_idle_timeout_says_goodbye_exactly_once(monkeypatch) -> None:
     assert tts.texts == ["没事的话，我先下啦。"]
 
 
+def test_a_stop_word_closes_the_session_not_just_the_turn(monkeypatch) -> None:
+    """Measured 20:42: 「退下吧」 was answered with 「好。」 and the log said session
+    closed, but the idle clock kept running behind it - the farewell spoke a second
+    goodbye 15 s later over a session the user had already ended."""
+    clock = FakeClock(0.0)
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("退下吧"), llms=[FakeLlm(["在。"])], ttss=[tts])
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner.idle.start()
+
+    asyncio.run(runner.dismiss(_discard, TurnTrace(device_id="living")))
+
+    assert tts.texts == ["好。"], "one goodbye, spoken immediately"
+    assert not runner.idle.active, "the stop reply must close the session itself"
+    clock.advance(60.0)
+    assert asyncio.run(runner.check_idle(_discard, TurnTrace(device_id="living"))) == ""
+    assert tts.texts == ["好。"], "no second goodbye from the idle watch"
+
+
 def test_off_ends_the_session_without_a_word(monkeypatch) -> None:
     clock = FakeClock()
     tts = FakeTts()

@@ -31,6 +31,7 @@ from ..trace import TurnTrace
 from . import prompts
 from .filler import filler_phrase, should_speak_filler
 from .idle import IdleWatch, farewell_line
+from .rules import stop_reply
 from .text import clean_reply, sanitize_spoken, strip_wake
 
 # The speak callable is the audio plane's client.speak: one call per TTS chunk, with
@@ -719,6 +720,18 @@ class TurnRunner:
         finally:
             self.idle.stop()
         return line
+
+    async def dismiss(self, speak: SpeakFn,
+                      trace: TurnTrace) -> int:
+        """Answer a stop word and close the session in the same breath.
+
+        The stop reply *is* a goodbye. Speaking it without closing the idle watch left
+        the clock running behind a session the user had already ended, and the farewell
+        said goodbye a second time 15 s later (measured 20:42:16 -> 20:42:34: 「退下吧」
+        -> 「好。」 -> 「没事的话，我先下啦。」).
+        """
+        self.idle.stop()
+        return await self.say(stop_reply(), speak, trace)
 
     async def check_idle(self, speak: SpeakFn,
                          trace: TurnTrace, *, now: float | None = None,

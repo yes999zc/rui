@@ -265,32 +265,37 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 21:05）
+## 9. 现场状态（2026-10-22 20:55）
 
-- 代码：HEAD `3f8a93c` fix(echo): close the follow-up gate before our own audio sounds；
-  **340 passed**，ruff clean。让位 V1 待真机复验；自言自语修复待真机复验（见下）。
-- **自言自语（9哥 20:16 报告，已修 `3f8a93c`）**：空闲告别语播进上一轮 reply 留开的 follow-up gate，
-  回声过 AEC 残余 → VAD 收 3.1 s 段 → ASR 把告别语转成 `'没事的话，我先下吧。'`（啦→吧 一字之差绕过
-  精确回声兜底）→ LLM 答了自己的告别。每次自答重置空闲钟 → 每 ~15 s 再来一次，是否触发取决于
-  VAD 起始 vs gate 到期的 ~30 ms 竞态。修复两层：① plane 在自己发声前 disarm armed 的 gate
-  （正常轮次 gate 本来就是关的，零变化；音乐恢复播放也不再开 follow-up 窗口，否则歌词必成幻影指令）；
-  ② `is_echo` 加 0.75 模糊匹配。**复验判据**：闲置 15 s 出告别语前后，日志应有
-  `gate: disarmed, our own audio is about to sound`，且告别语之后**不应**再出现 transcript 为告别语的
-  turn；放歌时应出现 `follow-up gate stays shut: music owns the speaker`。
-- **起服务（正确方式，2026-10-22 20:14 起在用）**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh
-  > ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `~/.hermes/.env` 取 6 个 provider key，
-  **`set -a` 是关键行**——没有它 eval 出来的只是 shell 局部变量，子进程一个 key 都看不到（20:09–20:12
-  事故根因）；`HOUSE_EAR_DEVICE_TOKEN` 故意不设（dev 配置走 `allow_no_token`，音箱启动脚本发不了 token，
-  设了反而把音箱拒之门外）。重启先按端口杀 4399/8091。
+- 代码：HEAD 见 git log（自言自语修复 `3f8a93c`、双告别修复见最新 commit）；**341 passed**，
+  ruff clean。服务最新一次 20:5x 起在跑；旧日志含 20:16 自言自语事故证据，已轮转为
+  `he-serve-b3t.log.old-2016`。
+- **让位 V1 复验 ✅（20:38、20:41 两轮，真机）**：`vendor takeover: pausing` → pause RPC
+  `before=1 {"code": 0}` → 厂家 `playing Idle` ≤0.2 s 且不再回来，小瑞独答；第二轮
+  「你好小瑞，今天天气怎么样」端到端完整（ASR/天气工具/8.7 s 答句全对）。
+  **判据修正**：`after=0` 才是对的（老项目 HANDOFF：mute_stat 0=idle 1=playing 2=paused；
+  TTS 对话被 pause 即终结→idle，`after=2` 是**音乐**被暂停的情形，B2 放歌时核对）。
+- **自言自语复验 ✅（20:39）**：farewell 前出现 `gate: disarmed, our own audio is about to
+  sound`，告别语播完无幻影 turn、无第二次 farewell 循环。根因（20:16 事故）：告别语播进上一轮
+  reply 留开的 follow-up gate，回声过 AEC 残余被 ASR 转回文字（啦→吧 一字之差绕过精确兜底），
+  LLM 答了自己的告别，每 ~15 s 循环一次、是否触发看 ~30 ms 竞态。修复两层：plane 自我发声前
+  disarm armed gate（音乐恢复也不开 follow-up 窗口）；`is_echo` 加 0.75 模糊匹配。
+- **退下吧双告别（9哥 20:42 报告，已修待复验）**：`stop intent -> session closed` 日志打了但
+  代码没关空闲钟，17.5 s 后 farewell 又道一次别（20:42:16→20:42:34）。修复：`runner.dismiss()`
+  先 `idle.stop()` 再答「好。」。**复验判据**：说「退下吧」→ 只有一句「好。」，等 20 s 无
+  第二句告别、日志无 `session idle ... farewell` 跟随。
+- **观察项（不阻塞）**：① 20:38 首轮 ASR 把「现在几点」听成 `'南方3。'`（段 rms 0.0116 偏轻，
+  疑提示音叠话头；20:41 第二轮 2.18 s 段转写全对，单样本，再出现再查）；② 天气工具 20:39 一次
+  「没查到」、20:42 正常——上游间歇，非代码。
+- **起服务（正确方式）**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh
+  > ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `~/.hermes/.env` 取 6 个
+  provider key，**`set -a` 是关键行**（20:09–20:12 丢 key 事故根因）；`HOUSE_EAR_DEVICE_TOKEN`
+  故意不设（dev 配置走 `allow_no_token`）。重启先按端口杀 4399/8091；带证据的旧日志先轮转。
 - **设备**：`$SPEAKER_IP`，SSH 用老项目 `server/devshell.py`（凭证 `~/.hermes/.secrets/lan_media.json`
   的 `voice.device_host/device_ssh`，自带 ControlMaster 防 dropbear 限流）；客户端日志 `/tmp/client.log`。
-- **B2 第一阶段（19:52–19:54，真机）**：① 端点 600 ms（live 配置就是 600，schema 默认 1000）——
-  「帮我查一下（停 1 s）明天北京的天气」**整句保留**，未切后半句（1 样本）；② 连续会话「明天呢」免唤醒
-  追问成功，灯效 wake→thinking→speaking→listening 全对；③ **厂家让位失败**：小爱答天气时说你好小瑞，
-  小爱继续说了 11 s，且我们的 ASR 把小爱的话转成幻影指令（`'摄氏度到17摄氏度。'`）→ V1+V3 修复
-  `3b4648e`（唤醒时若小爱在播 → 老项目的 mphelper ubus pause 停它），**复验被 20:09 运维事故作废，
-  未验证**。
-- **下一步**：9哥 重测 ③（小爱同学问天气 → 小爱开口后说你好小瑞问时间；判据日志两行
-  `vendor takeover: pausing` + `vendor pause (wake takeover): before=1 after=2`，听觉判据小爱马上闭嘴、
-  只有小瑞答）→ 第二阶段放歌打断+220 档远处唤醒（`POST /api/v1/debug/play`
-  `{"file": "~/.hermes/cache/scratch/music-test.wav", "loop": true}`，音量已 220）→ C1 冷装 → D1 音乐。
+- **B2 第一阶段（19:52–19:54，真机）**：① 端点 600 ms 整句保留（1 样本）✅；② 连续追问+灯效 ✅；
+  ③ 厂家让位 ❌→修复 `3b4648e`→**复验 ✅（见上）**。
+- **下一步**：9哥 复测「退下吧」（判据见上）→ B2 第二阶段放歌打断+220 档远处唤醒
+  （`POST /api/v1/debug/play` `{"file": "~/.hermes/cache/scratch/music-test.wav", "loop": true}`，
+  音量已 220；放歌期间日志应出现 `follow-up gate stays shut: music owns the speaker`，歌词不进
+  ASR）→ 五个数各一行写回 ROADMAP/HANDOFF → C1 冷装 → D1 音乐。
