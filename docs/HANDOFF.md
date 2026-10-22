@@ -31,6 +31,10 @@
 
 > **路线图与「v1 完成」的定义在 `docs/ROADMAP.md`；分层与设备扩展契约在
 > `docs/architecture.md`。** 本文记录现场状态、决策与坑，不重复那两份的内容。
+>
+> **⚠ 2026-10-22 晚：当前最痛的是播放链路（首字被吞 / 句间爆破音 / 告别卡）。
+> 三个故障的根因已定位、修法已写好、代码未动——先读 `docs/playback-path.md`，
+> 不要直接改 `_speak_loop` 或 `speak()`，那里有一条已知的错误设计（per-chunk 淡入）。**
 
 ## 1. 这是什么
 
@@ -74,10 +78,13 @@ MIT，私有仓 `yes999zc/house-ear`（main），本地 `~/AI_Workspace/01_Code/
 | S8 | 6 麦加权混音前端（`audio/frontend.py`） | ✅ 加权混音 + 放音冻结权重；真机唤醒 **6/6、4/4**（门限 0.15，`keywords-015.txt`） |
 | S9 | 设备 shell 通道 + 音量读写 | ✅ `run_shell` + `read_volume`/`set_volume`（`0646fe6`）；`GET/PUT /api/v1/device/volume`；真机 mysoftvol **220/255**（numid=177）；默认不接管（`devices[].volume: 0` = 归原厂，当前无自动写入路径） |
 | S10 | 说话/放歌互斥（ducking：暂停并续播） | ✅ 回复期间暂停音乐并记位，说完续播（rewind 0.55 s = 老项目 `PLAY_LAG_SECONDS`）；打断也走暂停（`e8994f2`/`eae1a24`）；修了循环文件位置累加、最后一句后不续播 |
+| S12 | 播放链路修复（首字 / 接缝 / 控速） | 🔴 **调查完成、修复未做**，见 `docs/playback-path.md`；三个根因：start_play 后缺 80 ms 静置、per-chunk 淡入（今天自己引入）、墙钟控速未接设备 `consumed` 回报 |
+| S13 | 播放仲裁 + 会话收尾修正 | ✅ 喇叭单一 owner（P0 提示音 > P1 回答 > P2 提醒 > P3 音乐，`487cdcf`）；提示音占住播放权到播完（`2e56b9c`）；播放期间不吃空闲计时、告别只说一次（`a5d141d`/`8955a7c`） |
+| S14 | filler 按意图选词 + 按工具计时 | ✅ 三条短语启动预渲染（我查一下/我想想/好的我看看），从"模型决定调工具"起算 0.6 s（`e498148`/`b5ad748`） |
 | S11 | NAS 冷装验收（v1 门槛） | ⬜ 未开始：30 分钟到第一句、20 次唤醒 ≥19（0.15 门限） |
 | 真机欠账 | 厂家让位验证、打断停推 ≤300 ms、220 档远处唤醒 | ⬜ 都要 9哥 出声配合 |
 
-**271 passed**（2026-10-22 14:20，HEAD `eae1a24`；此前 270/1 的 jitter 失败是当时 load 10.8 造成的假红，清掉孤儿 Chrome 进程后单跑通过）。那次失败的是 `tests/test_audio_plane.py` 的 jitter 断言
+**289 passed**（2026-10-22 15:40，HEAD `8955a7c`；此前 270/1 的 jitter 失败是当时 load 10.8 造成的假红，清掉孤儿 Chrome 进程后单跑通过）。那次失败的是 `tests/test_audio_plane.py` 的 jitter 断言
 （`test_plane_decimates_a_mock_device_over_a_socket`，23.1 ms vs 20±3）：当时 load 10.8（一堆孤儿 Chrome
 渲染进程占满 CPU），`git stash` 后同样失败，**不是代码问题**；清掉那些进程后单跑已通过。
 AEC/唤醒的数字已补进 `docs/audio-latency.md` §3.5/§3.6。
@@ -132,6 +139,18 @@ AEC/唤醒的数字已补进 `docs/audio-latency.md` §3.5/§3.6。
 
 ## 6. 已知问题（按严重度，全部有实测出处或明确写「未测」）
 
+0. **播放链路三个故障（最痛，根因已定位、未修）**——细节全在 `docs/playback-path.md`：
+   a) **每轮第一个字被吞/卡**（`现在几点`、新闻，连报三轮）。`start_play` 回执在
+      `Command::spawn(aplay)` 后立刻返回，ALSA 设备还没开；老项目 `Sink.open()`
+      在 start_play 后 `await asyncio.sleep(0.08)`。设备日志证据：
+      `[aplay] slow write 112 ms (3200 bytes)`。
+   b) **句子/分块衔接处爆破音、整段发毛**。`turn.py` 按讯飞**每块**调 `speak(chunk)`，
+      `client.speak()` 每次 `seq` 从 0 起，音频面把 `seq==0` 当句首做 12 ms 淡入 →
+      每 300–500 ms 一次淡入，且只淡入不淡出 = 电平阶跃。**这是今天 `2e56b9c`/`b5ad748`
+      自己引入的**，老项目一个淡化都不做。
+   c) **告别语卡且连说三遍**。连说三遍已在 `8955a7c` 修（busy 把已关闭会话重新打开）；
+      卡是 (a)+(b) 的叠加。
+   修法顺序：句级边界+静音 → 80 ms 静置 → 接 `consumed` 授信控速 → 块长对齐 60 ms。
 1. **220 档（接近满音量）下唤醒仍需靠近**。0.15 门限的 4/4 是「开窗、平时音量、近处」；
    220 档只验到「放歌时近距离命中一次」。原因量出了一半：AEC 在 220 档 ERLE 22.8 dB，但参考是
    -12.3 dBFS，按 ERLE 定义推算回声残差电平 ≈**-35.1 dBFS**；170 档是 **-48.5 dBFS**
@@ -227,27 +246,29 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 14:10）
+## 9. 现场状态（2026-10-22 15:40）
 
-- 代码：HEAD `eae1a24`（14:07，`fix(audio)` 循环文件续播位置 + 最后一句后仍续播）；
-  **最近一次（今天下午）270 passed / 1 flaky**（jitter 断言 23.1 ms vs 20±3，load 10.8 时测的，
-  `git stash` 后同样失败；14:10 未重跑）。ruff 13:31 时 clean，之后未复跑。
-- 今天 13:30 之后的提交：`e55778c`/`28a5043` 探针 spotter（真门限在 keywords 文件）、
-  `1d9a6e6`/`29aa093` KWS 输入与说话峰值打点、`0646fe6` 设备 shell 通道 + 读 mysoftvol、
-  `998c69c` 设备音量读写 API + 调试放 wav、`fafdac9` 调试口停播、
-  `e8994f2` 回复与音乐不互写 + `NO_MUSIC_NOTE`、`e10bdeb` AEC 改消混音、
-  `eae1a24` 循环续播修复。
-- 今日实测（`docs/audio-latency.md` §1/§3）：上午首响 p50 5617 ms（改造前 11553 ms）；
-  下午 ASR 51–90 ms（原 500 ms + 每轮 4.7–5.3 s 加载）、filler 预渲染 0.73 s、
-  回复队列 dropping 118 条 → 0 条、打断丢排队 7.6 s；**AEC 23.5 dB@170 / 22.8 dB@220**
-  （旧 6 滤波器 21.2 / 16.3，老项目 170 = 25.2；rtf 0.066 → 0.011）；
-  唤醒 0.20 门限 4/5 → **0.15 门限 4/4**，放歌时 170/220 各中 1 次、都当场暂停；
-  设备音量读回 **220/255**；15 s 超时 + 告别真机验一次。
-- 音箱：设备口 **4399** 上跑的是 `house-ear`（临时接管，`allow_no_token`，测试期行为）、
-  控制台 8091；`<LAN-IP>` 在 14:13 仍 ESTABLISHED。**下次开工先确认 4399 上跑的是哪个进程**；
-  §8 的 4412 是发布配置，今天没用。§2/§8 写的是「不占旧项目 4399/4400」，
-  今天实际起在 4399，和契约不一致——发布前必须改回（§6.3）。
+- 代码：HEAD `8955a7c`（`fix(xiaoai)` start_play 等回执 / 不再重启空闲播放器 / 不再喂爆管道）；
+  **289 passed**，ruff clean。今天下午的提交序列：
+  `487cdcf` 喇叭单一 owner → `e498148` filler 三条短语 + cue 打点 → `2e56b9c` cue 占权到播完 +
+  淡入 + 空闲播放器重开 → `b5ad748` filler 从工具决策计时 + 每句淡入 → `a5d141d` 播放不算闲置 +
+  450 ms 提前量 → `8955a7c` start_play 回执 / 去掉 forget_player / 1.00× 不追帧。
+- **当前服务**：`uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools-4399-dev.yaml`
+  （设备口 4399，控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-a2.log`）。重启前先
+  `lsof -nP -iTCP:4399 -t` 杀干净——上一轮残留进程会占住端口，新服务静默退出，然后你会对着
+  旧进程的指标下结论（今天已经中过一次）。
+- **设备**：`<LAN-IP>`，`sshpass -p 'open-xiaoai' ssh -o HostKeyAlgorithms=+ssh-rsa root@...`；
+  客户端日志 **`/tmp/client.log`**（无时间戳，看 `[aplay]` 行序）；`aplay --buffer-size 4800
+  --period-size 960 -r 16000` 常驻，跨应答不退出。
+- **今日实测**（`docs/audio-latency.md` §1/§3、`docs/playback-path.md` §5）：
+  唤醒 0.15 门限 4/4；ASR 51–90 ms；filler 0.73 s 预渲染；打断丢排队 7.6 s；
+  AEC 23.5 dB@170 / 22.8 dB@220；设备音量 220/255；
+  **播放链路基线（1.00× 无追帧、提前量 250 ms）：35 s 连续播放 slow write 17 次（80–107 ms）、
+  TIMEOUT 0 次**。
+- **听感现状（9哥 2026-10-22 15:30 判定）**：提示音时序已对；`现在几点`/新闻**首字仍被吞**；
+  新闻**整段不顺畅、句间有爆破音**；告别语**卡**且此前连说三遍（连说已修，卡未修）。
+  全部归到 `docs/playback-path.md` 的 A/B/C 三个根因。
 - 门限文件：`~/.hermes/cache/scratch/house-ear-s4/run/keywords-015.txt` 的 `#0.15`；
-  `config.audio.voice.kws_threshold` 运行时不生效（§6.2），别改错地方。
-- 未提交：本次 docs（按约定不 add/commit）；src/tests 当前工作树干净。
-- 下一步第一件事：**音乐播放能力**（§7.1）——`NO_MUSIC_NOTE` 只是「没有音乐工具」的补丁。
+  `config.audio.voice.kws_threshold` 运行时不生效（§6.2）。
+- **下一步第一件事**：`docs/playback-path.md` §4 的第 3、2 条（句级边界 + 80 ms 静置），
+  再做第 1 条（设备 `consumed` 授信控速）。**等 9哥 点头再动代码。**
