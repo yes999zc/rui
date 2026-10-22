@@ -58,6 +58,7 @@ def _light(app: FastAPI, effect: str, repaint: bool = False) -> None:
     live = supervisor.client if supervisor is not None else None
     if live is None:
         return
+    log.info("led: %s%s", effect, " (repaint)" if repaint else "")
     task = asyncio.create_task(live.set_led(effect, repaint=repaint), name="led")
     tasks = getattr(app.state, "led_tasks", None)
     if tasks is not None:

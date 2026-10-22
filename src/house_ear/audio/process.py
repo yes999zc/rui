@@ -932,6 +932,7 @@ class AudioPlane:
             raise
         gate = self.gate
         if gate is not None and not gate.armed and not self._stop.is_set():
+            log.info("follow-up gate open (%.1f s after the last block)", delay)
             gate.arm(followup=True)
 
     async def _apply_led(self, effect: str, repaint: bool = False) -> None:
