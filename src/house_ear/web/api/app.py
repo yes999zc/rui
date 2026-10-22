@@ -234,9 +234,12 @@ def create_app(
             ) from exc
         save_config(config_path, updated)
         log.info("config written from the console: %s", sorted(patch))
-        # Applied live: the prompt is rebuilt per turn, so an edited persona or band takes
-        # effect on the next turn without a restart. Values that need a restart (audio,
-        # providers) are not writable here, which is why this is enough.
+        # Applied live, in two places that both matter: the app's own copy (otherwise the
+        # next GET /api/v1/config - and a page reload - shows the value from startup) and
+        # the runner (the prompt is rebuilt per turn, so an edited persona or band takes
+        # effect on the next turn without a restart).
+        cfg.assistant = updated.assistant
+        cfg.session = updated.session
         runner = getattr(app.state, "runner", None)
         if runner is not None:
             runner.assistant = updated.assistant

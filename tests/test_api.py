@@ -116,6 +116,8 @@ def test_the_console_can_write_the_two_conversational_sections(tmp_path) -> None
     # the sections that were not in the patch are untouched
     assert body["assistant"]["reply_max_chars_long"] == 900
     assert body["session"]["history_rounds"] == 8
+    # the read endpoint must agree with the write, or a page reload shows the old value
+    assert c.get("/api/v1/config").json()["assistant"]["name"] == "小雷"
     written = load_config(path)
     assert written.assistant.name == "小雷"
     assert written.session.history_rounds == 8
