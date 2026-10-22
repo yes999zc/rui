@@ -128,6 +128,9 @@ class Metrics(BaseModel):
     barge_count: int = 0
     probe_hits: int = 0
     voice_peak_db: float | None = None
+    # mysoftvol (0-255): the only knob that changes loudness on this device. None = the
+    # shell channel could not read it.
+    device_volume: int | None = None
     # Wake acknowledgement (S5a). `ack_mode` is what actually played, not what was asked.
     ack_mode: str = ""
     ack_attempts: int = 0

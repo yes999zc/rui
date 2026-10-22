@@ -164,6 +164,10 @@ class AudioPlane:
         self.ref_rms_db: float | None = None
         self.playback_s = 0.0
         self.playback_lead_s = 0.0
+        # The speaker's own mixer value, read over the shell channel. Loudness on this box
+        # belongs to the vendor's `mysoftvol`; every ERLE or barge number is only
+        # comparable when this value is known.
+        self.device_volume: int | None = None
         self.barges = 0
         self.last_barge_s = 0.0
         self.playback_path = ""
@@ -685,6 +689,7 @@ class AudioPlane:
             else False,
             playback_s=round(self.playback_s, 1),
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
+            device_volume=self.device_volume,
             voice_peak_db=(
                 None if self._peak_hold <= 1e-6
                 else round(20.0 * float(np.log10(self._peak_hold)), 1)
@@ -712,9 +717,23 @@ class AudioPlane:
             rtf=round(self.cpu_s / self.audio_s, 4) if self.audio_s else 0.0,
         )
 
+    async def _read_device_volume(self) -> None:
+        adapter = self.adapter
+        read = getattr(adapter, "read_volume", None)
+        if read is None:
+            return
+        try:
+            self.device_volume = await read()
+        except Exception as exc:  # noqa: BLE001 - a shell hiccup must not touch audio
+            log.debug("volume read failed: %s", exc)
+
     async def _metrics_loop(self, writer: asyncio.StreamWriter, connected: asyncio.Event) -> None:
+        ticks = 0
         while not self._stop.is_set():
             await asyncio.sleep(METRICS_EVERY_S)
+            ticks += 1
+            if ticks % 8 == 1:  # every ~16 s: cheap RPC, and the vendor can change it
+                await self._read_device_volume()
             if not connected.is_set():
                 continue
             try:

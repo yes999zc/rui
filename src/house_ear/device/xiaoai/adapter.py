@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator
 from urllib.parse import parse_qs, urlparse
 
@@ -52,6 +54,11 @@ class XiaoaiAdapter(DeviceAdapter):
         self._frames: asyncio.Queue[AudioFrame] = asyncio.Queue(maxsize=64)
         self._seq = 0
         self._signals: list[protocol.VendorSignal] = []
+        # Request/Response correlation. The client answers every Request with a Response
+        # carrying the same id, and a shell call is how this build reads the device's own
+        # mixer (mysoftvol) instead of guessing at loudness.
+        self._pending: dict[str, asyncio.Future[dict]] = {}
+        self.device_volume: int | None = None
         self.frames_received = 0
         self.frames_dropped = 0
         self.bad_frames = 0
@@ -153,8 +160,58 @@ class XiaoaiAdapter(DeviceAdapter):
             return
         await conn.send(protocol.request("stop_play"))
 
+    async def call(self, command: str, payload: object = None, timeout: float = 3.0) -> dict:
+        """Send one Request and wait for the Response with the same id."""
+        conn = self._conn
+        if conn is None:
+            raise RuntimeError("speaker is not connected")
+        request_id = str(uuid.uuid4())
+        future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = future
+        try:
+            await conn.send(json.dumps({
+                "Request": {"id": request_id, "command": command, "payload": payload},
+            }, ensure_ascii=False))
+            return await asyncio.wait_for(future, timeout)
+        finally:
+            self._pending.pop(request_id, None)
+
+    async def shell(self, script: str, timeout: float = 3.0) -> str:
+        """Run a shell command on the speaker and return stdout.
+
+        The device is the only place where loudness is decided: `mysoftvol` (numid=177)
+        sits after the digital gains, and the vendor rewrites it whenever it touches its
+        own player. Measured on the old deployment: 160 -> 255 -> 160 within minutes. So
+        this reads the real value rather than assuming the config stuck.
+        """
+        response = await self.call("run_shell", script, timeout)
+        return str((response.get("data") or {}).get("stdout") or "").strip()
+
+    async def read_volume(self) -> int | None:
+        """The mixer's current value (0-255), or None when it cannot be read."""
+        out = await self.shell(
+            "amixer -c 0 cget numid=177 | awk -F'[=,]' '/: values=/{print $2; exit}'"
+        )
+        try:
+            value = int(out.splitlines()[0])
+        except (ValueError, IndexError):
+            return None
+        if not 0 <= value <= 255:
+            return None
+        self.device_volume = value
+        return value
+
     async def set_volume(self, volume: int) -> None:
-        raise NotImplementedError("volume goes through the device shell channel (S5)")
+        """Write the mixer. Only for a configured target or an explicit request.
+
+        `devices[].volume = 0` means "the vendor owns it" - the old deployment decided
+        this on 2026-10-20 after watching the vendor reset it, and the config keeps that
+        meaning: 0 is a decision, not a missing value.
+        """
+        if not 0 < volume <= 255:
+            raise ValueError("device volume is 0-255 (0 means 'leave it to the vendor')")
+        await self.shell(f"amixer -c 0 cset numid=177 {volume} >/dev/null; echo ok")
+        self.device_volume = volume
 
     async def set_led(self, effect: str, color: str = "") -> None:
         raise NotImplementedError("LED control lands with the device shell channel (S5)")
@@ -233,6 +290,9 @@ class XiaoaiAdapter(DeviceAdapter):
             if int(response.get("code") or 0) != 0:
                 self.last_error = str(response.get("message") or "device error")
                 log.warning("xiaoai: command failed: %s", self.last_error)
+            future = self._pending.get(str(response.get("id") or ""))
+            if future is not None and not future.done():
+                future.set_result(response)
 
     def _on_audio(self, message: bytes | str) -> None:
         try:
