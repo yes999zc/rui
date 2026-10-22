@@ -1244,6 +1244,33 @@ class AudioPlane:
             self.device_volume = await read()
         except Exception as exc:  # noqa: BLE001 - a shell hiccup must not touch audio
             log.debug("volume read failed: %s", exc)
+        await self._reconcile_volume()
+
+    async def _reconcile_volume(self) -> None:
+        """The configured target wins over whatever the vendor left in the mixer.
+
+        The vendor's own interactions rewrite mysoftvol at will (the old build
+        measured 255 -> 160 minutes after setting it, and 9哥's 「音量60%」 being
+        undone by the next answer). It reconciled at three call sites; this build
+        already reads the value on the metrics cadence, so the check lives here.
+        `devices[].volume` is a percent (0 = do not manage), mysoftvol is 0-255.
+        """
+        dev = next((d for d in self.cfg.devices if d.id == self.device_id), None)
+        target = dev.volume if dev is not None else 0
+        if target <= 0 or self.adapter is None or self.device_volume is None:
+            return
+        set_vol = getattr(getattr(self.adapter, "services", None), "set_volume", None)
+        if set_vol is None:
+            return
+        want = round(target * 255 / 100)
+        if self.device_volume == want:
+            return
+        try:
+            await set_vol(want)
+            self.device_volume = want
+            log.info("volume: reconciled to %d (config %d%%)", want, target)
+        except Exception as exc:  # noqa: BLE001 - a silent knob must never be loud
+            log.debug("volume reconcile failed: %s", exc)
 
     async def _metrics_loop(self, writer: asyncio.StreamWriter, connected: asyncio.Event) -> None:
         ticks = 0

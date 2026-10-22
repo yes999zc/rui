@@ -559,7 +559,13 @@ def create_app(
                 # interrupted by the goodbye (the old build hit this and fixed it).
                 def busy(state=live) -> bool:
                     metrics = getattr(getattr(state, "client", None), "metrics", None)
-                    return bool(metrics is not None and metrics.output_owner)
+                    if metrics is not None and metrics.output_owner:
+                        return True
+                    # A song parked for the vendor is music about to come back:
+                    # the farewell must not talk over the give-back (old build's
+                    # music_due rule).
+                    service = getattr(app.state, "music", None)
+                    return bool(service is not None and service.vendor_parked)
 
                 try:
                     line = await runner.check_idle(

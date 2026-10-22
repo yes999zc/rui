@@ -457,3 +457,36 @@ def test_stop_audio_keeps_a_hand_parked_song(tmp_path: Path) -> None:
             await plane._playback_task
 
     asyncio.run(run())
+
+
+def test_volume_reconciles_to_the_configured_target(tmp_path: Path) -> None:
+    """The vendor rewrites mysoftvol at will; the configured percent wins, on the
+    metrics cadence instead of the old build's three call sites. 0 = hands off."""
+    async def run() -> None:
+        plane, _ = make_plane(tmp_path)
+        from house_ear.config.schema import DeviceConfig
+        plane.cfg.devices.append(DeviceConfig(id="living", adapter="xiaoai",
+                                              host="<LAN-IP>", volume=86))
+        writes: list[int] = []
+
+        class Svc:
+            async def set_volume(self, value: int) -> None:
+                writes.append(value)
+
+        async def read() -> int:
+            return writes[-1] if writes else 160  # what the vendor left behind
+
+        plane.adapter.services = Svc()            # type: ignore[attr-defined]
+        plane.adapter.read_volume = read          # type: ignore[method-assign]
+
+        await plane._read_device_volume()
+        assert writes == [219], writes            # 86% * 2.55, one corrective write
+        await plane._read_device_volume()
+        assert writes == [219], "an in-range volume must not be rewritten"
+
+        plane.cfg.devices[0].volume = 0           # hands off
+        plane.device_volume = 5
+        await plane._read_device_volume()
+        assert writes == [219], "volume 0 means do not manage"
+
+    asyncio.run(run())
