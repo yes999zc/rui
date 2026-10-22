@@ -47,6 +47,7 @@ from .protocol import (
     Error,
     FrameType,
     Hello,
+    LedState,
     Metrics,
     PlayFile,
     QueryMetrics,
@@ -907,6 +908,15 @@ class AudioPlane:
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
 
+    async def _apply_led(self, effect: str) -> None:
+        adapter = self.adapter
+        if adapter is None:
+            return
+        try:
+            await adapter.set_led(effect)
+        except Exception as exc:  # noqa: BLE001 - a light is never worth an outage
+            log.info("led: %s", exc)
+
     def _flush_speech(self) -> None:
         self._release("dialogue")
         self._speak_queued_s = 0.0
@@ -1185,6 +1195,10 @@ class AudioPlane:
                 elif isinstance(msg, StopAudio):
                     self._flush_speech()
                     await self._stop_playback()
+                elif isinstance(msg, LedState):
+                    # Never awaited: the script runs on the device for up to a couple
+                    # of seconds and this loop also carries PLAY_PCM.
+                    asyncio.create_task(self._apply_led(msg.effect), name="led")
                 elif isinstance(msg, SpeakStart):
                     self._segment_pending = True
                 elif isinstance(msg, SpeakFinished):

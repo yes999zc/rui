@@ -62,6 +62,8 @@ class MockAdapter(DeviceAdapter):
         self.played: list[bytes] = []
         self.play_calls: list[tuple[int, int]] = []
         self.volume = 60
+        self.last_led = ""
+        self.led_history: list[str] = []
         self.services = MockServices(self)
         self._rate = rate
         self._channels = mic_channels + ref_channels
@@ -104,7 +106,8 @@ class MockAdapter(DeviceAdapter):
         self.volume = volume
 
     async def set_led(self, effect: str, color: str = "") -> None:
-        return None
+        self.last_led = effect
+        self.led_history.append(effect)
 
 
 def build(dev: object, cfg: object) -> MockAdapter:

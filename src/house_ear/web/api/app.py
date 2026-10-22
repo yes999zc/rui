@@ -48,6 +48,36 @@ code{background:#f4f4f5;padding:2px 6px;border-radius:4px}</style></head>
 <p>API: <code>/health</code>, <code>/api/v1/doctor</code>, <code>/api/v1/config</code></p></body></html>"""
 
 
+def _light(app: FastAPI, effect: str) -> None:
+    """Paint the ring without blocking the caller.
+
+    The shell request shares the websocket with the audio stream; the old build measured
+    a 3 s resume delay from awaiting one animation, so this is always a task.
+    """
+    supervisor = getattr(app.state, "audio", None)
+    live = supervisor.client if supervisor is not None else None
+    if live is None:
+        return
+    task = asyncio.create_task(live.set_led(effect), name="led")
+    tasks = getattr(app.state, "led_tasks", None)
+    if tasks is not None:
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+
+def _speaking(app: FastAPI, live: object):
+    """A speak callable that turns the ring cyan on the first block of a turn."""
+    turned = {"on": False}
+
+    async def say(pcm: bytes, **kwargs: object) -> None:
+        if not turned["on"]:
+            turned["on"] = True
+            _light(app, "speaking")
+        await live.speak(pcm, **kwargs)  # type: ignore[attr-defined]
+
+    return say
+
+
 def create_app(
     cfg: Config,
     config_path: Path | None = None,
@@ -119,6 +149,8 @@ def create_app(
         # warm that, which loaded the ASR model twice and left the real one cold.
         await runner.warm()
         app.state.ack_note = ""
+        app.state.led_tasks = set()
+
         if start_audio:
             supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
             try:
@@ -164,7 +196,8 @@ def create_app(
                         log.info("noise, no turn: %r", clean)
                         return
                     if rules.stop_intent(clean):
-                        spoken = await runner.say(rules.stop_reply(), client.speak, trace)
+                        spoken = await runner.say(rules.stop_reply(), _speaking(app, client), trace)
+                        _light(app, "off")
                         app.state.last_turn = {
                             "transcript": clean, "reply": "", "session_action": "stop",
                             "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
@@ -172,8 +205,9 @@ def create_app(
                         traces.add(trace)
                         log.info("stop intent: %r -> session closed", clean)
                         return
+                    _light(app, "thinking")
                     try:
-                        result = await runner.run(pcm, client.speak, trace, transcript=clean)
+                        result = await runner.run(pcm, _speaking(app, client), trace, transcript=clean)
                     except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
                         log.warning("turn failed: %s", exc)
                         return
@@ -181,12 +215,14 @@ def create_app(
                         result.stages.setdefault("asr", asr_report)
                     app.state.last_turn = result.to_dict()
                     traces.add(trace)
+                    _light(app, "listening")
                     log.info("turn: %s", result.to_dict())
 
                 client.on_utterance = on_utterance
                 client.on_vendor = vendor.vendor_spoke
                 def on_wake(msg: object) -> None:
                     vendor.ours_spoke()
+                    _light(app, "wake")
                     # A wake opens a conversation window; the countdown to the farewell
                     # starts again from here (and from the end of every turn).
                     runner.idle.start()
@@ -216,12 +252,13 @@ def create_app(
 
                 try:
                     line = await runner.check_idle(
-                        client.speak, TurnTrace(device_id="session"), busy=busy
+                        _speaking(app, client), TurnTrace(device_id="session"), busy=busy
                     )
                 except Exception as exc:  # noqa: BLE001 - a watchdog must not die
                     log.warning("idle watch: %s", exc)
                     continue
                 if line:
+                    _light(app, "off")
                     log.info("session closed: %r", line)
 
         app.state.idle_task = asyncio.create_task(idle_watch(), name="idle-watch")
@@ -478,7 +515,9 @@ def create_app(
         if runner.busy:
             raise HTTPException(status_code=409, detail="a turn is already running")
         trace = TurnTrace(device_id="debug")
-        result = await runner.run(b"", client.speak, trace, transcript=text)
+        _light(app, "thinking")
+        result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
+        _light(app, "listening")
         app.state.last_turn = result.to_dict()
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)

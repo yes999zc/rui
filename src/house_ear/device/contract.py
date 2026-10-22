@@ -116,6 +116,10 @@ class DeviceServices(Protocol):
 
     async def set_volume(self, volume: int) -> None: ...
 
+    async def set_led(self, effect: str, color: str = "") -> None:
+        """Paint the light ring, if the device has one. Fire-and-forget."""
+        ...
+
 
 class NullServices:
     """The honest answer for a device with no shell, no mixer, no light."""
@@ -128,6 +132,9 @@ class NullServices:
 
     async def set_volume(self, volume: int) -> None:
         raise NotImplementedError("this device has no controllable mixer")
+
+    async def set_led(self, effect: str, color: str = "") -> None:
+        raise NotImplementedError("this device has no light ring")
 
 
 class DeviceAdapter(Protocol):

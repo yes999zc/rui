@@ -191,6 +191,19 @@ class VendorSignalMsg(BaseModel):
     ts_ms: float = 0.0
 
 
+class LedState(BaseModel):
+    """control -> plane: paint the light ring. Fire-and-forget by design.
+
+    The shell request shares the websocket with the audio stream. Awaiting an 18-frame
+    animation inside the control loop would queue every PLAY_PCM behind it - the old
+    build measured a 3 s resume delay from exactly that. The plane hands this to the
+    adapter as a task and never waits.
+    """
+
+    type: Literal["led"] = "led"
+    effect: str
+
+
 class SpeakStart(BaseModel):
     """control -> plane: the next PLAY_PCM frame begins a new sentence.
 
@@ -279,9 +292,9 @@ class DeviceVolumeResult(BaseModel):
 
 
 ControlMessage = Annotated[
-    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | SpeakStart
-    | SpeakFinished | VendorSignalMsg | Error | Shutdown | ShellCommand | ShellResult
-    | DeviceVolume | DeviceVolumeResult,
+    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | LedState
+    | SpeakStart | SpeakFinished | VendorSignalMsg | Error | Shutdown | ShellCommand
+    | ShellResult | DeviceVolume | DeviceVolumeResult,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

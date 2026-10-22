@@ -34,6 +34,59 @@ class WebConfig(BaseModel):
     auth_token: str = ""  # empty = trusted LAN, no auth
 
 
+LED_STATES = (
+    "off", "listening", "thinking", "speaking", "wake", "error",
+    "music", "music_paused", "muted",
+)
+
+# Peak colours, straight from the two-day deployment. Brightness is applied when the
+# frame is built, never stored pre-multiplied.
+LED_COLORS = {
+    "off": "#000000",
+    "listening": "#004800",
+    "thinking": "#000060",
+    "speaking": "#003048",
+    "wake": "#484848",
+    "error": "#480000",
+    "music": "#481860",
+    "music_paused": "#602800",
+    "muted": "#3C0000",
+}
+
+
+class LedConfig(BaseModel):
+    """The 18-LED ring. Per device: a second speaker may have no ring at all."""
+
+    enabled: bool = False
+    gain: float = Field(default=1.9, ge=0.1, le=5.0)
+    night_factor: float = Field(default=0.6, ge=0.05, le=1.0)
+    # `start <= hour < end`; start > end crosses midnight. start == end is rejected so
+    # "never dim" has one spelling: night_factor 1.0.
+    night_start: int = Field(default=0, ge=0, le=23)
+    night_end: int = Field(default=7, ge=0, le=23)
+    fade_ms: int = Field(default=180, ge=0, le=600)
+    colors: dict[str, str] = Field(default_factory=lambda: dict(LED_COLORS))
+
+    @model_validator(mode="after")
+    def _sane(self) -> LedConfig:
+        if self.night_start == self.night_end:
+            raise ValueError("night_start and night_end are equal; set night_factor 1.0 instead")
+        unknown = set(self.colors) - set(LED_STATES)
+        if unknown:
+            raise ValueError(f"unknown LED states: {sorted(unknown)}; use {list(LED_STATES)}")
+        return self
+
+    @field_validator("colors", mode="before")
+    @classmethod
+    def _yaml_off_is_a_boolean(cls, value: object) -> object:
+        # PyYAML reads a bare `off:` key as False and `on:` as True. A hand-written
+        # config must not fail with "keys must be strings".
+        if isinstance(value, dict):
+            return {("off" if k is False else "on" if k is True else k): v
+                    for k, v in value.items()}
+        return value
+
+
 class DeviceConfig(BaseModel):
     id: str = Field(min_length=1, max_length=32)
     # A name, not an enum: the registry decides what exists. Keeping the two shipped
@@ -54,6 +107,7 @@ class DeviceConfig(BaseModel):
     # test against a speaker whose boot script cannot be edited. Off by default and it
     # says so in the log: anyone on the LAN can open the microphone while it is on.
     allow_no_token: bool = False
+    led: LedConfig = Field(default_factory=LedConfig)
 
     @field_validator("id")
     @classmethod
