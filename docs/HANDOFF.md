@@ -78,7 +78,7 @@ MIT，私有仓 `yes999zc/house-ear`（main），本地 `~/AI_Workspace/01_Code/
 | S8 | 6 麦加权混音前端（`audio/frontend.py`） | ✅ 加权混音 + 放音冻结权重；真机唤醒 **6/6、4/4**（门限 0.15，`keywords-015.txt`） |
 | S9 | 设备 shell 通道 + 音量读写 | ✅ `run_shell` + `read_volume`/`set_volume`（`0646fe6`）；`GET/PUT /api/v1/device/volume`；真机 mysoftvol **220/255**（numid=177）；默认不接管（`devices[].volume: 0` = 归原厂，当前无自动写入路径） |
 | S10 | 说话/放歌互斥（ducking：暂停并续播） | ✅ 回复期间暂停音乐并记位，说完续播（rewind 0.55 s = 老项目 `PLAY_LAG_SECONDS`）；打断也走暂停（`e8994f2`/`eae1a24`）；修了循环文件位置累加、最后一句后不续播 |
-| S12 | 播放链路修复（首字 / 接缝 / 控速） | 🟡 **听感两项已验收，控速未做**：0a 句级边界+350 ms 真静音（`c555e1d`）、0b 80 ms 静置（`9991773`）、每轮回答新起播放器治长静默 underrun（`68b9876`）→ 9哥 16:10 判定「首字不吞、句间完美、告别不卡」；**剩 0c**：接设备 `consumed` 授信控速、删墙钟 Pacer（`slow write` 现仍十余次 80–120 ms）。细节 `docs/playback-path.md` |
+| S12 | 播放链路修复（首字 / 接缝 / 控速） | ✅ **三项全关**：0a 句级边界+350 ms 真静音（`c555e1d`）、0b 80 ms 静置（`9991773`）、每轮回答新起播放器治长静默 underrun（`68b9876`）、consumed 在途上限（`e82a01a`）；9哥 16:10 听感验收「首字不吞、句间完美、告别不卡」；30 s 音乐 **slow write 0 / underrun 0 / TIMEOUT 0**。细节 `docs/playback-path.md` |
 | S13 | 播放仲裁 + 会话收尾修正 | ✅ 喇叭单一 owner（P0 提示音 > P1 回答 > P2 提醒 > P3 音乐，`487cdcf`）；提示音占住播放权到播完（`2e56b9c`）；播放期间不吃空闲计时、告别只说一次（`a5d141d`/`8955a7c`） |
 | S14 | filler 按意图选词 + 按工具计时 | ✅ 三条短语启动预渲染（我查一下/我想想/好的我看看），从"模型决定调工具"起算 0.6 s（`e498148`/`b5ad748`） |
 | S11 | NAS 冷装验收（v1 门槛） | ⬜ 未开始：30 分钟到第一句、20 次唤醒 ≥19（0.15 门限） |
@@ -147,11 +147,12 @@ AEC/唤醒的数字已补进 `docs/audio-latency.md` §3.5/§3.6。
    b) **句间爆破音**已修：per-chunk 淡入（`2e56b9c`/`b5ad748` 自己引入）改为声明式
       `SpeakStart`（`c555e1d`），句后 350 ms 真静音。9哥：「衔接处完美，顺利」。
    c) **告别卡/连说三遍**已修（`8955a7c` + a/b）。9哥：「不卡，顺利」。
-   d) **未做：0c 控速**。设备每写一块回 `consumed`，我们仍在忽略，靠墙钟 `Pacer`；新闻播放
-      仍有 `slow write` 十余次（80–120 ms）、`TIMEOUT` 0。照抄老项目 `Credit(window=2)`
-      的完整形状（clamp/reset/超时 dead/abort）写在 `docs/playback-path.md` §4。
-   e) 小口子：提示音有时复用上一轮排空的播放器（`16:09:41.939` 的 cue 无前置 `start_play`），
-      同一个机制但 320 ms 听不出来，0c 时顺手收。
+   d) **控速已做（0c）**：adapter 不再忽略 `consumed`，音频面用它做**在途上限**
+      （`audio.playback.credit_window`，默认 8）。实测该回报是「aplay 管道收下」而非「播完」，
+      所以 window=2 会把管道灌满（228 次 slow write / 30 s）；window=8 + 墙钟 = **0 次**。
+      设备停止回报时一次 1.5 s 超时后退回墙钟（粘性）。
+   e) 顺手修掉：歌曲播完不释放 `output_owner`（下一轮回答白等 2 s、空闲计时永不告别），
+      `fecd410` 起播放结束释放、续播重新 claim。
 1. **220 档（接近满音量）下唤醒仍需靠近**。0.15 门限的 4/4 是「开窗、平时音量、近处」；
    220 档只验到「放歌时近距离命中一次」。原因量出了一半：AEC 在 220 档 ERLE 22.8 dB，但参考是
    -12.3 dBFS，按 ERLE 定义推算回声残差电平 ≈**-35.1 dBFS**；170 档是 **-48.5 dBFS**
@@ -260,10 +261,9 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   `aplay --buffer-size 4800 --period-size 960 -r 16000` 常驻，跨应答不退出，长静默会排空。
 - **听感现状（9哥 2026-10-22 16:10 判定，三个故障全部关闭）**：首字不吞（伴的那声「叮」
   随 underrun 一起消失）、句间衔接完美、告别不卡。
-- **播放数字**：答案首块与 `start_play` 同毫秒；`chunk 1 at 88–93 ms`；新闻约 35 s 播放
-  `slow write` 十余次（80–120 ms）、`TIMEOUT` 0；句间 350 ms 静音处有
-  `underrun 371 ms`（听感无损，短 underrun 不吞音）。
+- **播放数字**：答案首块与 `start_play` 同毫秒；`chunk 1 at 88–93 ms`；30 s 音乐
+  **slow write 0、underrun 0、queue full 0、TIMEOUT 0**（`credit_window: 8`）。
 - 门限文件：`~/.hermes/cache/scratch/house-ear-s4/run/keywords-015.txt` 的 `#0.15`；
   `config.audio.voice.kws_threshold` 运行时不生效（§6.2）。
-- **下一步第一件事**：0c 接 `consumed` 授信控速、删墙钟 `Pacer`，验收 `slow write → ~0`
-  （照抄清单在 `docs/playback-path.md` §4）。之后按 `docs/ROADMAP.md` §2 走 P9/P10/P11 收尾。
+- **下一步第一件事**：P13 音乐（曲库搜索、播放/暂停/续播、上下首），全程只走
+  `device/contract.py` 的 adapter 契约，为第二台设备留接口；音乐类跳过 filler 一并做。

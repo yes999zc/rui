@@ -24,8 +24,9 @@
    `Command::spawn()` 之后——**进程起来了，ALSA 设备还没打开**。实测从 `start_play` 到
    `[aplay] chunk 1` 是 **88–93 ms**（0b 的 80 ms 静置之后），此前第一块会撞进初始化。
 2. 每块写进 aplay 之后回报事件 `{"event": "consumed", "n": idx}`（`play.rs:182-198`）。
-   **我们的 adapter 明确忽略这个事件**（`device/xiaoai/adapter.py`：
-   `elif event.get("event") not in {"consumed"}: log.debug(...)`）。这是 0c 要接的。
+   **实测语义：它是「aplay 的 stdin 管道收下了这一块」，不是「ALSA 已经播完」**——
+   报点在 `write_all` 返回之后（`play.rs:170-191`）。所以它适合当**在途上限**（防泄漏），
+   不适合当播放头（按它控速会把 64 KB 管道灌满，每次写都等一次排空）。
 3. 写入带 **500 ms 超时**，超时丢块并打日志（`[aplay] WRITE TIMEOUT dropped`），
    阻塞 ≥80 ms 时打 `[aplay] slow write {ms} ms ({bytes} bytes)`。
 4. **aplay 跨应答不死，但会排空**：两次声音之间超过 ~300 ms（ALSA buffer 深度），
@@ -95,8 +96,21 @@
 | 0a | 句级边界（`SpeakStart`）+ 句后 350 ms 真静音 + 去 per-chunk 淡入 | ✅ `c555e1d` |
 | 0b | `start_play` 回执后静置 80 ms | ✅ `9991773` |
 | 0b+ | 每轮回答新起播放器（治长静默 underrun） | ✅ `68b9876` |
-| 0c | **接 `consumed` 回报，用设备播放头控速（`Credit window=2`），删墙钟 `Pacer`** | ⬜ 未做 |
+| 0c | 接 `consumed` 回报、用设备回报做在途上限（`Credit`），墙钟控速 | ✅ `5d875ec`/`fecd410`/`e82a01a`，见下 |
 | 0d | 块长 100→60 ms | ❌ 取消：60 ms 是 ALSA period，老项目块长就是 100 ms（见 §2 勘误） |
+
+**0c 实测（同一段 30 s 音乐，2026-10-22 16:2x–16:3x）**：
+
+| 配置 | `slow write` | `queue full` 增长 | `underrun` 增长 | `TIMEOUT` |
+|---|---|---|---|---|
+| 只按 `consumed` 控速（window=2） | 228 次 / 30 s | 0 | 0 | 0 |
+| `consumed` 上限 window=2 + 墙钟 | 130 次 / 30 s | 0 | 0 | 0 |
+| `consumed` 上限 window=8 + 墙钟（现默认） | **0 次 / 30 s** | 0 | 0 | 0 |
+
+结论：设备回报只能当**泄漏上限**，不能当播放头。老项目 `Credit(window=2)` 的语义
+（它自己测的是服务端 `slow send`）在我们这条链路上会保持管道常满；`window` 做成配置项
+（`audio.playback.credit_window`，默认 8，0 = 只按墙钟），设备停止回报时一次 1.5 s 超时
+后退回墙钟，且粘性——与老项目一致。
 
 **0c 的照抄清单**（侦察自老项目 `server/session.py:52-138`，含四个审计洞）：
 
@@ -132,5 +146,6 @@ curl -s localhost:8091/api/v1/audio | python3 -c \
 
 基线（2026-10-22 15:2x，1.00× 无追帧、提前量 250 ms）：35 s 连续播放
 **slow write 17 次（80–107 ms）、TIMEOUT 0 次**。
-2026-10-22 16:10 复测（新闻，约 35 s 播放）：**slow write 十余次（80–120 ms）、TIMEOUT 0 次**——
-说明 0a/0b 没让写阻塞变差，但也**没有改善**；那是 0c 的活，修完应趋近 0。
+2026-10-22 16:10 复测（新闻，约 35 s 播放）：**slow write 十余次（80–120 ms）、TIMEOUT 0 次**。
+2026-10-22 16:3x（0c 完成，30 s 音乐，`credit_window: 8`）：**slow write 0 次、
+underrun 0、queue full 0、TIMEOUT 0**。
