@@ -148,7 +148,7 @@ def test_wake_then_speech_becomes_an_utterance_and_a_reply_is_played(tmp_path, m
                 assert client.utterances >= 1
 
                 reply = np.round(np.sin(2 * np.pi * 440 * np.arange(1600) / 16000) * 8000).astype("<i2")
-                await client.speak(reply.tobytes(), rate=16000)
+                await client.speak(reply.tobytes(), rate=16000, segment_start=True)
 
                 # The device answers control requests; start_play is only acknowledged
                 # once its player is able to take frames, and the plane waits for that.

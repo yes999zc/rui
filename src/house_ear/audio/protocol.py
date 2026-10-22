@@ -191,6 +191,19 @@ class VendorSignalMsg(BaseModel):
     ts_ms: float = 0.0
 
 
+class SpeakStart(BaseModel):
+    """control -> plane: the next PLAY_PCM frame begins a new sentence.
+
+    The boundary is declared, not inferred: seq restarts on every speak() call, and
+    speak() runs once per TTS chunk - the vendor streams one sentence in several
+    300-500 ms pieces, so treating seq == 0 as a sentence start faded the waveform in
+    a few times a second, mid-word. That ramp was the pop between chunks
+    (docs/playback-path.md, fault B). SpeakStart is the only fade site.
+    """
+
+    type: Literal["speak_start"] = "speak_start"
+
+
 class SpeakFinished(BaseModel):
     """control -> plane: the last PLAY_PCM frame of this reply has been sent."""
 
@@ -266,8 +279,8 @@ class DeviceVolumeResult(BaseModel):
 
 
 ControlMessage = Annotated[
-    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | SpeakFinished
-    | VendorSignalMsg | Error | Shutdown | ShellCommand | ShellResult
+    Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | SpeakStart
+    | SpeakFinished | VendorSignalMsg | Error | Shutdown | ShellCommand | ShellResult
     | DeviceVolume | DeviceVolumeResult,
     Field(discriminator="type"),
 ]

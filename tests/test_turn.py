@@ -87,22 +87,25 @@ def test_turn_runs_asr_llm_tts_and_marks_latency(monkeypatch) -> None:
     tts = FakeTts()
     patch_chains(monkeypatch, asr=asr, llms=[llm], ttss=[tts])
 
-    spoken: list[bytes] = []
+    spoken: list[tuple[bytes, bool]] = []
 
-    async def speak(pcm: bytes) -> None:
-        spoken.append(pcm)
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
+        spoken.append((pcm, segment_start))
 
     trace = TurnTrace(device_id="living")
     result = asyncio.run(TurnRunner(Config().providers).run(b"\x00\x00" * 1600, speak, trace))
 
     assert result.transcript == "今天天气怎么样"
     assert result.reply == "今天多云转晴，最高二十度。明天也是晴天。"
-    assert result.audio_bytes == 2 * 640          # one fake chunk per sentence
+    assert result.audio_bytes == 2 * 640          # one fake chunk per sentence; gap not counted
     assert result.stages["llm"].used == "l0"
     assert result.stages["tts"].used == "t0"
     # both sentences were synthesised, not just the first one
     assert tts.texts == ["今天多云转晴，最高二十度。", "明天也是晴天。"]
-    assert len(spoken) == 2
+    # each sentence: its chunk marked as a segment start, then 350 ms of true silence
+    gap = b"\x00\x00" * (16000 * 350 // 1000)
+    assert [pcm for pcm, _ in spoken] == [tts.chunk, gap, tts.chunk, gap]
+    assert [start for _, start in spoken] == [True, False, True, False]
     for mark in ("end_of_speech", "asr_done", "llm_first", "tts_first", "play_start", "llm_done"):
         assert trace.at(mark) is not None, f"missing mark {mark}"
     tts_first, llm_first = trace.at("tts_first"), trace.at("llm_first")
@@ -118,7 +121,7 @@ def test_a_dead_stage_falls_back_to_the_next_provider(monkeypatch) -> None:
     tts2 = FakeTts()
     patch_chains(monkeypatch, asr=asr2, llms=[llm, llm2], ttss=[tts, tts2])
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     trace = TurnTrace(device_id="living")
@@ -134,7 +137,7 @@ def test_a_dead_stage_falls_back_to_the_next_provider(monkeypatch) -> None:
 def test_empty_transcript_ends_the_turn_early(monkeypatch) -> None:
     patch_chains(monkeypatch, asr=FakeAsr("  "), llms=[FakeLlm(["不会用到"])], ttss=[FakeTts()])
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         raise AssertionError("nothing should be spoken")
 
     trace = TurnTrace(device_id="living")
@@ -157,7 +160,7 @@ def test_history_carries_context_between_turns(monkeypatch) -> None:
     patch_chains(monkeypatch, asr=TwoTurns(), llms=[llm], ttss=[FakeTts()])
     runner = TurnRunner(Config().providers)
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
@@ -176,7 +179,7 @@ def test_the_wake_word_from_the_preroll_never_reaches_the_model(monkeypatch) -> 
     patch_chains(monkeypatch, asr=FakeAsr("你好小瑞，现在几点了？"), llms=[llm], ttss=[FakeTts()])
     runner = TurnRunner(Config().providers, wake_words=["你好小瑞"])
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
@@ -192,7 +195,7 @@ def test_markup_is_never_spoken_nor_stored(monkeypatch) -> None:
     tts = FakeTts()
     patch_chains(monkeypatch, asr=FakeAsr("现在几度"), llms=[llm], ttss=[tts])
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     runner = TurnRunner(Config().providers)
@@ -208,7 +211,7 @@ def test_the_prompt_is_assembled_per_turn_and_history_is_six_rounds(monkeypatch)
     patch_chains(monkeypatch, asr=FakeAsr("好"), llms=[llm], ttss=[FakeTts()])
     runner = TurnRunner(Config().providers, wake_words=["你好小瑞"])
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     assert runner.history_turns == 6
@@ -255,7 +258,7 @@ def test_missing_key_fails_the_stage_with_a_reason(monkeypatch) -> None:
     cfg.providers.catalog["asr"].base_url = "http://127.0.0.1:9/v1"
     monkeypatch.delenv("HOUSE_EAR_NOT_SET_ANYWHERE", raising=False)
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     trace = TurnTrace(device_id="living")
@@ -392,7 +395,7 @@ def test_a_tool_round_runs_the_tool_then_answers(monkeypatch) -> None:
     patch_chains(monkeypatch, asr=FakeAsr("今天天气怎么样"), llms=[llm], ttss=[tts])
     runner = TurnRunner(Config().providers, tools=[(spec, handler)])
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
@@ -422,7 +425,7 @@ def test_a_model_that_keeps_asking_for_tools_still_answers(monkeypatch) -> None:
     patch_chains(monkeypatch, asr=FakeAsr("查一下"), llms=[llm], ttss=[FakeTts()])
     runner = TurnRunner(Config().providers, tools=[(spec, handler)])
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
@@ -449,7 +452,7 @@ def test_a_failing_tool_becomes_a_sentence_not_an_exception(monkeypatch) -> None
     patch_chains(monkeypatch, asr=FakeAsr("天气"), llms=[llm], ttss=[FakeTts()])
     runner = TurnRunner(Config().providers, tools=[(spec, handler)])
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
@@ -476,7 +479,7 @@ def test_a_slow_turn_says_something_small_first(monkeypatch) -> None:
     assistant = AssistantConfig(filler_after_s=0.01, filler_text="我查一下。")
     runner = TurnRunner(Config().providers, assistant=assistant)
 
-    async def speak(pcm: bytes) -> None:
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
 
     started = _time.monotonic()

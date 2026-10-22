@@ -54,6 +54,7 @@ from .protocol import (
     ShellCommand,
     ShellResult,
     SpeakFinished,
+    SpeakStart,
     StopAudio,
     VendorSignalMsg,
     Wake,
@@ -169,6 +170,10 @@ class AudioPlane:
         # turn and the listener heard the gaps. The budget below is seconds of audio,
         # which is the thing that actually has a right answer.
         self._speak_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        # Armed by SpeakStart, consumed by the next PLAY_PCM frame: the one declared
+        # sentence boundary in the current reply. The old source of truth - seq == 0 -
+        # fired on every speak() call, i.e. on every TTS chunk, and faded mid-word.
+        self._segment_pending = False
         self._speak_queued_s = 0.0
         self.frames_in = 0
         self.frames_out = 0
@@ -980,10 +985,11 @@ class AudioPlane:
                             )
                         else:
                             self._speak_queued_s += seconds
-                            # seq == 0 marks the first frame of a speak() call, i.e. a
-                            # sentence (or the cached filler). It is the only boundary
-                            # the plane can see, and the only place a ramp belongs.
-                            self._speak_queue.put_nowait((pcm, seq == 0))
+                            # The ramp belongs only where the control plane declares a
+                            # sentence start (SpeakStart); everything else is a slice of
+                            # one continuous synthesis and must join untouched.
+                            self._speak_queue.put_nowait((pcm, self._segment_pending))
+                            self._segment_pending = False
                     continue
                 if kind is not FrameType.CONTROL:
                     continue
@@ -1038,6 +1044,8 @@ class AudioPlane:
                 elif isinstance(msg, StopAudio):
                     self._flush_speech()
                     await self._stop_playback()
+                elif isinstance(msg, SpeakStart):
+                    self._segment_pending = True
                 elif isinstance(msg, SpeakFinished):
                     log.info("speak finished, %s chunks still queued (%.1f s of audio)",
                              self._speak_queue.qsize(), self._speak_queued_s)

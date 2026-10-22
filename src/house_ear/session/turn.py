@@ -33,6 +33,22 @@ from .filler import filler_phrase, should_speak_filler
 from .idle import IdleWatch, farewell_line
 from .text import clean_reply, sanitize_spoken, strip_wake
 
+# The speak callable is the audio plane's client.speak: one call per TTS chunk, with
+# segment_start declaring the first chunk of a sentence - the only place a fade belongs.
+SpeakFn = Callable[..., Awaitable[None]]
+
+# After every spoken sentence the old build wrote 350 ms of true silence
+# (xiaoai-voice-entry assistant_v3.speak_stream): the junction becomes silence to
+# silence instead of waveform to waveform, and the device's reference channel gets a
+# clean window - which is also what a wake word needs to pass AEC mid-answer. The gap
+# rides after the last sentence too; the first one starts straight away.
+SENTENCE_GAP_MS = 350
+
+
+def _sentence_gap(rate: int) -> bytes:
+    """The inter-sentence gap as mono s16 PCM at ``rate``."""
+    return b"\x00\x00" * (rate * SENTENCE_GAP_MS // 1000)
+
 log = logging.getLogger(__name__)
 
 
@@ -310,7 +326,7 @@ class TurnRunner:
         self,
         text: str,
         chain: list[tuple[str, Any]],
-        speak: Callable[[bytes], Awaitable[None]],
+        speak: SpeakFn,
         trace: TurnTrace,
     ) -> tuple[str, int, StageReport | None, str]:
         """Synthesise one sentence, taking the first provider that actually streams.
@@ -325,17 +341,25 @@ class TurnRunner:
                 # aclosing: an early exit mid-sentence must close the HTTP stream, otherwise
                 # the vendor keeps a half-read request open and the next turn queues behind it
                 async with contextlib.aclosing(provider.synthesize(text, "")) as stream:
+                    first = True
                     async for chunk in stream:
                         if self._abort.is_set():
                             return name, spoken, None, ""
                         if not chunk:
                             continue
-                        if spoken == 0:
+                        if first:
                             trace.mark("tts_first")
                             if not trace.marks.get("play_start"):
                                 trace.mark("play_start")
-                        await speak(chunk)
+                        await speak(chunk, segment_start=first)
+                        first = False
                         spoken += len(chunk)
+                    # The vendor's chunks are slices of one synthesis, so inside the
+                    # sentence they join seamlessly - no marker, no fade. The sentence end
+                    # is the junction: true silence after it, the old build's shape, so
+                    # the next sentence starts from silence and AEC gets a clean window.
+                    if spoken:
+                        await speak(_sentence_gap(self.sample_rate))
             except Exception as exc:  # noqa: BLE001 - fall through to the next vendor
                 attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
                 log.warning("tts: %s failed: %s", name, exc)
@@ -349,7 +373,7 @@ class TurnRunner:
     async def run(
         self,
         pcm: bytes,
-        speak: Callable[[bytes], Awaitable[None]],
+        speak: SpeakFn,
         trace: TurnTrace,
         *,
         transcript: str | None = None,
@@ -380,7 +404,7 @@ class TurnRunner:
     async def _run(
         self,
         pcm: bytes,
-        speak: Callable[[bytes], Awaitable[None]],
+        speak: SpeakFn,
         trace: TurnTrace,
         *,
         transcript: str | None = None,
@@ -486,7 +510,8 @@ class TurnRunner:
                 # Not tts_first: the filler is not the answer, and marking it there made
                 # every slow turn look fast in the metrics.
                 trace.mark("filler")
-                await speak(cached)
+                await speak(cached, segment_start=True)
+                await speak(_sentence_gap(self.sample_rate))
                 result.audio_bytes += len(cached)
                 return
             log.info("filler after %.1f s: %s", delay, text)
@@ -663,7 +688,7 @@ class TurnRunner:
             self.history.append({"role": "assistant", "content": result.reply})
         return result
 
-    async def say(self, text: str, speak: Callable[[bytes], Awaitable[None]],
+    async def say(self, text: str, speak: SpeakFn,
                   trace: TurnTrace) -> int:
         """Speak one canned line. No model, no round trip: session actions are decided."""
         chain = list(self._tts)
@@ -674,7 +699,7 @@ class TurnRunner:
             log.warning("canned line failed: %s", error)
         return spoken
 
-    async def farewell(self, speak: Callable[[bytes], Awaitable[None]],
+    async def farewell(self, speak: SpeakFn,
                        trace: TurnTrace) -> str:
         """End the session with the configured goodbye. Returns the line, "" if silent.
 
@@ -690,7 +715,7 @@ class TurnRunner:
             self.idle.stop()
         return line
 
-    async def check_idle(self, speak: Callable[[bytes], Awaitable[None]],
+    async def check_idle(self, speak: SpeakFn,
                          trace: TurnTrace, *, now: float | None = None,
                          busy: Callable[[], bool] | None = None) -> str:
         """Poll the idle window; say goodbye if it has just closed.

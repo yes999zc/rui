@@ -28,6 +28,7 @@ from .protocol import (
     ShellResult,
     Shutdown,
     SpeakFinished,
+    SpeakStart,
     VendorSignalMsg,
     Wake,
     decode_pcm,
@@ -157,8 +158,20 @@ class AudioPlaneClient:
     def start_pump(self) -> None:
         self._read_task = asyncio.create_task(self.pump(), name="audio-plane-read")
 
-    async def speak(self, pcm: bytes, chunk_ms: int = 100, rate: int = 16000) -> None:
-        """Push one reply to the speaker as PLAY_PCM frames."""
+    async def speak(
+        self, pcm: bytes, chunk_ms: int = 100, rate: int = 16000, *,
+        segment_start: bool = False,
+    ) -> None:
+        """Push one piece of a reply to the speaker as PLAY_PCM frames.
+
+        `segment_start` declares the first piece of a sentence (or the cached filler):
+        the plane fades it in and counts the reply as open from here. The remaining
+        pieces of the same sentence arrive unmarked on purpose - the vendor's chunks
+        are framing of one continuous synthesis, so joining them raw is seamless, and
+        a ramp on every piece was the pop heard between chunks.
+        """
+        if segment_start:
+            await self.send(SpeakStart())
         step = max(2, rate * chunk_ms // 1000 * 2)
         for start in range(0, len(pcm), step):
             self.writer.write(encode_pcm(FrameType.PLAY_PCM, start // step, 0.0, pcm[start:start + step]))
