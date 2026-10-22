@@ -711,7 +711,11 @@ class TurnRunner:
         if self._in_turn:
             return ""
         if busy is not None and busy():
-            self.idle.touch()
+            # Extend an open session, never open one: the farewell itself plays audio, so
+            # touching unconditionally reopened the session and said goodbye again every
+            # 18 s, forever (measured 15:13:30, 15:13:49, 15:14:06).
+            if self.idle.active:
+                self.idle.touch()
             return ""
         if not self.idle.tick(now=now):
             return ""

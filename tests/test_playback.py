@@ -88,16 +88,36 @@ def test_play_file_reaches_the_speaker_and_stop_play_follows(tmp_path, monkeypat
                 assert metrics is not None and metrics.speaker_connected is True
 
                 await client.send(PlayFile(path=str(tone), loop=False, gain=0.5))
-                open_player = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+
+                # Control requests (start_play, the volume probe) are answered like a real
+                # device does; only stream frames are audio.
+                async def recv_answer(raw: str) -> None:
+                    body = json.loads(raw)
+                    if "Request" in body:
+                        await ws.send(json.dumps({
+                            "Response": {"id": body["Request"]["id"], "code": 0},
+                        }))
+
+                def peek(raw: str) -> dict:
+                    return json.loads(raw)
+
+                raw = await asyncio.wait_for(ws.recv(), timeout=3)
+                while "Request" in peek(raw) and peek(raw)["Request"]["command"] != "start_play":
+                    await recv_answer(raw)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=3)
+                open_player = peek(raw)
                 assert open_player["Request"]["command"] == "start_play"
+                await recv_answer(raw)
                 assert open_player["Request"]["payload"]["channels"] == 1
                 assert open_player["Request"]["payload"]["sample_rate"] == 16000
 
                 chunks = 0
                 while chunks < 2:
-                    tag, pcm = protocol.decode_stream(
-                        await asyncio.wait_for(ws.recv(), timeout=3)
-                    )
+                    raw = await asyncio.wait_for(ws.recv(), timeout=3)
+                    if "Request" in peek(raw):
+                        await recv_answer(raw)
+                        continue
+                    tag, pcm = protocol.decode_stream(raw)
                     assert tag == "play"
                     assert len(pcm) > 0
                     chunks += 1

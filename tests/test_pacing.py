@@ -70,5 +70,9 @@ def test_a_stall_does_not_throw_the_schedule_into_the_future() -> None:
     assert pacer.lead == pytest.approx(CHUNK)
 
 
-def test_catchup_is_a_small_margin_not_a_speed_change() -> None:
-    assert 1.0 < CATCHUP < 1.05
+def test_the_sender_never_runs_faster_than_the_device_can_hold() -> None:
+    """1.0: no creep. The device chain is a pipe into aplay's 300 ms buffer, and running
+    even 2 % ahead fills the pipe until writes block - which the client answers by
+    dropping the block (see /tmp/client.log, "slow write"). Jitter is absorbed by the
+    pipe, not by us pushing faster."""
+    assert 1.0 <= CATCHUP <= 1.02

@@ -149,9 +149,25 @@ def test_wake_then_speech_becomes_an_utterance_and_a_reply_is_played(tmp_path, m
 
                 reply = np.round(np.sin(2 * np.pi * 440 * np.arange(1600) / 16000) * 8000).astype("<i2")
                 await client.speak(reply.tobytes(), rate=16000)
-                first = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
-                assert first["Request"]["command"] == "start_play"
-                tag, pcm = protocol.decode_stream(await asyncio.wait_for(ws.recv(), timeout=3))
+
+                # The device answers control requests; start_play is only acknowledged
+                # once its player is able to take frames, and the plane waits for that.
+                async def next_audio():
+                    while True:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=3)
+                        body = json.loads(raw)
+                        if "Request" in body:
+                            await ws.send(json.dumps({
+                                "Response": {"id": body["Request"]["id"], "code": 0},
+                            }))
+                            if body["Request"]["command"] == "start_play":
+                                opened.append(True)
+                            continue
+                        return protocol.decode_stream(raw)
+
+                opened: list[bool] = []
+                tag, pcm = await next_audio()
+                assert opened, "start_play was never requested"
                 assert tag == "play" and len(pcm) > 0
                 return {"wakes": client.wakes, "utterances": client.utterances,
                         "utterance_bytes": len(client.last_utterance)}

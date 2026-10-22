@@ -142,11 +142,16 @@ class XiaoaiAdapter(DeviceAdapter):
         if conn is None:
             raise RuntimeError("speaker is not connected")
         if not self._playing:
-            # The client opens its player on request; without start_play the stream
-            # frames have nowhere to go and are silently dropped device-side.
+            # Wait for the acknowledgement, not just for the send. The client's start_play
+            # kills the previous aplay and spawns a new one, and until that returns its
+            # frame sender is None - `play()` then drops the block on the floor and still
+            # answers Ok. Measured 2026-10-22: the answer's first word was swallowed on
+            # every fresh player, which is exactly the 100-300 ms the device is restarting.
             log.info("player: start_play at %d Hz, %d ms buffer", sample_rate,
                      protocol.playback_payload(sample_rate)["buffer_size"] * 1000 // sample_rate)
-            await conn.send(protocol.request("start_play", protocol.playback_payload(sample_rate)))
+            await self.call(
+                "start_play", protocol.playback_payload(sample_rate), timeout=2.0
+            )
             self._playing = True
         bytes_per_chunk = max(2, sample_rate * PLAY_CHUNK_MS // 1000 * 2)
         for start in range(0, len(pcm), bytes_per_chunk):

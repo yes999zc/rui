@@ -75,12 +75,14 @@ PLAY_CHUNK_MS = 100
 # So: hand it PREBUFFER_S of audio up front, keep writing CATCHUP faster than real time
 # so the lead can only grow, and clamp so a long answer never runs a second ahead (a
 # barge-in would then take that long to be heard).
-# 0.45 rather than the old 0.20: the speaker's client only starts its player once it holds
-# ~300 ms, so a 200 ms lead left the first word playing into a buffer that never reached
-# the threshold - heard as a stutter on the first character. The old build ran 0.55.
-PREBUFFER_S = 0.45
-CATCHUP = 1.02
-MAX_LEAD_S = 0.60
+# The device chain is a pipe into `aplay --buffer-size 4800 --period-size 960` (300 ms of
+# ALSA buffer, 60 ms periods). Pushing well past that only fills the pipe: the client's
+# write then blocks, and a write that blocks past its timeout is dropped - measured in
+# /tmp/client.log as "slow write 112 ms (3200 bytes)" repeating through a news read, which
+# is the roughness. So: a lead the device can actually hold, and no creep.
+PREBUFFER_S = 0.25
+CATCHUP = 1.0
+MAX_LEAD_S = 0.32
 # A producer that ignores SpeakFinished cannot grow the queue without bound.
 MAX_SPEAK_QUEUE_S = 120.0
 # 12 ms of ramp at the start of playback. Speech that begins on a hard sample boundary
@@ -695,12 +697,11 @@ class AudioPlane:
                     self._reply_open = False
                     self._release("dialogue")
                     self._resume_after_speech()
-                    # Silence for half a second: the client closes an idle player, and a
-                    # later stream without start_play would sit in its socket unseen. Drop
-                    # our flag so the next sound re-opens it.
-                    forget = getattr(self.adapter, "forget_player", None)
-                    if forget is not None:
-                        forget()
+                    # Do NOT drop the player flag on silence. The device keeps aplay
+                    # alive between streams; a start_play it does not need kills and
+                    # respawns aplay, and every frame written in that window is lost -
+                    # that was the swallowed first character. stop_play is the only thing
+                    # that closes the player, and it clears the flag itself.
                 continue
             if chunk is None:
                 continue

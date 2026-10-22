@@ -66,9 +66,17 @@ async def run_scenario(rate: int = 48000) -> dict:
             await asyncio.wait_for(task, timeout=3)
 
 
-            # playback: the adapter must open the client's player first, then stream
-            await adapter.play(b"\x00\x01" * 800, sample_rate=16000, channels=1)
+            # playback: the adapter must open the client's player first, then stream.
+            # start_play is acknowledged now: the client's player is only able to accept
+            # frames once it returns, so play() waits for it (a real client answers).
+            play_task = asyncio.create_task(
+                adapter.play(b"\x00\x01" * 800, sample_rate=16000, channels=1)
+            )
             open_player = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
+            await ws.send(json.dumps({
+                "Response": {"id": open_player["Request"]["id"], "code": 0},
+            }))
+            await asyncio.wait_for(play_task, timeout=2)
             reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
             await adapter.stop_playback()
             stop = json.loads(await asyncio.wait_for(ws.recv(), timeout=2))

@@ -102,5 +102,5 @@ def test_the_lead_is_bounded_and_the_barge_flushes_the_device() -> None:
     # and keep the cap tight enough that a long answer never runs a second ahead.
     from house_ear.audio.process import MAX_LEAD_S, PREBUFFER_S
 
-    assert PREBUFFER_S >= 0.35
-    assert MAX_LEAD_S <= 0.65
+    assert 0.2 <= PREBUFFER_S <= 0.35
+    assert MAX_LEAD_S <= 0.4
