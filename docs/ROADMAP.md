@@ -36,14 +36,17 @@
 | **P13c 厂家让位** | 「小爱同学」问句 → 「你好小瑞」接管，只响一个答案；已知 V1–V5 缺项随 D1 补 | 真机一句切换 | ✅ 2026-10-22 19:30：9哥 实测通过，log `he-serve-b2n.log:19:30:15–23:28.4` |
 | **P14 冷装** | NAS 一键部署 + 30 分钟验收 | §0 的四条 | ⬜ |
 
-**当前位置（2026-10-22 深夜更新）：B2 ✅ 4/5 + D1 音乐核心 ✅ + 控制台 P1 ✅（全部自测通过，见
-HANDOFF §9）。9哥 定：不着急冷装，继续往下开发。**
+**当前位置（2026-10-23 凌晨更新）：B2 ✅4/5 + D1 音乐核心 ✅ + C-UI P1 ✅ + 差距调研/后台设计完成
+（两份报告已交叉核对中）。9哥 三条定调：①不急冷装继续开发；②HA 排进路线、MCP 泛化补实现；
+③后台升级为「新人装完即可配音箱」的生产级管理台，且交互分层（系统层定义一次，应用层继承）
+的核心在**语音交互**——老项目当年只统一到 prompt 层（REQUIRED_HINTS 是证据），四套工具方言未动。**
 
-新顺序（开发串在前，需要 9哥 的验收集中到最后的「验收日」）：
-**D1b 让位收尾+小尾巴（V4/V5/gate-over-music/filler/音量对账，可自测——vendor 复验有
-ubus 自动注入法）→ C-UI P2（form/token/迁面板）→ C-UI P3（日志页+对话面板）→ D2 记忆
-→ 验收日（D3 二十次唤醒 + 灯环音乐态 + 控制台肉眼 + C1 冷装，一次到场全验）→ E1 P12。**
-（2026-10-22 9哥 定：C1 从 D1 之后移到验收日，与 D3 同场）
+**双主线新顺序（V 线=语音交互系统层，C 线=控制台，同一原则；生产化与验收压轴）**：
+**V1 交互地基（ToolResult+InteractionSpec+PhraseBook+exec/degrade，音乐 9 工具迁移）
+→ D1b 让位收尾 → HA-MCP（多服务器 MCP 客户端 + HA 经 MCP 接入 + V2 三原语随装：clarify/choose/confirm，
+HA 为首个验证用例）→ C-UI P2（form/collection + token 输入）→ C-UI P3（对话 timeline 镜像 + 日志页 = V3 控制台面）
+→ C-UI P4-P5（首次安装向导 + 设备添加 + probe）→ D2 记忆 → P15 生产化 → 验收日（D3+灯环+控制台肉眼+C1 冷装）→ E1。**
+设计全文：语音层 `docs/interaction.md`（十原语/PhraseBook/声明协议/V1-V3），后台 `docs/console.md`（PanelSpec/分期/镜像表）。
 
 ## 2. 接下来的顺序（每一步都能单独验收）
 
@@ -65,8 +68,11 @@ ubus 自动注入法）→ C-UI P2（form/token/迁面板）→ C-UI P3（日志
 | **C1** | **P14 冷装**（先验第 1/3/4 条；第 2 条放歌等音乐）；**2026-10-22 深夜移入「验收日」与 D3 同场**（镜像需先重建：`1913047` 后未重建） | v1 门槛 | 1 天 | 30 分钟到第一句 |
 | C1-pre | 容器预检（2026-10-22） | ✅ 镜像构建、`setup` 写配置、`serve`、`/health`、`/api/v1/doctor` 全通；发现 `setup` 默认移位 8/13 会削顶，已改 12/16（`1913047`）。改动后需重建镜像再验一次 | — | 已记 |
 | **D1** | **音乐 P13 多源重构**（2026-10-22 提前到 C1 前） | **✅ 核心完成 2026-10-22 深夜（a11bd00..2edec7b，自测全通，367 passed）**：`MusicSource` 源接口（Track id 前缀寻址）+ **Navidrome 首源**（token+salt/httpx 重试/PCM LRU/wav 容器）；MusicService 队列（PlayFinished 自然结束推进、静默跳曲、清场、持久历史、边界补货+预取）；9 个 LLM 工具 + **确定性词直通**（传输词+随机放歌词不进模型——模型两度口头应付实测）；plane 显式暂停（PauseMusic/ResumeMusic，无人可自动续）；起歌压 vendor。**真机自测**：点歌/随机/暂停/继续/上下首/停止/搜索/口味全通；**自然播完→17ms 无缝切歌→队列自动补齐**实测（soak3）；对话压低→答完自动续 ✓。在线兜底只留接口位。**遗留**：远场 20 唤醒计数（需 9哥）、音量对账接入起歌点、farewell 静音续歌边角、收藏/口味 UI | 见左 | 1 晚（核心）| 详细判据见 HANDOFF §9 |
-| **C-UI** | **控制台通用型重构**（9哥 定：重点通用型）：后端 PanelSpec 注册表 + 前端 block 渲染引擎 | **P1 ✅ 0ff8922**：`GET /api/v1/panels`（面板随功能装配处注册，disabled 灰化不隐藏）+ `POST /api/v1/music`/`search`（与语音同路径）+ 前端 usePanels/PanelHost/四 block（stats/now/actions/list）+ 极小表达式（`$.path`/map/单等值）+ 可见性轮询；概览/设备/音乐三面板迁入，八个旧 view 挂「更多」。**P2–P4 待做**：form block+422 回显、token 输入 UI、日志页、turns/traces 面板、（可选）websocket | 设计全文 `docs/console.md`（老项目调研+行号） | P1 半晚 | 面板自动出现/灰化 ✓；按钮与语音同路径 ✓ |
-| **D1b** | **让位收尾 + D1 小尾巴**（新开，可全自测）：V4 反向让位——小爱唤醒时暂停我方歌、对话完还回（老项目 `vendor_take_music` + 4s 静默看门狗 `assistant_v3.py:2171-2192`；复验走 ubus `event_notify` 自动注入，见 vendor.md）；V5 硬件键 114 先压后起+0.9s 复查；V2 现状核对；**gate-over-music 清理**（B2 遗留：音乐续播后 follow-up gate 仍会开）；音乐请求跳 filler（P9 的 🟡）；音量对账三调用点；farewell 静音续歌边角 | 全部有老项目方案+行号；除按键注入外均可自动验证 | 1 天 | vendor.md 判据逐条；日志无 gate-open-over-music |
+| **C-UI** | **控制台通用型重构**（9哥 定：重点通用型；升级为生产级**管理后台**——新人装完即可配音箱） | **P1 ✅ 0ff8922**（PanelSpec 注册表 + 四 block + 音乐/概览/设备面板）。**P2–P6 重排（含设计稿，`docs/console.md`）**：P2 form/collection 交互原语 + 422 分字段回显 + token 输入 UI + 密钥/体检迁入；P3 **对话 timeline 镜像**（每轮 ToolResult status 色点+实际话术键+filler 触发记录；=V3 的控制台面）+ 日志页；P4 **首次安装向导**（欢迎→key→添加音箱→唤醒词→试一句验收，可跳可重来）；P5 设备添加/编辑 + probe/selection 原语 + MCP/HA 管理页；P6 PhraseBook 话术编辑区 + 剧本测试（试一试走 clarify/confirm 全流程） | 语音交互镜像线让 9哥 手机上可验证语音交互；设计 token/线框见 console.md | P2-P6 共 3-4 天 | 每期验收见 console.md 分期表 |
+| **P15** | **生产化**：自愈演练（plane 崩溃重建/音箱重连/NAS 断电全链路）+ 日志轮转（max-size）+ cache/data 卷挂载 + compose healthcheck + 版本 tag/回滚演练 + runbook + deploy.md/README 补音乐与 HA 配置 + 公开仓安全复审（音乐新代码面） | 「E1 到生产」差距清单（2026-10-23 对话） | 1-1.5 天 | 断电重启全链路自起；3 天长稳观察启动 |
+| **V1** | **语音交互系统层·地基**：`ToolResult` 结构化（status/payload/options）+ `InteractionSpec` 进 ToolSpec（exec 模板键/choose 策略/danger 档位）+ `PhraseBook` 全局话术表（可配置覆盖）+ **exec/degrade 两原语**落地；迁移音乐 9 工具与搜索；轮级/系统级兜底话术进 TurnRunner | 差距报告 §8：老项目四套方言（音乐@@/HA错误串/搜索notice/提醒自成一套）只统一到 prompt 层；新项目已系统化 5 原语、缺 3 | 1 天 | 验收：music/tools.py 里 grep 不到中文字面话术；每工具一条 pytest 断言话术来自 PhraseBook（mock unreachable/empty） |
+| **HA-MCP** | **MCP 泛化 + HA 接入**：MCP 客户端（多服务器、stdio/http 两传输、白名单）+ HA 经 MCP 接入（老方案迁移：streamable-HTTP 常驻单连接/实体清单**无状态**注入·上限120·缓存7天/离线降级不装死）+ **V2 三原语随装**：clarify（动词缺失问回+谎报检测强制重试）、choose（first/top3/ask）、confirm（危险域 excluded 硬拒 + confirm 复述确认）；修老项目 8 个泛化欠缺（写死IP/中文SKIP_WORDS/UI-only排除/单服务器…）；控制台 MCP/HA 管理页（collection+form 原语） | 老项目 HA 方案成熟只欠泛化（差距报告 §3 全套行号）；choose/confirm 的首个真实用例就是 HA | 2 天 | 剧本测试：只说设备名→问回；确认对话一问一答；多命中三策略各一条；lock/alarm/valve 服务端硬拒；HA 挂了语音/音乐照常 |
+| **D1b** | **让位收尾 + D1 小尾巴**（可全自测）：V4 反向让位——小爱唤醒时暂停我方歌、对话完还回（老 `vendor_take_music`+4s 看门狗；复验走 ubus 自动注入）；V5 硬件键 114 先压后起+0.9s 复查；V2 现状核对；gate-over-music 清理；音乐请求跳 filler（P9 🟡）；音量对账三调用点；farewell 静音续歌边角 | 全部有老项目方案+行号 | 1 天 | vendor.md 判据逐条；日志无 gate-open-over-music |
 | **D2** | **记忆**（从老项目迁移：后台抽取 + 检索 + 控制台分区） | 旧项目有整套；house-ear 完全没有——也是控制台缺的那一页 | 1–2 天 | 说过的偏好下一轮能记住 |
 | **D3** | **v1 第 2 条门槛**：80% 音量放歌 20 次唤醒 ≥19；+ B2 遗留 3-4 米远场正式计数 + 灯环音乐态肉眼确认。**移入「验收日」与 C1 同场** | 音乐链路已就绪 | 30 分钟（需 9 哥） | ≥19/20 |
 | **E1** | **P12 C2/C3**：每设备音频配置（config v3）、无播放能力降级 | 第二台设备到货再做 | 1 天 | 假 4 麦设备零改 `src/` 跑通 |
