@@ -257,22 +257,21 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 16:10）
+## 9. 现场状态（2026-10-22 17:00）
 
-- 代码：HEAD 见 `git log -1`（本文更新时已含 `c555e1d` 句级边界 / `9991773` 80 ms 静置 /
-  `68b9876` 每轮新起播放器）；**289 passed**，ruff clean。
+- 代码：HEAD 见 `git log -1`（A1 提醒接线、A2 控制台、A3 质量口径、A4 发布约束都已提交）；
+  **306 passed**，ruff clean，`vue-tsc`/`vite build` 通过。
 - **当前服务**：`uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools-4399-dev.yaml`
-  （设备口 4399，控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-p7b-b.log`）。重启前先
-  `lsof -nP -iTCP:4399 -t` 杀干净——残留进程占端口会让新服务静默退出，然后你会对着旧进程的
-  指标下结论（已经中过一次）。
+  （设备口 4399、控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-a2b.log`）。重启前先按
+  **端口**杀干净（4399 和 8091 都要看）——只杀音频面会留下旧的 serve 占住 8091，新进程绑不上
+  控制台会直接退出（今天踩过一次）。
 - **设备**：`$SPEAKER_IP`，`sshpass -p "$SPEAKER_PASSWORD" ssh -o HostKeyAlgorithms=+ssh-rsa root@$SPEAKER_IP`；
   客户端日志 **`/tmp/client.log`**（无时间戳，看 `[aplay]` / `underrun` 行序）；
   `aplay --buffer-size 4800 --period-size 960 -r 16000` 常驻，跨应答不退出，长静默会排空。
-- **听感现状（9哥 2026-10-22 16:10 判定，三个故障全部关闭）**：首字不吞（伴的那声「叮」
-  随 underrun 一起消失）、句间衔接完美、告别不卡。
-- **播放数字**：答案首块与 `start_play` 同毫秒；`chunk 1 at 88–93 ms`；30 s 音乐
-  **slow write 0、underrun 0、queue full 0、TIMEOUT 0**（`credit_window: 8`）。
-- 门限文件：`~/.hermes/cache/scratch/house-ear-s4/run/keywords-015.txt` 的 `#0.15`；
-  `config.audio.voice.kws_threshold` 运行时不生效（§6.2）。
-- **下一步第一件事**：P13 音乐（曲库搜索、播放/暂停/续播、上下首），全程只走
-  `device/contract.py` 的 adapter 契约，为第二台设备留接口；音乐类跳过 filler 一并做。
+- **听感现状（9哥 2026-10-22 16:10 判定，三个故障全部关闭）**：首字不吞、句间衔接完美、告别不卡。
+- **今日数字（17:00）**：TTS 首字 p50 292 / p95 518 ms（10 句）；ASR 归一化 11 项测试；
+  提醒到点 408 ms 出声；30 s 音乐 `slow write` 0 / `underrun` 0；语音 20 s 回复 4 次慢写、0 underrun。
+- 门限的真实来源：`~/.hermes/cache/scratch/house-ear-s4/run/keywords-015.txt` 的 `#0.15`；
+  `config.audio.voice.kws_threshold` **已从 schema 删除**，控制台显示文件解析值（§6.2 关闭）。
+- **下一步**：B1 灯环（等灯环侦察结果）→ B2 一次真机 session（厂家让位、打断 ≤300 ms、220 档、
+  灯效、唤醒端点 600 vs 1000）→ C1 冷装 → D1 音乐 → D2 记忆 → D3 放歌 20 次唤醒 → E1 P12。
