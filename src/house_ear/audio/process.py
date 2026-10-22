@@ -825,7 +825,15 @@ class AudioPlane:
                     # idle timeout, and re-arming there left the gate open forever
                     # (measured: a turn 42 s after the last one, with no wake word).
                     if finished_reply and self.gate is not None and not self.gate.armed:
-                        self.gate.arm(followup=True)
+                        # The last block was *sent*; the device is still playing what is
+                        # in its buffer. Opening the gate now makes the assistant answer
+                        # its own voice - measured 2026-10-22: reply queued at 18:23:13,
+                        # a 1.58 s "segment" at 18:23:15 that became a turn. Wait for the
+                        # pacer to drain, then the old build's 1 s echo tail.
+                        delay = max(0.0, pacer.due - time.monotonic()) + 1.0
+                        asyncio.create_task(
+                            self._arm_followup_later(delay), name="followup-gate"
+                        )
                     self._resume_after_speech()
                     # The player is deliberately left alone here: the next reply closes
                     # it and opens a fresh one (see the first-chunk branch below). Closing
@@ -915,6 +923,16 @@ class AudioPlane:
         # drain on shutdown
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
+
+    async def _arm_followup_later(self, delay: float) -> None:
+        """Open the follow-up gate after the speaker has finished, not after sending."""
+        try:
+            await asyncio.sleep(max(0.0, delay))
+        except asyncio.CancelledError:
+            raise
+        gate = self.gate
+        if gate is not None and not gate.armed and not self._stop.is_set():
+            gate.arm(followup=True)
 
     async def _apply_led(self, effect: str, repaint: bool = False) -> None:
         adapter = self.adapter
