@@ -215,7 +215,9 @@ def create_app(
                         result.stages.setdefault("asr", asr_report)
                     app.state.last_turn = result.to_dict()
                     traces.add(trace)
-                    _light(app, "listening")
+                    # Not listening yet: run() returns when the audio is queued, and the
+                    # device may still be speaking. The ring turns green when the plane
+                    # reports the speaker idle (idle_watch), so cyan covers the answer.
                     log.info("turn: %s", result.to_dict())
 
                 client.on_utterance = on_utterance
@@ -260,9 +262,9 @@ def create_app(
 
                 busy_now = busy()
                 if was_busy and not busy_now:
-                    # The vendor's LED service repaints its idle colour when our audio
-                    # stops. Re-assert listening a few times, but only if the state is
-                    # still listening (a new turn's wake must win).
+                    # The answer has actually finished playing. Now the ring goes green,
+                    # and stays green through the vendor's idle repaint.
+                    _light(app, "listening")
                     asyncio.create_task(
                         _reassert_listening(app, client), name="led-reassert"
                     )
@@ -534,7 +536,6 @@ def create_app(
         trace = TurnTrace(device_id="debug")
         _light(app, "thinking")
         result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
-        _light(app, "listening")
         app.state.last_turn = result.to_dict()
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)
