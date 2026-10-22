@@ -731,6 +731,13 @@ class AudioPlane:
             self.last_playback_error = f"{type(exc).__name__}: {exc}"
             log.warning("playback failed: %s", self.last_playback_error)
             return
+        finally:
+            # A finished song stops holding the speaker. Without this the owner stayed
+            # "music" forever: the next reply waited 2 s before taking it, and the idle
+            # timer saw a busy speaker and never said goodbye. A pause for speech keeps
+            # the claim (the dialogue took it; resume claims it back).
+            if not self._speech_paused:
+                self._release("music")
         log.info("playback finished: %s", path.name)
 
     async def _stream_file(self, audio: np.ndarray, target: int, adapter: DeviceAdapter,
@@ -756,16 +763,16 @@ class AudioPlane:
                     # running total: resuming a 20 s snippet "at 37 s" played nothing.
                     self._file_position %= audio.size
                 if credited:
-                    # A song is long enough that the open-loop clock does drift; the
-                    # device's own report is what keeps its pipe from filling.
+                    # The report says "accepted by aplay's pipe", not "played": it bounds
+                    # how far the server may run ahead, but the pipe itself buffers up to
+                    # ~2 s. Pacing by the clock as well keeps that pipe shallow, which is
+                    # what keeps writes instant; measured on the device, credit-only
+                    # playback blocked 228 writes per 30 s vs 17 per 35 s with the clock.
                     self._credit_note(adapter, seconds)
-                else:
-                    # Same prebuffer as replies: a file paced at exactly 1.0x starves the
-                    # device buffer, and a song is long enough for that to be audible.
-                    now = time.monotonic()
-                    wait = pacer.sleep_for(now, seconds)
-                    self.playback_lead_s = pacer.lead
-                    await asyncio.sleep(wait)
+                now = time.monotonic()
+                wait = pacer.sleep_for(now, seconds)
+                self.playback_lead_s = pacer.lead
+                await asyncio.sleep(wait)
             if not loop:
                 break
 
@@ -851,19 +858,23 @@ class AudioPlane:
                 continue
             self.playback_s += seconds
             if credited:
+                # Bound only. The device's report means "aplay accepted the block into
+                # its pipe", so pacing by it alone keeps that pipe permanently full and
+                # every write waits for a drain (measured: 228 blocked writes / 30 s).
+                # The clock keeps the pipe shallow; the report stops us ever running
+                # more than `window` blocks ahead of the device's own queue.
                 self._credit_note(adapter, seconds)
-            else:
-                # Pace against a deadline: sending costs 1-3 ms per chunk, and adding that
-                # to every chunk drifts a 20 s answer half a second past what the device
-                # plays. The prebuffer is the lead the device keeps in hand; CATCHUP makes
-                # it grow 2 % per chunk so it cannot drain to zero; MAX_LEAD stops a long
-                # answer from running so far ahead that a barge-in is heard late.
-                now = time.monotonic()
-                wait = pacer.sleep_for(now, seconds)
-                self.playback_lead_s = pacer.lead
-                # Waiting until the buffer would drop to the target, not until it is
-                # empty: that wait is the whole fix.
-                await asyncio.sleep(wait)
+            # Pace against a deadline: sending costs 1-3 ms per chunk, and adding that
+            # to every chunk drifts a 20 s answer half a second past what the device
+            # plays. The prebuffer is the lead the device keeps in hand; CATCHUP makes
+            # it grow 2 % per chunk so it cannot drain to zero; MAX_LEAD stops a long
+            # answer from running so far ahead that a barge-in is heard late.
+            now = time.monotonic()
+            wait = pacer.sleep_for(now, seconds)
+            self.playback_lead_s = pacer.lead
+            # Waiting until the buffer would drop to the target, not until it is
+            # empty: that wait is the whole fix.
+            await asyncio.sleep(wait)
             if self._speak_queued_s <= 0.0 and self._speak_queue.empty():
                 # One short grace period: a sentence boundary is not the end of the answer,
                 # and resuming the song between two sentences would be worse than a pause.
@@ -933,6 +944,9 @@ class AudioPlane:
             return
         path, loop, gain = self._file_cfg
         self._speech_paused = False
+        # The claim was released with the dialogue; the resumed song owns the speaker
+        # again, otherwise a cue would not know it is interrupting music.
+        self._claim("music")
         self._playback_task = asyncio.create_task(
             self._play_file(path, loop, gain, offset=self._file_position),
             name="playback",
