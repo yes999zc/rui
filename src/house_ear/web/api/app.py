@@ -139,9 +139,31 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
     request is not a transport word (the turn proceeds normally).
     """
     service = getattr(app.state, "music", None)
-    action = rules.music_transport(clean) if service is not None else ""
-    if not action:
+    if service is None:
         return None
+    if rules.is_music_random(clean):
+        # 「放首歌」 is deterministic, like the transports: the model refused the
+        # identical prompt twice tonight out of pure context while the library was
+        # up (22:12, 22:24). A named ask (「放周杰伦的晴天」) still goes to the model.
+        from ...music.source import SourceError
+        from ...music.tools import _announce
+        try:
+            tracks = await service.source.random(service.cfg.queue_batch)
+        except SourceError as exc:
+            log.info("music random failed: %s", exc)
+            tracks = []
+        line = _announce(tracks, await service.play(tracks)) if tracks \
+            else "曲库这会儿连不上，过一会儿再让我放。"
+        runner.idle.touch()
+        spoken = await runner.say(line, _speaking(app, client), trace)
+        app.state.last_turn = {
+            "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
+            "tools": ["music_play"], "stages": {},
+        }
+        traces.add(trace)
+        log.info("music transport: %r -> random", clean)
+        return line
+    action = rules.music_transport(clean)
     # A transport word with nothing playing still deserves words, not silence.
     fn = {"pause": service.pause, "resume": service.resume,
           "next": service.next, "prev": service.prev}[action]

@@ -84,6 +84,24 @@ def music_transport(transcript: str) -> str:
     return ""
 
 
+# 「放首歌」 style: the whole request is a random-play ask with nothing to parse.
+# Deterministic on purpose, like the transports: measured twice tonight (22:12,
+# 22:24), the model sometimes refused the exact same prompt out of context -
+# 「没有接音乐来源」 - while the library was reachable. The old build's play key
+# went straight to random music for the same reason.
+MUSIC_RANDOM_WORDS = (
+    "放首歌", "放点歌", "放个歌", "放音乐", "来点音乐", "来首音乐", "来首歌",
+    "随便放点", "随便来点", "听点音乐", "听音乐", "放歌",
+)
+
+
+def is_music_random(transcript: str) -> bool:
+    t = normalize(transcript)
+    if not t or len(t) > 8:
+        return False
+    return any(word in t for word in MUSIC_RANDOM_WORDS)
+
+
 def normalize(text: str) -> str:
     """Strip punctuation and spaces so 「停 止。」 and 「停止」 compare equal."""
     return _PUNCT.sub("", text or "")
