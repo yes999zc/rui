@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..config.schema import AssistantConfig, ProvidersConfig
+from ..config.schema import AssistantConfig, ProvidersConfig, SessionConfig
 from ..providers.chain import (
     StageFailure,
     StageReport,
@@ -29,6 +29,8 @@ from ..providers.chain import (
 )
 from ..trace import TurnTrace
 from . import prompts
+from .filler import should_speak_filler
+from .idle import IdleWatch, farewell_line
 from .text import clean_reply, sanitize_spoken, strip_wake
 
 log = logging.getLogger(__name__)
@@ -149,17 +151,29 @@ class TurnRunner:
         sample_rate: int = 16000,
         history_turns: int = 6,
         assistant: AssistantConfig | None = None,
+        session: SessionConfig | None = None,
         wake_words: Sequence[str] = (),
         tools: Sequence[tuple[Any, Any]] = (),
         spoken: Any = None,
         tool_timeout_s: float = 20.0,
         turn_timeout_s: float = 30.0,
+        idle: IdleWatch | None = None,
     ) -> None:
         self.providers = providers
         # None means "assemble per turn": the prompt carries the length bands, the tool
         # rules and the clock, and a long session must not keep a stale copy.
         self.system_prompt = system_prompt
         self.assistant = assistant or AssistantConfig()
+        # Session-level decisions: how long silence may last and what the goodbye says.
+        # Held as the model (not copied into fields) so a console edit is one
+        # `apply_session` away instead of a list of attributes to keep in sync.
+        self.session = session or SessionConfig()
+        # Injected, so the 15 s boundary can be tested without sleeping 15 s. Production
+        # gets the monotonic clock and the configured window.
+        self.idle = idle if idle is not None else IdleWatch(self.session.timeout_s)
+        # A turn is not an idle session, however long it takes: a 20 s tool lookup must not
+        # get a goodbye at 15 s. `check_idle` is a poller and may run while `run()` is open.
+        self._in_turn = False
         self.sample_rate = sample_rate
         self.history_turns = history_turns
         self.wake_words = tuple(wake_words)
@@ -186,6 +200,17 @@ class TurnRunner:
         if self.system_prompt is not None:
             return self.system_prompt
         return prompts.build(self.assistant, tools_ok=bool(self.tools))
+
+    def apply_session(self, session: SessionConfig) -> None:
+        """Take a console-edited `session` section without a restart.
+
+        An open window keeps its original start time: if the new timeout is already
+        exceeded, the next `check_idle` says goodbye at once. Resetting the countdown
+        would hide the edit until the next turn, and a session that was already over
+        would sit there looking alive.
+        """
+        self.session = session
+        self.idle.timeout_s = session.timeout_s
 
     def history_messages(self, transcript: str) -> list[dict]:
         """The last `history_turns` rounds, minus earlier copies of the question asked now.
@@ -288,12 +313,19 @@ class TurnRunner:
         twice and eat the whole budget.
         """
         try:
+            self._in_turn = True
             return await asyncio.wait_for(
                 self._run(pcm, speak, trace, transcript=transcript), self.turn_timeout_s
             )
         except TimeoutError:
             log.warning("turn: timed out after %.0f s", self.turn_timeout_s)
             return TurnResult(error=f"turn timed out after {self.turn_timeout_s:.0f} s")
+        finally:
+            self._in_turn = False
+            # The end of a turn is activity: the idle countdown must start after the
+            # answer, not while it is still playing. A failed or timed-out turn counts
+            # too - the person did speak.
+            self.idle.touch()
 
     async def _run(
         self,
@@ -325,6 +357,10 @@ class TurnRunner:
 
         tts_provider: str | None = None
         spoken_parts: list[str] = []
+        # Every tool name the model asks for, recorded as the call streams in. The filler
+        # decides on this list (session/filler.py): waiting until the round returns would
+        # be too late to keep quiet about a music request.
+        turn_tools: list[str] = []
 
         async def say(text: str) -> None:
             nonlocal tts_provider, result
@@ -352,18 +388,28 @@ class TurnRunner:
             speaker, where a tool-grounded answer takes 9-11 s to first audio. The old
             build did the same at 1.8 s. Cancelled the moment real audio starts, so a fast
             turn never hears it.
+
+            The one turn that must stay silent is a music turn, because the song starts
+            right behind the tool and the filler would land on the first bars. That rule
+            lives in `session/filler.py` and is dormant until a music tool exists.
             """
             delay = self.assistant.filler_after_s
-            if delay <= 0 or not self.assistant.filler_text:
+            text = self.assistant.filler_text
+            if delay <= 0 or not text.strip():
                 return
             try:
                 await asyncio.sleep(delay)
             except asyncio.CancelledError:
                 return
-            if trace.at("tts_first") is not None:
+            if not should_speak_filler(
+                delay_s=delay,
+                text=text,
+                tool_names=turn_tools,
+                audio_started=trace.at("tts_first") is not None,
+            ):
                 return
-            log.info("filler after %.1f s: %s", delay, self.assistant.filler_text)
-            await say(self.assistant.filler_text)
+            log.info("filler after %.1f s: %s", delay, text)
+            await say(text)
 
         filler_task = asyncio.create_task(filler(), name="filler")
 
@@ -397,6 +443,7 @@ class TurnRunner:
                 """
                 nonlocal buffer
                 calls.extend(chunk.tool_calls or [])
+                turn_tools.extend(call.get("name", "") for call in chunk.tool_calls or [])
                 if chunk.finish_reason == "length":
                     # The vendor stopped at max_tokens: the last sentence is cut and TTS
                     # spoke half of it. Without this line the cut is completely silent.
@@ -535,6 +582,40 @@ class TurnRunner:
         if error:
             log.warning("canned line failed: %s", error)
         return spoken
+
+    async def farewell(self, speak: Callable[[bytes], Awaitable[None]],
+                       trace: TurnTrace) -> str:
+        """End the session with the configured goodbye. Returns the line, "" if silent.
+
+        The session closes even when the goodbye is turned off or TTS fails: the point of
+        the call is the state change, the words are a courtesy. Without this, a stop word
+        or an idle timeout would leave the window open and the next tick would try again.
+        """
+        line = farewell_line(self.session)
+        try:
+            if line:
+                await self.say(line, speak, trace)
+        finally:
+            self.idle.stop()
+        return line
+
+    async def check_idle(self, speak: Callable[[bytes], Awaitable[None]],
+                         trace: TurnTrace, *, now: float | None = None) -> str:
+        """Poll the idle window; say goodbye if it has just closed.
+
+        The caller needs no timer of its own: call this from whatever loop already runs
+        (an audio frame, a heartbeat) and it is silent until the window closes, then
+        silent again forever. Returns the spoken line, "" when there was nothing to do.
+
+        A turn in flight is not idle, however long it takes: this is a poller and may run
+        while `run()` is still awaiting a tool, so the goodbye waits for the answer.
+        """
+        if self._in_turn:
+            return ""
+        if not self.idle.tick(now=now):
+            return ""
+        log.info("session idle for %.1f s: farewell", self.idle.timeout_s)
+        return await self.farewell(speak, trace)
 
     async def _call_tool(self, call: dict) -> str:
         """Run one tool call. Failures are sentences, because the model has to say them."""

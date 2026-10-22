@@ -341,10 +341,35 @@ class SessionConfig(BaseModel):
     # used 12 s: long enough to cover one vendor dialog, short enough that a later
     # "你好小瑞" is not fighting a stale window.
     vendor_quiet_s: float = Field(default=12.0, ge=0.0, le=60.0)
+    # No activity for this long ends the session with a goodbye (`session/idle.py`).
+    # Old build: `conversation.timeout_seconds = 15`. Activity is a request or a finished
+    # turn, not playback; this build has no music player yet, so only the first two are
+    # observable. 0 = never time out, which is also what `farewell: "off"` reads like -
+    # two ways to say the same thing, because a console user may reach for either.
+    timeout_s: float = Field(default=15.0, ge=0.0, le=300.0)
+    # off = silent exit, short = one line, full = the line that invites a follow-up.
+    # Old build: `conversation.farewell` (default short) with the same two texts.
+    farewell: Literal["off", "short", "full"] = "short"
+    farewell_text: str = "没事的话，我先下啦。"
+    farewell_text_full: str = "我先下啦，有事喊我。"
     # Rounds (a user+assistant pair each) handed to the model. The old build read this
     # from `conversation.history_rounds` (6); house-ear had it hard-coded to 4, which is
     # why a repeated question collapsed into its own previous answer.
     history_rounds: int = Field(default=6, ge=0, le=12)
+
+    @model_validator(mode="after")
+    def _the_goodbye_has_words(self) -> SessionConfig:
+        """A goodbye that is configured must not be blank.
+
+        Falling back to a built-in line when the field is empty is how a config stops
+        matching what it says - the same reason `AckConfig` rejects an unknown chime name.
+        Here the failure would be a silent exit while `farewell: "short"` claims otherwise.
+        """
+        if self.farewell == "short" and not self.farewell_text.strip():
+            raise ValueError("session.farewell_text is empty but farewell is 'short'")
+        if self.farewell == "full" and not self.farewell_text_full.strip():
+            raise ValueError("session.farewell_text_full is empty but farewell is 'full'")
+        return self
 
 
 class Config(BaseModel):
