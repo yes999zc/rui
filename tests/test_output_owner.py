@@ -424,3 +424,36 @@ def test_no_followup_window_over_resumed_music_full_turn(tmp_path: Path) -> None
                     await plane._playback_task
 
     asyncio.run(run())
+
+
+def test_stop_audio_keeps_a_hand_parked_song(tmp_path: Path) -> None:
+    """V4's plane half: the vendor's wake kills our speech tail with StopAudio,
+    and that must not throw away a parked song's position - the give-back has
+    nothing to resume otherwise."""
+
+    async def run() -> None:
+        plane, adapter = make_plane(tmp_path)
+        song = tmp_path / "song.wav"
+        write_wav(song, seconds=2.0)
+        plane._file_cfg = (song, False, 1.0)
+        plane._file_position = int(1.7 * plane.cfg.audio.playback.rate)
+        plane._playback_task = asyncio.create_task(asyncio.sleep(30))
+
+        plane._pause_for_speech()
+        plane._paused_explicit = True          # what PauseMusic sets
+        await plane._stop_playback()           # the vendor-wake speech kill
+
+        assert plane._file_cfg is not None, "the parked position was thrown away"
+        assert plane._paused_explicit is True
+        assert adapter.stops >= 1              # the device itself was silenced
+
+        # ResumeMusic picks the song back up from the parked position.
+        plane._paused_explicit = False
+        plane._resume_after_speech()
+        await asyncio.sleep(0.05)
+        assert plane._playback_task is not None and not plane._playback_task.done()
+        plane._playback_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await plane._playback_task
+
+    asyncio.run(run())

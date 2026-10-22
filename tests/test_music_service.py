@@ -166,3 +166,37 @@ def test_history_persists_across_instances(tmp_path: Path) -> None:
         assert data["plays"] == {"周": 1}
 
     asyncio.run(run())
+
+
+def test_the_vendor_parks_the_song_and_gives_it_back(tmp_path: Path) -> None:
+    """V4: the vendor takes the line mid-song - park, then hand back (0.6 s tail
+    or the 4 s silent-wake watchdog, both the old build's numbers)."""
+    async def run() -> None:
+        service, _, rec = make_service(tmp_path)
+        await service.play([Track(id="subsonic:1", title="T1", artist="A", duration=100),
+                            Track(id="subsonic:2", title="T2", artist="A", duration=100)])
+
+        assert await service.park_for_vendor() is True
+        assert service.state == "paused" and service.vendor_parked is True
+        assert any(isinstance(m, PauseMusic) for m in rec.sent)
+
+        # double-park is not a park; nothing playing any more
+        assert await service.park_for_vendor() is False
+
+        # the vendor's dialog ends: the song comes back
+        assert await service.give_back_if_parked(delay_s=0.0) is True
+        assert service.state == "playing" and service.vendor_parked is False
+        assert await service.give_back_if_parked() is False   # not parked any more
+
+    asyncio.run(run())
+
+
+def test_stop_clears_the_park(tmp_path: Path) -> None:
+    async def run() -> None:
+        service, _, rec = make_service(tmp_path)
+        await service.play([Track(id="subsonic:1", title="T1", artist="A", duration=100)])
+        await service.park_for_vendor()
+        await service.stop()
+        assert service.vendor_parked is False and service.state == "idle"
+
+    asyncio.run(run())

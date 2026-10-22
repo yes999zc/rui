@@ -481,6 +481,20 @@ def create_app(
                     except Exception as exc:  # noqa: BLE001 - never crash the app
                         log.info("vendor yield: stop failed: %s", exc)
 
+                async def vendor_park_and_watch() -> None:
+                    """The vendor took the line while our song played (V4/V5).
+
+                    Park the song - StopAudio keeps a parked position now - and arm
+                    the old build's silent-wake watchdog: if the vendor never sounds
+                    within 4 s, hand the line back (assistant_v3.py:2185).
+                    """
+                    service = getattr(app.state, "music", None)
+                    if service is None or not await service.park_for_vendor():
+                        return
+                    await asyncio.sleep(4.0)
+                    if not getattr(app.state.audio.client, "vendor_playing", False):
+                        await service.give_back_if_parked(delay_s=0.0)
+
                 def on_vendor(kind: str, text: str) -> None:
                     """The vendor's assistant woke: it owns the next utterance.
 
@@ -488,10 +502,26 @@ def create_app(
                     (continuous follow-up listening means it often has), the two answers
                     overlap. The old build barge-in'd on this signal; so do we: abort the
                     synthesis and stop the speaker, then stay quiet for 12 s.
+
+                    With our music playing the stop becomes a park: the song waits out
+                    the vendor's dialog and comes back (its `idle` event, or the 4 s
+                    watchdog above). Key 114 starting the vendor's own player lands on
+                    the same `playing` event, so V5 needs no separate path.
                     """
+                    service = getattr(app.state, "music", None)
+                    if kind == "playing" and service is not None:
+                        if text == "playing" and service.state == "playing":
+                            asyncio.create_task(service.park_for_vendor(),
+                                                name="vendor-park")
+                        elif text == "idle" and service.vendor_parked:
+                            # The old build's 0.6 s tail: let the vendor's TTS ring out.
+                            asyncio.create_task(service.give_back_if_parked(0.6),
+                                                name="vendor-giveback")
                     if not vendor.vendor_spoke(kind, text):
                         return
                     runner.abort()
+                    if service is not None and service.state == "playing":
+                        asyncio.create_task(vendor_park_and_watch(), name="vendor-park")
                     asyncio.create_task(stop_ours(), name="vendor-stop")
                     _light(app, "off")
 

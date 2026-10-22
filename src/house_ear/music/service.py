@@ -43,6 +43,9 @@ class MusicService:
         self.idx = 0
         # "playing" (or waiting for the speaker) | "paused" (the user's hand) | "idle"
         self.state = "idle"
+        # The song is parked because the vendor took the line; its dialog ending
+        # (or staying silent 4 s) hands the speaker back.
+        self.vendor_parked = False
         self._current_path: Path | None = None
         self._prefetch: asyncio.Task | None = None
 
@@ -137,6 +140,33 @@ class MusicService:
         await self._send(LedState(effect="music_paused"))
         return True
 
+    async def park_for_vendor(self) -> bool:
+        """The vendor took the line (its wake, or its own player over key 114):
+        park the song where it is and remember to give it back (old build
+        `vendor_take_music`, assistant_v3.py:2171 - pause + armed give-back)."""
+        if self.state != "playing":
+            return False
+        parked = await self.pause()
+        self.vendor_parked = parked
+        if parked:
+            log.info("music: parked for the vendor")
+        return parked
+
+    async def give_back_if_parked(self, delay_s: float = 0.6) -> bool:
+        """The vendor's dialog ended (or never spoke): hand the line back.
+
+        The 0.6 s tail is the old build's number (resume_music_after_vendor) -
+        the vendor's TTS rings out a beat after its `idle` event."""
+        if not self.vendor_parked:
+            return False
+        self.vendor_parked = False
+        if delay_s > 0:
+            await asyncio.sleep(delay_s)
+        back = await self.resume()
+        if back:
+            log.info("music: resumed after the vendor")
+        return back
+
     async def resume(self) -> bool:
         if self.state != "paused":
             return False
@@ -157,6 +187,7 @@ class MusicService:
         # A finished queue must leave nothing behind (old build, test_music_sink).
         self.queue, self.idx, self._current_path = [], 0, None
         self.state = "idle"
+        self.vendor_parked = False
 
     # ------------------------------------------------------------------ radio
     def _schedule_topup(self) -> None:

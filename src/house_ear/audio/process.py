@@ -1160,6 +1160,17 @@ class AudioPlane:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         self._playback_task = None
+        if self._paused_explicit and self._file_cfg is not None:
+            # A hand-parked song makes no sound. StopAudio here is for the speech
+            # tail and the device (the vendor took the line mid-song and kills our
+            # reply with it); throwing the parked position away would break the
+            # give-back (V4). The cue is gone, the park survives.
+            if self.adapter is not None:
+                try:
+                    await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+                    log.info("playback: stop failed: %s", exc)
+            return
         self._speech_paused = False
         self._paused_explicit = False
         self._file_cfg = None

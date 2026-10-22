@@ -11,14 +11,13 @@ own decision is the thing that makes the answer fast, and a request that merely 
 「歌」 but ends up as a weather question should still get its filler. So the rule is
 "a music-* tool ran this turn", evaluated at the moment the filler would speak.
 
-**DORMANT in this build.** No music tool is registered yet (`tools/` has weather, news
-and web_search), so `is_music_turn()` is False for every real turn and behaviour is
-exactly what it was before this file existed. It is a hook, not a stub: register a tool
-whose LLM name starts with `music` (that is the old build's whole namespace:
-`music_play`, `music_next`, `music_stop`, ...) or whose name is listed in `MUSIC_TOOLS`,
-and the skip takes effect with no other change. The one thing that must not happen is the
-inverse - a tool that *is* music but is named `play_song`, so both the prefix and a name
-list are checked.
+**LIVE since D1** (2026-10-22): the music tools registered (`local.music_play`,
+`local.music_next`, ...) and this rule started firing on its own - the note once
+said DORMANT because the hook shipped before the tools did. It is a rule, not a
+stub: any tool whose LLM name starts with `music`, or whose name is listed in
+`MUSIC_TOOLS`, gets the skip with no other change. The one thing that must not
+happen is the inverse - a tool that *is* music but is named `play_song`, so both
+the prefix and a name list are checked.
 
 Trade-off accepted: a music turn whose answer really is slow (a lookup that stalls) will
 now be silent. The old build made the same trade, and talking over the song is the worse
