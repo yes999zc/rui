@@ -1130,11 +1130,16 @@ class AudioPlane:
         if not self._speech_paused or self._file_cfg is None:
             return
         path, loop, gain = self._file_cfg
+        # The claim first, the state second: the grace branch (0.4 s after the last
+        # block was *sent*) can race a reply still holding the speaker. Consuming the
+        # pause and starting the task anyway left the music ownerless - audio kept
+        # playing (play_file does not need the claim), no later path retried the
+        # claim, and the follow-up window then opened over the song's "free" speaker
+        # (measured 21:13, reproduced as a test).
+        if not self._claim("music"):
+            return
         self._speech_paused = False
         self._turn_pending = False
-        # The claim was released with the dialogue; the resumed song owns the speaker
-        # again, otherwise a cue would not know it is interrupting music.
-        self._claim("music")
         self._playback_task = asyncio.create_task(
             self._play_file(path, loop, gain, offset=self._file_position),
             name="playback",

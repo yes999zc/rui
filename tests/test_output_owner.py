@@ -387,3 +387,40 @@ def test_an_explicit_pause_is_not_lifted_by_the_speech_path(tmp_path: Path) -> N
                     await plane._playback_task
 
     asyncio.run(run())
+
+
+def test_no_followup_window_over_resumed_music_full_turn(tmp_path: Path) -> None:
+    """The 21:13 production anomaly as a test: wake barged over music, the turn
+    answered, the music resumed - and the follow-up window opened anyway over
+    the song. If this test stays green, the production path had help we have
+    not modelled and the item stays instrumented for the on-site test."""
+    async def run() -> None:
+        plane, adapter = make_plane(tmp_path)
+        gate = StubGate(armed=True)
+        plane.gate = gate  # type: ignore[assignment]
+        song = tmp_path / "song.wav"
+        write_wav(song, seconds=5.0)   # long enough: no track boundary inside the window
+        plane._file_cfg = (song, False, 1.0)
+        plane._file_position = 0
+        plane._speech_paused = True          # the wake's barge parked the song
+
+        # the reply: one streamed sentence, then ReplyFinished, then the drain tick
+        plane._reply_finished = True
+        plane._speak_queued_s = 0.2
+        plane._speak_queue.put_nowait((np.zeros(3200, dtype="<i2").tobytes(), True))
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            await asyncio.sleep(1.8)         # send + 0.5s drain tick + 1.0s follow-up
+            assert plane._owner == "music", f"owner is {plane._owner!r}"
+            assert gate.arms == 0, "the follow-up window opened over the resumed song"
+            assert gate.disarms >= 1         # the reply's first block closed the gate
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            if plane._playback_task is not None:
+                plane._playback_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await plane._playback_task
+
+    asyncio.run(run())
