@@ -58,6 +58,9 @@ class XiaoaiAdapter(DeviceAdapter):
         # carrying the same id, and a shell call is how this build reads the device's own
         # mixer (mysoftvol) instead of guessing at loudness.
         self._pending: dict[str, asyncio.Future[dict]] = {}
+        from .services import XiaoaiServices
+
+        self.services = XiaoaiServices(self)  # type: ignore[assignment]
         self.device_volume: int | None = None
         self.frames_received = 0
         self.frames_dropped = 0
@@ -188,29 +191,14 @@ class XiaoaiAdapter(DeviceAdapter):
         return str((response.get("data") or {}).get("stdout") or "").strip()
 
     async def read_volume(self) -> int | None:
-        """The mixer's current value (0-255), or None when it cannot be read."""
-        out = await self.shell(
-            "amixer -c 0 cget numid=177 | awk -F'[=,]' '/: values=/{print $2; exit}'"
-        )
-        try:
-            value = int(out.splitlines()[0])
-        except (ValueError, IndexError):
-            return None
-        if not 0 <= value <= 255:
-            return None
+        """Kept for callers that already hold the adapter; the detail lives in services."""
+        value = await self.services.read_volume()
         self.device_volume = value
         return value
 
     async def set_volume(self, volume: int) -> None:
-        """Write the mixer. Only for a configured target or an explicit request.
-
-        `devices[].volume = 0` means "the vendor owns it" - the old deployment decided
-        this on 2026-10-20 after watching the vendor reset it, and the config keeps that
-        meaning: 0 is a decision, not a missing value.
-        """
-        if not 0 < volume <= 255:
-            raise ValueError("device volume is 0-255 (0 means 'leave it to the vendor')")
-        await self.shell(f"amixer -c 0 cset numid=177 {volume} >/dev/null; echo ok")
+        """Write the mixer. `devices[].volume = 0` means "the vendor owns it"."""
+        await self.services.set_volume(volume)
         self.device_volume = volume
 
     async def set_led(self, effect: str, color: str = "") -> None:

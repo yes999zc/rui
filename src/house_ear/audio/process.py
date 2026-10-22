@@ -42,6 +42,8 @@ from .decimate import Decimator
 from .kws import KwsUnavailable, WakeHit, WakeProbe, WakeWord
 from .protocol import (
     CONTROL,
+    DeviceVolume,
+    DeviceVolumeResult,
     Error,
     FrameType,
     Hello,
@@ -903,6 +905,22 @@ class AudioPlane:
                     writer.write(encode_json(ShellResult(
                         request_id=msg.request_id, stdout=stdout, error=error,
                     )))
+                    await writer.drain()
+                elif isinstance(msg, DeviceVolume):
+                    volume, error = None, ""
+                    try:
+                        if self.adapter is None:
+                            raise RuntimeError("no device connected")
+                        services = self.adapter.services
+                        if msg.action == "set":
+                            if msg.value is None:
+                                raise ValueError("set needs a value")
+                            await services.set_volume(int(msg.value))
+                        volume = await services.read_volume()
+                        self.device_volume = volume
+                    except Exception as exc:  # noqa: BLE001 - report, never crash
+                        error = f"{type(exc).__name__}: {exc}"
+                    writer.write(encode_json(DeviceVolumeResult(volume=volume, error=error)))
                     await writer.drain()
                 elif isinstance(msg, QueryMetrics):
                     writer.write(encode_json(self.metrics()))

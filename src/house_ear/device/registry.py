@@ -1,17 +1,35 @@
-"""Adapter lookup. v1 ships xiaoai + mock; new devices register here.
+"""Adapter lookup: a name, and the function that builds it.
 
-A missing adapter implementation must not take the control plane down: the console
-has to come up, list the device and say what is wrong with it. So building returns
-an AdapterSet - the adapters that exist, plus one error string per device that does
-not - instead of raising out of application startup.
+Adding a speaker is one new module plus one line in `_BUILDERS` here. The table is the
+*only* place a vendor name appears; nothing above this file validates, branches on, or
+documents a vendor name, so a device that is not in this build can still be configured -
+it fails with a readable error instead of a validation failure.
+
+A missing adapter must not take the control plane down: the console has to come up, list
+the device and say what is wrong with it. So building returns an AdapterSet (the adapters
+that exist plus one error string per device that does not) instead of raising out of
+application startup.
 """
 from __future__ import annotations
 
+import importlib
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..config.schema import Config, DeviceConfig
 from .contract import DeviceAdapter
-from .mock import MockAdapter
+
+log = logging.getLogger(__name__)
+
+Builder = Callable[[DeviceConfig, Config], DeviceAdapter]
+
+# name -> "module:function". A function, not a class, because adapters do not share a
+# constructor: one needs the capture layout, another needs nothing but its id.
+_BUILDERS: dict[str, str] = {
+    "xiaoai": "house_ear.device.xiaoai:build",
+    "mock": "house_ear.device.mock:build",
+}
 
 
 class AdapterUnavailable(RuntimeError):
@@ -27,15 +45,27 @@ class AdapterSet:
         return len(self.adapters)
 
 
-def _build(dev: DeviceConfig, cfg: Config) -> DeviceAdapter:
-    if dev.adapter == "mock":
-        return MockAdapter(dev.id, dev.host, dev.room)
-    if dev.adapter == "xiaoai":
-        # The adapter needs the capture layout to tell the device what to record.
-        from .xiaoai.adapter import XiaoaiAdapter
+def register(name: str, target: str) -> None:
+    """Let a downstream build add a device without editing this file's table."""
+    _BUILDERS[name] = target
 
-        return XiaoaiAdapter(dev, cfg.audio.capture, cfg.audio.voice)
-    raise AdapterUnavailable(f"unknown adapter: {dev.adapter}")
+
+def available() -> list[str]:
+    return sorted(_BUILDERS)
+
+
+def _builder(name: str) -> Builder:
+    target = _BUILDERS.get(name)
+    if target is None:
+        raise AdapterUnavailable(
+            f"unknown adapter: {name!r} (this build has: {', '.join(available())})"
+        )
+    module_name, _, attribute = target.partition(":")
+    try:
+        module = importlib.import_module(module_name)
+        return getattr(module, attribute)
+    except (ImportError, AttributeError) as exc:
+        raise AdapterUnavailable(f"adapter {name!r} is registered but not importable: {exc}") from exc
 
 
 def build_adapters(cfg: Config) -> AdapterSet:
@@ -44,7 +74,10 @@ def build_adapters(cfg: Config) -> AdapterSet:
         if not dev.enabled:
             continue
         try:
-            out.adapters[dev.id] = _build(dev, cfg)
+            out.adapters[dev.id] = _builder(dev.adapter)(dev, cfg)
         except AdapterUnavailable as exc:
             out.errors[dev.id] = str(exc)
+        except Exception as exc:  # noqa: BLE001 - one broken device must not stop the rest
+            log.warning("adapter %r failed to build: %s", dev.adapter, exc)
+            out.errors[dev.id] = f"{type(exc).__name__}: {exc}"
     return out

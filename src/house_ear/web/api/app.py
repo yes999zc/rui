@@ -343,15 +343,11 @@ def create_app(
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         try:
-            out = await client.shell(
-                "amixer -c 0 cget numid=177 | awk -F'[=,]' '/: values=/{print $2; exit}'"
-            )
+            value = await client.device_volume()
         except Exception as exc:  # noqa: BLE001 - the device may be gone
             raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
-        try:
-            value = int(out.strip().splitlines()[0])
-        except (ValueError, IndexError) as exc:
-            raise HTTPException(status_code=502, detail=f"unreadable: {out!r}") from exc
+        if value is None:
+            raise HTTPException(status_code=502, detail="the device did not report a mixer value")
         return {"volume": value, "range": "0-255"}
 
     @app.put("/api/v1/device/volume", dependencies=[Depends(auth)])
@@ -364,9 +360,12 @@ def create_app(
         client = supervisor.client if supervisor is not None else None
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
-        await client.shell(f"amixer -c 0 cset numid=177 {value} >/dev/null; echo ok")
-        log.info("device volume set to %d from the API", value)
-        return {"volume": value}
+        try:
+            applied = await client.set_device_volume(value)
+        except Exception as exc:  # noqa: BLE001 - the device may be gone
+            raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
+        log.info("device volume set to %s from the API", applied)
+        return {"volume": applied}
 
     @app.post("/api/v1/debug/play", dependencies=[Depends(auth)])
     async def debug_play(patch: Annotated[dict, Body()]) -> dict:

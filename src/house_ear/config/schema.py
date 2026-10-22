@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 CONFIG_VERSION = 2
 
-AdapterName = Literal["xiaoai", "mock"]
 ExposeMode = Literal["domain", "whitelist", "all"]
 STAGES = ("asr", "tts", "llm")
 
@@ -37,7 +36,10 @@ class WebConfig(BaseModel):
 
 class DeviceConfig(BaseModel):
     id: str = Field(min_length=1, max_length=32)
-    adapter: AdapterName = "xiaoai"
+    # A name, not an enum: the registry decides what exists. Keeping the two shipped
+    # names in a Literal meant config validation rejected any adapter a future build
+    # registers, so "add a speaker" touched this file - the layer that must not care.
+    adapter: str = "xiaoai"
     host: str
     room: str = ""
     enabled: bool = True

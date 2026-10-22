@@ -16,6 +16,8 @@ from .process import default_socket_path, resolve_socket_path
 from .protocol import (
     CONTROL,
     ControlMessage,
+    DeviceVolume,
+    DeviceVolumeResult,
     Error,
     FrameType,
     Hello,
@@ -67,6 +69,7 @@ class AudioPlaneClient:
         # Set by the control plane: called (in a task) for every finished utterance.
         self.on_utterance: Callable[[bytes], Awaitable[None]] | None = None
         self._shell_waiters: dict[str, asyncio.Future[str]] = {}
+        self._volume_waiters: list[asyncio.Future[DeviceVolumeResult]] = []
         self.last_vendor: VendorSignalMsg | None = None
         self._turns: set[asyncio.Task] = set()
         self._metrics_event = asyncio.Event()
@@ -136,6 +139,11 @@ class AudioPlaneClient:
             self.last_vendor = msg
             if self.on_vendor is not None:
                 self.on_vendor(msg.kind, msg.text)
+        elif isinstance(msg, DeviceVolumeResult):
+            for waiter in self._volume_waiters:
+                if not waiter.done():
+                    waiter.set_result(msg)
+                    break
         elif isinstance(msg, ShellResult):
             waiter = self._shell_waiters.pop(msg.request_id, None)
             if waiter is not None and not waiter.done():
@@ -156,6 +164,31 @@ class AudioPlaneClient:
             self.writer.write(encode_pcm(FrameType.PLAY_PCM, start // step, 0.0, pcm[start:start + step]))
         await self.writer.drain()
         await self.send(SpeakFinished())
+
+    async def device_volume(self, timeout_s: float = 3.0) -> int | None:
+        """Read the speaker's mixer value through the plane (None if it cannot)."""
+        future: asyncio.Future[DeviceVolumeResult] = asyncio.get_running_loop().create_future()
+        self._volume_waiters.append(future)
+        try:
+            await self.send(DeviceVolume(action="read"))
+            result = await asyncio.wait_for(future, timeout_s)
+        finally:
+            self._volume_waiters.remove(future)
+        if result.error:
+            raise RuntimeError(result.error)
+        return result.volume
+
+    async def set_device_volume(self, value: int, timeout_s: float = 3.0) -> int | None:
+        future: asyncio.Future[DeviceVolumeResult] = asyncio.get_running_loop().create_future()
+        self._volume_waiters.append(future)
+        try:
+            await self.send(DeviceVolume(action="set", value=value))
+            result = await asyncio.wait_for(future, timeout_s)
+        finally:
+            self._volume_waiters.remove(future)
+        if result.error:
+            raise RuntimeError(result.error)
+        return result.volume
 
     async def shell(self, script: str, timeout_s: float = 3.0) -> str:
         """Run a shell command on the speaker through the plane (device RPC)."""

@@ -13,6 +13,24 @@ from collections.abc import AsyncIterator
 from .contract import AudioFrame, Capability, DeviceAdapter, DeviceInfo, Transport
 
 
+class MockServices:
+    """A device that can hold a number and nothing else - enough to test the path."""
+
+    def __init__(self, adapter: MockAdapter) -> None:
+        self._adapter = adapter
+
+    async def shell(self, script: str, timeout: float = 3.0) -> str:
+        raise NotImplementedError("the mock device has no shell")
+
+    async def read_volume(self) -> int | None:
+        return self._adapter.volume
+
+    async def set_volume(self, volume: int) -> None:
+        if not 0 < volume <= 255:
+            raise ValueError("device volume is 0-255")
+        self._adapter.volume = volume
+
+
 class MockAdapter(DeviceAdapter):
     def __init__(
         self,
@@ -44,6 +62,7 @@ class MockAdapter(DeviceAdapter):
         self.played: list[bytes] = []
         self.play_calls: list[tuple[int, int]] = []
         self.volume = 60
+        self.services = MockServices(self)
         self._rate = rate
         self._channels = mic_channels + ref_channels
 
@@ -86,3 +105,12 @@ class MockAdapter(DeviceAdapter):
 
     async def set_led(self, effect: str, color: str = "") -> None:
         return None
+
+
+def build(dev: object, cfg: object) -> MockAdapter:
+    """Registry entry. The mock device ignores audio layout: it invents one."""
+    return MockAdapter(
+        getattr(dev, "id", "mock"),
+        getattr(dev, "host", "127.0.0.1"),
+        getattr(dev, "room", ""),
+    )

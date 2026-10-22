@@ -43,7 +43,9 @@ def test_an_adapter_that_cannot_be_built_is_reported_not_raised(monkeypatch) -> 
     def boom(dev, cfg):
         raise registry.AdapterUnavailable("adapter exploded")
 
-    monkeypatch.setattr(registry, "_build", boom)
+    # The registry is a table of builders now: patching `_builder` fails every name at
+    # build time without needing a fake module on disk.
+    monkeypatch.setattr(registry, "_builder", lambda name: boom)
     cfg = Config(devices=[DeviceConfig(id="living", adapter="xiaoai", host="<LAN-IP>")])
     c = client(cfg)
     assert c.get("/health").json()["device_errors"] == 1

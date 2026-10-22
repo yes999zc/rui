@@ -96,6 +96,40 @@ class AudioFrame:
 
 
 @runtime_checkable
+class DeviceServices(Protocol):
+    """What a device can do beyond moving audio: a shell, the mixer, a light.
+
+    Optional on purpose. A speaker that has none of this implements `NullServices` and
+    reports no VOLUME/LED capability; nothing above has to ask "is this a 小爱".
+    """
+
+    async def shell(self, script: str, timeout: float = 3.0) -> str: ...
+
+    async def read_volume(self) -> int | None:
+        """0-255 mixer value, or None when the device cannot report one."""
+        ...
+
+    @property
+    def services(self) -> DeviceServices:
+        """Shell/mixer/light. Defaults to nothing rather than to a vendor guess."""
+        return NullServices()
+
+    async def set_volume(self, volume: int) -> None: ...
+
+
+class NullServices:
+    """The honest answer for a device with no shell, no mixer, no light."""
+
+    async def shell(self, script: str, timeout: float = 3.0) -> str:
+        raise NotImplementedError("this device exposes no shell")
+
+    async def read_volume(self) -> int | None:
+        return None
+
+    async def set_volume(self, volume: int) -> None:
+        raise NotImplementedError("this device has no controllable mixer")
+
+
 class DeviceAdapter(Protocol):
     """Async contract every speaker adapter implements."""
 

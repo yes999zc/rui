@@ -245,9 +245,28 @@ class ShellResult(BaseModel):
     error: str = ""
 
 
+class DeviceVolume(BaseModel):
+    """control -> plane: read or write the speaker's own mixer.
+
+    A message instead of a shell string on purpose: the ALSA detail (numid=177) belongs to
+    the device module, and the API layer must not know it to show a number.
+    """
+
+    type: Literal["device_volume"] = "device_volume"
+    action: Literal["read", "set"] = "read"
+    value: int | None = None
+
+
+class DeviceVolumeResult(BaseModel):
+    type: Literal["device_volume_result"] = "device_volume_result"
+    volume: int | None = None
+    error: str = ""
+
+
 ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | SpeakFinished
-    | VendorSignalMsg | Error | Shutdown | ShellCommand | ShellResult,
+    | VendorSignalMsg | Error | Shutdown | ShellCommand | ShellResult
+    | DeviceVolume | DeviceVolumeResult,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)
