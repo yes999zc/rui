@@ -265,10 +265,18 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 20:15）
+## 9. 现场状态（2026-10-22 21:05）
 
-- 代码：HEAD `3b4648e` feat(vendor): pause xiaoai's player when our wake takes over the line；
-  **337 passed**，ruff clean。让位 V1（主动打断小爱）已实现**待真机复验**。
+- 代码：HEAD `3f8a93c` fix(echo): close the follow-up gate before our own audio sounds；
+  **340 passed**，ruff clean。让位 V1 待真机复验；自言自语修复待真机复验（见下）。
+- **自言自语（9哥 20:16 报告，已修 `3f8a93c`）**：空闲告别语播进上一轮 reply 留开的 follow-up gate，
+  回声过 AEC 残余 → VAD 收 3.1 s 段 → ASR 把告别语转成 `'没事的话，我先下吧。'`（啦→吧 一字之差绕过
+  精确回声兜底）→ LLM 答了自己的告别。每次自答重置空闲钟 → 每 ~15 s 再来一次，是否触发取决于
+  VAD 起始 vs gate 到期的 ~30 ms 竞态。修复两层：① plane 在自己发声前 disarm armed 的 gate
+  （正常轮次 gate 本来就是关的，零变化；音乐恢复播放也不再开 follow-up 窗口，否则歌词必成幻影指令）；
+  ② `is_echo` 加 0.75 模糊匹配。**复验判据**：闲置 15 s 出告别语前后，日志应有
+  `gate: disarmed, our own audio is about to sound`，且告别语之后**不应**再出现 transcript 为告别语的
+  turn；放歌时应出现 `follow-up gate stays shut: music owns the speaker`。
 - **起服务（正确方式，2026-10-22 20:14 起在用）**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh
   > ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `~/.hermes/.env` 取 6 个 provider key，
   **`set -a` 是关键行**——没有它 eval 出来的只是 shell 局部变量，子进程一个 key 都看不到（20:09–20:12
