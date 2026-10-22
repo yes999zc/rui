@@ -121,6 +121,10 @@ class Metrics(BaseModel):
     gate_discarded: int = 0
     gate_interrupted: int = 0
     playback_s: float = 0.0
+    # How far ahead of real time the speaker's buffer is being fed. Zero (or a number
+    # that collapses) is what an underrun looks like from here; the speak loop aims for
+    # PREBUFFER_S of lead and never more than MAX_LEAD_S.
+    playback_lead_ms: float = 0.0
     # Wake acknowledgement (S5a). `ack_mode` is what actually played, not what was asked.
     ack_mode: str = ""
     ack_attempts: int = 0

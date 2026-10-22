@@ -65,6 +65,48 @@ from .wav import read_wav_mono
 
 METRICS_EVERY_S = 2.0
 PLAY_CHUNK_MS = 100
+# Reply pacing. Pushing a block and then waiting exactly its own duration leaves the
+# device's buffer empty the whole time: any scheduler hiccup (1-3 ms per send, GC, a
+# busy VM) and the speaker underruns - heard as stutter, invisible in every counter.
+# So: hand it PREBUFFER_S of audio up front, keep writing CATCHUP faster than real time
+# so the lead can only grow, and clamp so a long answer never runs a second ahead (a
+# barge-in would then take that long to be heard).
+PREBUFFER_S = 0.30
+CATCHUP = 1.02
+MAX_LEAD_S = 1.00
+
+
+class Pacer:
+    """Keeps the speaker's buffer full instead of pacing it to empty.
+
+    ``due`` is when the audio already handed to the device finishes playing, so
+    ``due - now`` is the buffer depth. ``target`` is depth we insist on: it starts at
+    the prebuffer and creeps up by ``catchup - 1`` per block, which covers a device
+    clock that runs a hair fast, and is capped so a barge-in is never queued behind a
+    second of speech. The wait is the only thing that ever changed.
+    """
+
+    def __init__(
+        self,
+        prebuffer: float = PREBUFFER_S,
+        catchup: float = CATCHUP,
+        max_lead: float = MAX_LEAD_S,
+    ) -> None:
+        self.prebuffer = prebuffer
+        self.catchup = catchup
+        self.max_lead = max_lead
+        self.due = 0.0
+        self.target = prebuffer
+        self.lead = 0.0
+
+    def sleep_for(self, now: float, seconds: float) -> float:
+        """Record a block of ``seconds`` just sent, return how long to wait."""
+        self.due = max(self.due, now) + seconds
+        self.target = min(self.target + (self.catchup - 1.0) * seconds, self.max_lead)
+        self.lead = self.due - now
+        return max(0.0, self.due - self.target - now)
+
+
 # The device buffer keeps sounding after the last frame is sent (~300 ms at 48 kHz), so a
 # tone needs a tail floor before the gate may open. The old build used 250 ms.
 ACK_TAIL_MS = 250
@@ -106,6 +148,7 @@ class AudioPlane:
         self.voice_rms_db: float | None = None
         self.ref_rms_db: float | None = None
         self.playback_s = 0.0
+        self.playback_lead_s = 0.0
         self.playback_path = ""
         self.last_playback_error = ""
         self._playback_task: asyncio.Task | None = None
@@ -469,6 +512,7 @@ class AudioPlane:
     async def _stream_file(self, audio: np.ndarray, target: int, adapter: DeviceAdapter,
                            loop: bool) -> None:
         step = max(1, target * PLAY_CHUNK_MS // 1000)
+        pacer = Pacer()
         while not self._stop.is_set():
             for start in range(0, audio.size, step):
                 if self._stop.is_set():
@@ -480,7 +524,12 @@ class AudioPlane:
                     channels=1,
                 )
                 self.playback_s += chunk.size / target
-                await asyncio.sleep(PLAY_CHUNK_MS / 1000.0)
+                # Same prebuffer as replies: a file paced at exactly 1.0x starves the
+                # device buffer, and a song is long enough for that to be audible.
+                now = time.monotonic()
+                wait = pacer.sleep_for(now, chunk.size / target)
+                self.playback_lead_s = pacer.lead
+                await asyncio.sleep(wait)
             if not loop:
                 break
 
@@ -494,7 +543,7 @@ class AudioPlane:
         """
         target = self.cfg.audio.playback.rate
         source = self.cfg.audio.voice.rate
-        due = 0.0
+        pacer = Pacer()
         while not self._stop.is_set():
             chunk = await self._speak_queue.get()
             if chunk is None:
@@ -515,9 +564,15 @@ class AudioPlane:
             self.playback_s += seconds
             # Pace against a deadline: sending costs 1-3 ms per chunk, and adding that to
             # every chunk drifts a 20 s answer half a second past what the device plays.
+            # The prebuffer is the lead the device keeps in hand; CATCHUP makes it grow
+            # 2 % per chunk so it cannot drain to zero; MAX_LEAD stops a long answer from
+            # running so far ahead that a barge-in is heard late.
             now = time.monotonic()
-            due = max(due, now) + seconds
-            await asyncio.sleep(max(0.0, due - time.monotonic()))
+            wait = pacer.sleep_for(now, seconds)
+            self.playback_lead_s = pacer.lead
+            # Waiting until the buffer would drop to the target, not until it is empty:
+            # that wait is the whole fix.
+            await asyncio.sleep(wait)
         # drain on shutdown
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
@@ -567,6 +622,7 @@ class AudioPlane:
             if self.adapter is not None
             else False,
             playback_s=round(self.playback_s, 1),
+            playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
             ack_mode=self.ack_mode_effective,
             ack_attempts=self.ack_attempts,
             ack_plays=self.ack_plays,

@@ -7,6 +7,7 @@ import socket
 import wave
 
 import numpy as np
+import pytest
 from websockets.asyncio.client import connect
 
 from house_ear.audio.client import AudioPlaneSupervisor
@@ -102,8 +103,19 @@ def test_play_file_reaches_the_speaker_and_stop_play_follows(tmp_path, monkeypat
                     chunks += 1
 
                 await client.send(StopAudio())
-                stop = json.loads(await asyncio.wait_for(ws.recv(), timeout=3))
+                # A stop is not instantaneous on the wire: blocks already handed to the
+                # socket arrive first. What matters is that stop_play arrives and no new
+                # block follows it.
+                while True:
+                    message = await asyncio.wait_for(ws.recv(), timeout=3)
+                    if isinstance(message, str):
+                        break
+                    tag, _pcm = protocol.decode_stream(message)
+                    assert tag == "play"
+                stop = json.loads(message)
                 assert stop["Request"]["command"] == "stop_play"
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(ws.recv(), timeout=0.5)
                 metrics = await client.request_metrics()
                 return {"metrics": metrics.model_dump() if metrics else {}}
         finally:
