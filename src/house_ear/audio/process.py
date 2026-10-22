@@ -856,7 +856,16 @@ class AudioPlane:
                         asyncio.create_task(
                             self._arm_followup_later(delay), name="followup-gate"
                         )
-                    self._resume_after_speech()
+                    # The song waits out the whole turn. An empty queue alone once meant
+                    # "speech over", so the music came back 0.4 s after the wake - over
+                    # the user's request, and the resumed music then closed the freshly
+                    # armed gate (measured 20:54:03: wake, cue, resume, deaf). It comes
+                    # back when the gate has closed: the reply drained, or the no-speech
+                    # disarm - the old build's silent-wake watchdog, vendor_silence_
+                    # watchdog() at assistant_v3.py:2185, with the session timeout as
+                    # its clock.
+                    if self.gate is None or not self.gate.armed:
+                        self._resume_after_speech()
                     # The player is deliberately left alone here: the next reply closes
                     # it and opens a fresh one (see the first-chunk branch below). Closing
                     # it now would cut the tail still playing out of the device buffer.
@@ -1037,6 +1046,11 @@ class AudioPlane:
         ALSA buffer); resuming from the last *sent* sample would skip that much, so the
         position is rewound by it, exactly as `rewind()` did there.
         """
+        if self._speech_paused:
+            # Already paused: the wake path cancels, then _claim("cue") cancels again
+            # before the first cancel has landed, and a second rewind ate PLAY_LAG
+            # twice (5.5 -> 4.9 s measured 20:54:03).
+            return
         task = self._playback_task
         if task is None or task.done() or self._file_cfg is None:
             return

@@ -194,3 +194,63 @@ def test_no_followup_window_opens_over_our_own_music(tmp_path: Path) -> None:
         assert gate.arms == 1, "the window never opened after the music ended"
 
     asyncio.run(run())
+
+
+def test_the_song_waits_out_the_whole_turn(tmp_path: Path) -> None:
+    """Measured 20:54:03: the wake paused the music, then an empty speak queue brought
+    it back 0.4 s later - over the user's request - and the resumed music closed the
+    freshly armed gate. An empty queue is not "speech over": the song comes back only
+    once the gate has closed (the reply drained, or the no-speech disarm)."""
+    async def run() -> None:
+        plane, _ = make_plane(tmp_path)
+        gate = StubGate(armed=True)
+        plane.gate = gate  # type: ignore[assignment]
+        song = tmp_path / "song.wav"
+        write_wav(song, seconds=0.3)
+        plane._file_cfg = (song, True, 1.0)
+        plane._speech_paused = True
+        plane._file_position = 0
+
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            await asyncio.sleep(0.8)   # one empty-queue tick past the 0.5 s poll
+            assert plane._speech_paused is True, "the music came back while the gate was armed"
+
+            gate.armed = False         # the turn is over (drained, or no-speech disarm)
+            await asyncio.sleep(0.8)
+            assert plane._speech_paused is False, "the music never came back after the turn"
+            assert plane._playback_task is not None and not plane._playback_task.done()
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            if plane._playback_task is not None:
+                plane._playback_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await plane._playback_task
+
+    asyncio.run(run())
+
+
+def test_pause_for_speech_rewinds_the_lag_once(tmp_path: Path) -> None:
+    """The wake path cancels, then _claim("cue") cancels again before the first cancel
+    lands; two rewinds ate PLAY_LAG twice (5.5 -> 4.9 s measured 20:54:03)."""
+    async def run() -> None:
+        plane, _ = make_plane(tmp_path)
+        song = tmp_path / "song.wav"
+        write_wav(song, seconds=0.3)
+        plane._file_cfg = (song, True, 1.0)
+        rate = plane.cfg.audio.playback.rate
+        plane._file_position = int(5.5 * rate)
+        plane._playback_task = asyncio.create_task(asyncio.sleep(10))
+        try:
+            plane._pause_for_speech()
+            plane._pause_for_speech()
+            once = int(5.5 * rate) - int(plane.PLAY_LAG_SECONDS * rate)
+            assert plane._file_position == once
+        finally:
+            plane._playback_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await plane._playback_task
+
+    asyncio.run(run())
