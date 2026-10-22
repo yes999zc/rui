@@ -49,10 +49,13 @@ from .protocol import (
     Hello,
     LedState,
     Metrics,
+    PauseMusic,
     PlayFile,
+    PlayFinished,
     QueryMetrics,
     Ready,
     ReplyFinished,
+    ResumeMusic,
     ShellCommand,
     ShellResult,
     SpeakFinished,
@@ -284,6 +287,10 @@ class AudioPlane:
         self._file_position = 0
         self._file_cfg: tuple[Path, bool, float] | None = None
         self._speech_paused = False
+        # The user said 「暂停」: parked by hand, so no automatic resume path may lift
+        # it - only ResumeMusic or a fresh play_file (old build: pause(for_speech=False),
+        # the one pause that survived every hook).
+        self._paused_explicit = False
         # An utterance fired since the music was paused for a wake, and no reply has
         # finished since. The turn is alive between end-of-speech and the answer
         # (ASR + LLM + tools), and the music must stay down through it - the gate is
@@ -292,6 +299,9 @@ class AudioPlane:
         # between the question and 现在是晚上9点07分).
         self._turn_pending = False
         self._turn_pending_ts = 0.0
+        # The control-plane socket, for plane -> control events (PlayFinished).
+        self._ctl_writer: asyncio.StreamWriter | None = None
+        self._ctl_connected: asyncio.Event | None = None
         self._reply_open = False
         self.started = time.monotonic()
         self._stop = asyncio.Event()
@@ -711,6 +721,7 @@ class AudioPlane:
         self._file_position = 0
         self._file_cfg = (Path(msg.path), msg.loop, msg.gain)
         self._speech_paused = False
+        self._paused_explicit = False
         self._playback_task = asyncio.create_task(
             self._play_file(Path(msg.path), msg.loop, msg.gain), name="playback"
         )
@@ -781,6 +792,21 @@ class AudioPlane:
             if not self._speech_paused:
                 self._release("music")
         log.info("playback finished: %s", path.name)
+        # Only a natural end of a non-looping file says so: the queue advances on this,
+        # and a pause (which cancels the task above) must not look like a finish.
+        if not loop:
+            self._emit_control(PlayFinished(path=str(path)))
+
+    def _emit_control(self, msg: object) -> None:
+        """Best-effort plane -> control message; the plane outlives reconnects."""
+        writer, connected = self._ctl_writer, self._ctl_connected
+        if writer is None or connected is None or not connected.is_set():
+            return
+        try:
+            writer.write(encode_json(msg))  # type: ignore[arg-type]
+            asyncio.create_task(writer.drain(), name="ctl-drain")
+        except (ConnectionResetError, BrokenPipeError):
+            connected.clear()
 
     async def _stream_file(self, audio: np.ndarray, target: int, adapter: DeviceAdapter,
                            loop: bool) -> None:
@@ -1084,6 +1110,10 @@ class AudioPlane:
         log.info("playback paused for speech at %.1f s", self._file_position / target)
 
     def _resume_after_speech(self) -> None:
+        if self._paused_explicit:
+            # 「暂停」 was the user's own hand, not the dialogue's duck: the song waits
+            # for 「继续」, and an answer ending must not lift it.
+            return
         if not self._speech_paused or self._file_cfg is None:
             return
         path, loop, gain = self._file_cfg
@@ -1113,6 +1143,7 @@ class AudioPlane:
                 pass
         self._playback_task = None
         self._speech_paused = False
+        self._paused_explicit = False
         self._file_cfg = None
         self._turn_pending = False
         if self.adapter is not None:
@@ -1230,6 +1261,7 @@ class AudioPlane:
             )
             await writer.drain()
             connected.set()
+            self._ctl_writer, self._ctl_connected = writer, connected
             tasks = [
                 asyncio.create_task(self._capture(connected, writer), name="capture"),
                 asyncio.create_task(self._send_audio(writer, connected), name="send-audio"),
@@ -1309,6 +1341,15 @@ class AudioPlane:
                 elif isinstance(msg, StopAudio):
                     self._flush_speech()
                     await self._stop_playback()
+                elif isinstance(msg, PauseMusic):
+                    self._pause_for_speech()
+                    self._paused_explicit = True
+                    log.info("playback parked by hand (pause)")
+                elif isinstance(msg, ResumeMusic):
+                    self._paused_explicit = False
+                    if self._speech_paused:
+                        log.info("playback resumed by hand")
+                    self._resume_after_speech()
                 elif isinstance(msg, LedState):
                     # Never awaited: the script runs on the device for up to a couple
                     # of seconds and this loop also carries PLAY_PCM.

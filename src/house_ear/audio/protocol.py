@@ -306,10 +306,39 @@ class DeviceVolumeResult(BaseModel):
     error: str = ""
 
 
+class PlayFinished(BaseModel):
+    """plane -> control: a non-looping play_file reached its natural end.
+
+    A cancelled one (stop, barge, pause) says nothing - only the music queue advances
+    on this event, and a pause must not look like a finish. The path identifies which
+    request ended, so debug playback and the queue cannot mix.
+    """
+
+    type: Literal["play_finished"] = "play_finished"
+    path: str
+
+
+class PauseMusic(BaseModel):
+    """control -> plane: the user said 「暂停」 - park the track, keep the position.
+
+    Distinct from the speech duck (which `_speak_loop` grants and takes back): an
+    explicit pause survives answers and idle timeouts; only ResumeMusic (or a new
+    play_file) lifts it. Old build: `pause(for_speech=False)`, never auto-resumed.
+    """
+
+    type: Literal["pause_music"] = "pause_music"
+
+
+class ResumeMusic(BaseModel):
+    """control -> plane: the user said 「继续」 - play on from where it parked."""
+
+    type: Literal["resume_music"] = "resume_music"
+
+
 ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | LedState
     | SpeakStart | SpeakFinished | ReplyFinished | VendorSignalMsg | Error | Shutdown | ShellCommand
-    | ShellResult | DeviceVolume | DeviceVolumeResult,
+    | ShellResult | DeviceVolume | DeviceVolumeResult | PlayFinished | PauseMusic | ResumeMusic,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

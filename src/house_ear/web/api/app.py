@@ -26,6 +26,8 @@ from ...config.schema import CONFIG_VERSION, LED_STATES, Config
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
+from ...music import MusicService, NavidromeSource, PlayHistory
+from ...music.tools import build_music_tools
 from ...session import rules
 from ...session.ack import ensure_ack_wav
 from ...session.text import strip_wake
@@ -101,6 +103,33 @@ def _speaking(app: FastAPI, live: object):
     return say
 
 
+def _music_sender(app: FastAPI):
+    """The music service's way out: always the *current* plane client.
+
+    The plane restarts and reconnects; a sender that captured the first client
+    would send music into a dead socket forever.
+    """
+
+    async def send(msg: object) -> None:
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if client is None:
+            raise RuntimeError("no audio plane connected")
+        await client.send(msg)  # type: ignore[arg-type]
+
+    return send
+
+
+async def _never_sender(_msg: object) -> None:
+    """Placeholder until the app exists; replaced by `_music_sender` two lines after
+    FastAPI() is built. A call before that would be a wiring bug worth an exception."""
+
+    class _NotWired(RuntimeError):
+        pass
+
+    raise _NotWired("music sender used before the app was built")
+
+
 def create_app(
     cfg: Config,
     config_path: Path | None = None,
@@ -114,6 +143,23 @@ def create_app(
     local_tools = build_local_tools(cfg)
     for spec, _handler in local_tools:
         registry.register(spec)
+    # Music: the tools exist only when the source is configured. The service sends
+    # through whatever client is live at call time - the plane reconnects, the
+    # sender must not capture the first one forever. Kept in a local until the app
+    # object exists; `app.state.music` is set right after FastAPI() is built.
+    music_service: MusicService | None = None
+    if cfg.music.enabled:
+        source = NavidromeSource(
+            Path(cfg.music.secrets_path).expanduser(),
+            Path(cfg.music.cache_dir), cfg.music.cache_tracks,
+        )
+        history = PlayHistory(
+            Path(cfg.system.data_dir) / "music_history.json", keep=cfg.music.history_max)
+        music_service = MusicService(source, history, _never_sender(), cfg.music)
+        for spec, handler in build_music_tools(cfg, music_service):
+            registry.register(spec)
+            local_tools.append((spec, handler))
+        log.info("music: source=%s tools=%d", cfg.music.source, len(local_tools))
     adapters = build_adapters(cfg)
     traces = TraceLog()
     for dev_id, err in adapters.errors.items():
@@ -229,13 +275,18 @@ def create_app(
                         # A stop word with a song owning the speaker stops the sound;
                         # 「退下吧」 only dismisses the conversation and the song keeps
                         # playing - the old build split these between the conversation
-                        # stop and the music tools, which land in D1. Measured 21:10:
-                        # 「停止」 answered 好。 and the music played on.
+                        # stop and the music tools. Measured 21:10: 「停止」 answered
+                        # 好。 and the music played on. Through the service so the
+                        # queue state dies with the sound.
                         metrics = client.metrics
                         if (metrics is not None and metrics.output_owner == "music"
                                 and not rules.is_dismiss(clean)):
+                            service = getattr(app.state, "music", None)
                             try:
-                                await client.send(StopAudio())
+                                if service is not None:
+                                    await service.stop()
+                                else:
+                                    await client.send(StopAudio())
                             except Exception as exc:  # noqa: BLE001 - never crash the app
                                 log.info("stop music failed: %s", exc)
                         # dismiss() closes the session before the reply: the idle clock
@@ -303,6 +354,11 @@ def create_app(
                         runner.abort()
 
                 client.on_wake = on_wake
+                music = getattr(app.state, "music", None)
+                if music is not None:
+                    # The queue advances only on a file's natural end (the plane's
+                    # PlayFinished); a pause or a barge must not look like a finish.
+                    client.on_playback_finished = music.on_finished
         # Session end. Polled rather than timed: one loop, 1 s resolution, and the
         # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
         async def idle_watch() -> None:
@@ -400,6 +456,11 @@ def create_app(
     app = FastAPI(title="house-ear", version=__version__, lifespan=lifespan)
     app.state.tools = registry  # the console and tests read the same registry turns use
     app.state.trace_log = traces  # scripts and tests read the same log the API serves
+    if music_service is not None:
+        music_service.sender = _music_sender(app)
+        app.state.music = music_service
+    else:
+        app.state.music = None
 
     def auth(x_auth_token: str | None = Header(default=None)) -> None:
         if not cfg.web.auth_token:
@@ -610,6 +671,19 @@ def create_app(
             raise HTTPException(status_code=409, detail="no audio plane connected")
         await client.set_led(effect)
         return {"effect": effect}
+
+    @app.get("/api/v1/music", dependencies=[Depends(auth)])
+    async def music_status() -> dict:
+        """What is playing and what was played: the console page and the self-tests."""
+        service = getattr(app.state, "music", None)
+        if service is None:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            **service.status(),
+            "top": [{"artist": a, "plays": n} for a, n in service.history.top(5)],
+            "last": service.history.last(),
+        }
 
     @app.get("/api/v1/voice/threshold", dependencies=[Depends(auth)])
     async def voice_threshold() -> dict:

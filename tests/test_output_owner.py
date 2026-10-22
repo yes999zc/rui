@@ -303,3 +303,87 @@ def test_pause_for_speech_rewinds_the_lag_once(tmp_path: Path) -> None:
                 await plane._playback_task
 
     asyncio.run(run())
+
+
+class RecordingWriter:
+    """Collects the control messages the plane emits (PlayFinished and friends)."""
+
+    def __init__(self) -> None:
+        self.frames: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        self.frames.append(data)
+
+    async def drain(self) -> None:
+        return None
+
+
+def test_a_natural_end_emits_play_finished_but_a_cancel_never_does(tmp_path: Path) -> None:
+    """The music queue advances on play_finished only: a pause or barge cancels the
+    task, and a cancelled file must not look finished (service would skip a track)."""
+
+    from house_ear.audio.protocol import parse_control
+
+    async def run() -> None:
+        plane, _ = make_plane(tmp_path)
+        writer = RecordingWriter()
+        connected = asyncio.Event()
+        connected.set()
+        plane._ctl_writer, plane._ctl_connected = writer, connected   # type: ignore[assignment]
+        song = tmp_path / "song.wav"
+        write_wav(song, seconds=0.2)
+        long_song = tmp_path / "long.wav"
+        write_wav(long_song, seconds=2.0)
+
+        await plane._play_file(song, loop=False, gain=1.0)
+        events = [parse_control(f[5:]) for f in writer.frames]
+        assert [type(m).__name__ for m in events] == ["PlayFinished"], events
+        assert events[0].path == str(song)
+
+        # A cancelled one (the pause path) emits nothing. The file must outlive the
+        # cancel: shorter than the prebuffer, the whole file streams in one burst and
+        # finishes "naturally" before the cancel lands.
+        plane._file_cfg = (long_song, False, 1.0)
+        task = asyncio.create_task(plane._play_file(long_song, loop=False, gain=1.0))
+        await asyncio.sleep(0.05)
+        plane._speech_paused = True          # what _pause_for_speech would have set
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        assert len(writer.frames) == 1, "a cancelled play must not announce a finish"
+
+    asyncio.run(run())
+
+
+def test_an_explicit_pause_is_not_lifted_by_the_speech_path(tmp_path: Path) -> None:
+    """「暂停」 is the user's own hand: the reply-drain resume (and everything else
+    automatic) must leave the song parked until ResumeMusic (old build's
+    pause(for_speech=False), the one pause that survived every hook)."""
+    async def run() -> None:
+        plane, _ = make_plane(tmp_path)
+        song = tmp_path / "song.wav"
+        write_wav(song, seconds=2.0)   # must still be playing when the asserts look
+        plane._file_cfg = (song, False, 1.0)
+        plane._speech_paused = True
+        plane._paused_explicit = True
+        plane._file_position = 0
+
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            await asyncio.sleep(0.8)   # an empty-queue tick: the auto-resume window
+            assert plane._speech_paused is True, "an automatic path lifted 「暂停」"
+
+            plane._paused_explicit = False
+            await asyncio.sleep(0.8)
+            assert plane._speech_paused is False, "ResumeMusic did not resume"
+            assert plane._playback_task is not None and not plane._playback_task.done()
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            if plane._playback_task is not None:
+                plane._playback_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await plane._playback_task
+
+    asyncio.run(run())

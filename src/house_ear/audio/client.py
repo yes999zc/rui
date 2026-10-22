@@ -23,9 +23,12 @@ from .protocol import (
     Hello,
     LedState,
     Metrics,
+    PauseMusic,
+    PlayFinished,
     QueryMetrics,
     Ready,
     ReplyFinished,
+    ResumeMusic,
     ShellCommand,
     ShellResult,
     Shutdown,
@@ -64,6 +67,8 @@ class AudioPlaneClient:
         # The control plane decides what a vendor wake means; the client only delivers it.
         self.on_vendor: Callable[[str, str], object] | None = None
         self.on_wake: Callable[[Wake], object] | None = None
+        # One non-looping file reached its natural end (the music queue advances here).
+        self.on_playback_finished: Callable[[str], object] | None = None
         # Debug aid: keep the exact mono stream the plane produced (what AEC/KWS saw).
         self.record_voice = False
         self.voice_audio = bytearray()
@@ -142,6 +147,9 @@ class AudioPlaneClient:
             self.last_vendor = msg
             if self.on_vendor is not None:
                 self.on_vendor(msg.kind, msg.text)
+        elif isinstance(msg, PlayFinished):
+            if self.on_playback_finished is not None:
+                self.on_playback_finished(msg.path)
         elif isinstance(msg, DeviceVolumeResult):
             for waiter in self._volume_waiters:
                 if not waiter.done():
@@ -192,6 +200,14 @@ class AudioPlaneClient:
     async def reply_finished(self) -> None:
         """Tell the plane the turn is over (its cue for the follow-up gate)."""
         await self.send(ReplyFinished())
+
+    async def pause_music(self) -> None:
+        """「暂停」: park the track where it is; only resume_music lifts it."""
+        await self.send(PauseMusic())
+
+    async def resume_music(self) -> None:
+        """「继续」: play on from where the track parked."""
+        await self.send(ResumeMusic())
 
     async def device_volume(self, timeout_s: float = 3.0) -> int | None:
         """Read the speaker's mixer value through the plane (None if it cannot)."""

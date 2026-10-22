@@ -398,6 +398,35 @@ class ToolsConfig(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
 
 
+class MusicConfig(BaseModel):
+    """The music layer. One enabled source today; the interface is the point.
+
+    The old deployment ran its NAS music on Navidrome (a Subsonic-compatible server,
+    `tools/music.py` there) and that is the first source here too. Everything
+    source-specific lives behind `MusicSource`; a second source (the old build's
+    online fallback) plugs in without touching the tools or the queue.
+    """
+
+    # Off by default: without the NAS reachable the tools would only ever answer
+    # 「曲库里没找到」, and a dead tool list is noise the model has to talk around.
+    enabled: bool = False
+    source: str = "navidrome"
+    # Credential keys (url/user/password) inside this json; values never enter the
+    # config or the log. Same file the old build read.
+    secrets_path: str = "~/.hermes/.secrets/lan_media.json"
+    # Resolved PCM (16 kHz mono s16) is cached here. The old build transcoded and
+    # deleted, so replaying one song meant downloading its flac again.
+    cache_dir: str = "/tmp/house-ear-music"
+    cache_tracks: int = Field(default=8, ge=1, le=64)
+    # Radio mode (old build `_top_up`, test_radio.py): pull the next batch while the
+    # queue still has this many unplayed, and only ever at a track boundary.
+    queue_min_tracks: int = Field(default=2, ge=1, le=10)
+    queue_batch: int = Field(default=20, ge=1, le=50)
+    # How many track ids the history remembers for radio dedup. The old build slid a
+    # 40-60 window in memory and lost it on restart; ours persists.
+    history_max: int = Field(default=60, ge=10, le=500)
+
+
 class AssistantConfig(BaseModel):
     """Who the assistant is and how long it may talk.
 
@@ -486,6 +515,7 @@ class Config(BaseModel):
     assistant: AssistantConfig = Field(default_factory=AssistantConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    music: MusicConfig = Field(default_factory=MusicConfig)
 
     @field_validator("version")
     @classmethod
