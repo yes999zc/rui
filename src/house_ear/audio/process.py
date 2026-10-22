@@ -181,6 +181,12 @@ class AudioPlane:
         # a reply and a song cannot both be written: the old build paused the song for
         # speech and resumed it after the turn, and the same is needed here because two
         # writers interleaved their PCM into one player (heard on 2026-10-22).
+        # One device stream, one owner. Measured 2026-10-22: a reply written while a song
+        # was playing interleaved two PCM streams into the same player and the words came
+        # out stuttering. The plane enforces the lock; the coordinator decides what to ask
+        # for by sending speak / play_file / cue.
+        self._owner: str | None = None
+        self._pending_play: PlayFile | None = None
         self._file_position = 0
         self._file_cfg: tuple[Path, bool, float] | None = None
         self._speech_paused = False
@@ -497,6 +503,7 @@ class AudioPlane:
 
     def _start_ack(self, audio: np.ndarray) -> None:
         """Fire and forget. Awaiting the cue here would block the frame consumer."""
+        self._claim("cue")
         if self._ack_task is not None and not self._ack_task.done():
             # The previous cue belongs to a wake we have already moved past; playing it out
             # would make the hold describe a cue nobody hears.
@@ -532,6 +539,8 @@ class AudioPlane:
             self.ack_failed += 1
             self.ack_error = f"{type(exc).__name__}: {exc}"
             log.info("ack: %s", self.ack_error)
+        finally:
+            self._release("cue")
 
     async def _send_audio(self, writer: asyncio.StreamWriter, connected: asyncio.Event) -> None:
         """Consume the ring at real time and hand each block to the control plane."""
@@ -557,6 +566,12 @@ class AudioPlane:
 
     # -------------------------------------------------------------- playback
     def _start_playback(self, msg: PlayFile) -> str:
+        if not self._claim("music"):
+            # A reply or a cue owns the speaker. Hold one request (not a queue): the user
+            # asked for one song, and it starts the moment the answer ends.
+            self._pending_play = msg
+            log.info("playback queued behind %s: %s", self._owner, msg.path)
+            return msg.path
         if self._playback_task is not None and not self._playback_task.done():
             self._playback_task.cancel()
         self.playback_path = msg.path
@@ -644,11 +659,22 @@ class AudioPlane:
                 # back. Checking only after a send missed the case where the last chunk
                 # was already out and the loop sat waiting.
                 if self._speak_queue.empty():
+                    self._release("dialogue")
                     self._resume_after_speech()
                 continue
             if chunk is None:
                 continue
             # A reply owns the device stream while it speaks; the song waits where it is.
+            # A cue in flight is 320 ms: wait for it rather than cut it, but never wait
+            # forever - an owner that is not releasing is a bug, not a reason to go silent.
+            waited = 0.0
+            while not self._claim("dialogue"):
+                await asyncio.sleep(0.02)
+                waited += 0.02
+                if waited > 2.0:
+                    log.warning("output: %s never released in 2 s, taking it", self._owner)
+                    self._owner = "dialogue"
+                    break
             self._pause_for_speech()
             self._speak_queued_s = max(
                 0.0, self._speak_queued_s - len(chunk) / 2 / self.cfg.audio.voice.rate
@@ -689,12 +715,36 @@ class AudioPlane:
             self._speak_queue.get_nowait()
 
     def _flush_speech(self) -> None:
+        self._release("dialogue")
         self._speak_queued_s = 0.0
         while not self._speak_queue.empty():
             try:
                 self._speak_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    # 0 is the most important. A cue is 320 ms and must be heard over anything; a reply
+    # preempts music; a reminder waits for the reply and preempts music.
+    PRIORITY = {"cue": 0, "dialogue": 1, "reminder": 2, "music": 3}
+
+    def _claim(self, owner: str) -> bool:
+        """Take the speaker. True if this owner now holds it (preempting a lower one)."""
+        current = self._owner
+        if current is not None and self.PRIORITY[owner] > self.PRIORITY[current]:
+            return False
+        if current is not None and current != owner:
+            log.info("output: %s preempts %s", owner, current)
+            if current == "music":
+                self._pause_for_speech()
+        self._owner = owner
+        return True
+
+    def _release(self, owner: str) -> None:
+        if self._owner == owner:
+            self._owner = None
+            if self._pending_play is not None:
+                pending, self._pending_play = self._pending_play, None
+                self._start_playback(pending)
 
     # A song has hold music on the wire; dropping it loses up to this much audio.
     PLAY_LAG_SECONDS = 0.55
@@ -774,6 +824,7 @@ class AudioPlane:
             playback_s=round(self.playback_s, 1),
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
             device_volume=self.device_volume,
+            output_owner=self._owner or "",
             voice_peak_db=(
                 None if self._peak_hold <= 1e-6
                 else round(20.0 * float(np.log10(self._peak_hold)), 1)
