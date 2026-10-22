@@ -356,7 +356,11 @@ class AudioPlane:
         # Everything already handed to the device (up to MAX_LEAD_S) cannot be recalled,
         # and the client's own ALSA buffer sits behind that - the old build measured the
         # same lag and hard-coded it as PLAY_LAG_SECONDS = 0.55.
-        barged = self._speak_queued_s > 0.0 or self._playback_active()
+        # A cue is not an answer. Two wakes 100 ms apart must leave one cue playing, so
+        # only a reply or a file counts as "the speaker is talking" for barge purposes.
+        barged = self._speak_queued_s > 0.0 or (
+            self._playback_task is not None and not self._playback_task.done()
+        )
         barged_s = self._speak_queued_s
         if barged:
             self.barges += 1
@@ -604,12 +608,6 @@ class AudioPlane:
         # drain on shutdown
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
-
-    def _playback_active(self) -> bool:
-        for task in (self._playback_task, self._ack_task):
-            if task is not None and not task.done():
-                return True
-        return False
 
     def _flush_speech(self) -> None:
         self._speak_queued_s = 0.0
