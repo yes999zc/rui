@@ -265,14 +265,14 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
-## 9. 现场状态（2026-10-22 17:00）
+## 9. 现场状态（2026-10-22 19:35）
 
-- 代码：HEAD 见 `git log -1`（A1 提醒接线、A2 控制台、A3 质量口径、A4 发布约束都已提交）；
-  **306 passed**，ruff clean，`vue-tsc`/`vite build` 通过。
+- 代码：HEAD `b3da6ec` fix(vendor): pass kind to vendor_spoke in the text backstop；
+  A1–A4 + 灯环（B1）完成；**333 passed**，ruff clean，`vue-tsc`/`vite build` 通过。
 - **当前服务**：`uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools-4399-dev.yaml`
-  （设备口 4399、控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-a2b.log`）。重启前先按
-  **端口**杀干净（4399 和 8091 都要看）——只杀音频面会留下旧的 serve 占住 8091，新进程绑不上
-  控制台会直接退出（今天踩过一次）。
+  （设备口 4399、控制台 8091，日志 `~/.hermes/cache/scratch/he-serve-b2n.log`，
+  Thu 2026-10-22 18:56:10 起）。重启前先按 **端口**杀干净（4399 和 8091 都要看）——只杀音频面
+  会留下旧的 serve 占住 8091，新进程绑不上控制台会直接退出（今天踩过一次）。
 - **设备**：`$SPEAKER_IP`，`sshpass -p "$SPEAKER_PASSWORD" ssh -o HostKeyAlgorithms=+ssh-rsa root@$SPEAKER_IP`；
   客户端日志 **`/tmp/client.log`**（无时间戳，看 `[aplay]` / `underrun` 行序）；
   `aplay --buffer-size 4800 --period-size 960 -r 16000` 常驻，跨应答不退出，长静默会排空。
@@ -281,5 +281,8 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   提醒到点 408 ms 出声；30 s 音乐 `slow write` 0 / `underrun` 0；语音 20 s 回复 4 次慢写、0 underrun。
 - 门限的真实来源：`~/.hermes/cache/scratch/house-ear-s4/run/keywords-015.txt` 的 `#0.15`；
   `config.audio.voice.kws_threshold` **已从 schema 删除**，控制台显示文件解析值（§6.2 关闭）。
-- **下一步**：B1 灯环（等灯环侦察结果）→ B2 一次真机 session（厂家让位、打断 ≤300 ms、220 档、
-  灯效、唤醒端点 600 vs 1000）→ C1 冷装 → D1 音乐 → D2 记忆 → D3 放歌 20 次唤醒 → E1 P12。
+- **厂家让位（2026-10-22 19:30 实测通过，9哥）**：说 小爱同学 + 问句，小爱答，这时说 你好小瑞 →
+  一次只响一个答案（log `he-serve-b2n.log:19:30:15–23:28.4`）。已知缺项在 `docs/vendor.md` 
+  takeover 表 V1–V5（主动打断小爱、文本去重、vendor playing 时门限、音乐让渡、vendor 唤起自己的曲库）。
+- **下一步**：B2 一次真机 session（打断 ≤300 ms、220 档、灯效、唤醒端点 600 vs 1000）→ C1 冷装 
+  → D1 音乐（V1–V5 五个 gap 随 D1 一并实现）→ D2 记忆 → D3 放歌 20 次唤醒 → E1 P12。

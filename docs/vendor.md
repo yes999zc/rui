@@ -72,11 +72,45 @@ Two things the same run found, both outside this document:
   later, after our wake word. The AEC kept the room's audio separate from the vendor's
   speech well enough for that.
 
+## Takeover: "你好小瑞" while 小爱 is answering (closed 2026-10-22 19:30)
+
+The scenario 9哥 tested: say 小爱同学 and ask a question, 小爱 starts answering, then say
+你好小瑞. Expected: one answer at a time. 小爱's dialog is left behind and the line is ours.
+
+What makes it work, in the order a signal arrives:
+
+| layer | mechanism | commit |
+|---|---|---|
+| protocol | `StartCapture` counts as a vendor wake. It arrives before the final `RecognizeResult`, which was too late: both assistants answered one sentence (18:51) | `2d0134c` |
+| control plane | `on_vendor`: a vendor wake aborts our synthesis (`runner.abort()`), sends `StopAudio`, turns the light off and opens the 12 s window | `6d746b1` |
+| control plane | text backstop: a transcript containing 小爱同学 yields too, for client builds that miss `StartCapture` | `b3da6ec` (call fixed) |
+| control plane | `on_wake` → `VendorWindow.ours_spoke()`: our wake word clears the window, the same as the old build's `VENDOR["quiet_until"] = 0.0` (`assistant_v3.py:3288`) | — |
+
+Device log (`he-serve-b2n.log`, 9哥 on the speaker):
+
+```
+19:30:15.279  xiaoai: vendor wake ('今天星期几'), we yield
+19:30:15.569  event playing Playing          ← 小爱 answers
+19:30:17.423  kws: wake: 你好小瑞            ← window cleared
+19:30:18.922  event playing Idle
+19:30:23.284  turn: {'transcript': ..., 'reply': ...}   ← one answer, ours
+```
+
+### Known gaps (each has a debugged answer in the old build)
+
+| # | gap | evidence | old build |
+|---|---|---|---|
+| V1 | We do not actively stop 小爱 when 你好小瑞 fires. Today it finishes its sentence because its replies are short | 19:30 log: vendor `Idle` 1.5 s after our wake | `vendor_stop_player()` `assistant_v3.py:2248`: `ubus call mediaplayer player_play_operation '{"action":"pause","media":"common"}'`, only when `mphelper mute_stat` is 1/3 (`player_stop` does not exist, rc=3). The heavier route is `abort_xiaoai()` (client `speaker.rs:143`, `/etc/init.d/mico_aivs_lab restart`) |
+| V2 | The vendor's recognizer sometimes transcribes **our** wake word. `RecognizeResult('你好小瑞')` then opens the window and drops our own turn | 19:03:40 `vendor wake ('你好小瑞')` → 19:03:46 `dropping our turn` | Ignore a vendor final text that contains one of `runner.wake_words` |
+| V3 | While the vendor player is playing, our gate still listens and can transcribe 小爱's voice as a request | 18:56:55 our turn transcribed `到17摄氏度，南方向。` (the vendor's weather answer) | Mic gated while `DEVICE["playing"] == "playing"` and fresh (<90 s): `assistant_v3.py:3113-3116`; our wake clears the gate |
+| V4 | Music handoff. A vendor wake does not pause our song; nothing gives it back | No music path yet (D1) | `vendor_take_music()` `:2171` (pause + `resume=True`), `resume_music_after_vendor()` `:2154` on Playing→Idle, `vendor_silence_watchdog()` `:2187` 4 s for a mis-wake; pause/resume/stop words in the vendor text; `test_vendor_handoff.py`, `test_vendor_stop.py` |
+| V5 | Hardware play key (114) starts the vendor's Mi Music list on top of ours | Old-build measurement 2026-10-19 | `vendor_stop_player()` before and just after our play starts |
+
+V1–V3 belong together: they are the same "vendor is playing" state, read from the
+`playing` event that `PlayingMonitor` already reports. V4–V5 land with music (D1).
+
 ## Not done yet
 
-- The window does not pause our music (the old build paused the song for a vendor dialog so
-  the vendor's own AEC could hear the user). house-ear has no music path yet; when S5 adds
-  one, the vendor wake must pause it.
 - The old build also compared a transcript against the acknowledgement text
   (`_is_ack_echo`) to catch a cue that its own VAD segmented late. Text-level dedupe is not
-  ported yet: it belongs with S5b, where turn quality is already being fixed.
+  ported yet. `SpokenLog.is_echo` covers our replies, not the cue.
