@@ -284,19 +284,20 @@ def test_the_injected_clock_decides_night_brightness() -> None:
     assert all(NIGHT_GREEN in part for part in last_frame)
 
 
-def test_leaving_thinking_repaints_the_target_after_the_breathe(monkeypatch) -> None:
-    """The breathe runs 2.16 s on the device; a short turn must not end up blue.
+def test_the_chain_thinking_speaking_listening_still_ends_green(monkeypatch) -> None:
+    """The breathe runs 2.16 s on the device; the last sysfs write wins.
 
-    Device scripts run concurrently and the last sysfs write wins, so a fast
-    thinking -> speaking -> listening sequence used to leave the dark-blue breathe tail
-    on top. One settle frame after the breathe finishes makes the final colour
-    deterministic.
+    A fast turn paints thinking, speaking and then listening while the breathe is still
+    writing, and the breathe ends on dark blue - 9哥 saw two turns end blue. The settle
+    is keyed on "a long script is still running", not on "the previous state was
+    thinking", because by the time listening is painted the long script is two states
+    back.
     """
     import asyncio
+    import time
 
     import house_ear.device.xiaoai.led as led_mod
 
-    monkeypatch.setattr(led_mod, "THINKING_SETTLE_S", 0.02)
     scripts: list[str] = []
 
     async def fake_shell(script: str, timeout: float) -> str:
@@ -307,15 +308,20 @@ def test_leaving_thinking_repaints_the_target_after_the_breathe(monkeypatch) -> 
 
     async def run() -> None:
         ring.set_state("thinking")
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
+        # Shorten the in-flight long animation so the test does not sleep 2.3 s.
+        ring._long_until = time.monotonic() + 0.001
         before = len(scripts)
+        ring.set_state("speaking")
         ring.set_state("listening")
         await asyncio.sleep(0.01)
+        # Back-to-back states: the speaking fade is dropped by the generation token,
+        # only the newest script leaves. (In a real turn they are seconds apart.)
         assert len(scripts) == before + 1
-        await asyncio.sleep(0.05)  # settle delay
+        await asyncio.sleep(0.25)                  # settle delay (remaining + 0.15)
         assert len(scripts) == before + 2
         settle = scripts[-1]
         assert settle.count("led_rgb") == 18
-        assert "0x008800" in settle  # listening green at gain 1.9, noon
+        assert "0x008800" in settle                # listening green at gain 1.9, noon
 
     asyncio.run(run())

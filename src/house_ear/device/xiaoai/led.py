@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -326,6 +327,9 @@ class LedRing:
         # change wins is discarded before it reaches the device.
         self._generation = 0
         self._tasks: set[asyncio.Task] = set()
+        # Monotonic end of the in-flight long animation (thinking's 2.16 s breathe).
+        # Any state painted before this moment needs a settle frame afterwards.
+        self._long_until = 0.0
 
     @property
     def state(self) -> str:
@@ -339,14 +343,24 @@ class LedRing:
             return
         if not force and self._name == name:
             return  # idempotent: the same state must not cost a shell round-trip
-        prev_name, prev = self._name, self._rgb
+        prev = self._rgb
         self._name, self._rgb = name, rgb
         token = self._bump()
         if not self.enabled:
             return  # state is still tracked; the ring stays dark
-        self._spawn(self._transition_script(name, prev, rgb), token)
-        if prev_name == "thinking" and name != "thinking":
-            self._settle(name, token, THINKING_SETTLE_S)
+        script = self._transition_script(name, prev, rgb)
+        self._spawn(script, token)
+        if name == "thinking":
+            self._long_until = time.monotonic() + duration_of(script)
+        else:
+            # Any state painted while the breathe is still running needs one settle
+            # frame after it: the device executes scripts concurrently and the last
+            # sysfs write wins. Checking "still running" rather than "previous state
+            # was thinking" matters for thinking -> speaking -> listening, where the
+            # long script is two states back (9哥 saw the turn end blue twice).
+            remaining = self._long_until - time.monotonic()
+            if remaining > 0:
+                self._settle(name, token, remaining + 0.15)
 
     def _settle(self, name: str, token: int, delay: float) -> None:
         """Re-paint a state once the previous long animation has finished.
@@ -381,7 +395,6 @@ class LedRing:
         """
         white = self.colors.get("wake", COLOR_RGB["wake"])
         green = self.colors["listening"]
-        prev_name = self._name
         self._name, self._rgb = "listening", green
         token = self._bump()
         if not self.enabled:
@@ -393,8 +406,9 @@ class LedRing:
             parts.append(_sleep(WAKE_STEP_MS))
         parts.extend(self._fade_parts(white, green, self.fade_ms, level))
         self._spawn("; ".join(parts), token)
-        if prev_name == "thinking":
-            self._settle("listening", token, THINKING_SETTLE_S)
+        remaining = self._long_until - time.monotonic()
+        if remaining > 0:
+            self._settle("listening", token, remaining + 0.15)
 
     def error_pulse(self) -> None:
         """Two short red pulses plus a dim red settle, over in ~700 ms."""
