@@ -218,7 +218,11 @@ class TurnRunner:
     def build_prompt(self) -> str:
         if self.system_prompt is not None:
             return self.system_prompt
-        return prompts.build(self.assistant, tools_ok=bool(self.tools))
+        return prompts.build(
+            self.assistant,
+            tools_ok=bool(self.tools),
+            tool_names=[getattr(spec, "name", "") for spec, _handler in self.tools],
+        )
 
     def abort(self) -> None:
         """Stop speaking the current answer (barge-in)."""

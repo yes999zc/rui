@@ -15,6 +15,7 @@ situation: say you cannot check, never invent a number.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 
 from ..config.schema import AssistantConfig
 
@@ -82,10 +83,17 @@ def now_str(when: dt.datetime | None = None) -> str:
     )
 
 
+NO_MUSIC_NOTE = (
+    "（注意：你现在没有播放音乐、切歌、暂停或继续播放的能力，也没有接任何音乐来源。\n"
+    "用户让你放歌、接着放、换一首时，直接说做不到，不要答应，更不要说已经开始放了。）"
+)
+
+
 def build(
     assistant: AssistantConfig | None = None,
     *,
     tools_ok: bool = False,
+    tool_names: Sequence[str] = (),
     now: dt.datetime | None = None,
 ) -> str:
     """Assemble the system prompt exactly as the model receives it."""
@@ -107,6 +115,11 @@ def build(
         except (KeyError, IndexError, ValueError):
             pass
         text += "\n" + persona
+    if not any(name.startswith("music") for name in tool_names):
+        # Measured 2026-10-22: with music playing and no music tool, it answered
+        # 「好，接着放。」 - a promise it had no way to keep. Saying so is the only honest
+        # option until the music layer exists.
+        text += "\n" + NO_MUSIC_NOTE
     if tools_ok:
         text += "\n" + TOOL_RULES
     else:

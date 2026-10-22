@@ -142,3 +142,14 @@ def test_what_we_just_said_cannot_become_a_turn() -> None:
     import time as _time
 
     assert not m.is_echo("我想想", now=_time.monotonic() + 30)
+
+
+def test_without_a_music_tool_it_says_it_cannot_play_music() -> None:
+    """Measured 2026-10-22: with a song playing it answered 「好，接着放。」 with no tool."""
+    text = prompts.build(tool_names=["local.weather", "local.news"])
+    assert "没有播放音乐" in text
+
+
+def test_the_note_disappears_once_a_music_tool_exists() -> None:
+    text = prompts.build(tool_names=["local.weather", "music.play"])
+    assert "没有播放音乐" not in text

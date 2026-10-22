@@ -175,6 +175,13 @@ class AudioPlane:
         self.playback_path = ""
         self.last_playback_error = ""
         self._playback_task: asyncio.Task | None = None
+        # Where the current file is, and whether speech paused it. One device stream means
+        # a reply and a song cannot both be written: the old build paused the song for
+        # speech and resumed it after the turn, and the same is needed here because two
+        # writers interleaved their PCM into one player (heard on 2026-10-22).
+        self._file_position = 0
+        self._file_cfg: tuple[Path, bool, float] | None = None
+        self._speech_paused = False
         self.started = time.monotonic()
         self._stop = asyncio.Event()
         # Pre-wake audio. The streaming KWS reports a hit ~0.5 s after the wake word ends,
@@ -398,7 +405,16 @@ class AudioPlane:
             self.last_barge_s = barged_s
             log.info("barge: %d wake during playback, dropped %.1f s queued", self.barges, barged_s)
             self._flush_speech()
-            await self._stop_playback()
+            # A wake word interrupts speech, not the song: pause it where it is and let
+            # the turn's end bring it back (old build: paused_by_barge + auto-resume).
+            # The device still has up to a buffer of audio in hand, so it is told to drop
+            # it - that is the same stop_play a barge always needed.
+            self._pause_for_speech()
+            if self.adapter is not None:
+                try:
+                    await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+                    log.info("barge: stop failed: %s", exc)
 
         audio, mode, note = render_ack(self.cfg)
         self.ack_mode_effective = mode
@@ -541,12 +557,16 @@ class AudioPlane:
         if self._playback_task is not None and not self._playback_task.done():
             self._playback_task.cancel()
         self.playback_path = msg.path
+        self._file_position = 0
+        self._file_cfg = (Path(msg.path), msg.loop, msg.gain)
+        self._speech_paused = False
         self._playback_task = asyncio.create_task(
             self._play_file(Path(msg.path), msg.loop, msg.gain), name="playback"
         )
         return msg.path
 
-    async def _play_file(self, path: Path, loop: bool, gain: float) -> None:
+    async def _play_file(self, path: Path, loop: bool, gain: float,
+                         offset: int = 0) -> None:
         try:
             pcm, rate = read_wav_mono(path)
         except (OSError, wave.Error) as exc:
@@ -557,7 +577,12 @@ class AudioPlane:
         adapter = self.adapter
         if adapter is None:
             return
-        log.info("playback: %s %.1f s at %s Hz", path.name, audio.size / target, target)
+        if offset:
+            offset = int(min(max(offset, 0), max(audio.size - 1, 0)))
+            audio = audio[offset:]
+            self._file_position = offset
+        log.info("playback: %s %.1f s at %s Hz (from %.1f s)", path.name,
+                 audio.size / target, target, offset / target)
         try:
             await self._stream_file(audio, target, adapter, loop)
         except asyncio.CancelledError:
@@ -583,6 +608,7 @@ class AudioPlane:
                     channels=1,
                 )
                 self.playback_s += chunk.size / target
+                self._file_position += chunk.size
                 # Same prebuffer as replies: a file paced at exactly 1.0x starves the
                 # device buffer, and a song is long enough for that to be audible.
                 now = time.monotonic()
@@ -607,6 +633,8 @@ class AudioPlane:
             chunk = await self._speak_queue.get()
             if chunk is None:
                 continue
+            # A reply owns the device stream while it speaks; the song waits where it is.
+            self._pause_for_speech()
             self._speak_queued_s = max(
                 0.0, self._speak_queued_s - len(chunk) / 2 / self.cfg.audio.voice.rate
             )
@@ -635,6 +663,12 @@ class AudioPlane:
             # Waiting until the buffer would drop to the target, not until it is empty:
             # that wait is the whole fix.
             await asyncio.sleep(wait)
+            if self._speak_queued_s <= 0.0 and self._speak_queue.empty():
+                # One short grace period: a sentence boundary is not the end of the answer,
+                # and resuming the song between two sentences would be worse than a pause.
+                await asyncio.sleep(0.4)
+                if self._speak_queue.empty():
+                    self._resume_after_speech()
         # drain on shutdown
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
@@ -646,6 +680,37 @@ class AudioPlane:
                 self._speak_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+
+    # A song has hold music on the wire; dropping it loses up to this much audio.
+    PLAY_LAG_SECONDS = 0.55
+
+    def _pause_for_speech(self) -> None:
+        """Stop feeding the device while a reply speaks, remembering where the song is.
+
+        The old build measured what is already in flight as 0.55 s (aplay pipe plus one
+        ALSA buffer); resuming from the last *sent* sample would skip that much, so the
+        position is rewound by it, exactly as `rewind()` did there.
+        """
+        task = self._playback_task
+        if task is None or task.done() or self._file_cfg is None:
+            return
+        target = self.cfg.audio.playback.rate
+        self._file_position = max(0, self._file_position - int(self.PLAY_LAG_SECONDS * target))
+        task.cancel()
+        self._speech_paused = True
+        log.info("playback paused for speech at %.1f s", self._file_position / target)
+
+    def _resume_after_speech(self) -> None:
+        if not self._speech_paused or self._file_cfg is None:
+            return
+        path, loop, gain = self._file_cfg
+        self._speech_paused = False
+        self._playback_task = asyncio.create_task(
+            self._play_file(path, loop, gain, offset=self._file_position),
+            name="playback",
+        )
+        log.info("playback resumed after speech at %.1f s",
+                 self._file_position / self.cfg.audio.playback.rate)
 
     async def _stop_playback(self) -> None:
         # A cue is playback too: StopAudio and shutdown must not leave it sounding.
@@ -660,6 +725,8 @@ class AudioPlane:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         self._playback_task = None
+        self._speech_paused = False
+        self._file_cfg = None
         if self.adapter is not None:
             try:
                 await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
