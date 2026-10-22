@@ -274,6 +274,8 @@ class TurnRunner:
         pcm: bytes,
         speak: Callable[[bytes], Awaitable[None]],
         trace: TurnTrace,
+        *,
+        transcript: str | None = None,
     ) -> TurnResult:
         """One turn, with a hard ceiling.
 
@@ -283,7 +285,9 @@ class TurnRunner:
         twice and eat the whole budget.
         """
         try:
-            return await asyncio.wait_for(self._run(pcm, speak, trace), self.turn_timeout_s)
+            return await asyncio.wait_for(
+                self._run(pcm, speak, trace, transcript=transcript), self.turn_timeout_s
+            )
         except TimeoutError:
             log.warning("turn: timed out after %.0f s", self.turn_timeout_s)
             return TurnResult(error=f"turn timed out after {self.turn_timeout_s:.0f} s")
@@ -293,14 +297,17 @@ class TurnRunner:
         pcm: bytes,
         speak: Callable[[bytes], Awaitable[None]],
         trace: TurnTrace,
+        *,
+        transcript: str | None = None,
     ) -> TurnResult:
         result = TurnResult()
-        transcript, asr_report = await self.transcribe(pcm, trace)
-        if asr_report is not None:
-            result.stages["asr"] = asr_report
-        # The wake pre-roll is replayed into the gate on purpose, so the transcript can
-        # start with the wake phrase. The model must see the request only.
-        transcript = strip_wake(transcript, self.wake_words)
+        if transcript is None:
+            spoken_text, asr_report = await self.transcribe(pcm, trace)
+            if asr_report is not None:
+                result.stages["asr"] = asr_report
+            # The wake pre-roll is replayed into the gate on purpose, so the transcript can
+            # start with the wake phrase. The model must see the request only.
+            transcript = strip_wake(spoken_text, self.wake_words)
         result.transcript = transcript
         if not transcript.strip():
             result.error = "empty transcript"
@@ -443,6 +450,15 @@ class TurnRunner:
         if result.reply:
             self.history.append({"role": "assistant", "content": result.reply})
         return result
+
+    async def say(self, text: str, speak: Callable[[bytes], Awaitable[None]],
+                  trace: TurnTrace) -> int:
+        """Speak one canned line. No model, no round trip: session actions are decided."""
+        chain = tts_chain(self.providers, self.sample_rate)
+        _used, spoken, _report, error = await self._speak_sentence(text, chain, speak, trace)
+        if error:
+            log.warning("canned line failed: %s", error)
+        return spoken
 
     async def _call_tool(self, call: dict) -> str:
         """Run one tool call. Failures are sentences, because the model has to say them."""

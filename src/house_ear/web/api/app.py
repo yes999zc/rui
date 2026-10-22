@@ -24,7 +24,9 @@ from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
 from ...providers.chain import build_stage
+from ...session import rules
 from ...session.ack import ensure_ack_wav
+from ...session.text import strip_wake
 from ...session.turn import TurnRunner
 from ...session.vendor import VendorWindow
 from ...tools.info import build_tools
@@ -118,11 +120,33 @@ def create_app(
                     trace = TurnTrace(device_id=client.ready.device_id if client.ready else "")
                     if client.last_wake is not None:
                         trace.mark("wake", at_ms=client.last_wake.ts_ms)
+                    text, asr_report = await runner.transcribe(pcm, trace)
+                    clean = strip_wake(text, runner.wake_words)
+                    if not clean.strip():
+                        # Only the wake word arrived: the wake residue case, not a request.
+                        log.info("utterance was wake residue only; no turn")
+                        return
+                    if rules.is_noise(clean):
+                        # 「嗯。」 after the wake word: measured on the real speaker, and it
+                        # used to become a whole turn ("嗯，你说。").
+                        log.info("noise, no turn: %r", clean)
+                        return
+                    if rules.stop_intent(clean):
+                        spoken = await runner.say(rules.stop_reply(), client.speak, trace)
+                        app.state.last_turn = {
+                            "transcript": clean, "reply": "", "session_action": "stop",
+                            "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
+                        }
+                        traces.add(trace)
+                        log.info("stop intent: %r -> session closed", clean)
+                        return
                     try:
-                        result = await runner.run(pcm, client.speak, trace)
+                        result = await runner.run(pcm, client.speak, trace, transcript=clean)
                     except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
                         log.warning("turn failed: %s", exc)
                         return
+                    if asr_report is not None:
+                        result.stages.setdefault("asr", asr_report)
                     app.state.last_turn = result.to_dict()
                     traces.add(trace)
                     log.info("turn: %s", result.to_dict())

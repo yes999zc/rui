@@ -105,3 +105,22 @@ def test_the_old_wake_word_still_works_for_the_old_homophones() -> None:
     assert pattern is not None
     assert pattern.search("你好小志，几点了")
     assert wake_pattern([]) is None
+
+
+def test_session_rules_keep_noise_and_stop_words_out_of_the_model() -> None:
+    from house_ear.session import rules
+
+    # noise: the real-device 「嗯。」 that became a whole turn
+    for text in ("嗯。", "嗯嗯", "啊？", "。。。", "", "  "):
+        assert rules.is_noise(text), text
+    # a real one-character answer is not noise
+    assert not rules.is_noise("要")
+    assert not rules.is_noise("停")
+
+    # stop: session actions, including the ASR slip measured on the device
+    for text in ("停止", "停一下", "退下吧", "对一下吧", "关闭", "不听了", "关机"):
+        assert rules.stop_intent(text), text
+    # a sentence that merely contains a stop word is a question, not a dismissal
+    assert not rules.stop_intent("把灯关掉以后告诉我天气怎么样")
+    assert not rules.stop_intent("现在几点了")
+    assert rules.stop_reply(0) != rules.stop_reply(1)
