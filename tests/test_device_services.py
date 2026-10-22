@@ -29,6 +29,8 @@ def test_the_mixer_value_is_parsed_from_amixer() -> None:
     services = XiaoaiServices(shell)
     assert asyncio.run(services.read_volume()) == 220
     assert "numid=177" in shell.scripts[0]
+    # The awk action must survive: an f-string once ate it and every read returned None.
+    assert "{print $2" in shell.scripts[0]
 
 
 @pytest.mark.parametrize("answer", ["", "not a number", "999", "-3"])

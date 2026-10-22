@@ -12,8 +12,11 @@ import logging
 log = logging.getLogger(__name__)
 
 MIXER = "numid=177"
+# Built by concatenation, not an f-string: the awk action needs literal braces, and
+# escaping them in an f-string silently produced `/: values={print $2; exit}` - a pattern
+# with no action, which prints nothing and made the mixer read as None.
 READ_VOLUME = (
-    f"amixer -c 0 cget {MIXER} | awk -F'[=,]' '/: values={{print $2; exit}}'"
+    "amixer -c 0 cget " + MIXER + " | awk -F'[=,]' '/: values=/ {print $2; exit}'"
 )
 
 
