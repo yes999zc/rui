@@ -179,14 +179,14 @@ class AudioPlaneClient:
         await self.writer.drain()
         await self.send(SpeakFinished())
 
-    async def set_led(self, effect: str) -> None:
+    async def set_led(self, effect: str, repaint: bool = False) -> None:
         """Ask the plane to paint the ring. The plane applies it in a task, never inline.
 
         The method only sends; it does not wait for the animation, because the animation
         runs on the device for up to a couple of seconds and the caller is usually on the
         turn path.
         """
-        await self.send(LedState(effect=effect))
+        await self.send(LedState(effect=effect, repaint=repaint))
 
     async def device_volume(self, timeout_s: float = 3.0) -> int | None:
         """Read the speaker's mixer value through the plane (None if it cannot)."""

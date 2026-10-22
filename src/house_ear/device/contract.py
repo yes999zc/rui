@@ -116,7 +116,7 @@ class DeviceServices(Protocol):
 
     async def set_volume(self, volume: int) -> None: ...
 
-    async def set_led(self, effect: str, color: str = "") -> None:
+    async def set_led(self, effect: str, color: str = "", *, repaint: bool = False) -> None:
         """Paint the light ring, if the device has one. Fire-and-forget."""
         ...
 
@@ -133,7 +133,7 @@ class NullServices:
     async def set_volume(self, volume: int) -> None:
         raise NotImplementedError("this device has no controllable mixer")
 
-    async def set_led(self, effect: str, color: str = "") -> None:
+    async def set_led(self, effect: str, color: str = "", *, repaint: bool = False) -> None:
         raise NotImplementedError("this device has no light ring")
 
 
@@ -166,7 +166,7 @@ class DeviceAdapter(Protocol):
         """
         return []
 
-    async def set_led(self, effect: str, color: str = "") -> None: ...
+    async def set_led(self, effect: str, color: str = "", *, repaint: bool = False) -> None: ...
 
     # --- optional play-head report ------------------------------------------------
     # A device that reports every chunk it has handed to its own sink ("consumed")

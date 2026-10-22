@@ -48,7 +48,7 @@ code{background:#f4f4f5;padding:2px 6px;border-radius:4px}</style></head>
 <p>API: <code>/health</code>, <code>/api/v1/doctor</code>, <code>/api/v1/config</code></p></body></html>"""
 
 
-def _light(app: FastAPI, effect: str) -> None:
+def _light(app: FastAPI, effect: str, repaint: bool = False) -> None:
     """Paint the ring without blocking the caller.
 
     The shell request shares the websocket with the audio stream; the old build measured
@@ -58,7 +58,7 @@ def _light(app: FastAPI, effect: str) -> None:
     live = supervisor.client if supervisor is not None else None
     if live is None:
         return
-    task = asyncio.create_task(live.set_led(effect), name="led")
+    task = asyncio.create_task(live.set_led(effect, repaint=repaint), name="led")
     tasks = getattr(app.state, "led_tasks", None)
     if tasks is not None:
         tasks.add(task)
@@ -237,8 +237,16 @@ def create_app(
                 client.on_wake = on_wake
         # Session end. Polled rather than timed: one loop, 1 s resolution, and the
         # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
+        async def _reassert_listening(live: object) -> None:
+            for index in range(3):
+                await asyncio.sleep(1.0 if index == 0 else 1.2)
+                if getattr(live, "client", None) is None:
+                    return
+                _light(app, "listening", repaint=True)
+
         async def idle_watch() -> None:
             live = getattr(app.state, "audio", None)
+            was_busy = False
             while True:
                 await asyncio.sleep(1.0)
                 client = getattr(live, "client", None) if live is not None else None
@@ -250,6 +258,15 @@ def create_app(
                     metrics = getattr(getattr(state, "client", None), "metrics", None)
                     return bool(metrics is not None and metrics.output_owner)
 
+                busy_now = busy()
+                if was_busy and not busy_now:
+                    # The vendor's LED service repaints its idle colour when our audio
+                    # stops. Re-assert listening a few times, but only if the state is
+                    # still listening (a new turn's wake must win).
+                    asyncio.create_task(
+                        _reassert_listening(app, client), name="led-reassert"
+                    )
+                was_busy = busy_now
                 try:
                     line = await runner.check_idle(
                         _speaking(app, client), TurnTrace(device_id="session"), busy=busy

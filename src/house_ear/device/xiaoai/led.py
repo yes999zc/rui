@@ -386,6 +386,20 @@ class LedRing:
         script = frame(rgb, level=self._level(), path=self.device_path)
         await self._run(script, token)
 
+    def repaint(self, name: str) -> None:
+        """Re-assert the ring's current state, but only if it is still `name`.
+
+        The vendor's LED service repaints its own idle colour after our audio stops, so
+        the app re-asserts listening a few times after playback ends. A repaint must not
+        overwrite a newer state (a wake during the retry window), hence the name check.
+        """
+        if self._name != name:
+            return
+        token = self._bump()
+        if not self.enabled:
+            return
+        self._spawn(frame(self._rgb, level=self._level(), path=self.device_path), token)
+
     def wake_ring(self) -> None:
         """Outward sweep from the centre, then settle on listening green.
 

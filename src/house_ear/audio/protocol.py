@@ -202,6 +202,9 @@ class LedState(BaseModel):
 
     type: Literal["led"] = "led"
     effect: str
+    # Force a repaint of the same state: the vendor's LED service repaints its idle
+    # colour after our audio ends, so "listening" must be re-asserted, not assumed.
+    repaint: bool = False
 
 
 class SpeakStart(BaseModel):

@@ -325,3 +325,35 @@ def test_the_chain_thinking_speaking_listening_still_ends_green(monkeypatch) -> 
         assert "0x008800" in settle                # listening green at gain 1.9, noon
 
     asyncio.run(run())
+
+
+def test_a_repaint_only_touches_the_state_it_names() -> None:
+    """The vendor repaints its idle colour after our audio; we re-assert, but never over a new state."""
+    import asyncio
+
+    scripts: list[str] = []
+
+    async def fake_shell(script: str, timeout: float) -> str:
+        scripts.append(script)
+        return ""
+
+    from house_ear.device.xiaoai.led import LedRing
+
+    ring = LedRing(fake_shell, enabled=True, clock=lambda: 12)
+
+    async def run() -> None:
+        ring.set_state("listening")
+        await asyncio.sleep(0.01)
+        before = len(scripts)
+        ring.repaint("listening")
+        await asyncio.sleep(0.01)
+        assert len(scripts) == before + 1
+        # A newer state must not be overwritten by a late retry.
+        ring.set_state("thinking")
+        await asyncio.sleep(0.01)
+        before = len(scripts)
+        ring.repaint("listening")
+        await asyncio.sleep(0.01)
+        assert len(scripts) == before
+
+    asyncio.run(run())

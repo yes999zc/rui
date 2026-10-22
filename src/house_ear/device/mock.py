@@ -105,7 +105,7 @@ class MockAdapter(DeviceAdapter):
     async def set_volume(self, volume: int) -> None:
         self.volume = volume
 
-    async def set_led(self, effect: str, color: str = "") -> None:
+    async def set_led(self, effect: str, color: str = "", *, repaint: bool = False) -> None:
         self.last_led = effect
         self.led_history.append(effect)
 

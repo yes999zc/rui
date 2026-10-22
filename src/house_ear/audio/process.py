@@ -908,12 +908,12 @@ class AudioPlane:
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
 
-    async def _apply_led(self, effect: str) -> None:
+    async def _apply_led(self, effect: str, repaint: bool = False) -> None:
         adapter = self.adapter
         if adapter is None:
             return
         try:
-            await adapter.set_led(effect)
+            await adapter.set_led(effect, repaint=repaint)
         except Exception as exc:  # noqa: BLE001 - a light is never worth an outage
             log.info("led: %s", exc)
 
@@ -1198,7 +1198,7 @@ class AudioPlane:
                 elif isinstance(msg, LedState):
                     # Never awaited: the script runs on the device for up to a couple
                     # of seconds and this loop also carries PLAY_PCM.
-                    asyncio.create_task(self._apply_led(msg.effect), name="led")
+                    asyncio.create_task(self._apply_led(msg.effect, msg.repaint), name="led")
                 elif isinstance(msg, SpeakStart):
                     self._segment_pending = True
                 elif isinstance(msg, SpeakFinished):

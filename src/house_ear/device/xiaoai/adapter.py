@@ -271,7 +271,7 @@ class XiaoaiAdapter(DeviceAdapter):
         await self.services.set_volume(volume)
         self.device_volume = volume
 
-    async def set_led(self, effect: str, color: str = "") -> None:
+    async def set_led(self, effect: str, color: str = "", *, repaint: bool = False) -> None:
         """Hand an effect to the ring. Synchronous inside: it schedules and returns.
 
         The app names the wake effect "wake"; the ring plays its outward sweep for it and
@@ -279,6 +279,8 @@ class XiaoaiAdapter(DeviceAdapter):
         """
         if effect == "wake":
             self.led.wake_ring()
+        elif repaint:
+            self.led.repaint(effect)
         else:
             self.led.set_state(effect)
 
