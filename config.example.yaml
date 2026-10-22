@@ -113,6 +113,19 @@ providers:
 tools:
   expose: domain
   whitelist: []
+  # The three information tools a voice assistant needs on day one. Weather (open-meteo)
+  # and news (public digest) need no key; search talks to any OpenAI-ish search endpoint.
+  weather:
+    city: ""               # your city; empty means the assistant asks instead of guessing
+    days_max: 3            # 1 = today only, up to 3
+  news:
+    enabled: true
+  search:
+    enabled: true
+    kind: deepseek         # deepseek | none
+    base_url: https://api.deepseek.com
+    api_key_env: DEEPSEEK_API_KEY   # the key lives in env or secrets.yaml, never here
+    count: 6
   mcp_servers: []
   ha:
     base_url: ""

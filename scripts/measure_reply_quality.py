@@ -36,8 +36,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from house_ear import secrets  # noqa: E402
 from house_ear.config import load_config  # noqa: E402
 from house_ear.session.turn import TurnRunner  # noqa: E402
+from house_ear.tools.info import build_tools  # noqa: E402
 from house_ear.trace import TurnTrace  # noqa: E402
 
 DIGITS = re.compile(r"[0-9０-９]|零|一|二|三|四|五|六|七|八|九|十|两")
@@ -88,6 +90,8 @@ async def run(args: argparse.Namespace) -> int:
     history_turns = (
         args.history_turns if args.history_turns is not None else cfg.session.history_rounds
     )
+    secrets.configure(cfg.system.data_dir)
+    tools = build_tools(cfg) if args.tools else []
     runner = TurnRunner(
         cfg.providers,
         sample_rate=rate,
@@ -95,7 +99,10 @@ async def run(args: argparse.Namespace) -> int:
         assistant=cfg.assistant,
         history_turns=history_turns,
         wake_words=[w for d in cfg.devices for w in d.wake_words],
+        tools=tools,
     )
+    if tools:
+        print("tools: " + ", ".join(spec.llm_name for spec, _ in tools), flush=True)
     print(f"prompt: {len(runner.build_prompt())} chars"
           f"{' (override)' if prompt is not None else ' (assembled)'}, "
           f"history_turns={runner.history_turns}, "
@@ -128,6 +135,7 @@ async def run(args: argparse.Namespace) -> int:
                 "turn_ms": round(elapsed),
                 "llm_first_ms": trace.to_dict()["stages_ms"].get("llm_first"),
                 "audio_bytes": spoken,
+                "tools_called": result.tools,
             }
             rows.append(row)
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -167,6 +175,8 @@ def main() -> int:
     p.add_argument("--history-turns", type=int, default=None,
                    help="history window handed to the model (default: session.history_rounds)")
     p.add_argument("--prompt", default=None, help="override the system prompt")
+    p.add_argument("--no-tools", dest="tools", action="store_false",
+                   help="run without the information tools (reproduces the S5b baseline)")
     p.add_argument("--tts", action="store_true", help="also synthesise (costs time, no data)")
     p.add_argument("--out", default="/tmp/house-ear-quality.jsonl")
     p.add_argument("--env", default=str(Path.home() / ".hermes/.env"))

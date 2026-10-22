@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from ... import __version__
+from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
 from ...config.schema import CONFIG_VERSION, Config
@@ -27,6 +27,7 @@ from ...providers.chain import build_stage
 from ...session.ack import ensure_ack_wav
 from ...session.turn import TurnRunner
 from ...session.vendor import VendorWindow
+from ...tools.info import build_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
 
@@ -48,7 +49,13 @@ def create_app(
     config_path: Path | None = None,
     start_audio: bool = False,
 ) -> FastAPI:
+    secrets.configure(cfg.system.data_dir)
     registry = ToolRegistry()
+    # The information tools exist here, once: the console lists them from the registry and
+    # the turn loop gets the same specs plus their handlers.
+    info_tools = build_tools(cfg)
+    for spec, _handler in info_tools:
+        registry.register(spec)
     adapters = build_adapters(cfg)
     traces = TraceLog()
     for dev_id, err in adapters.errors.items():
@@ -71,9 +78,7 @@ def create_app(
             assistant=cfg.assistant,
             history_turns=cfg.session.history_rounds,
             wake_words=[w for d in cfg.devices for w in d.wake_words],
-            # Tools are registered but not wired into a turn yet (S5e): the prompt must
-            # tell the model it cannot check anything live instead of asking it to search.
-            tools_ok=False,
+            tools=info_tools,
         )
         app.state.runner = runner
         app.state.last_turn = None

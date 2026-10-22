@@ -8,7 +8,9 @@ attributed instead of guessed at.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import json
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -16,7 +18,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..config.schema import AssistantConfig, ProvidersConfig
-from ..providers.base import ChatChunk
 from ..providers.chain import (
     StageFailure,
     StageReport,
@@ -64,6 +65,9 @@ class TurnResult:
     audio_bytes: int = 0
     stages: dict[str, StageReport] = field(default_factory=dict)
     error: str = ""
+    # Which tools actually ran this turn. "Did the model look, or did it answer from
+    # memory" is the one question a fabrication report cannot answer afterwards.
+    tools: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -71,6 +75,7 @@ class TurnResult:
             "reply": self.reply,
             "audio_bytes": self.audio_bytes,
             "error": self.error,
+            "tools": self.tools,
             "stages": {
                 name: {"used": r.used, "elapsed_ms": r.elapsed_ms, "attempts": r.attempts}
                 for name, r in self.stages.items()
@@ -143,24 +148,39 @@ class TurnRunner:
         history_turns: int = 6,
         assistant: AssistantConfig | None = None,
         wake_words: Sequence[str] = (),
-        tools_ok: bool = False,
+        tools: Sequence[tuple[Any, Any]] = (),
+        tool_timeout_s: float = 20.0,
+        turn_timeout_s: float = 30.0,
     ) -> None:
         self.providers = providers
-        # None means "assemble per turn": the prompt carries the length bands and the
-        # no-tools note, and a long session must not keep a stale copy. A string is an
-        # explicit override, used by tests and by scripts that measure one prompt.
+        # None means "assemble per turn": the prompt carries the length bands, the tool
+        # rules and the clock, and a long session must not keep a stale copy.
         self.system_prompt = system_prompt
         self.assistant = assistant or AssistantConfig()
         self.sample_rate = sample_rate
         self.history_turns = history_turns
         self.wake_words = tuple(wake_words)
-        self.tools_ok = tools_ok
+        self.tools = tuple(tools)
+        self.tool_timeout_s = tool_timeout_s
+        # A turn that hangs is worse than a turn that fails: the speaker is left waiting and
+        # the session says nothing. The old build wrapped it in wait_for(30) for that reason.
+        self.turn_timeout_s = turn_timeout_s
         self.history: list[dict] = []
+        self._handlers = {spec.llm_name: handler for spec, handler in self.tools}
+        # The old build's INFO_TOOLS: a looked-up answer gets the longer budget; a weather
+        # answer does not (it is short and the user is standing there).
+        self.info_tool_names = {
+            spec.llm_name for spec, _ in self.tools if spec.llm_name in ("news", "web_search")
+        }
+
+    @property
+    def llm_tools(self) -> list[dict]:
+        return [spec.as_llm_tool() for spec, _ in self.tools]
 
     def build_prompt(self) -> str:
         if self.system_prompt is not None:
             return self.system_prompt
-        return prompts.build(self.assistant, tools_ok=self.tools_ok)
+        return prompts.build(self.assistant, tools_ok=bool(self.tools))
 
     def history_messages(self, transcript: str) -> list[dict]:
         """The last `history_turns` rounds, minus earlier copies of the question asked now.
@@ -253,6 +273,25 @@ class TurnRunner:
         speak: Callable[[bytes], Awaitable[None]],
         trace: TurnTrace,
     ) -> TurnResult:
+        """One turn, with a hard ceiling.
+
+        A turn that hangs is worse than a turn that fails: the speaker waits, the session
+        says nothing, and the logs do not say why either. The old build wrapped its turn in
+        wait_for(30) for the same reason; a search that stalls at 12 s can otherwise run
+        twice and eat the whole budget.
+        """
+        try:
+            return await asyncio.wait_for(self._run(pcm, speak, trace), self.turn_timeout_s)
+        except TimeoutError:
+            log.warning("turn: timed out after %.0f s", self.turn_timeout_s)
+            return TurnResult(error=f"turn timed out after {self.turn_timeout_s:.0f} s")
+
+    async def _run(
+        self,
+        pcm: bytes,
+        speak: Callable[[bytes], Awaitable[None]],
+        trace: TurnTrace,
+    ) -> TurnResult:
         result = TurnResult()
         transcript, asr_report = await self.transcribe(pcm, trace)
         if asr_report is not None:
@@ -272,18 +311,7 @@ class TurnRunner:
         messages += self.history_messages(transcript)
         messages.append({"role": "user", "content": transcript})
 
-        try:
-            (llm_name, first_chunk, stream), llm_report = await open_stream_stage(
-                "llm", llm_chain(self.providers), "chat", messages, []
-            )
-        except StageFailure as exc:
-            result.error = str(exc)
-            return result
-        result.stages["llm"] = llm_report
-        trace.mark("llm_first")
-
         tts_provider: str | None = None
-        buffer = ""
         spoken_parts: list[str] = []
 
         async def say(text: str) -> None:
@@ -301,33 +329,103 @@ class TurnRunner:
                 result.error = error
             result.audio_bytes += spoken
 
-        chunks: list[ChatChunk] = [first_chunk]
-        async for chunk in stream:
-            chunks.append(chunk)
-        for chunk in chunks:
-            if chunk.delta:
-                buffer += chunk.delta
-            if chunk.finish_reason == "length":
-                # The vendor stopped at max_tokens: the last sentence is cut and TTS spoke
-                # half of it. Without this line the cut is completely silent.
-                log.warning("llm: answer hit max_tokens and was cut mid-sentence")
-                result.error = result.error or "answer truncated at max_tokens"
-            if not chunk.delta:
-                continue
-            sentences, buffer = split_sentences(buffer)
-            for sentence in sentences:
-                # A model with no tools sometimes writes the tool call as text (DSML), and
-                # the split for streaming can cut a tag in half - so sanitise each piece
-                # instead of testing for a whole marker that may no longer be there.
-                speakable = sanitize_spoken(sentence)
-                if not speakable:
+        async def answer(tools: list[dict]) -> tuple[str, list[dict]]:
+            """One LLM round: speak text as it streams, return (spoken text, tool calls).
+
+            A round that decides to call a tool produces no text, so speaking on the way
+            through costs nothing and keeps the first-sentence latency of S4 intact.
+            """
+            (_name, first, stream), report = await open_stream_stage(
+                "llm", llm_chain(self.providers), "chat", messages, tools
+            )
+            result.stages["llm"] = report
+            trace.mark("llm_first")
+            chunks = [first]
+            async for chunk in stream:
+                chunks.append(chunk)
+            buffer = ""
+            parts: list[str] = []
+            calls: list[dict] = []
+            for chunk in chunks:
+                calls.extend(chunk.tool_calls or [])
+                if chunk.finish_reason == "length":
+                    # The vendor stopped at max_tokens: the last sentence is cut and TTS
+                    # spoke half of it. Without this line the cut is completely silent.
+                    log.warning("llm: answer hit max_tokens and was cut mid-sentence")
+                    result.error = result.error or "answer truncated at max_tokens"
+                if not chunk.delta:
                     continue
-                spoken_parts.append(speakable)
-                await say(speakable)
-        tail = sanitize_spoken(buffer) if buffer.strip() else ""
-        if tail:
-            spoken_parts.append(tail)
-            await say(tail)
+                buffer += chunk.delta
+                sentences, buffer = split_sentences(buffer)
+                for sentence in sentences:
+                    # A model without a tool layer writes the call as text (DSML), and the
+                    # split for streaming can cut a tag in half - so sanitise each piece
+                    # instead of testing for a whole marker that may no longer be there.
+                    speakable = sanitize_spoken(sentence)
+                    if not speakable:
+                        continue
+                    parts.append(speakable)
+                    await say(speakable)
+            tail = sanitize_spoken(buffer) if buffer.strip() else ""
+            if tail:
+                parts.append(tail)
+                await say(tail)
+            return "".join(parts), calls
+
+        try:
+            for attempt in range(3):
+                # Two rounds with tools, then a forced answer without them: a model that
+                # keeps asking for tools must still say something (old build: same rule).
+                allow = (
+                    self.llm_tools
+                    if attempt < 2 and self.llm_tools and len(result.tools) < 5
+                    else []
+                )
+                text, calls = await answer(allow)
+                spoken_parts.append(text)
+                # A round without tools is the answer by definition: if the model still
+                # writes a tool call there, there is nothing left to run it with.
+                if not calls or not allow:
+                    break
+                messages.append({
+                    "role": "assistant",
+                    "content": text,
+                    "tool_calls": [
+                        {
+                            "id": call.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": call.get("name", ""),
+                                "arguments": call.get("arguments", "{}"),
+                            },
+                        }
+                        for call in calls
+                    ],
+                })
+                info_used = False
+                for call in calls:
+                    output = await self._call_tool(call)
+                    result.tools.append(call.get("name", ""))
+                    log.info("tool %s -> %s", call.get("name", ""), output[:160])
+                    if call.get("name") in self.info_tool_names:
+                        info_used = True
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.get("id", ""),
+                        "content": output,
+                    })
+                if info_used and messages and messages[0].get("role") == "system":
+                    # A looked-up answer gets its own budget. Rewriting the system message
+                    # keeps it one system prompt; a second one mid-conversation is not.
+                    messages[0] = {
+                        "role": "system",
+                        "content": messages[0]["content"]
+                        + "\n"
+                        + prompts.search_hint(self.assistant.reply_max_chars_search),
+                    }
+        except StageFailure as exc:
+            result.error = str(exc)
+            return result
 
         trace.mark("llm_done")
         # The reply is what was actually spoken, not the raw deltas: markup that never
@@ -337,3 +435,25 @@ class TurnRunner:
         if result.reply:
             self.history.append({"role": "assistant", "content": result.reply})
         return result
+
+    async def _call_tool(self, call: dict) -> str:
+        """Run one tool call. Failures are sentences, because the model has to say them."""
+        name = call.get("name", "")
+        handler = self._handlers.get(name)
+        if handler is None:
+            return f"没有这个工具（{name}），直接说这件事你做不了。"
+        try:
+            args = json.loads(call.get("arguments") or "{}")
+        except ValueError:
+            args = {}
+        if not isinstance(args, dict):
+            args = {}
+        try:
+            output = await asyncio.wait_for(handler(args), timeout=self.tool_timeout_s)
+        except TimeoutError:
+            log.warning("tool %s timed out after %.0f s", name, self.tool_timeout_s)
+            return f"这个工具超时了（{name}），直接说没查到，不要自己编。"
+        except Exception as exc:  # noqa: BLE001 - a broken tool must not kill the turn
+            log.warning("tool %s failed: %s", name, exc)
+            return f"这个工具出错了（{name}），直接说没查到，不要自己编。"
+        return str(output)

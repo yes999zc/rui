@@ -24,6 +24,7 @@ onMounted(async () => {
       </div>
       <nav class="nav">
         <RouterLink to="/devices">设备</RouterLink>
+        <RouterLink to="/assistant">助手</RouterLink>
         <RouterLink to="/voice">语音</RouterLink>
         <RouterLink to="/models">模型</RouterLink>
         <RouterLink to="/tools">工具</RouterLink>

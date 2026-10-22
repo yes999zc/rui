@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   { path: '/', redirect: '/devices' },
   { path: '/devices', component: () => import('./views/DevicesView.vue'), meta: { title: '设备' } },
+  { path: '/assistant', component: () => import('./views/AssistantView.vue'), meta: { title: '助手' } },
   { path: '/voice', component: () => import('./views/VoiceView.vue'), meta: { title: '语音' } },
   { path: '/models', component: () => import('./views/ModelsView.vue'), meta: { title: '模型' } },
   { path: '/tools', component: () => import('./views/ToolsView.vue'), meta: { title: '工具' } },

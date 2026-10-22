@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -20,6 +20,9 @@ class ChatChunk:
     # "length" means the vendor stopped at the cap, i.e. the answer is cut mid-sentence.
     # Without it a truncated reply is spoken as if it were finished.
     finish_reason: str = ""
+    # Complete tool calls, emitted once at the end of a stream: the wire format sends them
+    # as deltas by index and the caller wants finished argument JSON.
+    tool_calls: list[dict] = field(default_factory=list)
 
 
 class AsrProvider(Protocol):

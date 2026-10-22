@@ -99,10 +99,23 @@ def chat_payload(cfg: ProviderConfig, messages: list[dict], tools: list[dict]) -
     return payload
 
 
+def _finished(pending: dict[int, dict[str, str]]) -> list[dict]:
+    """The accumulated tool-call deltas as finished calls, in the order the vendor sent them."""
+    return [
+        {"id": slot["id"], "name": slot["name"], "arguments": slot["arguments"] or "{}"}
+        for _, slot in sorted(pending.items())
+    ]
+
+
 class OpenAiCompatLlm(_HttpHolder):
 
     async def chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[ChatChunk]:
         payload = chat_payload(self.cfg, messages, tools)
+        # Tool calls arrive as deltas keyed by index ("arguments" is streamed in pieces), so
+        # they are accumulated here and emitted once, complete, when the stream ends. Until
+        # this existed the deltas were dropped and a tool-calling round looked like an
+        # answer with no text at all.
+        pending: dict[int, dict[str, str]] = {}
         async with self.client.stream(
             "POST", _url(self.cfg, "/chat/completions"), json=payload,
             headers=_headers(self.cfg),
@@ -113,21 +126,32 @@ class OpenAiCompatLlm(_HttpHolder):
                     continue
                 chunk = line[6:]
                 if chunk == "[DONE]":
-                    yield ChatChunk(delta="", done=True)
+                    yield ChatChunk(delta="", done=True, tool_calls=_finished(pending))
                     return
                 data = json.loads(chunk)
                 choices = data.get("choices") or []
                 if not choices:
                     continue
                 delta = choices[0].get("delta") or {}
+                for call in delta.get("tool_calls") or []:
+                    index = int(call.get("index") or 0)
+                    slot = pending.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    slot["id"] = call.get("id") or slot["id"]
+                    function = call.get("function") or {}
+                    slot["name"] += function.get("name") or ""
+                    slot["arguments"] += function.get("arguments") or ""
                 text = delta.get("content") or ""
                 if text:
                     yield ChatChunk(delta=text)
                 finish = choices[0].get("finish_reason") or ""
                 if finish:
                     # The last chunk often carries no text, only the reason. Passing it on
-                    # is what lets the caller notice "length" (answer cut at max_tokens).
-                    yield ChatChunk(delta="", finish_reason=finish)
+                    # is what lets the caller notice "length" (cut at max_tokens) and
+                    # "tool_calls" (finished argument JSON).
+                    yield ChatChunk(
+                        delta="", finish_reason=finish, tool_calls=_finished(pending)
+                    )
+                    pending.clear()
 
 
 class OpenAiCompatAsr(_HttpHolder):

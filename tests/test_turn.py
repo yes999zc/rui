@@ -357,3 +357,101 @@ def test_chat_payload_carries_the_latency_knobs() -> None:
 
     plain = chat_payload(ProviderConfig(model="x"), [], [])
     assert "thinking" not in plain and "tools" not in plain
+
+
+class ScriptedLlm:
+    """Replays pre-built chunk lists, so a tool round is a data shape, not a network call."""
+
+    def __init__(self, rounds: list[list[ChatChunk]]) -> None:
+        self.rounds = list(rounds)
+        self.seen: list[dict] = []
+
+    async def chat(self, messages: list[dict], tools: list[dict]):
+        self.seen.append({"messages": [dict(m) for m in messages], "tools": list(tools)})
+        for chunk in self.rounds.pop(0):
+            yield chunk
+
+
+def test_a_tool_round_runs_the_tool_then_answers(monkeypatch) -> None:
+    """Model asks for weather -> handler runs -> the second round gets the result."""
+    from house_ear.tools.contract import Permission, ToolSpec
+
+    spec = ToolSpec(name="local.weather", description="查天气", permission=Permission.READ)
+    calls: list[dict] = []
+
+    async def handler(args: dict) -> str:
+        calls.append(args)
+        return "沈阳：今天晴，1到15度。"
+
+    llm = ScriptedLlm([
+        [ChatChunk(delta="", finish_reason="tool_calls",
+                   tool_calls=[{"id": "t1", "name": "weather", "arguments": '{"city": "沈阳"}'}])],
+        [ChatChunk(delta="沈阳今天晴，1到15度。")],
+    ])
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("今天天气怎么样"), llms=[llm], ttss=[tts])
+    runner = TurnRunner(Config().providers, tools=[(spec, handler)])
+
+    async def speak(pcm: bytes) -> None:
+        return None
+
+    result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
+    assert calls == [{"city": "沈阳"}]
+    assert result.tools == ["weather"]
+    assert result.reply.startswith("沈阳今天晴")
+    # the wire name has no dot (DeepSeek rejects it), and the second round sees the result
+    assert llm.seen[0]["tools"][0]["name"] == "weather"
+    second = llm.seen[1]["messages"]
+    assert second[-2]["role"] == "assistant" and second[-2]["tool_calls"][0]["id"] == "t1"
+    assert second[-1] == {"role": "tool", "tool_call_id": "t1", "content": "沈阳：今天晴，1到15度。"}
+    # weather is not an INFO_TOOL: no long-answer hint was appended
+    assert "最多" not in second[0]["content"]
+
+
+def test_a_model_that_keeps_asking_for_tools_still_answers(monkeypatch) -> None:
+    from house_ear.tools.contract import Permission, ToolSpec
+
+    spec = ToolSpec(name="local.web_search", description="搜索", permission=Permission.READ)
+
+    async def handler(args: dict) -> str:
+        return "搜索结果：无关的东西"
+
+    call = [ChatChunk(delta="", finish_reason="tool_calls",
+                      tool_calls=[{"id": "t1", "name": "web_search", "arguments": '{"query": "x"}'}])]
+    llm = ScriptedLlm([call, call, [ChatChunk(delta="不知道。")]])
+    patch_chains(monkeypatch, asr=FakeAsr("查一下"), llms=[llm], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers, tools=[(spec, handler)])
+
+    async def speak(pcm: bytes) -> None:
+        return None
+
+    result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
+    # third round is forced: no tools=, so the model has to talk
+    assert llm.seen[2]["tools"] == []
+    assert result.reply == "不知道。"
+    # a searched answer gets the long budget, once
+    assert "最多" in llm.seen[1]["messages"][0]["content"]
+
+
+def test_a_failing_tool_becomes_a_sentence_not_an_exception(monkeypatch) -> None:
+    from house_ear.tools.contract import Permission, ToolSpec
+
+    spec = ToolSpec(name="local.weather", description="查天气", permission=Permission.READ)
+
+    async def handler(args: dict) -> str:
+        raise RuntimeError("upstream down")
+
+    llm = ScriptedLlm([
+        [ChatChunk(delta="", finish_reason="tool_calls",
+                   tool_calls=[{"id": "t1", "name": "weather", "arguments": "{}"}])],
+        [ChatChunk(delta="天气查不到。")],
+    ])
+    patch_chains(monkeypatch, asr=FakeAsr("天气"), llms=[llm], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers, tools=[(spec, handler)])
+
+    async def speak(pcm: bytes) -> None:
+        return None
+
+    result = asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living")))
+    assert result.reply == "天气查不到。"
+    assert "工具出错了" in llm.seen[1]["messages"][-1]["content"]

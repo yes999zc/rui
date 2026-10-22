@@ -263,11 +263,49 @@ class HaConfig(BaseModel):
     token_env: str = "HOUSE_EAR_HA_TOKEN"
 
 
+class WeatherConfig(BaseModel):
+    """open-meteo needs no key. The city is deliberately empty by default: this repo is
+    public, and shipping one person's home town as the default is both wrong and a leak."""
+
+    city: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+    days_max: int = Field(default=3, ge=1, le=7)
+    timeout_s: float = Field(default=8.0, ge=2.0, le=30.0)
+
+
+class NewsConfig(BaseModel):
+    enabled: bool = True
+    # Public static mirrors of a daily digest; no key, no personal feed.
+    source: str = "60s"
+    timeout_s: float = Field(default=8.0, ge=2.0, le=30.0)
+
+
+class SearchConfig(BaseModel):
+    """Web search as a swappable vendor, not a hard-wired one.
+
+    `kind` picks the client and `base_url` picks the endpoint, so a deployment can point
+    this at any OpenAI-ish search API. The key is never in this file: it comes from the
+    environment or from `secrets.yaml`, which the console can write and cannot read back.
+    """
+
+    enabled: bool = True
+    kind: Literal["deepseek", "none"] = "deepseek"
+    base_url: str = "https://api.deepseek.com"
+    api_key_env: str = "DEEPSEEK_API_KEY"
+    count: int = Field(default=6, ge=1, le=10)
+    # A search that is still running when the turn budget is gone is worse than no answer.
+    timeout_s: float = Field(default=12.0, ge=2.0, le=60.0)
+
+
 class ToolsConfig(BaseModel):
     expose: ExposeMode = "domain"
     whitelist: list[str] = Field(default_factory=list)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     ha: HaConfig = Field(default_factory=HaConfig)
+    weather: WeatherConfig = Field(default_factory=WeatherConfig)
+    news: NewsConfig = Field(default_factory=NewsConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
 
 
 class AssistantConfig(BaseModel):
