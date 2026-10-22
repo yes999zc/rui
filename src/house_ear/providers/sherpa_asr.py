@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 from ..config.schema import ProviderConfig
 from .base import Transcript
@@ -31,6 +32,21 @@ def model_paths(model_dir: str | Path) -> tuple[Path, Path]:
     if not onnx.exists():
         onnx = base / "model.onnx"
     return onnx, base / "tokens.txt"
+
+
+def normalise(samples: Any) -> Any:
+    """Bring a quiet clip up to a sane peak before decoding.
+
+    The old deployment measured this: after AEC a real voice lands at rms ~0.005, and the
+    tail syllables get mangled unless the clip is brought up. Only quiet clips are
+    touched - normalising a loud one would amplify the room with it.
+    """
+    import numpy as np
+
+    peak = float(np.abs(samples).max()) if samples.size else 0.0
+    if 0.0 < peak < 0.25:
+        return np.clip(samples * (0.8 / peak), -1.0, 1.0)
+    return samples
 
 
 class SherpaAsr:
@@ -64,7 +80,7 @@ class SherpaAsr:
         import numpy as np
 
         recognizer = self._load()
-        samples = np.frombuffer(pcm, dtype="<i2").astype("float32") / 32768.0
+        samples = normalise(np.frombuffer(pcm, dtype="<i2").astype("float32") / 32768.0)
         stream = recognizer.create_stream()
         stream.accept_waveform(sample_rate, samples)
         recognizer.decode_stream(stream)

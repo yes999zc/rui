@@ -83,6 +83,7 @@ def create_app(
             wake_words=[w for d in cfg.devices for w in d.wake_words],
             tools=info_tools,
             spoken=spoken,
+            session=cfg.session,
         )
         app.state.spoken = spoken
         # Render the spoken wake cue now, not on the wake: synthesising it inside the wake
@@ -173,6 +174,9 @@ def create_app(
                 client.on_vendor = vendor.vendor_spoke
                 def on_wake(msg: object) -> None:
                     vendor.ours_spoke()
+                    # A wake opens a conversation window; the countdown to the farewell
+                    # starts again from here (and from the end of every turn).
+                    runner.idle.start()
                     if getattr(msg, "barge", False):
                         # The plane already stopped the speaker and dropped its queue;
                         # this stops the answer that is still being synthesised from
@@ -182,6 +186,25 @@ def create_app(
                         runner.abort()
 
                 client.on_wake = on_wake
+        # Session end. Polled rather than timed: one loop, 1 s resolution, and the
+        # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
+        async def idle_watch() -> None:
+            live = getattr(app.state, "audio", None)
+            while True:
+                await asyncio.sleep(1.0)
+                client = getattr(live, "client", None) if live is not None else None
+                if client is None:
+                    continue
+                try:
+                    line = await runner.check_idle(client.speak, TurnTrace(device_id="session"))
+                except Exception as exc:  # noqa: BLE001 - a watchdog must not die
+                    log.warning("idle watch: %s", exc)
+                    continue
+                if line:
+                    log.info("session closed: %r", line)
+
+        app.state.idle_task = asyncio.create_task(idle_watch(), name="idle-watch")
+
         # The cue is rendered *after* the plane is up and in the background: it is a nicety,
         # and a vendor that hangs must not delay /health or the speaker's reconnect. The
         # plane re-reads ack.wav on every wake, so a file that lands a second later is
@@ -301,6 +324,9 @@ def create_app(
         if runner is not None:
             runner.assistant = updated.assistant
             runner.history_turns = updated.session.history_rounds
+            # timeout / farewell / history live in `session`, and an edited window must
+            # take effect without a restart - the console writes that section.
+            runner.apply_session(updated.session)
         return redacted(updated)
 
     @app.get("/api/v1/audio", dependencies=[Depends(auth)])
