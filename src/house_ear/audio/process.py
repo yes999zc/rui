@@ -160,6 +160,11 @@ class Credit:
 
     async def wait(self, adapter: DeviceAdapter, seconds: float) -> bool:
         """Block until one more block may go out. False when the device stopped reporting."""
+        if self.window <= 0:
+            # No leak bound: the clock alone paces, for deployments that want the
+            # shallowest possible device buffer.
+            self.lead = (self.sent - self.acked) * seconds
+            return True
         while not self.dead and self.sent - self.acked >= self.window:
             got = await adapter.wait_consumed(self.acked, self.timeout)
             if got <= self.acked:
@@ -225,7 +230,7 @@ class AudioPlane:
         # Device-reported pacing (0c): the plane never runs more than `window` blocks
         # ahead of the newest report. Shared by speech and file playback - one speaker,
         # one owner, so only one of them is writing at a time.
-        self._credit = Credit()
+        self._credit = Credit(window=cfg.audio.playback.credit_window)
         self._credit_generation = 0
         # Armed by SpeakStart, consumed by the next PLAY_PCM frame: the one declared
         # sentence boundary in the current reply. The old source of truth - seq == 0 -

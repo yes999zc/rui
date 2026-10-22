@@ -134,6 +134,13 @@ class PlaybackConfig(BaseModel):
     channels: int = Field(default=2, ge=1, le=8)
     queue_ms: int = Field(default=200, ge=20, le=1000)
     fade_out_ms: int = Field(default=120, ge=0, le=500)
+    # Blocks (100 ms each) the plane may run ahead of the device's own "consumed"
+    # reports. Measured on LX06: the report fires when a block enters aplay's stdin
+    # pipe, not when ALSA plays it, so a small window keeps that pipe full and every
+    # write waits ~100 ms for a drain (228 blocked writes / 30 s at 2, 130 at 2 with
+    # the clock too, 0 at 8). The window is a leak bound; the clock paces. 0 leaves
+    # only the clock.
+    credit_window: int = Field(default=8, ge=0, le=50)
     # Acceptance target: fully silent within this many ms of the user starting to speak.
     target_silence_ms: int = Field(default=300, ge=50, le=1500)
 
