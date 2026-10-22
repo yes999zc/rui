@@ -66,6 +66,28 @@ def _light(app: FastAPI, effect: str, repaint: bool = False) -> None:
         task.add_done_callback(tasks.discard)
 
 
+def _light_after_audio(app: FastAPI, audio_bytes: int, rate: int, effect: str = "listening") -> None:
+    """Paint `effect` when the audio just queued has finished playing.
+
+    run() returns when the last chunk is queued, not played; output_owner is released
+    at the same moment (the plane frees the speaker when its queue empties), so neither
+    is a "the answer is over" signal. The duration is exact: PCM bytes / 2 / rate. The
+    three repaints after it match what the vendor LED service needs to stay repainted.
+    """
+    seconds = max(0.0, audio_bytes / 2 / max(1, rate))
+
+    async def run() -> None:
+        await asyncio.sleep(seconds + 0.6)
+        _light(app, effect)
+        if effect != "listening":
+            return
+        for _ in range(3):
+            await asyncio.sleep(1.2)
+            _light(app, effect, repaint=True)
+
+    asyncio.create_task(run(), name="led-after-audio")
+
+
 def _speaking(app: FastAPI, live: object):
     """A speak callable that turns the ring cyan on the first block of a turn."""
     turned = {"on": False}
@@ -198,7 +220,9 @@ def create_app(
                         return
                     if rules.stop_intent(clean, cfg.session.end_words):
                         spoken = await runner.say(rules.stop_reply(), _speaking(app, client), trace)
-                        _light(app, "off")
+                        # No reply_finished here: the session is closing, so the plane
+                        # must not open a follow-up window after the goodbye.
+                        _light_after_audio(app, spoken, cfg.audio.voice.rate, "off")
                         app.state.last_turn = {
                             "transcript": clean, "reply": "", "session_action": "stop",
                             "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
@@ -216,9 +240,8 @@ def create_app(
                         result.stages.setdefault("asr", asr_report)
                     app.state.last_turn = result.to_dict()
                     traces.add(trace)
-                    # Not listening yet: run() returns when the audio is queued, and the
-                    # device may still be speaking. The ring turns green when the plane
-                    # reports the speaker idle (idle_watch), so cyan covers the answer.
+                    await client.reply_finished()
+                    _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate)
                     log.info("turn: %s", result.to_dict())
 
                 client.on_utterance = on_utterance
@@ -240,16 +263,8 @@ def create_app(
                 client.on_wake = on_wake
         # Session end. Polled rather than timed: one loop, 1 s resolution, and the
         # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
-        async def _reassert_listening(live: object) -> None:
-            for index in range(3):
-                await asyncio.sleep(1.0 if index == 0 else 1.2)
-                if getattr(live, "client", None) is None:
-                    return
-                _light(app, "listening", repaint=True)
-
         async def idle_watch() -> None:
             live = getattr(app.state, "audio", None)
-            was_busy = False
             while True:
                 await asyncio.sleep(1.0)
                 client = getattr(live, "client", None) if live is not None else None
@@ -261,15 +276,6 @@ def create_app(
                     metrics = getattr(getattr(state, "client", None), "metrics", None)
                     return bool(metrics is not None and metrics.output_owner)
 
-                busy_now = busy()
-                if was_busy and not busy_now:
-                    # The answer has actually finished playing. Now the ring goes green,
-                    # and stays green through the vendor's idle repaint.
-                    _light(app, "listening")
-                    asyncio.create_task(
-                        _reassert_listening(app, client), name="led-reassert"
-                    )
-                was_busy = busy_now
                 try:
                     line = await runner.check_idle(
                         _speaking(app, client), TurnTrace(device_id="session"), busy=busy
@@ -537,6 +543,8 @@ def create_app(
         trace = TurnTrace(device_id="debug")
         _light(app, "thinking")
         result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
+        await client.reply_finished()
+        _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate)
         app.state.last_turn = result.to_dict()
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)

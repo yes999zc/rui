@@ -25,6 +25,7 @@ from .protocol import (
     Metrics,
     QueryMetrics,
     Ready,
+    ReplyFinished,
     ShellCommand,
     ShellResult,
     Shutdown,
@@ -187,6 +188,10 @@ class AudioPlaneClient:
         turn path.
         """
         await self.send(LedState(effect=effect, repaint=repaint))
+
+    async def reply_finished(self) -> None:
+        """Tell the plane the turn is over (its cue for the follow-up gate)."""
+        await self.send(ReplyFinished())
 
     async def device_volume(self, timeout_s: float = 3.0) -> int | None:
         """Read the speaker's mixer value through the plane (None if it cannot)."""

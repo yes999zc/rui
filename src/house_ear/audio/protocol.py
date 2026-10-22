@@ -220,6 +220,18 @@ class SpeakStart(BaseModel):
     type: Literal["speak_start"] = "speak_start"
 
 
+class ReplyFinished(BaseModel):
+    """control -> plane: this turn has nothing more to say (once per turn).
+
+    SpeakFinished fires per TTS chunk; this fires when the runner has returned, so the
+    plane can wait for the speaker to drain before opening the follow-up gate. Arming on
+    "queue empty" was wrong: TTS gaps empty the queue mid-answer, and a 9.6 s reply armed
+    the gate at 2.4 s, then closed it again 5 s later - the window missed the real end.
+    """
+
+    type: Literal["reply_finished"] = "reply_finished"
+
+
 class SpeakFinished(BaseModel):
     """control -> plane: the last PLAY_PCM frame of this reply has been sent."""
 
@@ -296,7 +308,7 @@ class DeviceVolumeResult(BaseModel):
 
 ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | LedState
-    | SpeakStart | SpeakFinished | VendorSignalMsg | Error | Shutdown | ShellCommand
+    | SpeakStart | SpeakFinished | ReplyFinished | VendorSignalMsg | Error | Shutdown | ShellCommand
     | ShellResult | DeviceVolume | DeviceVolumeResult,
     Field(discriminator="type"),
 ]

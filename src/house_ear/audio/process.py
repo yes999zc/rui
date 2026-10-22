@@ -52,6 +52,7 @@ from .protocol import (
     PlayFile,
     QueryMetrics,
     Ready,
+    ReplyFinished,
     ShellCommand,
     ShellResult,
     SpeakFinished,
@@ -237,6 +238,8 @@ class AudioPlane:
         # sentence boundary in the current reply. The old source of truth - seq == 0 -
         # fired on every speak() call, i.e. on every TTS chunk, and faded mid-word.
         self._segment_pending = False
+        # Set by ReplyFinished: the turn is over, not merely between TTS chunks.
+        self._reply_finished = False
         self._speak_queued_s = 0.0
         self.frames_in = 0
         self.frames_out = 0
@@ -815,7 +818,8 @@ class AudioPlane:
                     if reply_chunks:
                         log.info("reply: %d chunks, lead max %.0f ms",
                                  reply_chunks, reply_lead_max * 1000)
-                    finished_reply = reply_chunks > 0
+                    finished_reply = self._reply_finished
+                    self._reply_finished = False
                     reply_chunks = 0
                     reply_lead_max = 0.0
                     self._release("dialogue")
@@ -1228,6 +1232,8 @@ class AudioPlane:
                     asyncio.create_task(self._apply_led(msg.effect, msg.repaint), name="led")
                 elif isinstance(msg, SpeakStart):
                     self._segment_pending = True
+                elif isinstance(msg, ReplyFinished):
+                    self._reply_finished = True
                 elif isinstance(msg, SpeakFinished):
                     log.info("speak finished, %s chunks still queued (%.1f s of audio)",
                              self._speak_queue.qsize(), self._speak_queued_s)
