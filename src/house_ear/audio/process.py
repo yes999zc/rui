@@ -610,6 +610,10 @@ class AudioPlane:
                 )
                 self.playback_s += chunk.size / target
                 self._file_position += chunk.size
+                if loop and audio.size:
+                    # A looping file's position is measured against the track, not a
+                    # running total: resuming a 20 s snippet "at 37 s" played nothing.
+                    self._file_position %= audio.size
                 # Same prebuffer as replies: a file paced at exactly 1.0x starves the
                 # device buffer, and a song is long enough for that to be audible.
                 now = time.monotonic()
@@ -631,7 +635,15 @@ class AudioPlane:
         source = self.cfg.audio.voice.rate
         pacer = Pacer()
         while not self._stop.is_set():
-            chunk = await self._speak_queue.get()
+            try:
+                chunk = await asyncio.wait_for(self._speak_queue.get(), timeout=0.5)
+            except TimeoutError:
+                # Nothing more is coming: that is the end of the answer, so hand the song
+                # back. Checking only after a send missed the case where the last chunk
+                # was already out and the loop sat waiting.
+                if self._speak_queue.empty():
+                    self._resume_after_speech()
+                continue
             if chunk is None:
                 continue
             # A reply owns the device stream while it speaks; the song waits where it is.
