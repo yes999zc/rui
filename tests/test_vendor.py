@@ -6,11 +6,14 @@ here - a vendor wake means we stay quiet for a window, and our own wake word tak
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
 
+from house_ear.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
 from house_ear.device.xiaoai import protocol
+from house_ear.device.xiaoai.adapter import XiaoaiAdapter
 from house_ear.session.vendor import VendorWindow
 
 
@@ -101,3 +104,47 @@ def test_yielded_turns_are_counted_so_a_silent_assistant_is_explainable() -> Non
     assert window.muted() is True
     assert window.muted() is True
     assert window.yielded_turns == 2
+
+
+def make_adapter() -> XiaoaiAdapter:
+    dev = DeviceConfig(
+        id="living", adapter="xiaoai", host="<LAN-IP>",
+        token_env="HOUSE_EAR_TEST_DEVICE_TOKEN",
+    )
+    return XiaoaiAdapter(dev, CaptureConfig(), VoiceConfig())
+
+
+def test_playing_events_track_the_vendors_player() -> None:
+    adapter = make_adapter()
+    adapter._on_text(json.dumps({"Event": {"event": "playing", "data": "Playing"}}))
+    assert adapter.vendor_playing is True
+    adapter._on_text(json.dumps({"Event": {"event": "playing", "data": "Idle"}}))
+    assert adapter.vendor_playing is False
+    assert adapter.health()["vendor_playing"] is False
+
+
+def test_pause_vendor_player_uses_the_guarded_ubus_pause() -> None:
+    """The old build's script, verbatim: only a running player gets paused."""
+    adapter = make_adapter()
+    seen: list[str] = []
+
+    async def fake_shell(script: str, timeout: float = 3.0) -> str:
+        seen.append(script)
+        return "before=1 after=2"
+
+    adapter.shell = fake_shell  # type: ignore[method-assign]
+    asyncio.run(adapter.pause_vendor_player("wake takeover"))
+    assert adapter.vendor_pauses == 1
+    assert "mute_stat" in seen[0], "the pause must check the vendor's state first"
+    assert '"action":"pause"' in seen[0], "not the mphelper pause the old build used"
+
+
+def test_a_dead_rpc_does_not_raise_from_pause_vendor_player() -> None:
+    adapter = make_adapter()
+
+    async def dead_shell(script: str, timeout: float = 3.0) -> str:
+        raise RuntimeError("speaker gone")
+
+    adapter.shell = dead_shell  # type: ignore[method-assign]
+    asyncio.run(adapter.pause_vendor_player("wake takeover"))
+    assert adapter.vendor_pauses == 1, "counted as attempted even when the speaker is gone"

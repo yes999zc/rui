@@ -516,6 +516,21 @@ class AudioPlane:
                 except Exception as exc:  # noqa: BLE001 - the speaker may be gone
                     log.info("barge: stop failed: %s", exc)
 
+        # Takeover: our wake outranks a running vendor dialog. The old build stayed
+        # deaf while the vendor player ran (mic gated, assistant_v3.py:3115), so its
+        # wake never had to stop 小爱; ours hears 你好小瑞 mid-answer, and taking the
+        # line means the vendor's voice stops - otherwise both assistants talk at
+        # once and the vendor's own answer leaks into our ASR as the next request
+        # (measured 19:54:06 on 2026-10-22). Fire-and-forget: the wake path must not
+        # wait on a shell RPC. The 90 s freshness guard is the old build's, against
+        # a sticky "playing" from a lost idle event.
+        adapter = self.adapter
+        if (adapter is not None
+                and getattr(adapter, "vendor_playing", False)
+                and time.monotonic() - getattr(adapter, "vendor_playing_ts", 0.0) < 90.0):
+            log.info("vendor takeover: pausing the vendor player for our wake")
+            asyncio.create_task(adapter.pause_vendor_player("wake takeover"))
+
         audio, mode, note = render_ack(self.cfg)
         self.ack_mode_effective = mode
         # Cleared on success: an error that sticks forever makes the console report a

@@ -48,6 +48,19 @@ def _rgb(value: str) -> tuple[int, int, int]:
 DEFAULT_LISTEN_PORT = 4412  # 4399/4400 belong to the old deployment
 PLAY_CHUNK_MS = 100
 
+# Pausing 小爱's own player. There is no player_stop / player_pause on this box
+# (rc=3, firmware 1.94.13); the vendor's own mphelper pauses through
+# player_play_operation. The mute_stat guard is the point: only a player that is
+# actually running gets paused, never toggle a paused one into playing. Ported
+# verbatim from the old build's vendor_stop_player (assistant_v3.py:2266), where
+# it ran in production for the key-114 double-music case.
+VENDOR_PAUSE_SCRIPT = (
+    's=$(mphelper mute_stat); echo "before=$s"; '
+    'case "$s" in 1|3) ubus -t 2 call mediaplayer player_play_operation '
+    '\'{"action":"pause","media":"common"}\'; sleep 0.15; '
+    'echo "after=$(mphelper mute_stat)";; esac'
+)
+
 
 class XiaoaiAdapter(DeviceAdapter):
     def __init__(self, dev: DeviceConfig, capture: CaptureConfig, voice: VoiceConfig) -> None:
@@ -83,6 +96,12 @@ class XiaoaiAdapter(DeviceAdapter):
         self.connected_at = 0.0
         self.last_error = ""
         self._playing = False
+        # The vendor assistant's own playback, from the "playing" events the monitor
+        # reports. The wake path asks "is 小爱 talking right now?" to decide whether
+        # taking the line must also pause its player.
+        self.vendor_playing = False
+        self.vendor_playing_ts = 0.0
+        self.vendor_pauses = 0
         # Play-head reports: the client sends {"event":"consumed","n":<chunk>} for every
         # block it hands to aplay. The plane paces by this instead of a wall clock.
         self.reports_consumption = True
@@ -284,6 +303,24 @@ class XiaoaiAdapter(DeviceAdapter):
         else:
             self.led.set_state(effect)
 
+    async def pause_vendor_player(self, reason: str) -> None:
+        """Pause 小爱's own player: one speaker, one owner.
+
+        Our KWS hears 你好小瑞 even while the vendor is talking (the old build's
+        mic was gated shut there, assistant_v3.py:3115, so it never faced this);
+        taking the line then means the vendor's answer has to stop, or both
+        assistants talk at once and the vendor's own answer leaks into our ASR
+        as a phantom request (measured 19:54:06 - the transcript was the middle
+        of 小爱's weather report). Best effort: a dead RPC must not block the
+        wake path, the caller fires this as a task.
+        """
+        self.vendor_pauses += 1
+        try:
+            out = await self.shell(VENDOR_PAUSE_SCRIPT, timeout=3.0)
+            log.info("xiaoai: vendor pause (%s): %s", reason, " ".join(out.split()))
+        except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+            log.info("xiaoai: vendor pause failed (%s): %s", reason, exc)
+
     # -------------------------------------------------------------------- inbound
     async def _handle(self, conn: ServerConnection) -> None:
         peer = conn.remote_address[0] if conn.remote_address else "?"
@@ -368,6 +405,9 @@ class XiaoaiAdapter(DeviceAdapter):
                 # which is the only layer that may decide to stay quiet.
                 self._signals.append(signal)
                 del self._signals[:-16]
+                if signal.kind == "playing":
+                    self.vendor_playing = signal.text == "playing"
+                    self.vendor_playing_ts = time.monotonic()
                 if signal.kind == "wake":
                     log.info("xiaoai: vendor wake (%r), we yield", signal.text)
             elif event.get("event") not in {"consumed"}:
@@ -427,6 +467,8 @@ class XiaoaiAdapter(DeviceAdapter):
             "bad_frames": self.bad_frames,
             "rejected": self.rejected,
             "last_error": self.last_error,
+            "vendor_playing": self.vendor_playing,
+            "vendor_pauses": self.vendor_pauses,
         }
 
 

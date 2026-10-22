@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -81,6 +82,36 @@ def test_a_wake_during_playback_stops_the_speaker() -> None:
     wake = next(f for f in frames if f.get("type") == "wake")
     assert wake["barge"] is True
     assert wake["barged_s"] == pytest.approx(3.0, abs=0.05)
+
+
+def test_a_wake_while_the_vendor_talks_pauses_its_player() -> None:
+    """Taking the line from 小爱 mid-answer: our wake also pauses the vendor player.
+
+    The old build's mic was gated shut while the vendor played (assistant_v3.py:3115), so
+    its wake never faced this; ours hears 你好小瑞 mid-answer and must cut the vendor off,
+    or both assistants talk at once.
+    """
+
+    async def run(*, playing: bool, fresh: bool = True) -> list[str]:
+        plane, adapter = make_plane()
+        adapter.vendor_playing = playing
+        adapter.vendor_playing_ts = time.monotonic() if fresh else time.monotonic() - 100.0
+        pauses: list[str] = []
+
+        async def pause(reason: str) -> None:
+            pauses.append(reason)
+
+        adapter.pause_vendor_player = pause  # type: ignore[method-assign]
+        writer, connected = StubWriter(), asyncio.Event()
+        connected.set()
+        hit = type("Hit", (), {"keyword": "你好小瑞", "ts_ms": 1.0})()
+        await plane._on_wake(hit, writer, connected)  # type: ignore[arg-type]
+        await asyncio.sleep(0)  # the pause is fire-and-forget; give the task its turn
+        return pauses
+
+    assert asyncio.run(run(playing=True)) == ["wake takeover"]
+    assert asyncio.run(run(playing=True, fresh=False)) == [], "a stale playing state is ignored"
+    assert asyncio.run(run(playing=False)) == [], "nothing to take over"
 
 
 def test_a_wake_in_silence_is_not_a_barge() -> None:
