@@ -144,6 +144,8 @@ class XiaoaiAdapter(DeviceAdapter):
         if not self._playing:
             # The client opens its player on request; without start_play the stream
             # frames have nowhere to go and are silently dropped device-side.
+            log.info("player: start_play at %d Hz, %d ms buffer", sample_rate,
+                     protocol.playback_payload(sample_rate)["buffer_size"] * 1000 // sample_rate)
             await conn.send(protocol.request("start_play", protocol.playback_payload(sample_rate)))
             self._playing = True
         bytes_per_chunk = max(2, sample_rate * PLAY_CHUNK_MS // 1000 * 2)

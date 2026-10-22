@@ -43,6 +43,37 @@ MUSIC_TOOLS = frozenset({
 })
 
 
+# The old deployment's three phrases, chosen by what the request is about rather than one
+# fixed line: "我查一下" on "开灯" reads wrong, and "我想想" on "今天天气" sounds like it has
+# no tools. Measured from `assistant_v3.filler_phrase()` (2026-10-22).
+THINK_TEXT = "我想想。"
+LOOK_TEXT = "我查一下。"
+DEVICE_TEXT = "好的，我看看。"
+
+DEVICE_HINTS = ("灯", "空调", "窗帘", "插座", "音量", "开关", "电视", "风扇", "净化器", "地暖")
+SEARCH_HINTS = (
+    "天气", "新闻", "几点", "时间", "日期", "汇率", "股票", "比分", "赛程", "价格",
+    "多少", "是什么", "查", "搜", "谁",
+)
+
+
+def filler_phrase(transcript: str, default: str = LOOK_TEXT) -> str:
+    """Which bridging phrase fits this request.
+
+    A guess, deliberately cheap: the transcript is already here, the tool has not been
+    chosen yet (that is what the filler is covering), and a wrong guess costs one short
+    sentence. Empty transcript falls back to the configured default.
+    """
+    text = (transcript or "").strip()
+    if not text:
+        return default
+    if any(word in text for word in DEVICE_HINTS):
+        return DEVICE_TEXT
+    if any(word in text for word in SEARCH_HINTS):
+        return LOOK_TEXT
+    return THINK_TEXT
+
+
 def is_music_tool(name: str) -> bool:
     """Is this tool call one that puts a song in front of the reply?"""
     clean = (name or "").strip().lower()

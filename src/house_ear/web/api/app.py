@@ -92,9 +92,19 @@ def create_app(
         app.state.ack_task = asyncio.create_task(render_ack_wav(cfg), name="ack-render")
 
         async def _warm_filler() -> None:
-            pcm = await render_filler_pcm(cfg)
-            runner.filler_pcm = pcm
-            app.state.filler_pcm = pcm
+            # Three phrases, not one: 9哥's expected flow is 「我查一下」 for a lookup,
+            # 「我想想」 for thinking, 「好的，我看看」 for a device - each pre-rendered so
+            # the choice costs nothing at the moment it is spoken.
+            from ...session.filler import DEVICE_TEXT, LOOK_TEXT, THINK_TEXT
+
+            rendered: dict[str, bytes] = {}
+            for line in (LOOK_TEXT, THINK_TEXT, DEVICE_TEXT):
+                pcm = await render_filler_pcm(cfg, line)
+                if pcm:
+                    rendered[line] = pcm
+            runner.filler_pcm = rendered
+            app.state.filler_pcm = rendered
+            log.info("filler: %d phrases ready", len(rendered))
 
         # Same reason as the ack: a filler that has to be synthesised when it is needed
         # costs the latency it exists to hide.

@@ -96,7 +96,7 @@ async def render_ack_wav(cfg: Config) -> Path | None:
     return None
 
 
-async def render_filler_pcm(cfg: Config) -> bytes:
+async def render_filler_pcm(cfg: Config, text: str | None = None) -> bytes:
     """Synthesise `assistant.filler_text` once, into memory.
 
     The filler exists to cover a wait, so it cannot pay the vendor's first-byte latency
@@ -105,7 +105,7 @@ async def render_filler_pcm(cfg: Config) -> bytes:
     filler into a memcpy. Kept in memory, not a file, because only the control plane
     speaks it.
     """
-    text = (cfg.assistant.filler_text or "").strip()
+    text = (text if text is not None else cfg.assistant.filler_text or "").strip()
     if not text or cfg.assistant.filler_after_s <= 0:
         return b""
     for name, provider in tts_chain(cfg.providers, cfg.audio.voice.rate):

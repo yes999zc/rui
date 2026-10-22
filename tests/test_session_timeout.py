@@ -294,7 +294,7 @@ class ScriptedLlm:
             yield chunk
 
 
-def _slow_tool_turn(monkeypatch, tool_name: str) -> FakeTts:
+def _slow_tool_turn(monkeypatch, tool_name: str, transcript: str = "随便") -> FakeTts:
     """A turn whose first round calls `tool_name`, and whose tool takes 250 ms."""
     spec = ToolSpec(name=f"local.{tool_name}", description="x", permission=Permission.READ)
 
@@ -308,7 +308,7 @@ def _slow_tool_turn(monkeypatch, tool_name: str) -> FakeTts:
     )
     llm = ScriptedLlm([(0.02, [call]), (0.0, [ChatChunk(delta="好了。")])])
     tts = FakeTts()
-    patch_chains(monkeypatch, asr=FakeAsr("随便"), llms=[llm], ttss=[tts])
+    patch_chains(monkeypatch, asr=FakeAsr(transcript), llms=[llm], ttss=[tts])
     runner = TurnRunner(
         Config().providers,
         tools=[(spec, handler)],
@@ -327,6 +327,13 @@ def test_a_music_tool_round_never_hears_the_filler(monkeypatch) -> None:
 
 def test_an_ordinary_slow_tool_round_still_gets_the_filler(monkeypatch) -> None:
     """The skip must be about music only - the weather turn is exactly why filler exists."""
-    tts = _slow_tool_turn(monkeypatch, "weather")
+    tts = _slow_tool_turn(monkeypatch, "weather", transcript="今天天气怎么样")
     assert tts.texts[0] == "我查一下。"
     assert "好了。" in tts.texts
+
+
+def test_the_filler_follows_the_request_not_one_fixed_line(monkeypatch) -> None:
+    """9哥's chain: 叮 → 我问 → 我查一下/我想想/好的我看看 → 回答."""
+    assert _slow_tool_turn(monkeypatch, "weather", transcript="帮我把客厅灯打开").texts[0] == "好的，我看看。"
+    assert _slow_tool_turn(monkeypatch, "weather", transcript="讲个笑话").texts[0] == "我想想。"
+    assert _slow_tool_turn(monkeypatch, "weather", transcript="今天新闻").texts[0] == "我查一下。"

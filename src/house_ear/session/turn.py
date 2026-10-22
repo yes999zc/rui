@@ -29,7 +29,7 @@ from ..providers.chain import (
 )
 from ..trace import TurnTrace
 from . import prompts
-from .filler import should_speak_filler
+from .filler import filler_phrase, should_speak_filler
 from .idle import IdleWatch, farewell_line
 from .text import clean_reply, sanitize_spoken, strip_wake
 
@@ -155,7 +155,7 @@ class TurnRunner:
         wake_words: Sequence[str] = (),
         tools: Sequence[tuple[Any, Any]] = (),
         spoken: Any = None,
-        filler_pcm: bytes = b"",
+        filler_pcm: dict[str, bytes] | bytes = b"",
         tool_timeout_s: float = 20.0,
         turn_timeout_s: float = 30.0,
         idle: IdleWatch | None = None,
@@ -444,7 +444,7 @@ class TurnRunner:
             lives in `session/filler.py` and is dormant until a music tool exists.
             """
             delay = self.assistant.filler_after_s
-            text = self.assistant.filler_text
+            text = filler_phrase(transcript, self.assistant.filler_text)
             if delay <= 0 or not text.strip():
                 return
             try:
@@ -458,7 +458,12 @@ class TurnRunner:
                 audio_started=trace.at("tts_first") is not None,
             ):
                 return
-            if self.filler_pcm:
+            cached = (
+                self.filler_pcm.get(text, b"")
+                if isinstance(self.filler_pcm, dict)
+                else self.filler_pcm
+            )
+            if cached:
                 # The whole point of the filler is to arrive early; synthesising it now
                 # adds the vendor's first byte to the wait it is hiding.
                 log.info("filler after %.1f s (cached): %s", delay, text)
@@ -468,8 +473,8 @@ class TurnRunner:
                     trace.mark("tts_first")
                 if trace.at("play_start") is None:
                     trace.mark("play_start")
-                await speak(self.filler_pcm)
-                result.audio_bytes += len(self.filler_pcm)
+                await speak(cached)
+                result.audio_bytes += len(cached)
                 return
             log.info("filler after %.1f s: %s", delay, text)
             await say(text)

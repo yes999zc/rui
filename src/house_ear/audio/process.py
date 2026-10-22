@@ -515,6 +515,7 @@ class AudioPlane:
         adapter = self.adapter
         if adapter is None:
             return
+        started = time.monotonic()
         rate = self.cfg.audio.playback.rate
         step = max(1, rate * PLAY_CHUNK_MS // 1000)
         try:
@@ -533,6 +534,10 @@ class AudioPlane:
             # start threshold it stayed silent - then came out together with the answer
             # (2026-10-22). Bursting fills the buffer in milliseconds.
             self.ack_plays += 1
+            # The cue is the first thing the user hears; if it is sent 300 ms after the
+            # wake but sounds two seconds later, that gap is the device, not us.
+            log.info("cue: %.0f ms of audio handed over in %.0f ms",
+                     audio.size * 1000.0 / rate, (time.monotonic() - started) * 1000)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - a broken cue must not kill the plane
@@ -664,6 +669,7 @@ class AudioPlane:
                 continue
             if chunk is None:
                 continue
+            log.info("reply: first chunk at %d Hz", target)
             # A reply owns the device stream while it speaks; the song waits where it is.
             # A cue in flight is 320 ms: wait for it rather than cut it, but never wait
             # forever - an owner that is not releasing is a bug, not a reason to go silent.
