@@ -252,7 +252,27 @@ def create_app(
                     log.info("turn: %s", result.to_dict())
 
                 client.on_utterance = on_utterance
-                client.on_vendor = vendor.vendor_spoke
+                async def stop_ours() -> None:
+                    try:
+                        await client.send(StopAudio())
+                    except Exception as exc:  # noqa: BLE001 - never crash the app
+                        log.info("vendor yield: stop failed: %s", exc)
+
+                def on_vendor(kind: str, text: str) -> None:
+                    """The vendor's assistant woke: it owns the next utterance.
+
+                    Opening a quiet window is not enough - if our turn already started
+                    (continuous follow-up listening means it often has), the two answers
+                    overlap. The old build barge-in'd on this signal; so do we: abort the
+                    synthesis and stop the speaker, then stay quiet for 12 s.
+                    """
+                    if not vendor.vendor_spoke(kind, text):
+                        return
+                    runner.abort()
+                    asyncio.create_task(stop_ours(), name="vendor-stop")
+                    _light(app, "off")
+
+                client.on_vendor = on_vendor
                 def on_wake(msg: object) -> None:
                     vendor.ours_spoke()
                     _light(app, "wake")
