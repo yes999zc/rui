@@ -120,6 +120,15 @@ def build(
         # 「好，接着放。」 - a promise it had no way to keep. Saying so is the only honest
         # option until the music layer exists.
         text += "\n" + NO_MUSIC_NOTE
+    else:
+        # The mirror case, measured 22:12: right after a stop turn the model answered
+        # 「没有接音乐来源，放不了」 out of conversation context and never called the
+        # tool. The library exists exactly when the music tools do - say so plainly.
+        text += (
+            "\n（你有音乐能力：曲库是家里的 NAS，放歌必须调用 music_play 工具，"
+            "传输类（暂停/继续/下一首/上一首/停止）也必须调用对应 music_ 工具。"
+            "不要凭对话上下文猜测曲库不可用——工具在就是可用的。）"
+        )
     if tools_ok:
         text += "\n" + TOOL_RULES
     else:
