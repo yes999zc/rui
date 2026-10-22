@@ -66,6 +66,11 @@ FADE_OUT_MS = 320  # shutting down should feel heavier than waking up
 FADE_STEP_MS = 40
 WAKE_STEP_MS = 90
 THINK_FRAME_MS = 120
+# One breathing rotation is 18 x 120 ms = 2.16 s. A state that replaces thinking
+# must re-assert itself after that script has finished: device-side scripts run
+# concurrently, and the last sysfs write wins, so the breathe tail used to paint
+# blue over listening green on a fast turn (9哥 saw it end blue, 2026-10-22).
+THINKING_SETTLE_S = 2.6
 ERROR_PULSE_MS = 140
 COMET_FRAME_MS = 33
 COMET_FRAMES = 18
@@ -334,12 +339,38 @@ class LedRing:
             return
         if not force and self._name == name:
             return  # idempotent: the same state must not cost a shell round-trip
-        prev = self._rgb
+        prev_name, prev = self._name, self._rgb
         self._name, self._rgb = name, rgb
         token = self._bump()
         if not self.enabled:
             return  # state is still tracked; the ring stays dark
         self._spawn(self._transition_script(name, prev, rgb), token)
+        if prev_name == "thinking" and name != "thinking":
+            self._settle(name, token, THINKING_SETTLE_S)
+
+    def _settle(self, name: str, token: int, delay: float) -> None:
+        """Re-paint a state once the previous long animation has finished.
+
+        Only needed after thinking: its breathe runs for 2.16 s on the device, so a
+        short turn can paint speaking and then listening while the breathe is still
+        writing - and the breathe ends on dark blue. One extra frame at the end makes
+        the final colour deterministic regardless of what was in flight.
+        """
+        rgb = self.colors.get(name)
+        if rgb is None:
+            return
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(self._settle_later(name, rgb, token, delay),
+                                name=f"led-settle-{name}")
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _settle_later(self, name: str, rgb: Color, token: int, delay: float) -> None:
+        await asyncio.sleep(delay)
+        if token != self._generation:
+            return  # a newer state owns the ring; do not paint over it
+        script = frame(rgb, level=self._level(), path=self.device_path)
+        await self._run(script, token)
 
     def wake_ring(self) -> None:
         """Outward sweep from the centre, then settle on listening green.
@@ -350,6 +381,7 @@ class LedRing:
         """
         white = self.colors.get("wake", COLOR_RGB["wake"])
         green = self.colors["listening"]
+        prev_name = self._name
         self._name, self._rgb = "listening", green
         token = self._bump()
         if not self.enabled:
@@ -361,6 +393,8 @@ class LedRing:
             parts.append(_sleep(WAKE_STEP_MS))
         parts.extend(self._fade_parts(white, green, self.fade_ms, level))
         self._spawn("; ".join(parts), token)
+        if prev_name == "thinking":
+            self._settle("listening", token, THINKING_SETTLE_S)
 
     def error_pulse(self) -> None:
         """Two short red pulses plus a dim red settle, over in ~700 ms."""

@@ -282,3 +282,40 @@ def test_the_injected_clock_decides_night_brightness() -> None:
     asyncio.run(go())
     last_frame = parts_of(shell.scripts[0])[-LED_COUNT:]
     assert all(NIGHT_GREEN in part for part in last_frame)
+
+
+def test_leaving_thinking_repaints_the_target_after_the_breathe(monkeypatch) -> None:
+    """The breathe runs 2.16 s on the device; a short turn must not end up blue.
+
+    Device scripts run concurrently and the last sysfs write wins, so a fast
+    thinking -> speaking -> listening sequence used to leave the dark-blue breathe tail
+    on top. One settle frame after the breathe finishes makes the final colour
+    deterministic.
+    """
+    import asyncio
+
+    import house_ear.device.xiaoai.led as led_mod
+
+    monkeypatch.setattr(led_mod, "THINKING_SETTLE_S", 0.02)
+    scripts: list[str] = []
+
+    async def fake_shell(script: str, timeout: float) -> str:
+        scripts.append(script)
+        return ""
+
+    ring = led_mod.LedRing(fake_shell, enabled=True, clock=lambda: 12)  # noon: gain only
+
+    async def run() -> None:
+        ring.set_state("thinking")
+        await asyncio.sleep(0.01)
+        before = len(scripts)
+        ring.set_state("listening")
+        await asyncio.sleep(0.01)
+        assert len(scripts) == before + 1
+        await asyncio.sleep(0.05)  # settle delay
+        assert len(scripts) == before + 2
+        settle = scripts[-1]
+        assert settle.count("led_rgb") == 18
+        assert "0x008800" in settle  # listening green at gain 1.9, noon
+
+    asyncio.run(run())
