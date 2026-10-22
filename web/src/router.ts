@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
-  { path: '/', redirect: '/devices' },
+  { path: '/', redirect: '/overview' },
+  { path: '/overview', component: () => import('./views/OverviewView.vue'), meta: { title: '概览' } },
   { path: '/devices', component: () => import('./views/DevicesView.vue'), meta: { title: '设备' } },
   { path: '/assistant', component: () => import('./views/AssistantView.vue'), meta: { title: '助手' } },
   { path: '/voice', component: () => import('./views/VoiceView.vue'), meta: { title: '语音' } },

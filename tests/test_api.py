@@ -200,3 +200,23 @@ def test_the_scheduler_starts_with_the_app(tmp_path) -> None:
         assert app.state.reminders is not None
         assert app.state.reminder_tick is not None
         assert app.state.reminder_task is not None
+
+
+def test_voice_threshold_reads_the_keywords_file(tmp_path) -> None:
+    """The console must show the gate the model uses, not a config field nobody reads."""
+    keywords = tmp_path / "keywords.txt"
+    keywords.write_text("n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞\n", encoding="utf-8")
+    cfg = Config()
+    cfg.audio.voice.kws_keywords_file = str(keywords)
+    body = TestClient(create_app(cfg)).get("/api/v1/voice/threshold").json()
+    assert body["exists"] is True
+    assert body["threshold"] == 0.15
+    assert body["boost"] == 2.0
+    assert body["keywords"] == 1
+
+
+def test_debug_say_requires_text_and_a_speaker() -> None:
+    c = client()
+    assert c.post("/api/v1/debug/say", json={"text": "   "}).status_code == 422
+    # No audio plane in this app: a real text turn must say so, not hang.
+    assert c.post("/api/v1/debug/say", json={"text": "现在几点"}).status_code == 409

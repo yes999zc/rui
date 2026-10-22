@@ -57,7 +57,6 @@ def migrate(raw: dict) -> dict:
         "voice": {
             "rate": int(old_audio.get("sample_rate", 16000)),
             "frame_ms": int(old_audio.get("frame_ms", 20)),
-            "kws_threshold": float(old_audio.get("kws_threshold", 0.20)),
             "vad_min_speech_ms": int(old_audio.get("vad_min_speech_ms", 200)),
             "vad_end_silence_ms": int(old_audio.get("vad_end_silence_ms", 600)),
             "barge_in": bool(old_audio.get("barge_in", True)),

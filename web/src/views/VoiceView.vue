@@ -5,29 +5,29 @@ import { api, type Config } from '../api'
 const cfg = ref<Config | null>(null)
 const error = ref('')
 
+/** What the keywords file itself says — the wake model's real gate. */
+const keywords = ref<{ file: string; exists: boolean; threshold: number | null; boost: number | null; keywords: number } | null>(null)
+
 /**
  * Where the wake threshold really lives.
  *
- * `audio.voice.kws_threshold` is in the schema, was shown here as if it were a knob, and is
- * read by no runtime code: sherpa-onnx takes the per-keyword threshold from the keywords
- * file itself (`#0.20` suffix; `:2.00` is the hotword boost). The console used to print the
- * config value, which made a dead field look like the loudest control on the page. It now
- * names the file instead — the path is the only thing the server can honestly tell us,
- * because the file's contents are not part of any API response.
+ * sherpa-onnx takes the per-keyword threshold from the keywords file (`#0.15` suffix;
+ * `:2.00` is the hotword boost). The old `audio.voice.kws_threshold` field was read by no
+ * runtime code and has been removed from the schema; the API now parses the file, so this
+ * page can show the number that is actually in force instead of a path and a guess.
  */
-const keywordsPath = computed(() => {
-  const voice = cfg.value?.audio.voice
-  if (!voice) return ''
-  if (voice.kws_keywords_file) return voice.kws_keywords_file
-  const dir = (voice.kws_model_dir || '').replace(/\/+$/, '')
-  return dir ? `${dir}/keywords.txt` : ''
-})
+const keywordsPath = computed(() => keywords.value?.file || cfg.value?.audio.voice.kws_keywords_file || '')
 
 onMounted(async () => {
   try {
     cfg.value = await api.config()
   } catch (e) {
     error.value = String(e)
+  }
+  try {
+    keywords.value = await api.threshold()
+  } catch {
+    // A console without a keywords file still renders the rest of the page.
   }
 })
 </script>
@@ -68,13 +68,19 @@ onMounted(async () => {
     <div class="row">
       <span class="k">唤醒门限（真实）</span>
       <span class="v">
-        <span class="tag">只读</span>
-        来自 keywords 文件里每个词的 <code>#0.xx</code> 后缀
+        <span v-if="keywords?.threshold !== null && keywords?.threshold !== undefined">
+          {{ keywords.threshold }} <span class="tag">来自文件</span>
+        </span>
+        <span v-else class="warn">文件里没读到 #0.xx</span>
+        <span v-if="keywords?.boost !== null && keywords?.boost !== undefined"> · boost {{ keywords.boost }}</span>
       </span>
     </div>
     <div class="row">
       <span class="k">keywords 文件</span>
-      <span class="v"><code>{{ keywordsPath || '未配置' }}</code></span>
+      <span class="v">
+        <code>{{ keywordsPath || '未配置' }}</code>
+        <span v-if="keywords" class="tag">{{ keywords.keywords }} 条</span>
+      </span>
     </div>
     <div class="row">
       <span class="k">vad</span>
@@ -86,10 +92,9 @@ onMounted(async () => {
     </div>
     <p class="note">
       唤醒门限不在 <code>config.yaml</code> 里：sherpa-onnx 逐行读 keywords 文件，
-      <code>#0.20</code> 是该词的门限、<code>:2.00</code> 是热词权重。
-      <code>audio.voice.kws_threshold</code> 是历史遗留字段，运行时代码从不读它——
-      改它不会改变灵敏度（这一行以前把它当旋钮显示，已改正）。要调门限就改上面这个文件，
-      再重启音频面。文件内容没有走任何 API，所以这里只能给出来源，给不出数值。
+      <code>#0.15</code> 是该词的门限、<code>:2.00</code> 是热词权重。原来那个
+      <code>audio.voice.kws_threshold</code> 字段没有任何代码读取，已从 schema 删除；
+      这里显示的是 API 从文件里解析出的实际值。要调门限就改文件，再重启音频面。
     </p>
   </div>
 

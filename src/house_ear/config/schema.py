@@ -94,7 +94,6 @@ class VoiceConfig(BaseModel):
 
     rate: int = Field(default=16000, ge=8000, le=48000)
     frame_ms: int = Field(default=20, ge=10, le=40)
-    kws_threshold: float = Field(default=0.20, ge=0.0, le=1.0)
     vad_min_speech_ms: int = Field(default=200, ge=50, le=2000)
     vad_end_silence_ms: int = Field(default=600, ge=100, le=3000)
     # Audio kept before the *detected* onset. Silero reports speech a little late, so a

@@ -182,3 +182,39 @@ class WakeWord:
 
 def total_hits(wake: WakeWord) -> int:
     return wake.hits
+
+
+def keyword_meta(keywords_file: Path | str) -> dict[str, object]:
+    """What the keywords file actually says.
+
+    The real gate is the file's own suffix (`... :2.00 #0.15 @你好小瑞`), not
+    `audio.voice.kws_threshold` - nothing at runtime reads that field. The console shows
+    this instead of a knob that cannot work, and the file is the single source of truth.
+    """
+    path = Path(keywords_file)
+    out: dict[str, object] = {
+        "file": str(path), "exists": path.exists(),
+        "threshold": None, "boost": None, "keywords": 0,
+    }
+    if not path.exists():
+        return out
+    threshold = boost = None
+    count = 0
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("//"):
+            continue
+        count += 1
+        for token in line.split():
+            if token.startswith("#") and len(token) > 1:
+                try:
+                    threshold = float(token[1:])
+                except ValueError:
+                    pass
+            elif token.startswith(":") and len(token) > 1:
+                try:
+                    boost = float(token[1:])
+                except ValueError:
+                    pass
+    out.update(threshold=threshold, boost=boost, keywords=count)
+    return out

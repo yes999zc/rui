@@ -20,6 +20,7 @@ from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
+from ...audio.kws import keyword_meta
 from ...audio.protocol import PlayFile, StopAudio
 from ...config.schema import CONFIG_VERSION, Config
 from ...config.store import ConfigError, load_config, redacted, save_config
@@ -457,6 +458,52 @@ def create_app(
         await client.send(PlayFile(path=path, loop=bool(patch.get("loop", False)),
                                    gain=float(patch.get("gain", 1.0))))
         return {"playing": path}
+
+    @app.post("/api/v1/debug/say", dependencies=[Depends(auth)])
+    async def debug_say(patch: Annotated[dict, Body()]) -> dict:
+        """Run one text turn as if the person had said it (the console's 试一试).
+
+        Typing a request is the cheapest way to test a turn - no microphone, no wake
+        word, no standing next to the speaker - and it exercises the same runner, tools,
+        TTS and playback path as a spoken turn.
+        """
+        text = str(patch.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="text is required")
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if client is None:
+            raise HTTPException(status_code=409, detail="no audio plane connected")
+        runner = app.state.runner
+        if runner.busy:
+            raise HTTPException(status_code=409, detail="a turn is already running")
+        trace = TurnTrace(device_id="debug")
+        result = await runner.run(b"", client.speak, trace, transcript=text)
+        app.state.last_turn = result.to_dict()
+        traces.add(trace)
+        log.info("debug say: %r -> %r", text, result.reply)
+        return {
+            "reply": result.reply,
+            "error": result.error,
+            "tools": result.tools,
+            "stages": result.stages,
+            "audio_bytes": result.audio_bytes,
+        }
+
+    @app.get("/api/v1/voice/threshold", dependencies=[Depends(auth)])
+    async def voice_threshold() -> dict:
+        """The threshold the wake model actually uses, read from the keywords file.
+
+        `audio.voice.kws_threshold` is inert; showing the real file (and what it says)
+        is the only way a person can tell whether changing a number did anything.
+        """
+        voice = cfg.audio.voice
+        path = (
+            Path(voice.kws_keywords_file)
+            if voice.kws_keywords_file
+            else Path(voice.kws_model_dir) / "keywords.txt"
+        )
+        return keyword_meta(path)
 
     @app.get("/api/v1/audio", dependencies=[Depends(auth)])
     async def audio_status() -> dict:

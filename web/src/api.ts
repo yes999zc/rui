@@ -140,6 +140,8 @@ export interface AudioMetrics {
    * targets 300 ms and caps at 1000 ms; 0 while idle, near-zero while talking = underrun.
    */
   playback_lead_ms: number
+  /** Who holds the speaker right now: '' / 'cue' / 'dialogue' / 'reminder' / 'music'. */
+  output_owner: string
   playback_s: number
   frames_in: number
   frames_out: number
@@ -176,19 +178,22 @@ export interface Capture {
 export interface Voice {
   rate: number
   frame_ms: number
-  /**
-   * In the schema and returned by the API, but read by nothing at runtime: the real
-   * threshold is the `#0.20` suffix inside the keywords file. Kept typed so the console
-   * can name it in a note instead of silently pretending it is a control.
-   */
-  kws_threshold: number
   kws_enabled: boolean
   kws_model_dir: string
-  /** Empty means `<kws_model_dir>/keywords.txt`; the file's contents are not exposed. */
+  /** Empty means `<kws_model_dir>/keywords.txt`. The real threshold is inside the file. */
   kws_keywords_file: string
   vad_min_speech_ms: number
   vad_end_silence_ms: number
   barge_in: boolean
+}
+
+/** What the keywords file says: the wake model's real gate (`#0.15`, boost `:2.00`). */
+export interface KeywordMeta {
+  file: string
+  exists: boolean
+  threshold: number | null
+  boost: number | null
+  keywords: number
 }
 
 export interface Playback {
@@ -306,4 +311,16 @@ export const api = {
   putSecret: (name: string, value: string) =>
     request<SecretPutResult>('/api/v1/secrets', { method: 'POST', body: JSON.stringify({ name, value }) }),
   traces: () => request<{ limit: number; turns: unknown[] }>('/api/v1/traces'),
+  /** The gate the wake model really uses, parsed from the keywords file. */
+  threshold: () => request<KeywordMeta>('/api/v1/voice/threshold'),
+  /** Run one text turn as if it had been spoken (the console's 试一试). */
+  say: (text: string) =>
+    request<{ reply: string; error: string; tools: unknown[]; stages: Record<string, unknown>; audio_bytes: number }>(
+      '/api/v1/debug/say',
+      { method: 'POST', body: JSON.stringify({ text }) },
+    ),
+  stopAudio: () => request<{ playing: string | null }>('/api/v1/debug/play', { method: 'POST', body: JSON.stringify({ stop: true }) }),
+  deviceVolume: () => request<{ volume: number; range: string }>('/api/v1/device/volume'),
+  setDeviceVolume: (value: number) =>
+    request<{ volume: number }>('/api/v1/device/volume', { method: 'PUT', body: JSON.stringify({ value }) }),
 }

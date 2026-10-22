@@ -23,6 +23,7 @@ onMounted(async () => {
         house-ear<small>v{{ version || '—' }} · {{ online ? 'control plane online' : 'offline' }}</small>
       </div>
       <nav class="nav">
+        <RouterLink to="/overview">概览</RouterLink>
         <RouterLink to="/devices">设备</RouterLink>
         <RouterLink to="/assistant">助手</RouterLink>
         <RouterLink to="/voice">语音</RouterLink>

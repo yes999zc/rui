@@ -749,6 +749,8 @@ class AudioPlane:
                            loop: bool) -> None:
         step = max(1, target * PLAY_CHUNK_MS // 1000)
         pacer = Pacer()
+        lead_max = 0.0
+        chunks = 0
         while not self._stop.is_set():
             for start in range(0, audio.size, step):
                 if self._stop.is_set():
@@ -777,9 +779,12 @@ class AudioPlane:
                 now = time.monotonic()
                 wait = pacer.sleep_for(now, seconds)
                 self.playback_lead_s = pacer.lead
+                chunks += 1
+                lead_max = max(lead_max, self.playback_lead_s)
                 await asyncio.sleep(wait)
             if not loop:
                 break
+        log.info("playback: %d chunks, lead max %.0f ms", chunks, lead_max * 1000)
 
     async def _speak_loop(self) -> None:
         """Play the reply PCM the control plane pushes.
@@ -792,6 +797,8 @@ class AudioPlane:
         target = self.cfg.audio.playback.rate
         source = self.cfg.audio.voice.rate
         pacer = Pacer()
+        reply_chunks = 0
+        reply_lead_max = 0.0
         while not self._stop.is_set():
             try:
                 chunk = await asyncio.wait_for(self._speak_queue.get(), timeout=0.5)
@@ -801,6 +808,12 @@ class AudioPlane:
                 # was already out and the loop sat waiting.
                 if self._speak_queue.empty():
                     self._reply_open = False
+                    # The lead is the number to read when a reply sounds rough; without
+                    # this line the only copy of it was the console, 2 s stale.
+                    log.info("reply: %d chunks, lead max %.0f ms",
+                             reply_chunks, reply_lead_max * 1000)
+                    reply_chunks = 0
+                    reply_lead_max = 0.0
                     self._release("dialogue")
                     self._resume_after_speech()
                     # The player is deliberately left alone here: the next reply closes
@@ -877,6 +890,8 @@ class AudioPlane:
             now = time.monotonic()
             wait = pacer.sleep_for(now, seconds)
             self.playback_lead_s = pacer.lead
+            reply_chunks += 1
+            reply_lead_max = max(reply_lead_max, self.playback_lead_s)
             # Waiting until the buffer would drop to the target, not until it is
             # empty: that wait is the whole fix.
             await asyncio.sleep(wait)
