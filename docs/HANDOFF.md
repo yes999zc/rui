@@ -280,13 +280,15 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   reply 留开的 follow-up gate，回声过 AEC 残余被 ASR 转回文字（啦→吧 一字之差绕过精确兜底），
   LLM 答了自己的告别，每 ~15 s 循环一次、是否触发看 ~30 ms 竞态。修复两层：plane 自我发声前
   disarm armed gate（音乐恢复也不开 follow-up 窗口）；`is_echo` 加 0.75 模糊匹配。
-- **退下吧双告别（9哥 20:42 报告，已修待复验）**：`stop intent -> session closed` 日志打了但
-  代码没关空闲钟，17.5 s 后 farewell 又道一次别（20:42:16→20:42:34）。修复：`runner.dismiss()`
-  先 `idle.stop()` 再答「好。」。**复验判据**：说「退下吧」→ 只有一句「好。」，等 20 s 无
-  第二句告别、日志无 `session idle ... farewell` 跟随。
-- **观察项（不阻塞）**：① 20:38 首轮 ASR 把「现在几点」听成 `'南方3。'`（段 rms 0.0116 偏轻，
-  疑提示音叠话头；20:41 第二轮 2.18 s 段转写全对，单样本，再出现再查）；② 天气工具 20:39 一次
-  「没查到」、20:42 正常——上游间歇，非代码。
+- **退下吧双告别（9哥 20:42 报告，修复 `ec3815f` 复验 ✅ 20:50）**：原 stop-intent 只答「好。」没关
+  空闲钟，17.5 s 后 farewell 又道一次别。修复 `runner.dismiss()` 先 `idle.stop()` 再答。复验：
+  20:50:27 stop intent → 一句「好。」→ 之后 **46 s+ 无 farewell**（整份日志 farewell 计数 0）。
+- **本段日志另两处亮点（20:49–20:50）**：① 第三轮流让位照常成立；② **真打断首次实测成立**：
+  自己答句播到一半喊「你好小瑞」→ `barge: 1 wake during playback, dropped 4.4 s queued` →
+  即起新轮、答对「今天星期几」。
+- **观察项（不阻塞）**：① 20:38 首轮 ASR 把「现在几点」听成 `'南方3。'`（疑提示音叠话头，后续
+  多轮转写全对，单样本）；② **天气工具今晚 1/3**（20:39 ✗、20:42 ✓、20:50 ✗，报「没查到」，
+  答句降级正常）——上游问题为主，B2 后值得单查。
 - **起服务（正确方式）**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh
   > ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `~/.hermes/.env` 取 6 个
   provider key，**`set -a` 是关键行**（20:09–20:12 丢 key 事故根因）；`HOUSE_EAR_DEVICE_TOKEN`
@@ -295,7 +297,7 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   的 `voice.device_host/device_ssh`，自带 ControlMaster 防 dropbear 限流）；客户端日志 `/tmp/client.log`。
 - **B2 第一阶段（19:52–19:54，真机）**：① 端点 600 ms 整句保留（1 样本）✅；② 连续追问+灯效 ✅；
   ③ 厂家让位 ❌→修复 `3b4648e`→**复验 ✅（见上）**。
-- **下一步**：9哥 复测「退下吧」（判据见上）→ B2 第二阶段放歌打断+220 档远处唤醒
+- **下一步**：B2 第二阶段放歌打断+220 档远处唤醒
   （`POST /api/v1/debug/play` `{"file": "~/.hermes/cache/scratch/music-test.wav", "loop": true}`，
   音量已 220；放歌期间日志应出现 `follow-up gate stays shut: music owns the speaker`，歌词不进
   ASR）→ 五个数各一行写回 ROADMAP/HANDOFF → C1 冷装 → D1 音乐。
