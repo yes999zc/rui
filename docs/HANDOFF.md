@@ -70,9 +70,9 @@ MIT，私有仓 `yes999zc/house-ear`（main），本地 `~/AI_Workspace/01_Code/
 | S4 | VAD 分段、回合编排（ASR→LLM→TTS→推流）、trace | ✅ 20 轮 20/20，首句 p50 3563 ms（无工具，11:xx 口径） |
 | S5a | 唤醒应答三档、preroll 回放、回声窗口 | ✅ `docs/ack.md` |
 | S5b | 回合质量（复读、抱怨、编造、标记、唤醒词尾巴） | ✅ `docs/turn-quality.md` |
-| S5c | 停止词、短噪声、filler、自听守卫 | 🟡 15 s 超时 + 两档告别 + filler 预渲染已落地（`f200778`/`f814d6f`/`0575b57`）；**告别真机验一次**（日志 `session closed: '没事的话，我先下啦。'`）；提醒到点、音乐类跳过 filler 未验 |
+| S5c | 停止词、短噪声、filler、自听守卫 | 🟡 15 s 超时 + 两档告别 + filler 预渲染已落地（`f200778`/`f814d6f`/`0575b57`）；告别真机已验（2026-10-22 16:05）；**提醒到点已接线并真机响过一次（16:37:48，408 ms 到首块）**；音乐类跳过 filler 待音乐 |
 | S5d | 控制台（六页 Vue + 助手页 + 密钥页） | 🟡 旧项目 10 个分区尚未逐项对齐；`playback_lead_ms`/barge 数已上控制台（`348e77b`） |
-| S5e | 时间注入、weather/news/web_search、工具循环 | 🟡 reminder/timer + 到点调度已落地（`f740819`），`app.py` 接线中，未真机验收 |
+| S5e | 时间注入、weather/news/web_search、工具循环 | ✅ reminder/timer **已接线**（`1882d8c`：`build_local_tools` + 1 s tick + 到点经 `runner.say`，避开回合与占用）；真机 2026-10-22 16:37:48 到点、408 ms 出声 |
 | S6 | 播报节奏（Pacer）+ 打断（barge-in） | ✅ 真机：队列 0 丢弃、打断丢 7.6 s（`4c4a69b`）；剩余 lead ≈420 ms 未按 300 ms 口径验收 |
 | S7 | ASR 常驻 + filler 预渲染 | ✅ 真机 ASR 51–90 ms（原 500 ms + 每轮 4.7–5.3 s 加载），filler 0.73 s 预渲染（`f814d6f`） |
 | S8 | 6 麦加权混音前端（`audio/frontend.py`） | ✅ 加权混音 + 放音冻结权重；真机唤醒 **6/6、4/4**（门限 0.15，`keywords-015.txt`） |
