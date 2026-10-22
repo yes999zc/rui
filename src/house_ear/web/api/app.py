@@ -28,12 +28,13 @@ from ...device.registry import build_adapters
 from ...doctor import run_doctor
 from ...music import MusicService, NavidromeSource, PlayHistory
 from ...music.tools import build_music_tools
-from ...session import rules
+from ...session import phrases, rules
 from ...session.ack import ensure_ack_wav
 from ...session.text import strip_wake
 from ...session.turn import TurnRunner
 from ...session.vendor import VendorWindow
 from ...tools import build_local_tools, build_scheduler
+from ...tools.contract import ToolResult
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
 
@@ -227,14 +228,19 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         # identical prompt twice tonight out of pure context while the library was
         # up (22:12, 22:24). A named ask (「放周杰伦的晴天」) still goes to the model.
         from ...music.source import SourceError
-        from ...music.tools import _announce
+        from ...music.tools import _started
         try:
             tracks = await service.source.random(service.cfg.queue_batch)
         except SourceError as exc:
             log.info("music random failed: %s", exc)
             tracks = []
-        line = _announce(tracks, await service.play(tracks)) if tracks \
-            else "曲库这会儿连不上，过一会儿再让我放。"
+        started = await service.play(tracks) if tracks else None
+        result = _started(tracks, started) if tracks else \
+            ToolResult(status="unreachable")
+        key = {"ok": "music.started", "ok_one": "music.started_one",
+               "unresolved": "music.unresolved",
+               "unreachable": "music.unreachable"}[result.status]
+        line = phrases.book.render(key, **result.payload)
         runner.idle.touch()
         spoken = await runner.say(line, _speaking(app, client), trace)
         app.state.last_turn = {
@@ -242,7 +248,7 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
             "tools": ["music_play"], "stages": {},
         }
         traces.add(trace)
-        log.info("music transport: %r -> random", clean)
+        log.info("music transport: %r -> random (%s)", clean, key)
         return line
     action = rules.music_transport(clean)
     # A transport word with nothing playing still deserves words, not silence.
@@ -254,11 +260,14 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         log.info("music transport %s failed: %s", action, exc)
         track_or_ok = False
     if action in ("next", "prev"):
-        line = (f"好，《{track_or_ok.title}》。" if track_or_ok
-                else ("已经是最后一首了。" if action == "next" else "已经是第一首了。"))
+        line = phrases.book.render(
+            "music.next" if track_or_ok
+            else ("music.last_track" if action == "next" else "music.first_track"),
+            **({"title": track_or_ok.title} if track_or_ok else {}))
     else:
-        line = {"pause": "好，先停这儿。", "resume": "接着放。"}[action] if track_or_ok \
-            else ("现在没有在放的歌。" if action == "pause" else "现在没有暂停着的歌。")
+        line = phrases.book.render(
+            {"pause": "music.paused", "resume": "music.resumed"}[action] if track_or_ok
+            else ("music.not_playing" if action == "pause" else "music.not_paused"))
     runner.idle.touch()
     spoken = await runner.say(line, _speaking(app, client), trace)
     app.state.last_turn = {
@@ -451,6 +460,11 @@ def create_app(
                         result = await runner.run(pcm, _speaking(app, client), trace, transcript=clean)
                     except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
                         log.warning("turn failed: %s", exc)
+                        # Turn-level degrade (V1): silence after a wake reads as
+                        # "it ignored me"; one system-layer line, best effort.
+                        with contextlib.suppress(Exception):
+                            await runner.say(phrases.book.render("turn.failed"),
+                                             _speaking(app, client), trace)
                         return
                     if asr_report is not None:
                         result.stages.setdefault("asr", asr_report)

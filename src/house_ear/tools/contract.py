@@ -22,6 +22,9 @@ class ToolSpec:
     permission: Permission = Permission.READ
     source: str = "local"        # local | mcp:<server> | ha
     needs_confirm: bool = False
+    # The V-line declaration (docs/interaction.md §3): which system-layer
+    # phrases render this tool's results. Empty = the handler's own text.
+    interaction: InteractionSpec | None = None
 
     def as_llm_tool(self) -> dict[str, Any]:
         """The OpenAI `tools[].function` entry.
@@ -47,9 +50,43 @@ class ToolSpec:
 
 @dataclass
 class ToolResult:
-    ok: bool
-    data: Any = None
-    error: str = ""
+    """What a handler returns: state + slots, never its own wording.
+
+    The phrase is rendered by the system layer (`session/phrases.py`) from the
+    tool's InteractionSpec - the V-line rule that ended four speech dialects in
+    one stroke (docs/interaction.md §3). `say` is the escape hatch for genuinely
+    free-form content (a weather report is data, not a template) and is spoken
+    verbatim. A plain `str` return value still works and means the same as
+    `say`: tools migrate at their own pace.
+    """
+
+    status: str = "ok"          # ok | empty | unreachable | denied | options
+    payload: dict[str, Any] = field(default_factory=dict)
+    options: list[dict[str, Any]] = field(default_factory=list)   # choose consumes (V2)
+
+    def slot(self, **slots: object) -> ToolResult:
+        """`ToolResult().slot(title="晴天", count=1)` - the common one-liner."""
+        self.payload.update(slots)
+        return self
+
+    @staticmethod
+    def say(text: str) -> ToolResult:
+        return ToolResult(status="ok", payload={"say": text})
 
 
-ToolHandler = Callable[[dict[str, Any]], Awaitable[ToolResult]]
+@dataclass(frozen=True)
+class InteractionSpec:
+    """How the system layer interacts for this tool. Declared, never implemented.
+
+    `exec` maps a ToolResult status to a PhraseBook key; the book renders the
+    words. `choose`/`danger`/`filler` are the V2 hooks the HA set will exercise;
+    declaring them now costs nothing and makes that migration one diff.
+    """
+
+    exec: dict[str, str] = field(default_factory=dict)
+    choose: str = "first"       # first | top3 | ask (V2)
+    danger: str = "none"        # none | confirm | excluded (V2)
+    filler: str = "auto"        # auto | none
+
+
+ToolHandler = Callable[[dict[str, Any]], Awaitable[ToolResult | str]]

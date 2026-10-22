@@ -1,13 +1,18 @@
-"""The music tools: intent in, one short line out, playback started by the service.
+"""The music tools: intent in, a structured result out, zero wording of their own.
 
-Contract copied from the old build: the handler's return value is spoken verbatim,
-so the wording is part of the tool - a failure says 「曲库里没找到」, never an
-English exception. Playback starts inside the handler: the plane queues a
-play_file behind the spoken line (dialogue owns the speaker), so the song begins
-the moment the short confirm ends instead of colliding with it.
+V-line contract (docs/interaction.md §3): every handler returns `ToolResult`
+slots and every sentence is rendered from the PhraseBook through the tool's
+InteractionSpec - the V1 acceptance is literal, no Chinese speech lives in this
+file. Playback starts inside the handler; the plane queues the play_file behind
+the spoken line (dialogue owns the speaker), so the song begins the moment the
+short confirm ends.
 
-The online fallback is an interface stub on purpose this round: when a second
-source lands, it slots into `_search` and nothing above this line changes.
+Statuses beyond the base five (`ok_star`, `ok_one`, ...) are wording variants of
+success: the exec map is the single place a status becomes a phrase, so two
+successes that say different things are two statuses, not a payload hack.
+
+The online fallback stays an interface stub this round: a second source plugs
+into `_search` and nothing above this line changes.
 """
 from __future__ import annotations
 
@@ -16,13 +21,18 @@ import random
 from typing import Any
 
 from ..config.schema import Config
-from ..tools.contract import Permission, ToolSpec
+from ..session import phrases
+from ..tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from . import query as q
 from .model import Track
 from .service import MusicService
 from .source import MusicSource, SourceError
 
 log = logging.getLogger(__name__)
+
+PLAY_MAP = {"ok": "music.started", "ok_one": "music.started_one",
+            "empty": "music.not_found", "unreachable": "music.unreachable",
+            "unresolved": "music.unresolved"}
 
 
 async def _search(source: MusicSource, p: q.QueryPlan) -> list[Track]:
@@ -43,11 +53,21 @@ async def _search(source: MusicSource, p: q.QueryPlan) -> list[Track]:
         return []
 
 
-def _announce(tracks: list[Track], started: Track | None) -> str:
+def _started(tracks: list[Track], started: Track | None) -> ToolResult:
+    """The queue started (or could not): one track omits the count, by ear.
+
+    `unresolved` is not `unreachable`: the library answered, the tracks were
+    there, and not one of them could be fetched - different apology.
+    """
     if started is None:
-        return "歌都在，但一首也没取出来，过会儿再试一次吧。"
-    more = f"，共 {len(tracks)} 首" if len(tracks) > 1 else ""
-    return f"好，放《{started.title}》-{started.artist}{more}。"
+        return ToolResult(status="unresolved")
+    slots = {"title": started.title, "artist": started.artist, "count": len(tracks)}
+    return ToolResult(status="ok" if len(tracks) > 1 else "ok_one", payload=slots)
+
+
+def _started_or(tracks: list[Track], started: Track | None,
+                empty: ToolResult) -> ToolResult:
+    return _started(tracks, started) if tracks else empty
 
 
 def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec, Any]]:
@@ -55,121 +75,136 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
     source = service.source
     batch = cfg.music.queue_batch
 
-    async def music_play(args: dict[str, Any]) -> str:
+    def spec(name: str, description: str, exec_map: dict[str, str], *,
+             choose: str = "first", filler: str = "none",
+             permission: Permission = Permission.WRITE,
+             input_schema: dict[str, Any] | None = None) -> ToolSpec:
+        return ToolSpec(
+            name=name, description=description, permission=permission,
+            input_schema=input_schema or {},
+            interaction=InteractionSpec(exec=exec_map, choose=choose, filler=filler),
+        )
+
+    async def music_play(args: dict[str, Any]) -> ToolResult:
         p = q.plan(str(args.get("query") or ""))
         try:
-            tracks = await source.favorites() if p.favorites else (
-                await source.random(batch) if p.random else await _search(source, p))
+            if p.favorites:
+                tracks = await source.favorites()
+            elif p.random:
+                tracks = await source.random(batch)
+            else:
+                tracks = await _search(source, p)
         except SourceError as exc:
             log.info("music_play: %s", exc)
-            return "曲库这会儿连不上，过一会儿再让我放。"
-        if not tracks:
-            want = p.title or p.term
-            return f"曲库里没找到「{want}」。" if want else "曲库里现在没有能放的。"
-        started = await service.play(tracks)
-        return _announce(tracks, started)
+            return ToolResult(status="unreachable")
+        started = await service.play(tracks) if tracks else None
+        return _started_or(tracks, started,
+                           ToolResult(status="empty").slot(want=p.title or p.term))
 
-    async def music_pause(_args: dict[str, Any]) -> str:
-        return "好，先停这儿。" if await service.pause() else "现在没有在放的歌。"
+    async def music_pause(_args: dict[str, Any]) -> ToolResult:
+        return ToolResult(status="ok") if await service.pause() else ToolResult(status="empty")
 
-    async def music_resume(_args: dict[str, Any]) -> str:
-        return "接着放。" if await service.resume() else "现在没有暂停着的歌。"
+    async def music_resume(_args: dict[str, Any]) -> ToolResult:
+        return ToolResult(status="ok") if await service.resume() else ToolResult(status="empty")
 
-    async def music_next(_args: dict[str, Any]) -> str:
+    async def music_next(_args: dict[str, Any]) -> ToolResult:
         t = await service.next()
-        return f"好，下一首《{t.title}》。" if t else "已经是最后一首了。"
+        return ToolResult(status="ok").slot(title=t.title) if t else ToolResult(status="empty")
 
-    async def music_prev(_args: dict[str, Any]) -> str:
+    async def music_prev(_args: dict[str, Any]) -> ToolResult:
         t = await service.prev()
-        return f"好，回到《{t.title}》。" if t else "已经是第一首了。"
+        return ToolResult(status="ok").slot(title=t.title) if t else ToolResult(status="empty")
 
-    async def music_stop(_args: dict[str, Any]) -> str:
+    async def music_stop(_args: dict[str, Any]) -> ToolResult:
         await service.stop()
-        return "好，不放了。"
+        return ToolResult(status="ok")
 
-    async def music_favorite(args: dict[str, Any]) -> str:
+    async def music_favorite(args: dict[str, Any]) -> ToolResult:
         action = str(args.get("action") or "")
         current = service.current
         if action == "list":
             try:
                 favs = await source.favorites()
             except SourceError:
-                return "收藏这会儿读不出来。"
+                return ToolResult(status="unreachable")
             if not favs:
-                return "还没有收藏的歌，播放时说「收藏这首歌」。"
+                return ToolResult(status="empty_list")
             names = "、".join(t.label for t in favs[:5])
-            return f"收藏了 {len(favs)} 首，比如：{names}。"
+            return ToolResult(status="ok_list").slot(count=len(favs), names=names)
         if current is None:
-            return "现在没有在播的歌，想收藏哪首就先放它。"
+            return ToolResult(status="empty")
         on = action != "remove"
         ok = await source.star(current.id, on)
-        return (f"已收藏《{current.title}》。" if on else f"取消收藏《{current.title}》。") \
-            if ok else "收藏没成功，服务器没回应。"
+        if not ok:
+            return ToolResult(status="unreachable")
+        return ToolResult(status="ok_star" if on else "ok_unstar").slot(title=current.title)
 
-    async def music_play_favorites(_args: dict[str, Any]) -> str:
+    async def music_play_favorites(_args: dict[str, Any]) -> ToolResult:
         try:
             favs = await source.favorites()
         except SourceError:
-            return "收藏这会儿读不出来。"
-        if not favs:
-            return "还没有收藏的歌，先说「收藏这首歌」。"
+            return ToolResult(status="unreachable")
         random.shuffle(favs)
-        started = await service.play(favs)
-        return _announce(favs, started)
+        started = await service.play(favs) if favs else None
+        return _started_or(favs, started, ToolResult(status="empty"))
 
-    async def music_taste(_args: dict[str, Any]) -> str:
+    async def music_taste(_args: dict[str, Any]) -> ToolResult:
         top = service.history.top(3)
         last = service.history.last()
         if not top:
-            return "还没怎么放过歌，先来一首？"
-        names = "、".join(f"{a} {n} 次" for a, n in top)
-        tail = f"最近一次放的是《{last.get('title', '')}》。" if last else ""
-        return f"你听得最多的是：{names}。{tail}"
+            return ToolResult(status="empty")
+        # Item wording comes from the book too; the tool only joins (the scan test
+        # would flag a single Chinese character back in here, and it should).
+        names = "、".join(phrases.book.render("music.taste_item", artist=a, plays=n)
+                         for a, n in top)
+        tail = phrases.book.render("music.taste_tail",
+                                   title=(last or {}).get("title", "")) if last else ""
+        return ToolResult(status="ok_taste").slot(names=names, tail=tail)
 
     return [
-        (ToolSpec(
-            name="local.music_play", permission=Permission.WRITE,
-            description="放歌/听音乐/来点音乐/放某歌手或某首歌（query 传用户原话整句，"
-                        "不要先拆词也不要先用别的工具试探）。说「收藏的歌」时 action 传 favorites。",
-            input_schema={"type": "object", "properties": {
-                "query": {"type": "string", "description": "用户原话，如 帮我放周杰伦的晴天"},
-                "action": {"type": "string", "enum": ["favorites"], "description": "播收藏列表"}},
-                "required": ["query"]},
-        ), music_play),
-        (ToolSpec(
-            name="local.music_pause", permission=Permission.WRITE,
-            description="音乐播放中说「暂停/停一下/先停这儿」时**必须调用本工具**真正暂停，"
-                        "禁止只口头说已暂停（实测模型会偷懒只回一句，音乐照播）。",
-        ), music_pause),
-        (ToolSpec(
-            name="local.music_resume", permission=Permission.WRITE,
-            description="「继续/接着放/恢复播放」时**必须调用本工具**，禁止只口头确认。",
-        ), music_resume),
-        (ToolSpec(
-            name="local.music_next", permission=Permission.WRITE,
-            description="「下一首/换一首/切歌」时**必须调用本工具**，禁止只口头确认。",
-        ), music_next),
-        (ToolSpec(
-            name="local.music_prev", permission=Permission.WRITE,
-            description="「上一首/前一首」时**必须调用本工具**，禁止只口头确认。",
-        ), music_prev),
-        (ToolSpec(
-            name="local.music_stop", permission=Permission.WRITE,
-            description="「别放了/停止播放/关掉音乐/不放了」时**必须调用本工具**真正停止。",
-        ), music_stop),
-        (ToolSpec(
-            name="local.music_favorite", permission=Permission.WRITE,
-            description="收藏/取消收藏当前在播的歌，或列出收藏（action: add/remove/list）",
-            input_schema={"type": "object", "properties": {
-                "action": {"type": "string", "enum": ["add", "remove", "list"]}},
-                "required": ["action"]},
-        ), music_favorite),
-        (ToolSpec(
-            name="local.music_play_favorites", permission=Permission.WRITE,
-            description="放收藏的歌（「放我收藏的/来点我喜欢的」）",
-        ), music_play_favorites),
-        (ToolSpec(
-            name="local.music_taste", permission=Permission.READ,
-            description="最近爱听什么/最常听谁（播放统计）",
-        ), music_taste),
+        (spec("local.music_play",
+              "放歌/听音乐/来点音乐/放某歌手或某首歌（query 传用户原话整句，"
+              "不要先拆词也不要先用别的工具试探）。说「收藏的歌」时 action 传 favorites。",
+              PLAY_MAP),
+         music_play),
+        (spec("local.music_pause",
+              "音乐播放中说「暂停/停一下/先停这儿」时**必须调用本工具**真正暂停，"
+              "禁止只口头说已暂停。",
+              {"ok": "music.paused", "empty": "music.not_playing"}),
+         music_pause),
+        (spec("local.music_resume",
+              "「继续/接着放/恢复播放」时**必须调用本工具**，禁止只口头确认。",
+              {"ok": "music.resumed", "empty": "music.not_paused"}),
+         music_resume),
+        (spec("local.music_next",
+              "「下一首/换一首/切歌」时**必须调用本工具**，禁止只口头确认。",
+              {"ok": "music.next", "empty": "music.last_track"}),
+         music_next),
+        (spec("local.music_prev",
+              "「上一首/前一首」时**必须调用本工具**，禁止只口头确认。",
+              {"ok": "music.prev", "empty": "music.first_track"}),
+         music_prev),
+        (spec("local.music_stop",
+              "「别放了/停止播放/关掉音乐/不放了」时**必须调用本工具**真正停止。",
+              {"ok": "music.stopped"}),
+         music_stop),
+        (spec("local.music_favorite",
+              "收藏/取消收藏当前在播的歌，或列出收藏（action: add/remove/list）。"
+              "列表为空时说收藏为空；没在播时提示先放一首。",
+              {"ok_star": "music.starred", "ok_unstar": "music.unstarred",
+               "ok_list": "music.favorites_count", "empty": "music.no_current",
+               "empty_list": "music.favorites_empty",
+               "unreachable": "music.star_failed"},
+              input_schema={"type": "object", "properties": {
+                  "action": {"type": "string", "enum": ["add", "remove", "list"]}},
+                  "required": ["action"]}),
+         music_favorite),
+        (spec("local.music_play_favorites", "放收藏的歌（「放我收藏的/来点我喜欢的」）",
+              {**PLAY_MAP, "empty": "music.favorites_empty",
+               "unreachable": "music.favorites_read_failed"}),
+         music_play_favorites),
+        (spec("local.music_taste", "最近爱听什么/最常听谁（播放统计）",
+              {"ok_taste": "music.taste_top", "empty": "music.taste_empty"},
+              permission=Permission.READ),
+         music_taste),
     ]

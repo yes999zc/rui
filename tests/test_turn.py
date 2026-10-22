@@ -488,3 +488,28 @@ def test_a_slow_turn_says_something_small_first(monkeypatch) -> None:
     assert "沈阳今天晴。" in tts.texts
     assert result.reply  # the real answer still landed
     assert _time.monotonic() - started < 2.0
+
+
+def test_a_structured_tool_result_renders_from_the_phrase_book() -> None:
+    """V1's core rule at the runner level: the handler returns slots, the system
+    layer speaks (docs/interaction.md §3). A str return still passes through."""
+    from house_ear.session import phrases
+    from house_ear.tools.contract import InteractionSpec, ToolResult, ToolSpec
+
+    async def handler(_args: dict) -> ToolResult:
+        return ToolResult(status="ok").slot(title="晴天", artist="周杰伦", count=20)
+
+    async def str_handler(_args: dict) -> str:
+        return "自由文本照旧"
+
+    spec = ToolSpec(
+        name="local.demo", description="demo",
+        interaction=InteractionSpec(exec={"ok": "music.started"}))
+    str_spec = ToolSpec(name="local.plain", description="demo")
+    runner = TurnRunner(Config().providers, tools=[(spec, handler), (str_spec, str_handler)])
+
+    out = asyncio.run(runner._call_tool({"name": "demo", "arguments": "{}"}))
+    assert out == phrases.book.render("music.started", title="晴天", artist="周杰伦", count=20)
+
+    plain = asyncio.run(runner._call_tool({"name": "plain", "arguments": "{}"}))
+    assert plain == "自由文本照旧"

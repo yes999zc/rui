@@ -27,8 +27,9 @@ from ..providers.chain import (
     llm_chain,
     tts_chain,
 )
+from ..tools.contract import ToolResult
 from ..trace import TurnTrace
-from . import prompts
+from . import phrases, prompts
 from .filler import filler_phrase, should_speak_filler
 from .idle import IdleWatch, farewell_line
 from .rules import stop_reply
@@ -222,6 +223,9 @@ class TurnRunner:
         self.turn_timeout_s = turn_timeout_s
         self.history: list[dict] = []
         self._handlers = {spec.llm_name: handler for spec, handler in self.tools}
+        # The V-line rendering table: llm_name -> InteractionSpec (None = the
+        # handler's own text; docs/interaction.md §3).
+        self._interactions = {spec.llm_name: spec.interaction for spec, _ in self.tools}
         # The old build's INFO_TOOLS: a looked-up answer gets the longer budget; a weather
         # answer does not (it is short and the user is standing there).
         self.info_tool_names = {
@@ -766,7 +770,12 @@ class TurnRunner:
         return await self.farewell(speak, trace)
 
     async def _call_tool(self, call: dict) -> str:
-        """Run one tool call. Failures are sentences, because the model has to say them."""
+        """Run one tool call. Failures are sentences, because the model has to say them.
+
+        A handler may return a structured ToolResult; its words then come from the
+        PhraseBook via the tool's InteractionSpec (docs/interaction.md §3). A plain
+        string still passes through unchanged - the migration is per-tool.
+        """
         name = call.get("name", "")
         handler = self._handlers.get(name)
         if handler is None:
@@ -785,4 +794,21 @@ class TurnRunner:
         except Exception as exc:  # noqa: BLE001 - a broken tool must not kill the turn
             log.warning("tool %s failed: %s", name, exc)
             return f"这个工具出错了（{name}），直接说没查到，不要自己编。"
+        if isinstance(output, ToolResult):
+            return self._render_tool_result(name, output)
         return str(output)
+
+    def _render_tool_result(self, name: str, result: ToolResult) -> str:
+        """System-layer wording: slots in, one phrase out - never the tool's own."""
+        if "say" in result.payload:
+            return str(result.payload["say"])
+        spec = (self._interactions or {}).get(name)
+        key = (spec.exec.get(result.status) if spec else None) or ""
+        if not key:
+            log.info("tool %s returned %s with no exec mapping; model gets slots only",
+                     name, result.status)
+            return json.dumps({"status": result.status, **result.payload},
+                              ensure_ascii=False)
+        rendered = phrases.book.render(key, **result.payload)
+        log.info("tool %s -> phrase %s (%s)", name, key, result.status)
+        return rendered
