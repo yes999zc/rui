@@ -15,6 +15,26 @@ devices:
     volume: 60
     listen_port: 4412      # the speaker's client dials us here; None = adapter default
     token_env: HOUSE_EAR_DEVICE_TOKEN
+    # The 18-LED ring. Off until you turn it on; colours are peak values, brightness is
+    # applied when a frame is built. The rings are driven by writing sysfs through the
+    # client's shell channel, never by blocking the audio stream.
+    led:
+      enabled: false
+      gain: 1.9            # the old deployment tuned 2.45 on this hardware
+      night_factor: 0.6    # 00:00-07:00 at 60%; the old deployment used 0.75
+      night_start: 0
+      night_end: 7
+      fade_ms: 180
+      colors:
+        off: "#000000"
+        listening: "#004800"
+        thinking: "#000060"
+        speaking: "#003048"
+        wake: "#484848"
+        error: "#480000"
+        music: "#481860"
+        music_paused: "#602800"
+        muted: "#3C0000"
 audio:
   # Measured on LX06 1.94.13 - do not copy these numbers to another speaker, measure it.
   capture:

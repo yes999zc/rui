@@ -150,3 +150,32 @@ def test_v1_config_is_migrated_in_memory(tmp_path) -> None:
     assert cfg.providers.catalog["asr"].model == "sensevoice"
     # migration is read-only: the file on disk is untouched
     assert path.read_text(encoding="utf-8") == V1_CONFIG
+
+
+def test_led_defaults_match_the_old_build() -> None:
+    from house_ear.config.schema import LedConfig
+
+    led = LedConfig()
+    assert led.enabled is False
+    assert (led.gain, led.night_factor) == (1.9, 0.6)
+    assert (led.night_start, led.night_end) == (0, 7)
+    assert led.fade_ms == 180
+    assert led.colors["listening"] == "#004800"
+    assert len(led.colors) == 9
+
+
+def test_led_night_window_must_not_be_empty() -> None:
+    from pydantic import ValidationError
+
+    from house_ear.config.schema import LedConfig
+
+    with pytest.raises(ValidationError):
+        LedConfig(night_start=7, night_end=7)
+
+
+def test_led_yaml_off_key_is_accepted() -> None:
+    """PyYAML reads a bare `off:` as False; a hand-written config must still load."""
+    from house_ear.config.schema import LedConfig
+
+    led = LedConfig.model_validate({"colors": {False: "#000000", "thinking": "#000060"}})
+    assert led.colors["off"] == "#000000"
