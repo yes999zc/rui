@@ -32,6 +32,10 @@ class GateConfig:
     preroll_ms: int = 200             # kept before the first detected speech
     min_speech_ms: int = 200          # anything shorter is a cough, not a request
     end_silence_ms: int = 1000        # old build's first-segment value
+    # After the first request, the old build listens for follow-ups with a shorter
+    # end point (0.5 s) and no wake word. Same here: the plane re-arms the gate
+    # when a reply finishes.
+    end_silence_followup_ms: int = 500
     max_utterance_ms: int = 45000     # old build: 45 s, one 43.28 s segment measured
     max_wait_ms: int = 5000           # wake with nothing said: give up
     threshold: float = 0.5
@@ -56,7 +60,12 @@ class UtteranceGate:
         config = sherpa_onnx.VadModelConfig()
         config.silero_vad.model = str(model)
         config.silero_vad.threshold = cfg.threshold
-        config.silero_vad.min_silence_duration = cfg.end_silence_ms / 1000.0
+        # Silero only answers is_speech_detected() here; the gate owns the end point. Its
+        # own silence window must be the shorter of the two, or a 500 ms follow-up can
+        # never see the silence it counts.
+        config.silero_vad.min_silence_duration = (
+            min(cfg.end_silence_ms, cfg.end_silence_followup_ms) / 1000.0
+        )
         config.silero_vad.min_speech_duration = cfg.min_speech_ms / 1000.0
         config.sample_rate = cfg.rate
         self._vad = sherpa_onnx.VoiceActivityDetector(
@@ -83,6 +92,7 @@ class UtteranceGate:
         self._silence_ms = 0.0
         self._waited_ms = 0.0
         self._started = False
+        self._end_silence_ms = self.cfg.end_silence_ms
 
     @property
     def speech_ms(self) -> float:
@@ -90,7 +100,7 @@ class UtteranceGate:
         return self._speech_ms
 
     # ------------------------------------------------------------------ state
-    def arm(self, *, start_after_ms: float = 0.0) -> None:
+    def arm(self, *, start_after_ms: float = 0.0, followup: bool = False) -> None:
         """A wake word just fired: ignore the phrase tail, then listen.
 
         `start_after_ms` holds the gate shut for the acknowledgement: a spoken cue mutes
@@ -102,7 +112,12 @@ class UtteranceGate:
         self._reset_state()
         self.armed = True
         self._hold_ms = max(0.0, start_after_ms)
-        self._skipping = int(self.rate * self.cfg.skip_after_wake_ms / 1000)
+        # A follow-up has no wake phrase to skip and closes faster: the person already
+        # knows the assistant is listening, so a natural pause must not hold the turn.
+        self._skipping = 0 if followup else int(self.rate * self.cfg.skip_after_wake_ms / 1000)
+        self._end_silence_ms = (
+            self.cfg.end_silence_followup_ms if followup else self.cfg.end_silence_ms
+        )
 
     def disarm(self) -> None:
         self.armed = False
@@ -197,7 +212,7 @@ class UtteranceGate:
         else:
             self._silence_ms += block_ms
 
-        if self._silence_ms < self.cfg.end_silence_ms and self._speech_ms < self.cfg.max_utterance_ms:
+        if self._silence_ms < self._end_silence_ms and self._speech_ms < self.cfg.max_utterance_ms:
             return None
 
         audio = np.concatenate(self._buf) if self._buf else np.zeros(0, dtype=np.float32)

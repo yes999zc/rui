@@ -177,3 +177,31 @@ def test_wake_then_speech_becomes_an_utterance_and_a_reply_is_played(tmp_path, m
     result = asyncio.run(run())
     assert result["utterances"] >= 1
     assert result["utterance_bytes"] > 16000  # at least 0.5 s of 16 kHz audio
+
+
+@needs_vad
+def test_followup_closes_sooner_and_skips_nothing() -> None:
+    """After a reply the gate re-arms as a follow-up: 0.5 s silence is enough.
+
+    The old build's 1.0 s first-segment end point exists because a person pauses after
+    the wake word; inside a session they expect the assistant to answer without one.
+    """
+    # Silero holds speech for ~250 ms after the audio ends, so 900 ms of silence is
+    # ~650 ms counted: enough for a 500 ms follow-up, not for the 1000 ms first turn.
+    stream = silence(100) + speech_pcm() + silence(900)
+
+    def feed(gate) -> bool:
+        out = None
+        for i in range(0, len(stream), 640):
+            result = gate.feed(stream[i:i + 640])
+            if result:
+                out = result
+        return out is not None
+
+    followup = UtteranceGate(GateConfig(end_silence_ms=1000, end_silence_followup_ms=500), MODEL)
+    followup.arm(followup=True)
+    assert feed(followup) is True
+
+    first = UtteranceGate(GateConfig(end_silence_ms=1000, end_silence_followup_ms=500), MODEL)
+    first.arm()
+    assert feed(first) is False

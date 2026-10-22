@@ -818,6 +818,11 @@ class AudioPlane:
                     reply_chunks = 0
                     reply_lead_max = 0.0
                     self._release("dialogue")
+                    # Keep the microphone open for the next sentence, the way the old
+                    # build did inside a session: 0.5 s end point, no wake word. It
+                    # disarms itself after `max_wait_ms` if nobody speaks.
+                    if self.gate is not None and not self.gate.armed:
+                        self.gate.arm(followup=True)
                     self._resume_after_speech()
                     # The player is deliberately left alone here: the next reply closes
                     # it and opens a fresh one (see the first-chunk branch below). Closing
