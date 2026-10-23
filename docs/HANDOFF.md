@@ -1104,7 +1104,7 @@ Telegram 可行性测试。
 
 - **仓库公开**：`yes999zc/house-ear` 已 public；`raw.githubusercontent.com/.../deploy/install.sh`
   实测 **200**。
-- **历史清洗**：`git filter-repo` 全历史替换（LAN IP → `<LAN-IP>`、`/Users/<user>/` → `<home>/`、
+- **历史清洗**：`git filter-repo` 全历史替换（LAN IP → `<LAN-IP>`、macOS home 绝对路径 → `<home>/`、
   音箱默认 root 密码 → `<redacted>`），并从全部历史移除 `docs/console-shots`（含真实环境截图）；
   force-push。复查历史已无上述模式。旧 commit hash 因重写全部变化，旧文档里的 hash 引用仅作历史记录。
 - **凭据轮换**：本机/NAS 的设备 token、控制台 token 均为新生成；NAS 新部署独立 secret。
