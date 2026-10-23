@@ -10,8 +10,10 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config, load_config, save_config
-from house_ear.web.api.app import create_app
+from house_ear import secrets as secrets_module
+from house_ear.config import Config, DeviceConfig, load_config, save_config
+from house_ear.web.api import app as app_module
+from house_ear.web.api.app import DEVICE_DEFAULT_LISTEN_PORT, create_app
 
 
 @pytest.fixture()
@@ -339,3 +341,136 @@ def test_device_admin_endpoints_surface_plane_errors(wizard) -> None:
     response = client.put("/api/v1/devices/living", json={"room": "主卧"})
     assert response.status_code == 200, response.text
     assert response.json()["plane_error"] == ""
+
+
+# ------------------------------------------------ cold-install connect info
+
+@pytest.fixture()
+def connect(tmp_path, monkeypatch):
+    """One configured inbound speaker, no token in the environment."""
+    monkeypatch.delenv("HOUSE_EAR_DEVICE_TOKEN", raising=False)
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.devices = [DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10",
+                                room="客厅", listen_port=4412)]
+    path = tmp_path / "config.yaml"
+    save_config(path, cfg)
+    return TestClient(create_app(cfg, config_path=path)), cfg, path
+
+
+def test_connect_info_returns_the_token_and_redacts_it_elsewhere(connect, monkeypatch,
+                                                                 caplog) -> None:
+    client, _cfg, _path = connect
+    token = "tok-abc-123"
+    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", token)
+    with caplog.at_level("INFO"):
+        response = client.get("/api/v1/devices/living/connect")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == {"device_id", "room", "host", "ws_url", "token", "token_env",
+                         "configured", "allow_no_token", "hint"}
+    assert body["device_id"] == "living"
+    assert body["room"] == "客厅"
+    assert body["host"] == "192.0.2.10"          # the speaker's address, not the console's
+    assert body["token"] == token
+    assert body["token_env"] == "HOUSE_EAR_DEVICE_TOKEN"
+    assert body["configured"] is True
+    assert body["allow_no_token"] is False
+    assert body["ws_url"] == f"ws://testserver:4412/?token={token}"
+    assert body["hint"]
+
+    # Masking stays everywhere else: /api/v1/config reports presence, never the value.
+    config_response = client.get("/api/v1/config")
+    assert token not in config_response.text
+    assert config_response.json()["devices"][0]["has_device_token"] is True
+    # ...and the endpoint itself writes only the device id/booleans to the log.
+    assert token not in caplog.text
+
+
+def test_connect_info_missing_token_is_not_configured(connect) -> None:
+    client, _cfg, _path = connect
+    body = client.get("/api/v1/devices/living/connect").json()
+    assert body["token"] == ""
+    assert body["configured"] is False
+    assert body["allow_no_token"] is False
+    assert body["ws_url"] == "ws://testserver:4412/?token="
+    assert "HOUSE_EAR_DEVICE_TOKEN" in body["hint"]
+    assert client.get("/api/v1/config").json()["devices"][0]["has_device_token"] is False
+
+
+def test_connect_info_allow_no_token_is_configured_with_a_warning(connect) -> None:
+    _client, cfg, path = connect
+    updated = cfg.model_copy(update={"devices": [
+        cfg.devices[0].model_copy(update={"allow_no_token": True})]})
+    save_config(path, updated)
+    client = TestClient(create_app(updated, config_path=path))
+    body = client.get("/api/v1/devices/living/connect").json()
+    assert body["token"] == ""
+    assert body["allow_no_token"] is True
+    assert body["configured"] is True      # a tokenless listener is deliberate
+    assert body["ws_url"].endswith("?token=")
+    assert "allow_no_token" in body["hint"] and "麦克风" in body["hint"]
+
+
+def test_connect_info_swaps_the_console_port_and_keeps_proxy_hosts(connect,
+                                                                  monkeypatch) -> None:
+    _client, cfg, path = connect
+    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", "tok-xyz")
+    for listen_port, expected in ((5000, "5000"), (None, str(DEVICE_DEFAULT_LISTEN_PORT))):
+        updated = cfg.model_copy(update={"devices": [
+            cfg.devices[0].model_copy(update={"listen_port": listen_port})]})
+        save_config(path, updated)
+        client = TestClient(create_app(updated, config_path=path))
+        proxied = client.get("/api/v1/devices/living/connect", headers={
+            "host": "nas.local:8091",
+            "x-forwarded-host": "he.example.ts.net",
+            "x-forwarded-proto": "https",
+        }).json()
+        assert proxied["ws_url"] == f"wss://he.example.ts.net:{expected}/?token=tok-xyz"
+        plain = client.get("/api/v1/devices/living/connect",
+                           headers={"host": "nas.local:8091"}).json()
+        assert plain["ws_url"] == f"ws://nas.local:{expected}/?token=tok-xyz"
+
+
+def test_connect_info_url_quotes_the_token(connect, monkeypatch) -> None:
+    client, _cfg, _path = connect
+    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", "a b&c")
+    body = client.get("/api/v1/devices/living/connect").json()
+    assert body["token"] == "a b&c"                  # raw value in the JSON field
+    assert body["ws_url"].endswith("?token=a%20b%26c")
+
+
+def test_connect_info_reads_secrets_yaml_and_env_wins(connect, monkeypatch) -> None:
+    client, _cfg, _path = connect
+    secrets_module.put("HOUSE_EAR_DEVICE_TOKEN", "file-token")
+    assert client.get("/api/v1/devices/living/connect").json()["token"] == "file-token"
+    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", "env-token")
+    assert client.get("/api/v1/devices/living/connect").json()["token"] == "env-token"
+
+
+def test_connect_info_needs_auth_when_configured(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("HOUSE_EAR_DEVICE_TOKEN", raising=False)
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.web.auth_token = "console-token"
+    cfg.devices = [DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10")]
+    path = tmp_path / "config.yaml"
+    save_config(path, cfg)
+    client = TestClient(create_app(cfg, config_path=path))
+    assert client.get("/api/v1/devices/living/connect").status_code == 401
+    response = client.get("/api/v1/devices/living/connect",
+                          headers={"X-Auth-Token": "console-token"})
+    assert response.status_code == 200
+    assert response.json()["token"] == ""
+
+
+def test_connect_info_unknown_device_is_404(connect) -> None:
+    client, _cfg, _path = connect
+    assert client.get("/api/v1/devices/ghost/connect").status_code == 404
+
+
+def test_the_connect_info_default_port_matches_the_adapter() -> None:
+    from house_ear.device.xiaoai import DEFAULT_LISTEN_PORT
+
+    assert app_module.DEVICE_DEFAULT_LISTEN_PORT == DEFAULT_LISTEN_PORT == 4412
+

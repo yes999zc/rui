@@ -226,3 +226,20 @@ def test_debug_say_requires_text_and_a_speaker() -> None:
     assert c.post("/api/v1/debug/say", json={"text": "   "}).status_code == 422
     # No audio plane in this app: a real text turn must say so, not hang.
     assert c.post("/api/v1/debug/say", json={"text": "现在几点"}).status_code == 409
+
+
+def test_security_headers_are_present() -> None:
+    response = client().get("/health")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "microphone=()" in response.headers["permissions-policy"]
+
+
+def test_auth_failure_is_logged_without_the_token(caplog) -> None:  # noqa: ANN001
+    cfg = Config(web={"auth_token": "s3cret"})
+    response = client(cfg).get("/api/v1/devices", headers={"X-Auth-Token": "wrong-token"})
+    assert response.status_code == 401
+    text = caplog.text
+    assert "console auth failed" in text
+    assert "s3cret" not in text and "wrong-token" not in text

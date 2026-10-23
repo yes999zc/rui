@@ -354,6 +354,21 @@ export interface DeviceDetail {
   live: { model?: string; transport?: string; status?: string; capabilities?: string[] }
 }
 
+/** GET /api/v1/devices/{id}/connect: what the open-xiaoai client needs. */
+export interface DeviceConnectInfo {
+  device_id: string
+  room: string
+  host: string
+  /** Full client URL (may already carry ?token=...). */
+  ws_url: string
+  /** Sensitive; write-only in the sense that this page never stores it. */
+  token: string
+  token_env: string
+  configured: boolean
+  allow_no_token: boolean
+  hint: string
+}
+
 /** HA over MCP: the endpoint, whether it answers, and how much it lists. */
 export interface McpServerStatus {
   name: string
@@ -686,6 +701,9 @@ export const api = {
     request<MusicTestResult>(href, { method: 'POST', body: JSON.stringify(patch) }),
   /** P5: device admin (edit/delete use the id; probe is the wizard's SSH check). */
   deviceDetail: (id: string) => request<DeviceDetail>(`/api/v1/devices/${encodeURIComponent(id)}`),
+  /** Connection parameters for the speaker client; the token is sensitive. */
+  deviceConnect: (id: string) =>
+    request<DeviceConnectInfo>(`/api/v1/devices/${encodeURIComponent(id)}/connect`),
   updateDevice: (id: string, patch: Record<string, unknown>) =>
     request<DeviceDetail>(`/api/v1/devices/${encodeURIComponent(id)}`, {
       method: 'PUT', body: JSON.stringify(patch),

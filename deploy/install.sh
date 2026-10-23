@@ -40,6 +40,18 @@ fi
 curl -fsSL "$RAW/config.example.yaml" -o "$DIR/config.example.yaml" \
   || echo "      WARNING: could not fetch config.example.yaml (optional reference)"
 
+# Ops scripts live in the repo, not in the image. Fetch the backup/restore pair and the
+# guided acceptance recorder next to the compose file so docs/runbook.md commands work
+# after a cold install; a failed fetch must not block the service (best effort).
+mkdir -p "$DIR/scripts"
+for f in backup.sh restore.sh acceptance-v1.py; do
+  if [ ! -f "$DIR/scripts/$f" ]; then
+    curl -fsSL "$RAW/scripts/$f" -o "$DIR/scripts/$f" \
+      && chmod 755 "$DIR/scripts/$f" \
+      || echo "      WARNING: could not fetch scripts/$f (backup/restore docs will need a manual copy)"
+  fi
+done
+
 echo "[2/5] config + wake words"
 if [ ! -f "$DIR/config/config.yaml" ]; then
   # `setup` writes the production template (provider chains, model paths, ack TTS) and

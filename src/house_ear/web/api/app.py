@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
@@ -80,6 +81,7 @@ from ...tools.mcp_manager import test_server as test_generic_mcp_server
 from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
+from .security import install_security_headers
 
 START = time.time()
 log = logging.getLogger(__name__)
@@ -1038,6 +1040,44 @@ def sweep_audition_files(directory: Path, *, ttl_s: float = AUDITION_TTL_S,
     return removed
 
 
+# The inbound WS port an LX06 client dials when devices[].listen_port is unset. Kept
+# vendor-neutral here with a test pinning it to device/xiaoai/adapter.py's constant.
+DEVICE_DEFAULT_LISTEN_PORT = 4412
+
+
+def _host_without_port(value: str) -> str:
+    """`nas.local:8091` -> nas.local; `[::1]:8091` -> [::1] (brackets kept)."""
+    host = (value or "").strip()
+    if host.startswith("["):
+        end = host.find("]")
+        return host[: end + 1] if end > 0 else host
+    return host.split(":")[0]
+
+
+def request_console_host(request: Request) -> str:
+    """The host a speaker on the LAN should dial back, preserving reverse-proxy hosts.
+
+    X-Forwarded-Host wins (Tailscale/nginx/Cloudflare setups advertise the public name
+    there), then the request's own Host header, then the URL host. Only the host is
+    taken: the console port is replaced with the device's inbound port.
+    """
+    forwarded = (request.headers.get("x-forwarded-host") or "").split(",")[0]
+    candidate = _host_without_port(forwarded) or _host_without_port(
+        request.headers.get("host") or "")
+    if candidate:
+        return candidate
+    hostname = request.url.hostname or "127.0.0.1"
+    return f"[{hostname}]" if ":" in hostname else hostname
+
+
+def request_ws_scheme(request: Request) -> str:
+    """`ws`, or `wss` when a TLS-terminating proxy is in front of the console."""
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if not proto:
+        proto = request.url.scheme
+    return "wss" if proto in ("https", "wss") else "ws"
+
+
 def create_app(
     cfg: Config,
     config_path: Path | None = None,
@@ -1657,6 +1697,7 @@ def create_app(
             await supervisor.stop()
 
     app = FastAPI(title="house-ear", version=__version__, lifespan=lifespan)
+    install_security_headers(app)
     # The live config and the file it came from: voice commands that edit a
     # setting (「关闭上下文」) persist through the same file the console writes.
     app.state.cfg = cfg
@@ -1711,6 +1752,7 @@ def create_app(
         recent = [seen for seen in _auth_failures.get(ip, []) if now - seen < 60.0]
         recent.append(now)
         _auth_failures[ip] = recent[-20:]
+        log.warning("console auth failed from %s", ip)
         if len(recent) >= 10:
             raise HTTPException(status_code=429, detail="too many bad tokens; wait a minute")
         raise HTTPException(status_code=401, detail="bad or missing X-Auth-Token")
@@ -3413,6 +3455,64 @@ def create_app(
     async def device_detail(device_id: str) -> dict:
         """One device's editable config plus what the adapter reports right now."""
         return await _device_detail(device_id)
+
+    @app.get("/api/v1/devices/{device_id}/connect", dependencies=[Depends(auth)])
+    async def device_connect(device_id: str, request: Request) -> dict:
+        """The exact client URL + token an LX06 must dial in with (cold-install step).
+
+        This is deliberately the ONLY endpoint that returns the token value: the
+        speaker's boot script needs it in the ws URL, and typing it by hand from a
+        `secrets.yaml` on the NAS is the step that made onboarding painful. The response
+        is authenticated (same token middleware as the rest of the console) and the token
+        is never logged. Masking stays in place everywhere else: `GET /api/v1/config`
+        still reports only `has_device_token`.
+
+        `ws_url` keeps a reverse proxy's host (X-Forwarded-Host / Host), swaps the console
+        port for the device's inbound port, and carries the token as `?token=`. If no
+        token is provisioned, `configured` is false (unless `allow_no_token`) and the hint
+        says how to fix it.
+        """
+        cfg_now = getattr(app.state, "cfg", cfg)
+        device = _device_or_404(device_id, cfg_now)
+        token = secrets.get(device.token_env) if device.token_env else ""
+        port = int(device.listen_port or DEVICE_DEFAULT_LISTEN_PORT)
+        host = request_console_host(request)
+        scheme = request_ws_scheme(request)
+        # The token is quoted: a generated token is usually hex, but a hand-set one may
+        # contain characters that would otherwise split the query string.
+        ws_url = f"{scheme}://{host}:{port}/?token={quote(token, safe='')}"
+        allow_no_token = bool(device.allow_no_token)
+        configured = bool(token) or allow_no_token
+        token_env = device.token_env or "HOUSE_EAR_DEVICE_TOKEN"
+        if token:
+            hint = (
+                "在音箱客户端里把服务器地址填成这个 ws_url（token 已包含）。"
+                "这个地址等于设备密钥，不要发到公开渠道；换了 token 要重新填。"
+            )
+        elif allow_no_token:
+            hint = (
+                f"当前允许无 token 连接（allow_no_token=true）：音箱可以直接拨入，"
+                f"但同一网络里任何人都能打开麦克风。建议在密钥页设置 {token_env} "
+                "后关闭 allow_no_token，再重新生成这个地址。"
+            )
+        else:
+            hint = (
+                f"还没有设备 token，音箱连不上。请在密钥页或环境变量里设置 {token_env}，"
+                "或重新运行安装向导生成；设置好之后这里会给出带 token 的完整 ws_url。"
+            )
+        log.info("connect info issued for device %s (configured=%s, allow_no_token=%s)",
+                 device.id, configured, allow_no_token)
+        return {
+            "device_id": device.id,
+            "room": device.room,
+            "host": device.host,
+            "ws_url": ws_url,
+            "token": token,
+            "token_env": device.token_env,
+            "configured": configured,
+            "allow_no_token": allow_no_token,
+            "hint": hint,
+        }
 
     @app.put("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
     async def device_update(device_id: str, payload: Annotated[dict, Body()]) -> dict:

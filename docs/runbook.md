@@ -176,18 +176,92 @@ docker compose exec house-ear house-ear doctor
 
 ## 9. 备份与恢复
 
-备份（关不关服务都行，配置是原子写）：
+用仓库里的脚本，不要手写 tar 命令（手工 tar 容易把模型打进去、漏 `.env`、或忘 sha256）。
+`deploy/install.sh` 会把 `scripts/backup.sh`、`scripts/restore.sh` 和验收记录脚本
+`scripts/acceptance-v1.py` 拉到 `~/house-ear/scripts/`；老安装或手工部署可从仓库补齐：
 
 ```bash
-cd ~
-tar czf house-ear-backup-$(date +%Y%m%d).tar.gz house-ear/config house-ear/data --exclude=house-ear/data/models
+mkdir -p ~/house-ear/scripts
+for f in backup.sh restore.sh acceptance-v1.py; do
+  curl -fsSL "https://raw.githubusercontent.com/<repo>/main/scripts/$f" \
+    -o ~/house-ear/scripts/$f && chmod 755 ~/house-ear/scripts/$f
+done
 ```
 
-- `data/models` 可重下（~250 MB），不备份；
-- `config/config.yaml` 有版本历史（`*.bak.*`），打包 config 即可；
-- 恢复：解包回 `~/house-ear/`（保持目录名），`docker compose up -d`；
-- 换机器：新机器先跑 `install.sh`，再覆盖 `config/` + `data/`（不含 models），
-  最后 `fetch-models` 补模型（命令见 deploy.md）。
+```bash
+cd ~/house-ear
+scripts/backup.sh --out ~/house-ear-backups
+# 可选：
+#   --with-models   连 data/models（~272 MB）一起备份；默认排除，可重下
+#   --no-env        不备份 .env（默认包含；归档 0600，脚本只打印“included”不打印值）
+#   --home DIR      非默认安装目录
+```
+
+脚本行为：
+
+- 归档 `house-ear-backup-<UTC时间>.tar.gz`，**0600**；旁边写 `.manifest.json`
+  （backup_format、时间、config_version、镜像 ref/digest/version、包含项、排除项、文件数）
+  和 `.sha256`；
+- 只读 `--home` 下的 `config/`、`data/`、`.env`、`docker-compose.yml`；
+- 默认排除 `data/models`（可 `fetch-models` 重下）；`.env` 与音乐凭据包含在归档里，
+  所以归档/备份目录必须当密钥对待（`chmod 700` 目录，0600 文件）。
+
+恢复：
+
+```bash
+# 先演练：恢复到临时目录，绝不碰生产目录
+scripts/restore.sh ~/house-ear-backups/<archive>.tar.gz --home /tmp/house-ear-restore-smoke
+diff -r ~/house-ear/config /tmp/house-ear-restore-smoke/config   # 允许 .bak 差异
+
+# 真恢复（会先把旧树移走，不删除）：
+cd ~/house-ear
+docker compose stop
+scripts/restore.sh ~/house-ear-backups/<archive>.tar.gz --home ~/house-ear --force
+docker compose up -d
+docker compose ps                         # healthy
+docker compose exec -T house-ear house-ear doctor
+curl -s http://127.0.0.1:8080/health | python3 -m json.tool
+```
+
+- 目标目录非空时 restore **拒绝执行**（exit 4），除非 `--force`；
+- `--force` 会把旧 `config/ data/ .env docker-compose.yml` 改名为 `*.pre-restore-<ts>`，
+  **不会删除**；恢复错了就把它们移回去；
+- 脚本会校验 `.sha256`（有的话）、拒绝绝对路径/`..` 条目、先解到临时目录再落位；
+- 恢复后权限统一收紧到 `go-rwx`（密钥/历史/配置 0600）；
+- 换机器：新机器先跑 `install.sh`，再 `restore.sh --force`，最后
+  `fetch-models --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx
+  --kws-dest /data/models/kws` 补模型。
+
+### 9.1 配置恢复（last-good / defaults）
+
+服务启动时会用 `config/recovery.py`：配置读不出来时**不崩溃**，而是把坏文件保留为
+`config.yaml.failed-<ts>`，尽量用 `config.last-good.yaml` 启动（没有则 schema defaults），
+并在 `data/config-recovery.json` 写标记；控制台会显示 banner。
+
+```bash
+# 看当前恢复状态
+curl -s -H "X-Auth-Token: $HOUSE_EAR_TOKEN" \
+  http://127.0.0.1:8080/api/v1/config/recovery | python3 -m json.tool
+
+# 用最近一次成功启动时的快照覆盖当前配置（需重启服务）
+docker compose exec -T house-ear house-ear config restore --last-good
+docker compose restart house-ear
+
+# 回到全新模板（会丢 devices/providers 配置，慎用；不删密钥/模型）
+docker compose exec -T house-ear house-ear config restore --defaults
+docker compose restart house-ear
+```
+
+- 每次成功启动会自动刷新 `config.last-good.yaml`（见 `app.py: remember_last_good`）；
+- 手改坏配置前先 `scripts/backup.sh`，这是比 last-good 更完整的回退；
+- 恢复后至少核对：`/health`、`doctor`、设备在线、音乐/HA 工具数。
+
+### 9.2 备份节奏
+
+- 升级/改配置/验收实验前：各做一次 `backup.sh`；
+- 日常：每周或每次改完配置后一次即可；保留最近 3–5 份，旧归档可删（`data/models`
+  已排除，所以每份通常只有几 MB / 取决于历史与缓存）；
+- 备份目录不要放进 `data/`（会被再次打包）；放在 NAS 独立目录或另做异地副本。
 
 ## 10. 安全
 

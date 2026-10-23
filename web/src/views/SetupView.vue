@@ -11,7 +11,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
-import { api, ApiError, type CatalogDoc, type SetupState } from '../api'
+import { api, ApiError, type CatalogDoc, type DeviceConnectInfo, type SetupState } from '../api'
 import { localizeBackend, pickLocalized, providerName, t, type MsgKey } from '../i18n'
 
 const state = ref<SetupState | null>(null)
@@ -42,6 +42,14 @@ const host = ref('')
 const room = ref('')
 const wakeWord = ref('你好小瑞')
 const probe = ref<{ usable: boolean; hint: string; ssh: { port_open: boolean; banner: boolean; ms?: number; error?: string } } | null>(null)
+
+const connect = ref<DeviceConnectInfo | null>(null)
+const connectBusy = ref(false)
+const connectError = ref('')
+const tokenVisible = ref(false)
+const copied = ref<'' | 'ws' | 'token'>('')
+const copyError = ref('')
+const CONNECT_DOCS = 'https://github.com/yes999zc/rui/blob/main/docs/open-xiaoai-client.md'
 
 const sayText = ref('')
 const said = ref('')
@@ -75,6 +83,7 @@ async function load() {
       wakeWord.value = state.value.device.wake_words[0] || wakeWord.value
     }
     error.value = ''
+    await loadConnect()
   } catch (exc) {
     error.value = exc instanceof ApiError ? exc.message : String(exc)
   }
@@ -118,10 +127,61 @@ async function probeHost() {
   }
 }
 
-function saveDevice() {
-  void run('device', () => api.setupDevice({
+async function loadConnect(): Promise<void> {
+  const id = state.value?.device?.id
+  connect.value = null
+  connectError.value = ''
+  copyError.value = ''
+  tokenVisible.value = false
+  if (!id) return
+  connectBusy.value = true
+  try {
+    connect.value = await api.deviceConnect(id)
+  } catch (exc) {
+    connectError.value = exc instanceof ApiError ? exc.message : String(exc)
+  } finally {
+    connectBusy.value = false
+  }
+}
+
+async function saveDevice(): Promise<void> {
+  await run('device', () => api.setupDevice({
     host: host.value.trim(), room: room.value.trim(), wake_words: [wakeWord.value.trim()],
   }))
+  if (state.value?.device) await loadConnect()
+}
+
+const maskedToken = computed(() => (connect.value?.token ? '••••••••••••••••' : '—'))
+const wsDisplay = computed(() => {
+  const url = connect.value?.ws_url ?? ''
+  const token = connect.value?.token
+  if (!url || tokenVisible.value || !token) return url
+  // The URL often embeds ?token=...; hide that copy of the secret until revealed.
+  return url.includes(token) ? url.replace(token, '••••••••') : url
+})
+const wsCopyDisabled = computed(() => {
+  const info = connect.value
+  return !info || (!info.configured && !info.allow_no_token)
+})
+
+async function copyConnect(kind: 'ws' | 'token'): Promise<void> {
+  const text = kind === 'ws' ? connect.value?.ws_url : connect.value?.token
+  if (!text) return
+  copyError.value = ''
+  try {
+    await navigator.clipboard.writeText(text)
+    copied.value = kind
+    window.setTimeout(() => {
+      if (copied.value === kind) copied.value = ''
+    }, 2000)
+  } catch {
+    copyError.value = t('setup.connect.copyFailed')
+  }
+}
+
+function selectInput(event: Event): void {
+  const input = event.target as HTMLInputElement | null
+  input?.select()
 }
 
 function saveWake() {
@@ -371,6 +431,103 @@ onMounted(load)
         <p class="field-hint" style="margin-top: var(--s3)">
           {{ t('setup.device.note', { file: state.keywords_file || t('setup.device.keywordsFile'), state: audioState }) }}
         </p>
+
+        <div id="setup-connect" class="connect-panel">
+          <div class="connect-head">
+            <div>
+              <h3>{{ t('setup.connect.title') }}</h3>
+              <p class="field-hint">{{ t('setup.connect.lede') }}</p>
+            </div>
+            <div class="connect-badges">
+              <span v-if="connect" class="badge" :class="connect.configured ? 'badge-ok' : 'badge-warn'">
+                {{ connect.configured ? t('setup.connect.configured') : t('setup.connect.notConfigured') }}
+              </span>
+              <span v-if="connect?.allow_no_token" class="badge badge-warn">
+                {{ t('setup.connect.allowNoToken') }}
+              </span>
+            </div>
+          </div>
+
+          <p v-if="connectBusy" class="field-hint">{{ t('setup.connect.loading') }}</p>
+          <div v-else-if="connectError" class="note fail" role="alert">
+            {{ t('setup.connect.loadError', { message: connectError }) }}
+            <button type="button" class="btn btn-sm" style="margin-top: 8px" @click="loadConnect">
+              {{ t('setup.connect.retry') }}
+            </button>
+          </div>
+
+          <template v-else-if="connect">
+            <div class="connect-fields">
+              <div class="connect-field">
+                <label class="field-label" for="connect-ws">{{ t('setup.connect.wsUrl') }}</label>
+                <div class="copy-row">
+                  <input
+                    id="connect-ws"
+                    :value="wsDisplay"
+                    readonly
+                    spellcheck="false"
+                    class="mono"
+                    @focus="selectInput"
+                  />
+                  <button type="button" class="btn btn-sm" :disabled="wsCopyDisabled" @click="copyConnect('ws')">
+                    {{ copied === 'ws' ? t('setup.connect.copied') : t('setup.connect.copy') }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="connect-field">
+                <div class="connect-label-row">
+                  <label class="field-label" for="connect-token">{{ t('setup.connect.token') }}</label>
+                  <span class="field-hint mono">{{ connect.token_env }}</span>
+                </div>
+                <div class="copy-row">
+                  <input
+                    id="connect-token"
+                    :value="tokenVisible ? connect.token : maskedToken"
+                    readonly
+                    spellcheck="false"
+                    autocomplete="off"
+                    class="mono"
+                    :aria-label="t('setup.connect.token')"
+                    @focus="selectInput"
+                  />
+                  <button type="button" class="btn btn-sm" :disabled="!connect.token" @click="tokenVisible = !tokenVisible">
+                    {{ tokenVisible ? t('setup.connect.hide') : t('setup.connect.show') }}
+                  </button>
+                  <button type="button" class="btn btn-sm" :disabled="!connect.token" @click="copyConnect('token')">
+                    {{ copied === 'token' ? t('setup.connect.copied') : t('setup.connect.copy') }}
+                  </button>
+                </div>
+                <p class="field-hint">{{ t('setup.connect.tokenHint') }}</p>
+              </div>
+            </div>
+
+            <div v-if="!connect.configured" class="connect-warning">
+              <strong>{{ t('setup.connect.missingTitle') }}</strong>
+              <p>{{ t('setup.connect.missingBody', { env: connect.token_env || 'HOUSE_EAR_DEVICE_TOKEN' }) }}</p>
+              <pre class="connect-command mono">{{ t('setup.connect.rotate') }}</pre>
+              <p class="field-hint">{{ t('setup.connect.missingReload') }}</p>
+            </div>
+            <div v-else-if="connect.allow_no_token" class="connect-warning">
+              <strong>{{ t('setup.connect.allowNoToken') }}</strong>
+              <p>{{ t('setup.connect.allowNoTokenHint') }}</p>
+            </div>
+
+            <div class="connect-help">
+              <h4>{{ t('setup.connect.openXiaoai') }}</h4>
+              <ol>
+                <li>{{ t('setup.connect.stepServer') }}</li>
+                <li>{{ t('setup.connect.stepToken', { env: connect.token_env || 'HOUSE_EAR_DEVICE_TOKEN' }) }}</li>
+                <li>{{ t('setup.connect.stepRestart') }}</li>
+              </ol>
+              <a :href="CONNECT_DOCS" target="_blank" rel="noopener noreferrer">
+                {{ t('setup.connect.docs') }}
+              </a>
+            </div>
+
+            <p v-if="copyError" class="note fail" role="alert">{{ copyError }}</p>
+          </template>
+        </div>
       </div>
     </section>
 
@@ -397,6 +554,60 @@ onMounted(load)
         <p>
           {{ t('setup.done.text', { wake: state.device?.wake_words[0] || t('setup.device.wakePlaceholder') }) }}
           <RouterLink to="/panel/overview" class="setup-done-link">{{ t('setup.done.open') }}</RouterLink>
+        </p>
+        <div v-if="connect" class="done-connect">
+          <div class="done-connect-head">
+            <strong>{{ t('setup.connect.title') }}</strong>
+            <span class="badge" :class="connect.configured ? 'badge-ok' : 'badge-warn'">
+              {{ connect.configured ? t('setup.connect.configured') : t('setup.connect.notConfigured') }}
+            </span>
+          </div>
+          <div class="done-connect-field">
+            <label class="field-label" for="done-connect-ws">{{ t('setup.connect.wsUrl') }}</label>
+            <div class="copy-row">
+              <input
+                id="done-connect-ws"
+                :value="wsDisplay"
+                readonly
+                spellcheck="false"
+                class="mono"
+                @focus="selectInput"
+              />
+              <button type="button" class="btn btn-sm" :disabled="wsCopyDisabled" @click="copyConnect('ws')">
+                {{ copied === 'ws' ? t('setup.connect.copied') : t('setup.connect.copy') }}
+              </button>
+            </div>
+          </div>
+          <div class="done-connect-field">
+            <div class="connect-label-row">
+              <label class="field-label" for="done-connect-token">{{ t('setup.connect.token') }}</label>
+              <span class="field-hint mono">{{ connect.token_env }}</span>
+            </div>
+            <div class="copy-row">
+              <input
+                id="done-connect-token"
+                :value="tokenVisible ? connect.token : maskedToken"
+                readonly
+                spellcheck="false"
+                autocomplete="off"
+                class="mono"
+                :aria-label="t('setup.connect.token')"
+                @focus="selectInput"
+              />
+              <button type="button" class="btn btn-sm" :disabled="!connect.token" @click="tokenVisible = !tokenVisible">
+                {{ tokenVisible ? t('setup.connect.hide') : t('setup.connect.show') }}
+              </button>
+              <button type="button" class="btn btn-sm" :disabled="!connect.token" @click="copyConnect('token')">
+                {{ copied === 'token' ? t('setup.connect.copied') : t('setup.connect.copy') }}
+              </button>
+            </div>
+          </div>
+          <p class="setup-done-connect">
+            <a href="#setup-connect">{{ t('setup.done.connect') }}</a>
+          </p>
+        </div>
+        <p v-else class="setup-done-connect">
+          <a href="#setup-connect">{{ t('setup.done.connect') }}</a>
         </p>
       </div>
     </div>
@@ -566,6 +777,178 @@ onMounted(load)
   margin-left: 4px;
 }
 
+.setup-done-connect {
+  margin: var(--s2) 0 0;
+  font-size: 12px;
+}
+
+.done-connect {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+.done-connect-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+}
+
+.done-connect-head strong {
+  font-size: 13px;
+}
+
+.done-connect-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: var(--s2);
+}
+
+.setup-done-connect a {
+  color: var(--accent);
+}
+
+/* — speaker connection card (open-xiaoai client) ————————————— */
+.connect-panel {
+  margin-top: var(--s4);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.connect-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.connect-head h3 {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.connect-head .field-hint {
+  margin-top: 3px;
+}
+
+.connect-badges {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.connect-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin-top: var(--s3);
+}
+
+.connect-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.connect-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.copy-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.copy-row input {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 8px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.copy-row .btn {
+  flex: none;
+}
+
+.connect-warning {
+  margin-top: var(--s3);
+  padding: 10px 12px;
+  border-left: 2px solid var(--warn);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--warn-soft);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.connect-warning p {
+  margin-top: 4px;
+}
+
+.connect-command {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.connect-server-hint {
+  margin-top: var(--s3);
+}
+
+.connect-help {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+.connect-help h4 {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.connect-help ol {
+  margin: var(--s2) 0 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.connect-help li + li {
+  margin-top: 3px;
+}
+
+.connect-help a {
+  display: inline-block;
+  margin-top: var(--s2);
+  color: var(--accent);
+  font-size: 11.5px;
+}
+
 @media (max-width: 720px) {
   .setup-section {
     grid-template-columns: 28px minmax(0, 1fr);
@@ -584,6 +967,25 @@ onMounted(load)
 
   .say-bar {
     flex-direction: column;
+  }
+}
+@media (max-width: 720px) {
+  .connect-panel {
+    padding: var(--s3);
+  }
+
+  .copy-row {
+    flex-wrap: wrap;
+  }
+
+  .copy-row input {
+    flex: 1 1 100%;
+    min-height: 44px;
+  }
+
+  .copy-row .btn {
+    flex: 1 1 calc(50% - var(--s2));
+    min-height: 44px;
   }
 }
 </style>
