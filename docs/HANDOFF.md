@@ -639,3 +639,25 @@ Lead 已拍板：49 键全开/占位符硬拒绝/只交 pytest 场景契约；d1
   运行期重连/422/清空即停用/test 不落盘/无 config 409，用 FakeBridge 替身）；面板契约测试
   增加 P5 两个 component 断言。
 
+### 12.14 2026-10-23 收线：C-UI P1–P6 全部完成 / 镜像复验 / 验收清单（已 push）
+
+**HEAD `ad3fcc6`（+本次文档 commit）。535 passed，ruff clean，vue-tsc/build clean，工作树干净、
+origin/main 同步。**
+
+- **C-UI P5 ✅（`ad3fcc6`）**：设备管理 + MCP/HA 管理页，详见 §12.13。至此控制台六期全部落地：
+  P1 注册表、P2 form、P3 日志/对话、P3.5 逐页复核、P4 安装向导、P5 设备与 HA 管理、P6 话术编辑。
+  注册表面板 10 个：概览/设备/对话/设备管理/话术/MCP-HA/日志/记忆/设置/音乐，其中 4 个走
+  `component` 逃生舱（安装向导是独立路由 + 设备管理/话术/MCP 三块）。
+- **镜像复验（P4–P6 之后重建，本机 arm64）**：`docker build` 增量 **59 s**、镜像 **428,879,612 B
+  （409 MiB）**；镜像内 `template.yaml` 4804 B、provider 链齐全；容器 `setup` 写出 config 4912 B +
+  keywords 50 B（逐字一致）；`HOUSE_EAR_CONFIG=/config/config.yaml` 起服务后 `/health` 200、
+  `/api/v1/setup` 正确报 `complete=false / next=keys`、`/api/v1/phrases` 49 键、`/api/v1/mcp` 正确、
+  `/api/v1/panels` 10 个面板；`house-ear-healthcheck` 输出 `ok: uptime=9.9s devices=0 audio_plane=False`，
+  容器 `healthy`。
+- **新增 `docs/acceptance.md`**：验收日可执行清单——前置条件（仓库公开/镜像发布/NAS/音箱/密钥）、
+  C1 冷装计时口径、D3 20 次唤醒测法（170–220 档、2–3 m、失败轮记录）、打断 ≤300 ms 口径、
+  灯环音乐态、控制台逐页肉眼表、收尾与回滚。验收当天只填数字，不改门槛。
+
+**剩余全部是外部条件（等 9哥）**：① 仓库公开（raw 目前 404，一键 install.sh 不可用）；
+② NAS 上跑 C1/D3/灯环验收；③ 真唤醒语音项（停止词二分、20 次计数、让位听感）需要 9哥 的嘴和耳朵。
+
