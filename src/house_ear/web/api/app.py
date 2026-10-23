@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import collections
 import contextlib
 import hmac
@@ -1154,6 +1155,10 @@ def create_app(
         # costs the latency it exists to hide.
         app.state.filler_task = asyncio.create_task(_warm_filler(), name="filler-render")
         app.state.runner = runner
+        # Text channels keep their own history; a Telegram chat must not overwrite the
+        # living-room context. The runner itself is single-session, so the endpoint swaps
+        # this list in and restores it under a lock. The dict/lock were created in
+        # create_app for clients that never enter the lifespan.
         app.state.last_turn = None
         vendor = VendorWindow(cfg.session.vendor_quiet_s)
         app.state.vendor = vendor
@@ -1627,6 +1632,10 @@ def create_app(
     # The live config and the file it came from: voice commands that edit a
     # setting (「关闭上下文」) persist through the same file the console writes.
     app.state.cfg = cfg
+    # Channel endpoints must work in a TestClient without entering the lifespan (and in
+    # production the lifespan keeps them); create the containers eagerly.
+    app.state.chat_histories: dict[str, list[dict]] = {}
+    app.state.chat_lock = asyncio.Lock()
     app.state.config_path = config_path
     # The wizard can add a device at runtime; endpoints read this attribute, not a
     # startup closure, so a fresh probe does not need a control-plane restart.
@@ -2145,6 +2154,168 @@ def create_app(
             "tools": result.tools,
             "stages": result.stages,
             "audio_bytes": result.audio_bytes,
+        }
+
+    def _channels_path() -> Path:
+        cfg_now = getattr(app.state, "cfg", cfg)
+        return Path(cfg_now.system.data_dir) / "channels.json"
+
+    def _channels_defaults() -> dict:
+        cfg_now = getattr(app.state, "cfg", cfg)
+        data_dir = Path(cfg_now.system.data_dir)
+        return {
+            "telegram": {
+                "enabled": False,
+                "allowed_chat_ids": [],
+                "reply_mode": "text",
+            },
+            "weixin": {
+                "enabled": False,
+                "allowed_user_ids": [],
+                "reply_mode": "text",
+                "data_dir": str(data_dir / "channels" / "weixin"),
+            },
+        }
+
+    def _channels_state() -> dict:
+        path = _channels_path()
+        state = _channels_defaults()
+        with contextlib.suppress(Exception):
+            saved = json.loads(path.read_text())
+            if isinstance(saved, dict):
+                for name in ("telegram", "weixin"):
+                    if isinstance(saved.get(name), dict):
+                        state[name].update(saved[name])
+        token = bool(os.environ.get("TELEGRAM_BOT_TOKEN")
+                     or os.environ.get("HOUSE_EAR_TELEGRAM_TOKEN"))
+        state["telegram"]["token_configured"] = token
+        wx_dir = Path(state["weixin"].get("data_dir") or "")
+        account = {}
+        with contextlib.suppress(Exception):
+            account = json.loads((wx_dir / "account.json").read_text())
+        state["weixin"]["logged_in"] = bool(account.get("token"))
+        state["weixin"]["account_id"] = str(account.get("accountId") or "")
+        state["weixin"]["user_id"] = str(account.get("userId") or "")
+        state["gateway"] = {
+            "command": "house-ear-channels",
+            "config_note": "The gateway reads this state at startup; restart it after changes.",
+        }
+        return state
+
+    @app.get("/api/v1/channels", dependencies=[Depends(auth)])
+    async def get_channels() -> dict:
+        return _channels_state()
+
+    @app.put("/api/v1/channels", dependencies=[Depends(auth)])
+    async def put_channels(patch: Annotated[dict, Body()]) -> dict:
+        allowed = {"telegram", "weixin"}
+        if not isinstance(patch, dict) or not set(patch) <= allowed:
+            raise HTTPException(status_code=422, detail="expected telegram and/or weixin")
+        state = _channels_state()
+        for name in allowed:
+            if name not in patch:
+                continue
+            incoming = patch.get(name)
+            if not isinstance(incoming, dict):
+                raise HTTPException(status_code=422, detail=f"{name} must be an object")
+            reply_mode = str(incoming.get("reply_mode", state[name].get("reply_mode", "text")))
+            if reply_mode not in {"text", "voice", "both"}:
+                raise HTTPException(status_code=422, detail="reply_mode must be text/voice/both")
+            ids_key = "allowed_chat_ids" if name == "telegram" else "allowed_user_ids"
+            ids = incoming.get(ids_key, state[name].get(ids_key, []))
+            if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
+                raise HTTPException(status_code=422, detail=f"{ids_key} must be a list of strings")
+            state[name]["enabled"] = bool(incoming.get("enabled", state[name].get("enabled", False)))
+            state[name]["reply_mode"] = reply_mode
+            state[name][ids_key] = [x.strip() for x in ids if x.strip()]
+        path = _channels_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {name: state[name] for name in ("telegram", "weixin")}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
+        return _channels_state()
+
+    @app.post("/api/v1/chat", dependencies=[Depends(auth)])
+    async def channel_chat(patch: Annotated[dict, Body()]) -> dict:
+        """One text turn from a channel adapter (Telegram/WeChat/console).
+
+        No audio plane, no wake word, no device: the caller gets the same runner, tools,
+        history and (optionally) TTS audio. Channel sessions are isolated from the
+        living-room runner history by swapping a per-session list under one lock.
+        """
+        text = str(patch.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="text is required")
+        runner = getattr(app.state, "runner", None)
+        lock = getattr(app.state, "chat_lock", None)
+        histories = getattr(app.state, "chat_histories", None)
+        if runner is None or lock is None or histories is None:
+            raise HTTPException(status_code=503, detail="control plane is not ready")
+        channel = str(patch.get("channel") or "console").strip()[:32] or "console"
+        peer = str(patch.get("peer_id") or "local").strip()[:128] or "local"
+        session_id = str(patch.get("session_id") or f"{channel}:{peer}")[:200]
+        want_audio = bool(patch.get("want_audio", False))
+        reset = bool(patch.get("reset", False))
+        chunks: list[bytes] = []
+
+        async def collect(pcm: bytes, **_kwargs: object) -> None:
+            chunks.append(pcm)
+
+        async with lock:
+            if runner.busy:
+                raise HTTPException(status_code=409, detail="a turn is already running")
+            original = runner.history
+            history = [] if reset else histories.setdefault(session_id, [])
+            runner.history = history
+            trace = TurnTrace(device_id=f"channel:{channel}")
+            try:
+                result = await runner.run(b"", collect, trace, transcript=text)
+                histories[session_id] = runner.history
+            finally:
+                runner.history = original
+
+        audio = b"".join(chunks)
+        payload: dict[str, object] = {
+            "reply": result.reply,
+            "error": result.error,
+            "tools": result.tools,
+            "stages": {
+                name: {"used": r.used, "elapsed_ms": r.elapsed_ms, "attempts": r.attempts}
+                for name, r in result.stages.items()
+            },
+            "session_id": session_id,
+            "audio_bytes": len(audio),
+            "audio_format": "pcm_s16le",
+            "sample_rate": cfg.audio.voice.rate,
+        }
+        if want_audio and audio:
+            payload["audio_b64"] = base64.b64encode(audio).decode("ascii")
+        return payload
+
+    @app.post("/api/v1/asr", dependencies=[Depends(auth)])
+    async def channel_asr(patch: Annotated[dict, Body()]) -> dict:
+        """Transcribe a channel voice note. Accepts raw s16le PCM base64 only."""
+        runner = getattr(app.state, "runner", None)
+        if runner is None:
+            raise HTTPException(status_code=503, detail="control plane is not ready")
+        raw = str(patch.get("audio_b64") or "")
+        if not raw:
+            raise HTTPException(status_code=422, detail="audio_b64 is required")
+        try:
+            pcm = base64.b64decode(raw, validate=True)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=422, detail=f"bad audio_b64: {exc}") from exc
+        if not pcm or len(pcm) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413 if pcm else 422,
+                                detail="audio must be 1 byte..10 MB")
+        trace = TurnTrace(device_id="channel:asr")
+        text, report = await runner.transcribe(pcm, trace)
+        return {
+            "text": text,
+            "provider": report.used if report is not None else "",
+            "error": "" if text else "empty transcript",
         }
 
     @app.post("/api/v1/debug/led", dependencies=[Depends(auth)])
