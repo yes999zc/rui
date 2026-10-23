@@ -39,9 +39,13 @@ async def _search(source: MusicSource, p: q.QueryPlan) -> list[Track]:
     """Where a second source will plug in: today only the NAS library."""
     try:
         if p.artist and not p.title:
-            # An artist-only ask: search the artist, not an empty title (which
-            # the source would answer with a random batch).
-            return await source.search(p.artist, 25)
+            # An artist-only ask: search the artist, then keep only that artist.
+            # Subsonic's fuzzy search answered 「周杰伦」 with 陈奕迅《十年》 first
+            # (measured 09:45) - playing a different artist is worse than saying
+            # nothing was found.
+            hits = await source.search(p.artist, 40)
+            return [t for t in hits if q.accepts(t.artist, p.artist)
+                    or q.accepts(t.label, p.artist)]
         if p.artist:
             hits = await source.search(p.title, 25)
             keep = [t for t in hits if q.accepts(t.artist, p.artist)]

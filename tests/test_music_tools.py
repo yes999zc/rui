@@ -265,7 +265,7 @@ def test_a_successful_transport_is_silent(tmp_path: Path) -> None:
 
         out = await _music_transport(app, "继续播放", runner, client, None, traces)
         assert out == "" and runner.said == [], "the resume must not speak"
-        assert client.hold == 0
+        assert client.hold == 2.0   # command window, not 0
 
         # the edge (last track) still says so - silence there would be a lie
         out = await _music_transport(app, "下一首", runner, client, None, traces)
