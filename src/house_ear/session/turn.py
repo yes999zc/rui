@@ -707,7 +707,8 @@ class TurnRunner:
                     spec = self._interactions.get(call.get("name", ""))
                     if spec is not None and getattr(spec, "answer", "text") == "silent":
                         silent_calls += 1
-                    log.info("tool %s -> %s", call.get("name", ""), output[:160])
+                    log.info("tool %s(%s) -> %s", call.get("name", ""),
+                             str(call.get("arguments") or "")[:120], output[:160])
                     if call.get("name") in self.info_tool_names:
                         info_used = True
                     messages.append({
