@@ -6,7 +6,7 @@
 ## A. v1 验收门槛（需要 9哥 / 外部条件）
 
 1. **仓库已公开 + raw 安装脚本 200 ✅**；**GHCR 包仍 private**（GitHub REST 不支持个人 package
-   改可见性，需网页 Settings 一次点击）→ 一键装 pull 仍 401。
+   改可见性，需网页 Settings 一次点击）→ 一键装 pull 仍 401；`deploy/install.sh` 已加「拉不到镜像就从公开源码 build」回退，所以一键装本身可用。
 2. **git 历史凭据**：round-1 记录的旧 commit 含真实凭据/LAN IP/用户名；公开前必须全历史扫描 →
    轮换所有真实凭据 → filter-repo/BFG 重写（需 9哥 授权，会冻结并行工作）。
 3. **NAS 部署 ✅ 2026-10-23**：本机 Docker 构建 + NAS 运行 + 音箱切换 + LAN/Tailscale 实测
