@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from ..session import pinyin
+from . import semantic
 from .model import QueryPlan
 
 # Wrappers people put around a song ask. Old build clean_query (music.py:267-282).
@@ -28,11 +29,6 @@ _TAIL = re.compile(r"[的吧啊呗嘞呀哦了]$")
 # Sentence punctuation on either edge; 《》 deliberately excluded (a quoted title).
 _SENT_PUNCT = re.compile(r"^[，。！？；：、,.!?;:…\s]+|[，。！？；：、,.!?;:…\s]+$")
 _PUNCT = re.compile(r"[\s，。、！？；：,.!?;:…—《》「」‘’’\"（）()]")
-# 「描述式」words: qualitative, never part of a name (old build DESCRIPTIVE).
-_DESCRIPTIVE = re.compile(
-    r"(安静|舒缓|轻柔|放松|欢快|热闹|劲爆|抒情|伤感|睡前|工作时|写作业|随便|随机|任意|"
-    r"好听|热门|经典|新歌|老歌|流行|摇滚|民谣|电子|爵士|古典|说唱|轻音乐)"
-)
 
 
 # Measured ASR slips in music asks: 「周杰伦的歌」 heard as 「…的节」/「…的结」.
@@ -63,13 +59,30 @@ def clean_query(q: str) -> str:
     return t
 
 
+_QUOTED = re.compile(r"[《「『]([^》」』]+)[》」』]")
+
+
+def has_quoted_title(text: str) -> bool:
+    """True when the user quoted a name: 《》/「」 mark a title, not a genre word."""
+    return bool(_QUOTED.search(text or ""))
+
+
 def extract_title(q: str) -> str:
-    """《》「」quoted names win outright; otherwise strip the descriptive words."""
-    m = re.search(r"[《「『]([^》」』]+)[》」』]", q)
+    """《》「」quoted names win outright; otherwise strip the descriptive words.
+
+    A mixed ask keeps its title: 「播放日文歌曲留在我身边」 must search
+    「留在我身边」 rather than play a J-Pop shuffle and drop the name the user
+    said (old build music.py:283-313). Only when a descriptor was actually
+    removed are the leftover 「歌曲/歌」 edges cleaned - 「周杰伦的歌」 is an
+    artist ask and must stay whole for split_artist.
+    """
+    m = _QUOTED.search(q)
     if m:
         return m.group(1).strip()
     t = clean_query(q)
-    return _DESCRIPTIVE.sub("", t).strip() or t
+    if not semantic.looks_descriptive(t):
+        return t
+    return semantic.strip_descriptors(t)
 
 
 # A tail that is just "songs" says "this artist's songs", not "a song called 歌".
@@ -115,23 +128,13 @@ def accepts(candidate: str, want: str) -> bool:
 
 
 # Language asks have no title or artist to search: the old build's first answer was
-# a genre tag (J-Pop 16 songs on its library), later replaced by a per-song language
-# index. A genre is a rough but honest first step here; the index is the upgrade.
-_LANGUAGE_GENRES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    (("日文", "日语", "日本歌", "日系"), ("J-Pop", "JPop", "Japanese")),
-    (("韩文", "韩语", "韩国歌", "k-pop", "kpop"), ("K-Pop", "KPop", "Korean")),
-    (("英文歌", "英文", "英语", "欧美"), ("Pop", "Rock")),
-    (("粤语", "国语", "华语", "中文歌", "普通话"), ("Pop", "华语")),
-)
-
-
+# a genre tag (J-Pop: 16 songs of 5738), later replaced by a per-song language index
+# (`music/library_index.py`). The genre mapping survives only as the fallback used
+# when the index has not been built yet - it lives in `semantic.py` so the voice
+# layer and the index agree on what 「日文」 means.
 def language_genres(term: str) -> list[str]:
     """Genres to try for a language ask, [] when the term is not about language."""
-    t = normalize(term)
-    for words, genres in _LANGUAGE_GENRES:
-        if any(w in t for w in words):
-            return list(genres)
-    return []
+    return semantic.language_genres(term)
 
 
 def plan(raw: str) -> QueryPlan:

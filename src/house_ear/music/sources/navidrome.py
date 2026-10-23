@@ -120,6 +120,10 @@ class NavidromeSource:
                 title=str(s.get("title") or ""),
                 artist=str(s.get("artist") or ""),
                 duration=int(s.get("duration") or 0),
+                # The old build's _brief dropped these; the descriptive path needs
+                # them (mood by BPM, then by genre tag) and they cost nothing here.
+                genre=str(s.get("genre") or ""),
+                bpm=int(s.get("bpm") or 0),
             )
             for s in songs
         ]
@@ -142,6 +146,26 @@ class NavidromeSource:
         """One genre tag's songs - the fallback for a language ask (J-Pop etc.)."""
         body = await self._get("getSongsByGenre", genre=genre, count=limit, offset=0)
         return self._tracks(body.get("songsByGenre", {}).get("song", []) or [], limit)
+
+    # ------------------------------------------------------- library index pages
+    # The per-song language index (library_index.py) walks the whole library.
+    # Empty search3 is a match-all on Navidrome and pages 500 rows at a time; the
+    # album walk is the fallback for a server that refuses an empty query (the old
+    # build measured 12 requests / 0.6 s for 5738 songs vs 579 album requests).
+    async def songs_page(self, offset: int, limit: int = 500) -> list[dict]:
+        body = await self._get("search3", query="", songCount=limit, songOffset=offset,
+                               artistCount=0, albumCount=0)
+        return list(body.get("searchResult3", {}).get("song", []) or [])
+
+    async def albums_page(self, offset: int, limit: int = 500) -> list[dict]:
+        body = await self._get("getAlbumList2", type="alphabeticalByName",
+                               size=limit, offset=offset)
+        return list(body.get("albumList2", {}).get("album", []) or [])
+
+    async def album_songs(self, album_id: str) -> list[dict]:
+        body = await self._get("getAlbum", id=album_id)
+        return list(body.get("album", {}).get("song", []) or [])
+
 
     async def favorites(self) -> list[Track]:
         body = await self._get("getStarred2")

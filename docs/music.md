@@ -110,6 +110,28 @@ owner 仲裁（cue/dialogue/reminder/music）、Credit 节奏、`PLAY_LAG 0.55s`
 `music_prev`、`music_stop`、`music_favorite`(add/remove/list)、`music_play_favorites`、
 `music_taste`；`music_volume` 并入既有音量路径。
 
+### 2.6 D1c 追加：语言索引、描述式点歌、多候选（2026-10-23）
+
+老项目 `library_index.py` / `semantic.py` / `music_search` 三件套落地，详见 `docs/d1c-notes.md`。
+
+- **每首歌语言索引**（`music/library_index.py`）：分类规则原样移植（kana/hangul/汉字/拉丁 +
+  artist override，标题优先、专辑最后），`build()` 用 `search3` 空查询 500 行分页（失败退
+  `getAlbumList2` 相册遍历），缓存写 `data_dir/library_index.json`，7 天 TTL、原子写、重建失败
+  继续用旧缓存。真实库实测：5736 首 / 12 请求 / 0.78 s / 1189 KiB；ja 20、ko 3、zh 5333、
+  en 377、other 3。`pick(language, genre, keywords, moods, years)` 是多条件**交集**，空交集时按
+  “情绪→流派→年代→关键词”放宽，语言不放宽，也绝不放宽成“全库随便放”。
+- **描述式点歌**（`music/semantic.py`）：`plan()` 把语言/流派/乐器/情绪/年代映射成过滤条件，
+  返回 None 表示“这是名字/歌名/随机”，仍走字面搜索。`pool()` 索引优先，未建索引或索引无命中才
+  退 `by_genre`/关键词/随机 200 首按情绪筛（`by_mood` 阶梯）。点歌路径**不调大模型**：词表封闭、
+  无 key 可用、不会编出库里没有的流派。
+- **混合请求标题优先**（`music/query.py`）：`播放日文歌曲留在我身边` → 先搜《留在我身边》，
+  找不到再按“日文”取池；`《》` 引号标题绝对优先。
+- **多候选返回**（`music/tools.py`）：新增只读工具 `local.music_search`，返回
+  `{status, want, count, candidates}` 原始 JSON 给模型（无 exec 话术，否则列表会被话术盖住），
+  同时填 `ToolResult.options` 给将来的 `choose`；`music_play` 的结果也带 `options`（最多 8 条）。
+  真实库实测：「晴天」3 个候选（含周杰伦）、「富士山下」5 个版本。
+- 真机听感尚未在本阶段验收（本任务不对真机下发声音）；D1c 的 ③④ 仍等 `app.py` 交接。
+
 ## 3. 相对老项目的明确改动（为什么）
 
 | 老项目做法 | 问题 | 新做法 |

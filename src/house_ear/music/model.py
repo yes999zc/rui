@@ -17,6 +17,11 @@ class Track:
     title: str = ""
     artist: str = ""
     duration: int = 0   # seconds; 0 = unknown
+    # Carried for the descriptive-song path: a mood filter ("来点安静的") needs the
+    # genre tag and BPM the source already returned. Both are optional - an online
+    # source may know neither, and the filter then falls back to "anything".
+    genre: str = ""
+    bpm: int = 0
 
     @property
     def label(self) -> str:

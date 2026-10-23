@@ -61,10 +61,10 @@ class Recorder:
         self.sent.append(msg)
 
 
-def make(tmp_path: Path, cfg: Config | None = None):
+def make(tmp_path: Path, cfg: Config | None = None, source: object | None = None):
     cfg = cfg or Config()
     cfg.music.enabled = True
-    source = FlakySource()
+    source = source or FlakySource()
     history = PlayHistory(tmp_path / "h.json", keep=10)
     service = MusicService(source, history, Recorder(), cfg.music)
     tools = dict((spec.llm_name, handler)
@@ -273,5 +273,161 @@ def test_a_successful_transport_is_silent(tmp_path: Path) -> None:
 
     async def tools_play(service) -> None:
         await service.play([Track(id="subsonic:1", title="T1", artist="A", duration=100)])
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# D1c: the per-song index, descriptive requests, and the candidate channel
+# ---------------------------------------------------------------------------
+class IndexSource(FlakySource):
+    """A library with paging (for the index) and a known song for search."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pages = 0
+        self.genre_calls = 0
+        self.songs = [
+            {"id": "ja1", "title": "雪の華", "artist": "だれか", "duration": 300,
+             "genre": "J-Pop"},
+            {"id": "ja2", "title": "First Love", "artist": "だれか", "duration": 300,
+             "genre": "J-Pop"},
+            {"id": "zh1", "title": "晴天", "artist": "周杰伦", "duration": 269,
+             "genre": "Pop"},
+            {"id": "en1", "title": "Rock One", "artist": "Band", "duration": 200,
+             "genre": "Rock"},
+        ]
+
+    async def songs_page(self, offset: int, limit: int) -> list[dict]:
+        self.pages += 1
+        return self.songs[offset:offset + limit]
+
+    async def by_genre(self, genre: str, limit: int = 40) -> list[Track]:
+        self.genre_calls += 1
+        return [Track(id=f"subsonic:g{genre}", title=f"{genre} song",
+                      artist="A", duration=200)]
+
+    async def search(self, term: str, limit: int) -> list[Track]:
+        if "留在我身边" in term:
+            return [Track(id="subsonic:soba", title="留在我身边",
+                          artist="青山テルマ", duration=300)]
+        return await super().search(term, limit)
+
+
+def tmp_config(tmp_path: Path) -> Config:
+    cfg = Config()
+    cfg.music.enabled = True
+    cfg.system.data_dir = str(tmp_path)
+    return cfg
+
+
+def test_a_language_ask_uses_the_per_song_index(tmp_path: Path) -> None:
+    """「放几首日文歌」 is answered by the song's language, not the J-Pop tag."""
+    cfg = tmp_config(tmp_path)
+    src = IndexSource()
+
+    async def run() -> None:
+        service, _, tools, _ = make(tmp_path, cfg, src)
+        out = await tools["music_play"]({"query": "放几首日文歌"})
+        assert out.status in ("ok", "ok_one")
+        assert {t.id for t in service.queue} == {"subsonic:ja1", "subsonic:ja2"}
+        assert (tmp_path / "library_index.json").is_file()
+        assert src.pages == 1
+        # the second ask answers from the cache, not the NAS
+        await tools["music_stop"]({})
+        await tools["music_play"]({"query": "来点日文歌"})
+        assert src.pages == 1
+
+    asyncio.run(run())
+
+
+def test_a_language_ask_falls_back_to_genres_without_an_index(tmp_path: Path) -> None:
+    class NoPaging(IndexSource):
+        async def songs_page(self, offset: int, limit: int) -> list[dict]:
+            raise SourceError("no paging")
+
+        async def by_genre(self, genre: str, limit: int = 40) -> list[Track]:
+            self.genre_calls += 1
+            return [Track(id="subsonic:jpop", title=f"{genre} song",
+                          artist="A", duration=200)]
+
+    cfg = tmp_config(tmp_path)
+    src = NoPaging()
+
+    async def run() -> None:
+        service, _, tools, _ = make(tmp_path, cfg, src)
+        out = await tools["music_play"]({"query": "放几首日文歌"})
+        assert out.status in ("ok", "ok_one")
+        assert [t.id for t in service.queue] == ["subsonic:jpop"]
+        assert not (tmp_path / "library_index.json").exists()
+
+    asyncio.run(run())
+
+
+def test_a_title_inside_a_descriptive_ask_wins(tmp_path: Path) -> None:
+    """「播放日文歌曲留在我身边」 plays the named song, not a J-Pop shuffle."""
+    cfg = tmp_config(tmp_path)
+    src = IndexSource()
+
+    async def run() -> None:
+        service, _, tools, _ = make(tmp_path, cfg, src)
+        await tools["music_play"]({"query": "播放日文歌曲留在我身边"})
+        assert service.queue[0].title == "留在我身边"
+
+    asyncio.run(run())
+
+
+def test_a_quoted_title_beats_its_descriptor(tmp_path: Path) -> None:
+    async def run() -> None:
+        service, _, tools, _ = make(tmp_path)
+        await tools["music_play"]({"query": "放点安静的《晴天》"})
+        assert service.queue[0].title == "晴天"
+
+    asyncio.run(run())
+
+
+def test_music_search_returns_the_candidate_list_to_the_model(tmp_path: Path) -> None:
+    """The old build could not show the model more than the first hit; this is
+    the candidate channel docs/interaction.md §6 called missing."""
+    from types import SimpleNamespace
+
+    from house_ear.session.turn import TurnRunner
+
+    async def run() -> None:
+        _, _, tools, _ = make(tmp_path)
+        result = await tools["music_search"]({"query": "晴天"})
+        assert result.status == "ok"
+        assert result.payload["candidates"] == [
+            {"id": "subsonic:1", "title": "晴天", "artist": "周杰伦"}]
+        assert result.options == result.payload["candidates"]
+        # music_search has no exec phrase: the turn runner passes the JSON through
+        rendered = TurnRunner._render_tool_result(
+            SimpleNamespace(_interactions={}), "music_search", result)
+        assert "candidates" in rendered and "晴天" in rendered
+
+        # an empty lookup and a descriptive ask are distinguishable
+        empty = await tools["music_search"]({"query": "从未收录"})
+        assert empty.status == "empty"
+        desc = await tools["music_search"]({"query": "放几首日文歌"})
+        assert desc.status == "descriptive"
+        assert desc.payload["suggest"] == "local.music_play"
+
+    asyncio.run(run())
+
+
+def test_a_play_result_carries_the_candidates_it_queued(tmp_path: Path) -> None:
+    """options is the choose primitive's input: the model can see what it got."""
+    class Multi(FlakySource):
+        async def search(self, term: str, limit: int) -> list[Track]:
+            return [Track(id=f"subsonic:{i}", title=f"晴天{i}", artist=f"A{i}",
+                          duration=200) for i in range(3)]
+
+    async def run() -> None:
+        service, _, tools, _ = make(tmp_path, source=Multi())
+        result = await tools["music_play"]({"query": "放晴天"})
+        assert result.status == "ok"
+        assert len(result.options) == 3
+        assert result.payload["count"] == 3
+        assert service.current is not None
 
     asyncio.run(run())
