@@ -29,7 +29,7 @@ from ...doctor import run_doctor
 from ...music import MusicService, NavidromeSource, PlayHistory
 from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
-from ...session import phrases, rules
+from ...session import phrases, prompts, rules
 from ...session.ack import ensure_ack_wav
 from ...session.text import strip_wake
 from ...session.turn import TurnRunner
@@ -104,6 +104,20 @@ def _speaking(app: FastAPI, live: object):
         await live.speak(pcm, **kwargs)  # type: ignore[attr-defined]
 
     return say
+
+
+def _context_provider(app: FastAPI, ha: HaBridge | None):
+    """Per-turn prompt extras: the entity list and, over music, the short-answer rule."""
+    ha_ctx = _ha_context(ha) if ha is not None else (lambda: "")
+
+    def provider() -> str:
+        parts = [ha_ctx()]
+        service = getattr(app.state, "music", None)
+        if service is not None and service.state in ("playing", "paused"):
+            parts.append(prompts.MUSIC_HINT)
+        return "\n".join(p for p in parts if p)
+
+    return provider
 
 
 def _ha_context(ha: HaBridge):
@@ -496,7 +510,7 @@ def create_app(
                     registry.register(spec)
                     local_tools.append((spec, handler))
                 runner.set_tools(local_tools)
-                runner.extra_context = _ha_context(ha)
+                runner.extra_context = _context_provider(app, ha)
                 app.state.ha = ha
                 log.info("ha: %d tools registered", len(ha.tool_specs()))
             else:
