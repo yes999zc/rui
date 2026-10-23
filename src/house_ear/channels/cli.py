@@ -121,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # httpx logs the full request URL at INFO, and Telegram's bot token is in that URL.
+    # Keep transport logs quiet even in verbose mode; our own lines are redacted.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     if args.login_weixin:
         data = Path(args.weixin_data or args.data_dir) / "weixin"
         return asyncio.run(_login_weixin(data))
