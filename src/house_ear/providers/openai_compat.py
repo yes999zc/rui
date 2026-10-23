@@ -112,6 +112,27 @@ def _finished(pending: dict[int, dict[str, str]]) -> list[dict]:
 
 class OpenAiCompatLlm(_HttpHolder):
 
+    async def warm(self, stage: str = "") -> None:
+        """Open the HTTP connection before the first real turn.
+
+        A cold DeepSeek request pays DNS + TLS before the first token; one cheap
+        max_tokens=1 call at startup removes that from the user-visible first answer.
+        Only the LLM is warmed: the same class is also the cloud ASR fallback, where a
+        chat completion call would be the wrong request.
+        """
+        if stage != "llm":
+            return
+        payload = {
+            "model": self.cfg.model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+            "temperature": 0.0,
+            "stream": False,
+        }
+        resp = await self.client.post(_url(self.cfg, "/chat/completions"),
+                                      json=payload, headers=_headers(self.cfg))
+        resp.raise_for_status()
+
     async def chat(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[ChatChunk]:
         payload = chat_payload(self.cfg, messages, tools)
         # Tool calls arrive as deltas keyed by index ("arguments" is streamed in pieces), so

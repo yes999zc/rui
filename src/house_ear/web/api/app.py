@@ -1223,6 +1223,9 @@ def create_app(
                     trace = TurnTrace(device_id=client.ready.device_id if client.ready else "")
                     if client.last_wake is not None:
                         trace.mark("wake", at_ms=client.last_wake.ts_ms)
+                        # Consume it: a follow-up utterance has no new wake event, and
+                        # reusing this timestamp made first_response_ms 20-35 s.
+                        client.last_wake = None
                     text, asr_report = await runner.transcribe(pcm, trace)
                     clean = strip_wake(text, runner.wake_words)
                     if "小爱同学" in clean or clean.strip() in {"小爱", "小爱小爱"}:

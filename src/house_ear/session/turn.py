@@ -423,19 +423,26 @@ class TurnRunner:
         The local ASR provider pulls a 1.1 GB model on first use. Warming *these*
         instances (not a throwaway chain) is what keeps the first request as fast as the
         tenth: measured on the speaker, a cold first turn spent 5 s before the transcript.
+        Stage-aware providers (the LLM) also open their TLS/HTTP connection here.
         """
+        import inspect
+
         seen: set[int] = set()
-        for chain in (self._asr, self._tts, self._llm):
+        for stage, chain in (("asr", self._asr), ("tts", self._tts), ("llm", self._llm)):
             for _name, provider in chain:
                 if id(provider) in seen:
                     continue
                 seen.add(id(provider))
                 warm = getattr(provider, "warm", None)
-                if warm is not None:
-                    try:
+                if warm is None:
+                    continue
+                try:
+                    if "stage" in inspect.signature(warm).parameters:
+                        await warm(stage=stage)
+                    else:
                         await warm()
-                    except Exception as exc:  # noqa: BLE001 - warming is never fatal
-                        log.warning("warm: %s: %s", type(exc).__name__, exc)
+                except Exception as exc:  # noqa: BLE001 - warming is never fatal
+                    log.warning("warm: %s: %s", type(exc).__name__, exc)
 
     def apply_session(self, session: SessionConfig) -> None:
         """Take a console-edited `session` section without a restart.
