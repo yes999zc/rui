@@ -79,7 +79,11 @@ def test_edit_validates_its_inputs(admin) -> None:
 def test_delete_removes_it_and_a_second_delete_is_404(admin) -> None:
     client, path, _tmp = admin
     body = client.delete("/api/v1/devices/living").json()
-    assert body == {"removed": "living", "devices": []}
+    assert body["removed"] == "living"
+    assert body["devices"] == []
+    # No plane runs in this test, so the restart outcome is "" (the key is always there;
+    # a failed restart carries the error - see tests/test_setup.py).
+    assert body["plane_error"] == ""
     assert load_config(path).devices == []
     assert client.delete("/api/v1/devices/living").status_code == 404
 

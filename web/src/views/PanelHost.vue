@@ -27,6 +27,7 @@ import BlockLog from '../components/BlockLog.vue'
 import BlockMemory from '../components/BlockMemory.vue'
 import BlockSay from '../components/BlockSay.vue'
 import BlockVolume from '../components/BlockVolume.vue'
+import BlockCredentials from '../components/BlockCredentials.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -196,6 +197,12 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
           <BlockMemory v-else-if="block.type === 'memory'" :block="block" :data="dataFor(block)" :refresh="poll" />
           <BlockSay v-else-if="block.type === 'say'" :block="block" :data="dataFor(block)" />
           <BlockVolume v-else-if="block.type === 'volume'" :block="block" :data="dataFor(block)" />
+          <BlockCredentials
+            v-else-if="block.type === 'credentials'"
+            :block="block"
+            :data="dataFor(block)"
+            :refresh="poll"
+          />
           <div v-else class="banner banner-warn">
             <AppIcon name="alert" :size="16" class="banner-icon" />
             <span>{{ t('page.blockUnknown', { type: block.type }) }}</span>

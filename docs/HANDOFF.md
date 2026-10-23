@@ -1048,3 +1048,28 @@ dev 已重启：`/api/v1/setup` next_step=verify complete=true、providers-v2 �
 filter-repo（需授权）；③ 音乐凭据 UI、对话卡片化、Providers 阶段标题/手机触控微调、
 设备添加忽略 plane 重启错误；④ 新截图/审计 doc 不入库（`.gitignore` 已挡新截图）。
 
+### 12.28 2026-10-23 17:55：审计 P1 收尾（音乐凭据 / 设备诚实化 / MCP env / Providers 微调）
+
+按 round-2 审计继续收口，全部已重启验证：
+
+1. **音乐凭据 UI（functional audit P1-3）**：`GET /api/v1/music` 新增只读布尔
+   `credentials_present`；music PanelSpec 新增 `credentials` block（url/user/password，
+   password 只写不读、保存后清空、空值=删除、一次「清除凭据」删全部）；前端
+   `BlockCredentials.vue` 走 `PUT /api/v1/music/credentials` + `POST /api/v1/music/test`
+   （显示 ok/延迟/错误），保存/清除后刷新状态。实测 /panel/music 已出现「音乐凭据」区块，
+   本机显示「凭据已配置」。
+2. **设备/安装诚实化（P1-6）**：`_write_devices` 不再吞掉音频面重启错误；设备 add/PUT/GET/
+   DELETE 和 `/api/v1/setup` 的 device step 都带 `plane_error`；plane 起不来时
+   `device.done=false`、`complete=false`，不再假绿。
+3. **MCP test env 透传**：`POST /api/v1/mcp/test` 的 generic 分支接受 `env`（依赖 env 的
+   stdio server 可先测后存），响应不回显 env。
+4. **Providers v2 微调**：阶段 H2 22→17px 与配置中心组头一致；手机 ≤720px 下卡片输入/试听/
+   链路按钮 ≥44px，桌面密度不变。
+5. **额度卡小修**：ASR 两行误用 `.kv`，已改 `.row`，与 TTS/余额行对齐。
+
+**验证**：真 VAD 全量 **713 passed / 1 skipped**、ruff clean、前端 typecheck+build 绿；
+dev 重启后 `/panel/music` 新 block 生效、`credentials_present=true`、setup `complete=true
+plane_error=''`。新增测试：`test_music_credentials.py`（块契约/状态布尔/保存删除/不回显）、
+setup plane_error 4 条、MCP env 2 条。剩余：真实 Navidrome 凭据保存/测试需 9哥 在 NAS 上点一次；
+仓库公开/GHCR 与 git 历史仍等 9哥。
+

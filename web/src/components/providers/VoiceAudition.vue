@@ -160,10 +160,17 @@ onUnmounted(stop)
 @media (max-width: 720px) {
   .audition {
     width: 100%;
+    gap: var(--s2);
+  }
+
+  .audition-btn {
+    min-height: 44px;
+    padding: 10px 14px;
   }
 
   .audition-note {
     max-width: none;
+    font-size: 11.5px;
   }
 }
 </style>

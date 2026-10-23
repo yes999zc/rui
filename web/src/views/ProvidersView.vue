@@ -576,7 +576,7 @@ onBeforeRouteLeave(() => (anyDirty.value ? window.confirm(t('providers.unsavedLe
   font-size: 12px;
   color: var(--accent);
   letter-spacing: 0.06em;
-  padding-top: 7px;
+  padding-top: 4px;
 }
 
 .stage-title-block {
@@ -584,7 +584,8 @@ onBeforeRouteLeave(() => (anyDirty.value ? window.confirm(t('providers.unsavedLe
 }
 
 .stage-title-block h2 {
-  font-size: 22px;
+  /* Same as a ConfigCenter group header: the page title is the H1, the stage is a section. */
+  font-size: 17px;
 }
 
 .stage-purpose {
@@ -769,12 +770,9 @@ onBeforeRouteLeave(() => (anyDirty.value ? window.confirm(t('providers.unsavedLe
 }
 
 @media (max-width: 720px) {
-  .stage-title-block h2 {
-    font-size: 20px;
-  }
-
   .stage-actions .btn {
     flex: 1;
+    min-height: 44px;
   }
 
   .providers-bar .p-keys {

@@ -342,6 +342,14 @@ const prosody = computed(() => {
 
   .p-key-link {
     white-space: normal;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .p-advanced summary {
+    min-height: 44px;
+    align-items: center;
   }
 }
 </style>

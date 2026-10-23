@@ -538,6 +538,30 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                 {"type": "list", "title": "最近爱听", "items": "$.top",
                  "item_title": "$.artist", "item_sub": "$.plays 次",
                  "empty": "还没有播放记录", "max": 5},
+                # Credentials are write-only: the block shows `credentials_present` and
+                # posts url/user/password to PUT /api/v1/music/credentials; Test calls
+                # POST /api/v1/music/test. Never renders a stored value.
+                {"type": "credentials",
+                 "title": {"zh": "音乐凭据", "en": "Music credentials"},
+                 "status_key": "credentials_present",
+                 "fields": [
+                     {"key": "url", "kind": "text",
+                      "label": {"zh": "服务器地址", "en": "Server URL"},
+                      "hint": {"zh": "Navidrome/Subsonic 地址，http:// 或 https:// 开头",
+                               "en": "Navidrome/Subsonic URL, starting with http:// or https://"}},
+                     {"key": "user", "kind": "text",
+                      "label": {"zh": "用户名", "en": "Username"},
+                      "hint": {"zh": "曲库登录用户名",
+                               "en": "Library login user"}},
+                     {"key": "password", "kind": "password",
+                      "label": {"zh": "密码", "en": "Password"},
+                      "hint": {"zh": "只写不读：保存后 0600 存到 data_dir/lan_media.json，"
+                                     "接口永不回显；留空表示删除该字段",
+                               "en": "Write-only: stored 0600 at data_dir/lan_media.json, "
+                                     "never returned; empty deletes the field"}},
+                 ],
+                 "save": {"href": "/api/v1/music/credentials", "method": "PUT"},
+                 "test": {"href": "/api/v1/music/test", "method": "POST"}},
             ],
         },
     ]
@@ -1541,6 +1565,7 @@ def create_app(
     app.state.memory = memory
     app.state.tools = registry  # the console and tests read the same registry turns use
     app.state.mcp_manager = mcp_manager  # generic MCP sessions/status (console reads it)
+    app.state.plane_error = ""  # last device-write audio-plane restart outcome
     app.state.trace_log = traces  # scripts and tests read the same log the API serves
     if music_service is not None:
         music_service.sender = _music_sender(app)
@@ -2068,12 +2093,19 @@ def create_app(
 
     @app.get("/api/v1/music", dependencies=[Depends(auth)])
     async def music_status() -> dict:
-        """What is playing and what was played: the console page and the self-tests."""
+        """What is playing and what was played: the console page and the self-tests.
+
+        `credentials_present` is a boolean only - whether the credentials json exists at
+        `music.secrets_path` (or data_dir/lan_media.json when unset). The url/user/password
+        are write-only through PUT /api/v1/music/credentials and never appear here.
+        """
+        present = music_credentials_path(cfg).is_file()
         service = getattr(app.state, "music", None)
         if service is None:
-            return {"enabled": False}
+            return {"enabled": False, "credentials_present": present}
         return {
             "enabled": True,
+            "credentials_present": present,
             **service.status(),
             "top": [{"artist": a, "plays": n} for a, n in service.history.top(5)],
             "last": service.history.last(),
@@ -2604,14 +2636,19 @@ def create_app(
         verified = bool((getattr(app.state, "last_turn", None) or {}).get("audio_bytes"))
         plane = _plane_snapshot(app)
         enabled_devices = sum(1 for item in cfg_now.devices if item.enabled)
+        # The last device-write restart outcome. A configured speaker whose plane failed
+        # to start is not "done": the room is still deaf (functional audit P1-6).
+        plane_error = str(getattr(app.state, "plane_error", "") or "")
         steps = [
             {"id": "keys", "title": "填 key", "done": all(stage_ok.values()), "detail": keys},
             {"id": "models", "title": "本地模型", "done": all(models.values()), "detail": models},
-            {"id": "device", "title": "添加音箱", "done": device is not None,
+            {"id": "device", "title": "添加音箱",
+             "done": device is not None and not plane_error,
              "detail": ({"id": device.id, "host": device.host, "room": device.room,
                          "enabled": device.enabled,
-                         "connected": plane["speaker_connected"]}
-                        if device else {})},
+                         "connected": plane["speaker_connected"],
+                         "plane_error": plane_error}
+                        if device else {"plane_error": plane_error})},
             {"id": "wake", "title": "唤醒词",
              "done": bool(device and device.wake_words and keywords and keywords.is_file()),
              "detail": {"words": list(device.wake_words) if device else [],
@@ -2631,6 +2668,8 @@ def create_app(
             "config_path": str(config_path) if config_path else "",
             "config_exists": bool(config_path and Path(config_path).exists()),
             "audio_plane": plane["running"],
+            # Same sentence the device step carries: a failed restart is not hidden.
+            "plane_error": plane_error,
             # Process-up is not room-hearing: the wizard shows both numbers.
             "speaker_connected": plane["speaker_connected"],
             "enabled_devices": enabled_devices,
@@ -2702,8 +2741,13 @@ def create_app(
         if not _write_keywords_preserving(updated) and words:
             log.warning("devices: could not write keywords file for %d wake word(s)", len(words))
 
-    async def _write_devices(updated: Config) -> None:
-        """Persist devices[], regenerate the wake words, restart the plane."""
+    async def _write_devices(updated: Config) -> str:
+        """Persist devices[], regenerate the wake words, restart the plane.
+
+        Returns the audio-plane restart error ("" = the plane came back). The caller must
+        surface it: a device save that leaves the room deaf must not look like success
+        (functional audit round 2, P1-6).
+        """
         if config_path is None:
             raise HTTPException(status_code=409, detail="there is no config file on disk to write")
         if not updated.audio.voice.kws_keywords_file:
@@ -2715,10 +2759,15 @@ def create_app(
         _apply_config(updated)
         _sync_devices(updated)
         supervisor = getattr(app.state, "audio", None)
+        error = ""
         if supervisor is not None:
             # The plane holds the device list, the wake model and the keywords file
             # from its own startup: a new speaker or a new wake word needs a restart.
-            await _restart_audio(supervisor, updated)
+            error = await _restart_audio(supervisor, updated)
+        app.state.plane_error = error
+        if error:
+            log.warning("device write saved, but the audio plane did not come back: %s", error)
+        return error
 
     @app.get("/api/v1/setup", dependencies=[Depends(auth)])
     async def setup_state() -> dict:
@@ -2825,9 +2874,9 @@ def create_app(
             updated = Config.model_validate(merged.model_dump(mode="json"))
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
-        await _write_devices(updated)
-        log.info("setup: device %s written (host=%s, wake=%s)", device.id, device.host,
-                 device.wake_words)
+        plane_error = await _write_devices(updated)
+        log.info("setup: device %s written (host=%s, wake=%s, plane_error=%r)",
+                 device.id, device.host, device.wake_words, plane_error)
         return _wizard_state()
 
     @app.post("/api/v1/setup/wake", dependencies=[Depends(auth)])
@@ -2843,7 +2892,8 @@ def create_app(
             raise HTTPException(status_code=409, detail="add a speaker first")
         first = current.devices[0].model_copy(update={"wake_words": words})
         updated = current.model_copy(update={"devices": [first, *current.devices[1:]]})
-        await _write_devices(updated)
+        plane_error = await _write_devices(updated)
+        log.info("setup: wake words written (plane_error=%r)", plane_error)
         return _wizard_state()
 
     @app.post("/api/v1/setup/probe", dependencies=[Depends(auth)])
@@ -2870,7 +2920,10 @@ def create_app(
             live = {"model": info.model, "transport": info.transport.value,
                     **_device_link(info, adapter, plane),
                     "capabilities": sorted(info.capabilities)}
-        return {"device": device.model_dump(mode="json"), "live": live}
+        return {"device": device.model_dump(mode="json"), "live": live,
+                # The last restart outcome belongs to the page: editing a device and
+                # leaving the plane dead must be visible, not inferred from logs.
+                "plane_error": str(getattr(app.state, "plane_error", "") or "")}
 
     @app.get("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
     async def device_detail(device_id: str) -> dict:
@@ -2926,9 +2979,11 @@ def create_app(
             ]) from exc
         others = [item for item in current.devices if item.id != device_id]
         updated = current.model_copy(update={"devices": [updated_device, *others]})
-        await _write_devices(updated)
-        log.info("device %s updated from the console", device_id)
-        return await _device_detail(device_id)
+        plane_error = await _write_devices(updated)
+        log.info("device %s updated from the console (plane_error=%r)", device_id, plane_error)
+        detail = await _device_detail(device_id)
+        detail["plane_error"] = plane_error
+        return detail
 
     @app.delete("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
     async def device_delete(device_id: str) -> dict:
@@ -2939,9 +2994,10 @@ def create_app(
         _device_or_404(device_id, current)
         updated = current.model_copy(
             update={"devices": [item for item in current.devices if item.id != device_id]})
-        await _write_devices(updated)
-        log.info("device %s removed from the console", device_id)
-        return {"removed": device_id, "devices": [item.id for item in updated.devices]}
+        plane_error = await _write_devices(updated)
+        log.info("device %s removed from the console (plane_error=%r)", device_id, plane_error)
+        return {"removed": device_id, "devices": [item.id for item in updated.devices],
+                "plane_error": plane_error}
 
     @app.post("/api/v1/devices/probe", dependencies=[Depends(auth)])
     async def devices_probe(payload: Annotated[dict, Body()]) -> dict:
@@ -3114,8 +3170,11 @@ def create_app(
         session, lists its tools and disconnects.
         """
         if any(key in payload for key in ("transport", "url", "command")):
+            # `env` travels too: an env-dependent stdio server (tokens in its own
+            # environment) can only be tested with the environment it will run with.
             raw = {key: payload[key] for key in
-                   ("name", "transport", "url", "command", "enabled") if key in payload}
+                   ("name", "transport", "url", "command", "env", "enabled")
+                   if key in payload}
             raw.setdefault("name", "probe")
             raw.setdefault("enabled", True)
             try:

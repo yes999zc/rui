@@ -30,11 +30,12 @@ export interface PanelButton {
 export interface PanelField {
   key: string
   label: string
-  kind?: 'text' | 'number' | 'textarea' | 'select' | 'bool'
+  kind?: 'text' | 'number' | 'textarea' | 'select' | 'bool' | 'password'
   min?: number
   max?: number
   unit?: string
   hint?: string
+  placeholder?: string
   options?: string[]
 }
 
@@ -67,6 +68,11 @@ export interface PanelBlock {
   label?: string
   min?: number
   note?: string
+  /** `credentials` block: boolean path in the panel data (`credentials_present`). */
+  status_key?: string
+  /** `credentials` block: write endpoint (PUT) and connection-test endpoint (POST). */
+  save?: { href: string; method?: string }
+  test?: { href: string; method?: string }
 }
 
 export interface PanelColumn {

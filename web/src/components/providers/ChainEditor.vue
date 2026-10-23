@@ -305,8 +305,8 @@ function add(): void {
 
 @media (max-width: 720px) {
   .chain-btn {
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
   }
 
   .chain-add {
@@ -315,6 +315,11 @@ function add(): void {
 
   .chain-add select {
     flex: 1 1 100%;
+    min-height: 44px;
+  }
+
+  .chain-add .btn {
+    min-height: 44px;
   }
 }
 </style>

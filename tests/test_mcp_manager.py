@@ -32,6 +32,7 @@ from house_ear.tools.mcp_manager import (
     test_server as probe_server,
 )
 from house_ear.tools.registry import ToolRegistry
+from house_ear.web.api import app as app_module
 from house_ear.web.api.app import create_app
 
 # --------------------------------------------------------------------- fakes
@@ -641,4 +642,47 @@ def test_the_stdio_gate_is_a_catalog_field_and_applies_immediately(tmp_path,
             "values": {"tools.mcp_allow_stdio": True}})
         assert response.status_code == 200, response.text
         assert http.get("/api/v1/mcp").json()["generic"]["connected"] == 1
+
+
+# ------------------------------------------------------- MCP test env passthrough
+
+def test_mcp_test_passes_env_to_the_generic_probe(app_with_mcp, monkeypatch) -> None:
+    """An env-dependent stdio server can only be tested with its environment."""
+    app, _path, _opener = app_with_mcp
+    captured: dict = {}
+
+    async def fake_probe(server_cfg, *, allow_stdio: bool = False):
+        captured["server"] = server_cfg
+        captured["allow_stdio"] = allow_stdio
+        return {"ok": True, "attempted": True, "connected": True,
+                "name": server_cfg.name, "transport": str(server_cfg.transport),
+                "tools": 1, "tool_names": ["env_probe"], "latency_ms": 1, "error": ""}
+
+    monkeypatch.setattr(app_module, "test_generic_mcp_server", fake_probe)
+    with TestClient(app) as http:
+        response = http.post("/api/v1/mcp/test", json={
+            "name": "envsrv", "transport": "stdio",
+            "command": ["env-server"],
+            "env": {"API_TOKEN": "tok-123", "MODE": "dev"},
+        })
+        assert response.status_code == 200, response.text
+        body = response.json()
+    server_cfg = captured["server"]
+    assert server_cfg.name == "envsrv"
+    assert str(server_cfg.transport) == "stdio"
+    assert server_cfg.command == ["env-server"]
+    # The env reached McpServerConfig and hence the probe; the response never echoes it.
+    assert server_cfg.env == {"API_TOKEN": "tok-123", "MODE": "dev"}
+    assert captured["allow_stdio"] is True
+    assert "tok-123" not in response.text
+    assert body["tool_names"] == ["env_probe"]
+
+
+def test_mcp_test_rejects_a_non_mapping_env(app_with_mcp, monkeypatch) -> None:
+    app, _path, _opener = app_with_mcp
+    with TestClient(app) as http:
+        response = http.post("/api/v1/mcp/test", json={
+            "name": "bad", "transport": "stdio", "command": ["x"],
+            "env": ["NOT", "A", "DICT"]})
+    assert response.status_code == 422
 

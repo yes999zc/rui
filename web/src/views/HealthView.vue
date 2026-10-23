@@ -118,11 +118,11 @@ onMounted(run)
       <span class="k">{{ t('health.quota7d') }}</span>
       <span class="v mono">{{ quota.tts_chars_7d ?? '—' }}</span>
     </div>
-    <div class="kv">
+    <div class="row">
       <span class="k">{{ t('health.quotaAsrToday') }}</span>
       <span class="v mono">{{ quota.asr_seconds_today ?? '—' }}</span>
     </div>
-    <div class="kv">
+    <div class="row">
       <span class="k">{{ t('health.quotaAsr7d') }}</span>
       <span class="v mono">{{ quota.asr_seconds_7d ?? '—' }}</span>
     </div>

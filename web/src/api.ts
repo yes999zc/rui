@@ -517,6 +517,28 @@ export interface SaveValuesResult {
   warnings?: string[]
 }
 
+/* — music credentials (write-only; the panel never receives the values) ————— */
+
+export interface MusicCredentialsPatch {
+  url?: string
+  user?: string
+  password?: string
+}
+
+/** Presence only: the backend never returns url/user/password values. */
+export interface MusicCredentialsState {
+  has_credentials: boolean
+  has_url: boolean
+  has_user: boolean
+  has_password: boolean
+}
+
+export interface MusicTestResult {
+  ok: boolean
+  latency_ms: number | null
+  error: string
+}
+
 export const api = {
   health: () =>
     request<{
@@ -565,6 +587,15 @@ export const api = {
     ),
   stopAudio: () => request<{ playing: string | null }>('/api/v1/debug/play', { method: 'POST', body: JSON.stringify({ stop: true }) }),
   deviceVolume: () => request<{ volume: number; range: string }>('/api/v1/device/volume'),
+  /**
+   * Write music credentials. Absent keys keep the stored value; an empty string
+   * deletes that field. Values are write-only and never read back.
+   */
+  saveMusicCredentials: (patch: MusicCredentialsPatch, href = '/api/v1/music/credentials') =>
+    request<MusicCredentialsState>(href, { method: 'PUT', body: JSON.stringify(patch) }),
+  /** Ping the music source; with drafts it tests those unsaved values first. */
+  testMusic: (patch: MusicCredentialsPatch = {}, href = '/api/v1/music/test') =>
+    request<MusicTestResult>(href, { method: 'POST', body: JSON.stringify(patch) }),
   /** P5: device admin (edit/delete use the id; probe is the wizard's SSH check). */
   deviceDetail: (id: string) => request<DeviceDetail>(`/api/v1/devices/${encodeURIComponent(id)}`),
   updateDevice: (id: string, patch: Record<string, unknown>) =>

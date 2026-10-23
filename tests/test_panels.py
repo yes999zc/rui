@@ -23,6 +23,7 @@ from house_ear.web.api.app import create_app
 
 BLOCK_TYPES = {
     "stats", "now", "actions", "list", "form", "table", "log", "memory", "say", "volume",
+    "credentials",  # music credentials form (write-only url/user/password)
 }
 
 CONSOLE_ROUTES = [

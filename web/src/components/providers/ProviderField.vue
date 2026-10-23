@@ -208,4 +208,33 @@ function onChange(event: Event): void {
 .invalid :deep(textarea) {
   border-color: var(--fail);
 }
+
+/* Touch targets: only on phones, so the desktop density stays untouched. */
+@media (max-width: 720px) {
+  .p-label {
+    font-size: 13px;
+  }
+
+  .p-control-row > input,
+  .p-control-row > select {
+    min-height: 44px;
+    padding: 10px 10px;
+    font-size: 14px;
+  }
+
+  .p-control-row > textarea {
+    min-height: 96px;
+    padding: 10px;
+    font-size: 14px;
+  }
+
+  .switch {
+    min-height: 44px;
+    padding: 8px 0;
+  }
+
+  .p-hint {
+    font-size: 12px;
+  }
+}
 </style>

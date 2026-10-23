@@ -235,3 +235,107 @@ def test_builtin_endpoint_providers_do_not_need_a_base_url(tmp_path, monkeypatch
     keys = body["steps"][0]
     assert keys["detail"]["stages"]["tts"] is True
     assert keys["detail"]["missing_by_stage"].get("tts", []) == []
+
+
+# ------------------------------------------------ plane restart honesty (P1-6)
+
+class _RestartFailingPlane:
+    """Stands in for AudioPlaneSupervisor: the restart never comes back."""
+
+    def __init__(self) -> None:
+        self.cfg = None
+        self.error = ""
+        self.stops = 0
+        self.starts = 0
+        self.watches = 0
+
+    async def stop(self) -> None:
+        self.stops += 1
+
+    async def start(self) -> None:
+        self.starts += 1
+        raise RuntimeError("no device this build can drive")
+
+    def watch(self) -> None:
+        self.watches += 1
+
+
+class _RestartOkPlane(_RestartFailingPlane):
+    async def start(self) -> None:
+        self.starts += 1
+
+
+def test_device_step_is_not_done_when_the_plane_restart_fails(wizard) -> None:
+    client, path = wizard
+    client.app.state.audio = _RestartFailingPlane()
+    response = client.post("/api/v1/setup/device", json={
+        "host": "speaker.local", "room": "客厅", "wake_words": ["你好小瑞"]})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    step = next(item for item in body["steps"] if item["id"] == "device")
+    # The config was saved, but the room is deaf: not "done", and never silent about it.
+    assert step["done"] is False
+    assert "RuntimeError" in step["detail"]["plane_error"]
+    assert "RuntimeError" in body["plane_error"]
+    assert body["complete"] is False
+    assert [device.id for device in load_config(path).devices] == ["living"]
+    plane = client.app.state.audio
+    assert plane.starts == 1 and plane.stops == 1 and plane.watches == 1
+    # GET /api/v1/setup tells the same story on a reload.
+    state = client.get("/api/v1/setup").json()
+    assert state["plane_error"] == body["plane_error"]
+    assert next(item for item in state["steps"]
+                if item["id"] == "device")["detail"]["plane_error"]
+
+
+def test_a_successful_restart_clears_the_plane_error(wizard) -> None:
+    client, _path = wizard
+    client.app.state.audio = _RestartFailingPlane()
+    client.post("/api/v1/setup/device", json={"host": "speaker.local"})
+    assert client.get("/api/v1/setup").json()["plane_error"]
+
+    client.app.state.audio = _RestartOkPlane()
+    response = client.post("/api/v1/setup/wake", json={"wake_words": ["嗨小瑞"]})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["plane_error"] == ""
+    step = next(item for item in body["steps"] if item["id"] == "device")
+    assert step["done"] is True
+    assert step["detail"]["plane_error"] == ""
+
+
+def test_wake_word_save_surfaces_a_failed_plane_restart(wizard) -> None:
+    client, _path = wizard
+    client.post("/api/v1/setup/device", json={"host": "speaker.local"})
+    client.app.state.audio = _RestartFailingPlane()
+    response = client.post("/api/v1/setup/wake", json={"wake_words": ["嗨小瑞"]})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "RuntimeError" in body["plane_error"]
+    step = next(item for item in body["steps"] if item["id"] == "device")
+    assert step["done"] is False
+
+
+def test_device_admin_endpoints_surface_plane_errors(wizard) -> None:
+    client, _path = wizard
+    client.post("/api/v1/setup/device", json={"host": "speaker.local"})
+    client.app.state.audio = _RestartFailingPlane()
+
+    response = client.put("/api/v1/devices/living", json={"room": "书房"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "RuntimeError" in body["plane_error"]
+    assert body["device"]["room"] == "书房"
+    detail = client.get("/api/v1/devices/living").json()
+    assert detail["plane_error"] == body["plane_error"]
+
+    removed = client.delete("/api/v1/devices/living").json()
+    assert "RuntimeError" in removed["plane_error"]
+    assert removed["devices"] == []
+
+    # A working plane clears the sentence again on the next write.
+    client.app.state.audio = _RestartOkPlane()
+    client.post("/api/v1/setup/device", json={"host": "speaker.local"})
+    response = client.put("/api/v1/devices/living", json={"room": "主卧"})
+    assert response.status_code == 200, response.text
+    assert response.json()["plane_error"] == ""
