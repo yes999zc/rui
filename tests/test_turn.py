@@ -616,3 +616,32 @@ def test_a_hallucinated_music_call_beside_weather_keeps_the_answer(monkeypatch) 
                                     TurnTrace(device_id="living")))
     assert played == [], "the repeated music call must be refused"
     assert result.reply == "沈阳今天毛雨。", "the weather answer must survive"
+
+
+def test_a_music_call_with_no_query_uses_what_the_user_said(monkeypatch) -> None:
+    """Measured 10:13:04: one run in three sent music_play({}) and played a random
+    batch instead of the requested band."""
+    from house_ear.tools.contract import InteractionSpec, ToolResult, ToolSpec
+
+    seen: list[dict] = []
+
+    async def play(args: dict) -> ToolResult:
+        seen.append(args)
+        return ToolResult(status="ok")
+
+    spec = ToolSpec(name="local.music_play", description="demo",
+                    interaction=InteractionSpec(exec={"ok": "music.started"},
+                                                answer="silent",
+                                                guard="music_request"))
+    llm = ScriptedLlm([[ChatChunk(delta="", finish_reason="tool_calls",
+                                  tool_calls=[{"id": "t1", "name": "music_play",
+                                               "arguments": "{}"}])]])
+    patch_chains(monkeypatch, asr=FakeAsr("战车"), llms=[llm], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers, tools=[(spec, play)])
+
+    async def speak(_pcm: bytes, *, segment_start: bool = False) -> None:
+        return None
+
+    asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living"),
+                           transcript="播放战车乐队的歌"))
+    assert seen == [{"query": "播放战车乐队的歌"}]

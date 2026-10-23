@@ -702,6 +702,15 @@ class TurnRunner:
                                          "tool_call_id": call.get("id", ""),
                                          "content": "用户没说要点歌，不要调用音乐工具。"})
                         continue
+                    # A music call with no query is the model forgetting the
+                    # argument: default it to what the user said (measured 10:13:04,
+                    # one run in three sent {} and played a random batch).
+                    if (guard is not None and getattr(guard, "guard", "") == "music_request"):
+                        args = call.get("arguments") or ""
+                        if isinstance(args, str) and args.strip() in ("", "{}"):
+                            call = dict(call)
+                            call["arguments"] = json.dumps(
+                                {"query": self._transcript}, ensure_ascii=False)
                     output = await self._call_tool(call)
                     result.tools.append(call.get("name", ""))
                     spec = self._interactions.get(call.get("name", ""))
