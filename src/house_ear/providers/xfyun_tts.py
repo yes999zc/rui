@@ -49,7 +49,7 @@ def build_auth_url(api_key: str, api_secret: str) -> str:
     return TTS_URL + "?" + urlencode(params, quote_via=quote_plus)
 
 
-def request_payload(app_id: str, text: str, vcn: str, rate: int) -> dict:
+def request_payload(app_id: str, text: str, vcn: str, rate: int, speed: int = 50) -> dict:
     return {
         "common": {"app_id": app_id},
         "business": {
@@ -57,7 +57,7 @@ def request_payload(app_id: str, text: str, vcn: str, rate: int) -> dict:
             "auf": f"audio/L16;rate={rate}",
             "vcn": vcn,
             "tte": "UTF8",
-            "speed": 50,
+            "speed": speed,
             "volume": 50,
             "pitch": 50,
             "bgs": 0,
@@ -104,7 +104,10 @@ class XfyunTts:
         if not vcn:
             raise ProviderError("xfyun needs a voice name (vcn) in config.voice or config.model")
         url = build_auth_url(api_key, api_secret)
-        payload = json.dumps(request_payload(app_id, text, vcn, self.sample_rate))
+        # xfyun's own speed is 0..100 with 50 = normal; map the shared speech_rate
+        # (-50..100, -50 = 0.5x, 100 = 2x) onto it, clamped to the vendor's range.
+        speed = max(0, min(100, 50 + round(int(getattr(self.cfg, "speech_rate", 0)) / 2)))
+        payload = json.dumps(request_payload(app_id, text, vcn, self.sample_rate, speed))
 
         # close_timeout: the server answers the close handshake ~1 s late, and waiting for it
         # would add that second to every sentence even though the audio is already complete.

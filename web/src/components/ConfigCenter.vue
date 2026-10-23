@@ -408,7 +408,12 @@ async function playAudition(field: CatalogField): Promise<void> {
   auditionState[field.path] = 'loading'
   try {
     const voice = String(draft.value[field.path] ?? '')
-    const blob = await api.audition(field.audition.stage, field.audition.provider, voice)
+    const prosody: Record<string, unknown> = {}
+    for (const key of ['speech_rate', 'emotion', 'emotion_scale'] as const) {
+      const path = `providers.catalog.${field.audition.provider}.${key}`
+      if (path in draft.value) prosody[key] = draft.value[path]
+    }
+    const blob = await api.audition(field.audition.stage, field.audition.provider, voice, undefined, prosody)
     const url = URL.createObjectURL(blob)
     auditionAudio = new Audio(url)
     auditionAudio.onended = () => {

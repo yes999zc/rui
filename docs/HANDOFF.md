@@ -846,6 +846,16 @@ origin/main 同步。**
   代码侧已确认两点：AUC 客户端未接入实时链；要接实时 ASR 需 9哥 在控制台开通
   「大模型流式语音识别」或一句话识别（资源包/服务），开通后按 sauc/bigmodel WS 协议接入。
 
-**验证**：`pytest` 全绿（新增 12 条火山 TTS/额度测试）、ruff clean、typecheck/build 绿；
+**验证**：`pytest` 全绿（新增 15 条火山 TTS/额度/韵律测试）、ruff clean、typecheck/build 绿；
 控制台截图 `docs/console-shots/voice-audition.png`、`quota-card.png`。
+
+**追加（同日）语速/情感开放到控制台**：ProviderConfig 新增通用 TTS 韵律字段
+`speech_rate`（-50..100，-50=0.5 倍，0=正常，100=2 倍）、`emotion`、`emotion_scale`（1–5）。
+火山 payload 映射为 `audio_params.speech_rate/emotion/emotion_scale`；讯飞映射到它自己的
+0–100 speed（`50 + speech_rate/2`，钳位）。外部资源里每个 TTS provider 多出「语速 / 情感 /
+情感强度」三行（保存后重启生效）；点「试听」时会把**表单里未保存的**语速/情感一起带给
+audition 接口，先听再决定。实测：`speech_rate=60` 同一句 2.60 s → **1.74 s**；`emotion=happy`
+音频 2.61 s → 2.39 s（小荷支持情感，部分音色不支持则忽略）。**控制台的两个 key**：9哥 给的
+AK/SK 是账号级 OpenAPI 凭据（查额度/列 key）；语音用的 `X-Api-Key` 不是新建的，是用 AK/SK
+调 `ListAPIKeys` 查到的他 15:08 创建的那个 speech API Key，已存 dev secrets 作为 `VOLC_API_KEY`。
 

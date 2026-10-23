@@ -114,6 +114,9 @@ providers:
       kind: volc_tts
       model: seed-tts-2.0          # picks the 2.0 voice + billing item
       voice: zh_female_xiaohe_uranus_bigtts   # 小荷 2.0; the console can audition others
+      speech_rate: 0               # -50..100: -50 = 0.5x, 0 = normal, 100 = 2x
+      emotion: ""                  # only some 2.0 voices; "" = vendor default
+      emotion_scale: 4             # 1..5 strength, used when emotion is set
       api_key_env: VOLC_API_KEY
       timeout_s: 15.0
     siliconflow_tts:

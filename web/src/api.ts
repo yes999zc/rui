@@ -579,15 +579,22 @@ export const api = {
   /** Voices a TTS provider offers, for the select and the audition button. */
   voices: () => request<{ tts: Record<string, { value: string; label: LocalizedText }[]>; asr: Record<string, unknown[]> }>('/api/v1/providers/voices'),
 
-  /** Synthesise one line with a provider + voice and return the wav bytes. */
-  audition: async (stage: string, provider: string, voice: string, text?: string): Promise<Blob> => {
+  /** Synthesise one line with a provider + voice and return the wav bytes.
+   *  `prosody` carries unsaved speech_rate/emotion drafts so preview matches the form. */
+  audition: async (
+    stage: string,
+    provider: string,
+    voice: string,
+    text?: string,
+    prosody?: Record<string, unknown>,
+  ): Promise<Blob> => {
     const headers = new Headers({ 'Content-Type': 'application/json' })
     const authToken = token.get()
     if (authToken) headers.set('X-Auth-Token', authToken)
     const res = await fetch(`/api/v1/providers/${stage}/${encodeURIComponent(provider)}/audition`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ voice, ...(text ? { text } : {}) }),
+      body: JSON.stringify({ voice, ...(text ? { text } : {}), ...(prosody ?? {}) }),
     })
     if (res.status === 401) window.dispatchEvent(new Event('house-ear-401'))
     if (!res.ok) {

@@ -2264,8 +2264,23 @@ def create_app(
         cfg_now = getattr(app.state, "cfg", cfg)
         if stage != "tts":
             raise HTTPException(status_code=422, detail="only tts can be auditioned")
+        body = patch or {}
+        # Preview the draft prosody too: the console may not have saved yet, and these
+        # three fields only apply at provider construction (restart) otherwise.
+        providers_now = cfg_now.providers.model_copy(deep=True)
+        entry = providers_now.catalog.get(name)
+        if entry is not None:
+            updates: dict[str, Any] = {}
+            if body.get("speech_rate") not in (None, ""):
+                updates["speech_rate"] = int(body["speech_rate"])
+            if "emotion" in body:
+                updates["emotion"] = str(body.get("emotion") or "")
+            if body.get("emotion_scale") not in (None, ""):
+                updates["emotion_scale"] = int(body["emotion_scale"])
+            if updates:
+                providers_now.catalog[name] = entry.model_copy(update=updates)
         try:
-            chain = build_stage(cfg_now.providers, "tts",
+            chain = build_stage(providers_now, "tts",
                                 sample_rate=cfg_now.audio.voice.rate)
         except Exception as exc:  # noqa: BLE001 - a bad chain is a user-visible config error
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2273,8 +2288,8 @@ def create_app(
                          if provider_name == name), None)
         if provider is None:
             raise HTTPException(status_code=404, detail=f"no tts provider named {name!r}")
-        text = str((patch or {}).get("text") or "你好，我是小瑞。这是音色试听。")
-        voice = str((patch or {}).get("voice") or "")
+        text = str(body.get("text") or "你好，我是小瑞。这是音色试听。")
+        voice = str(body.get("voice") or "")
         pcm = bytearray()
         try:
             async for chunk in provider.synthesize(text, voice):

@@ -829,6 +829,43 @@ def _provider_fields(cfg: Config) -> list[dict]:
                 {"zh": f"{name} · {zh}", "en": f"{name} · {en}"}, hint,
                 effect="restart", unit=unit, minimum=lo, maximum=hi, options=options,
                 advanced=advanced, audition=audition))
+        if stage == "tts":
+            fields.append(_field(
+                f"providers.catalog.{name}.speech_rate", "providers.catalog", "number",
+                {"zh": f"{name} · 语速", "en": f"{name} · Speech rate"},
+                _t("相对正常语速的调节：-50 = 0.5 倍，0 = 正常，100 = 2 倍。"
+                   "火山/讯飞都支持；改完保存并重启服务生效，可先「试听」。",
+                   "Speech rate relative to normal: -50 = 0.5x, 0 = normal, 100 = 2x. "
+                   "Works for 火山 and 讯飞; save + restart, or audition first."),
+                effect="restart", unit={"zh": "%", "en": "%"},
+                minimum=-50, maximum=100))
+        if stage == "tts" and str(getattr(provider, "kind", "")) == "volc_tts":
+            fields.append(_field(
+                f"providers.catalog.{name}.emotion", "providers.catalog", "select",
+                {"zh": f"{name} · 情感", "en": f"{name} · Emotion"},
+                _t("给音色加情绪。只有部分音色支持（火山 2.0 的多情感音色），"
+                   "不支持的音色会忽略；不同音色支持的情绪范围不同。先「试听」再决定。",
+                   "Adds an emotion to the voice. Only some voices support it (火山 2.0 "
+                   "multi-emotion speakers); unsupported voices ignore it, and the "
+                   "supported set differs per voice. Audition before saving."),
+                effect="restart",
+                options=[{"value": "", "label": {"zh": "默认（不加情感）", "en": "Default (none)"}},
+                         {"value": "happy", "label": {"zh": "开心", "en": "Happy"}},
+                         {"value": "sad", "label": {"zh": "难过", "en": "Sad"}},
+                         {"value": "angry", "label": {"zh": "生气", "en": "Angry"}},
+                         {"value": "surprised", "label": {"zh": "惊讶", "en": "Surprised"}},
+                         {"value": "fear", "label": {"zh": "害怕", "en": "Fear"}},
+                         {"value": "hate", "label": {"zh": "厌恶", "en": "Hate"}},
+                         {"value": "excited", "label": {"zh": "兴奋", "en": "Excited"}},
+                         {"value": "coldness", "label": {"zh": "冷漠", "en": "Coldness"}},
+                         {"value": "neutral", "label": {"zh": "平静", "en": "Neutral"}}]))
+            fields.append(_field(
+                f"providers.catalog.{name}.emotion_scale", "providers.catalog", "number",
+                {"zh": f"{name} · 情感强度", "en": f"{name} · Emotion strength"},
+                _t("设置情感后生效：1–5，越大情绪越明显（默认 4）。先「试听」再决定。",
+                   "Applies after an emotion is set: 1–5, larger is more expressive "
+                   "(default 4). Audition before saving."),
+                effect="restart", minimum=1, maximum=5, advanced=True))
     names = list(cfg.providers.catalog)
     for stage in ("asr", "tts", "llm"):
         fields.append(_field(

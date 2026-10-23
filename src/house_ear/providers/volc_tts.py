@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from .. import secrets
 from ..config.schema import ProviderConfig
@@ -45,13 +46,16 @@ class VolcTts:
         speaker = voice or self.cfg.voice
         if not speaker:
             raise ProviderError("volc tts needs a speaker id in config.voice (or per request)")
+        audio_params: dict[str, Any] = {"format": "pcm", "sample_rate": self.sample_rate}
+        if self.cfg.speech_rate:
+            # [-50, 100]: -50 is 0.5x, 100 is 2x, 0 is the vendor default.
+            audio_params["speech_rate"] = int(self.cfg.speech_rate)
+        if self.cfg.emotion:
+            audio_params["emotion"] = self.cfg.emotion
+            audio_params["emotion_scale"] = int(self.cfg.emotion_scale)
         payload = {
             "user": {"uid": "house-ear"},
-            "req_params": {
-                "text": text,
-                "speaker": speaker,
-                "audio_params": {"format": "pcm", "sample_rate": self.sample_rate},
-            },
+            "req_params": {"text": text, "speaker": speaker, "audio_params": audio_params},
         }
         headers = {
             "X-Api-Key": self._api_key(),

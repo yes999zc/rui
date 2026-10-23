@@ -237,3 +237,49 @@ def test_quota_summary_parses_balance_usage_and_packs(monkeypatch) -> None:
     assert data["tts_chars_7d"] == 150
     assert data["packs"][0]["remaining"] == 50000
     assert data["errors"] == []
+
+
+def test_prosody_is_forwarded_only_when_configured(monkeypatch) -> None:
+    captured: dict = {}
+    lines = [_frame(b"\x00\x00"), _frame(None)]
+    monkeypatch.setattr("house_ear.providers.volc_tts.secrets.get", lambda name: "k")
+    monkeypatch.setattr("httpx.AsyncClient", lambda **kw: FakeClient(lines, captured))
+
+    async def collect(cfg):
+        async for _ in VolcTts(cfg, 16000).synthesize("你好"):
+            pass
+
+    import asyncio
+
+    asyncio.run(collect(_cfg()))
+    assert "speech_rate" not in captured["json"]["req_params"]["audio_params"]
+    assert "emotion" not in captured["json"]["req_params"]["audio_params"]
+
+    asyncio.run(collect(_cfg(speech_rate=40, emotion="happy", emotion_scale=3)))
+    params = captured["json"]["req_params"]["audio_params"]
+    assert params["speech_rate"] == 40
+    assert params["emotion"] == "happy"
+    assert params["emotion_scale"] == 3
+
+
+def test_catalog_exposes_speech_rate_emotion_and_strength() -> None:
+    cfg = Config()
+    cfg.providers.catalog["volc-tts"] = _cfg()
+    cfg.providers.tts.chain = ["volc-tts"]
+    fields = {f["path"]: f for f in document(cfg)["fields"]}
+    rate = fields["providers.catalog.volc-tts.speech_rate"]
+    assert (rate["kind"], rate["min"], rate["max"]) == ("number", -50, 100)
+    emotion = fields["providers.catalog.volc-tts.emotion"]
+    assert emotion["kind"] == "select"
+    assert {"happy", "sad", "angry"} <= {option["value"] for option in emotion["options"]}
+    strength = fields["providers.catalog.volc-tts.emotion_scale"]
+    assert (strength["min"], strength["max"]) == (1, 5)
+
+
+def test_xfyun_speed_maps_the_shared_rate() -> None:
+    from house_ear.providers.xfyun_tts import request_payload
+
+    # xfyun's own scale is 0..100 with 50 = normal; the shared speech_rate is -50..100.
+    payload = request_payload("app", "你好", "voice", 16000, speed=75)
+    assert payload["business"]["speed"] == 75
+    assert request_payload("app", "你好", "voice", 16000, speed=0)["business"]["speed"] == 0

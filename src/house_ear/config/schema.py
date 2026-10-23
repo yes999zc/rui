@@ -307,6 +307,12 @@ class ProviderConfig(BaseModel):
     retries: int = Field(default=0, ge=0, le=3)
     threads: int = Field(default=2, ge=1, le=16)  # local models only
     voice: str = ""  # TTS voice name; ignored by ASR/LLM
+    # TTS prosody, on the Volcano scale: speech_rate -50..100 means 0.5x..2x speed
+    # (0 = the vendor default). xfyun maps it onto its 0..100 speed. Emotion names are
+    # vendor/voice specific; empty = leave the vendor default.
+    speech_rate: int = Field(default=0, ge=-50, le=100)
+    emotion: str = ""
+    emotion_scale: int = Field(default=4, ge=1, le=5)
     # Vendors that need more than a bearer key (讯飞 wants app_id + key + secret).
     app_id_env: str = ""
     api_secret_env: str = ""
