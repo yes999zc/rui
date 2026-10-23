@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * The index rail (docs/console-redesign.md §3/§5): registry-driven navigation,
- * plus the three utilities the backend does not declare (secrets, diagnostics,
+ * plus the utilities the backend does not declare (channels, secrets, diagnostics,
  * setup) and the appearance controls. On a phone the same element becomes the
  * drawer — one instance, so state and listeners never double up.
  */
@@ -106,6 +106,7 @@ const groups = computed(() => {
 })
 
 const utilities = [
+  { path: '/channels', labelKey: 'nav.channels', icon: 'chat' },
   { path: '/secrets', labelKey: 'nav.secrets', icon: 'key' },
   { path: '/diagnostics', labelKey: 'nav.diagnostics', icon: 'activity' },
   { path: '/setup', labelKey: 'nav.setup', icon: 'compass' },

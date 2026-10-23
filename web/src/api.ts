@@ -481,6 +481,53 @@ export interface CatalogField {
   audition?: { stage: string; provider: string }
 }
 
+/** Telegram + WeChat channel gateway (GET/PUT /api/v1/channels). */
+export type ChannelReplyMode = 'text' | 'voice' | 'both'
+
+export interface TelegramChannelState {
+  enabled: boolean
+  allowed_chat_ids: string[]
+  reply_mode: ChannelReplyMode
+  /** Computed from HOUSE_EAR_TELEGRAM_TOKEN; the token itself is never returned. */
+  token_configured: boolean
+}
+
+export interface WeixinChannelState {
+  enabled: boolean
+  allowed_user_ids: string[]
+  reply_mode: ChannelReplyMode
+  data_dir: string
+  logged_in: boolean
+  account_id: string
+  user_id: string
+}
+
+export interface ChannelsGateway {
+  command: string
+  config_note: string
+  config_path?: string
+}
+
+export interface ChannelsState {
+  telegram: TelegramChannelState
+  weixin: WeixinChannelState
+  gateway: ChannelsGateway
+}
+
+/** What PUT /api/v1/channels accepts. Omitted channels keep their stored values. */
+export interface ChannelsPatch {
+  telegram?: {
+    enabled: boolean
+    allowed_chat_ids: string[]
+    reply_mode: ChannelReplyMode
+  }
+  weixin?: {
+    enabled: boolean
+    allowed_user_ids: string[]
+    reply_mode: ChannelReplyMode
+  }
+}
+
 /** Volcano account/usage summary for the diagnostics page. */
 export interface BillingQuota {
   available_balance: string | null
@@ -639,6 +686,13 @@ export const api = {
     }>('/api/v1/setup/probe', { method: 'POST', body: JSON.stringify({ host }) }),
   setDeviceVolume: (value: number) =>
     request<{ volume: number }>('/api/v1/device/volume', { method: 'PUT', body: JSON.stringify({ value }) }),
+
+  /* — channel gateway (Telegram + WeChat) ————————————————— */
+
+  /** Channel enablement, allowlists and reply modes; token values are never returned. */
+  channels: () => request<ChannelsState>('/api/v1/channels'),
+  saveChannels: (patch: ChannelsPatch) =>
+    request<ChannelsState>('/api/v1/channels', { method: 'PUT', body: JSON.stringify(patch) }),
 
   /* — config catalog (console-api, docs/config-catalog-contract.md) ————— */
 

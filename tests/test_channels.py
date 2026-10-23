@@ -201,7 +201,8 @@ def test_weixin_qr_login_and_text_roundtrip(tmp_path: Path) -> None:
         transport = httpx.MockTransport(handler)
         client = httpx.AsyncClient(transport=transport)
         from house_ear.channels.weixin import WeixinAdapter
-        wx = WeixinAdapter(tmp_path / "wx", client=client, base_url="https://wx.test")
+        wx = WeixinAdapter(tmp_path / "wx", allowed_user_ids={"user@im.wechat"},
+                           client=client, base_url="https://wx.test")
         account = await wx.qr_login()
         wx.save_login(account)
         seen: list[Inbound] = []

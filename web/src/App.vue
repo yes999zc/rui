@@ -89,6 +89,7 @@ const STATIC_TITLES: Record<string, MsgKey> = {
   '/diagnostics': 'health.title',
   '/setup': 'setup.title',
   '/tools': 'tools.title',
+  '/channels': 'channels.title',
 }
 
 function updateTitle(): void {

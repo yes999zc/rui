@@ -2199,6 +2199,7 @@ def create_app(
         state["gateway"] = {
             "command": "house-ear-channels",
             "config_note": "The gateway reads this state at startup; restart it after changes.",
+            "config_path": str(path),
         }
         return state
 
@@ -2271,7 +2272,7 @@ def create_app(
             runner.history = history
             trace = TurnTrace(device_id=f"channel:{channel}")
             try:
-                result = await runner.run(b"", collect, trace, transcript=text)
+                result = await runner.run(b"", collect, trace, transcript=text, audio=want_audio)
                 histories[session_id] = runner.history
             finally:
                 runner.history = original

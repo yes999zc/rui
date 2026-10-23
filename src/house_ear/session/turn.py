@@ -590,6 +590,7 @@ class TurnRunner:
         *,
         transcript: str | None = None,
         hint: str = "",
+        audio: bool = True,
     ) -> TurnResult:
         """One turn, with a hard ceiling.
 
@@ -602,7 +603,8 @@ class TurnRunner:
             self._abort.clear()
             self._in_turn = True
             return await asyncio.wait_for(
-                self._run(pcm, speak, trace, transcript=transcript, hint=hint), self.turn_timeout_s
+                self._run(pcm, speak, trace, transcript=transcript, hint=hint, audio=audio),
+                self.turn_timeout_s,
             )
         except TimeoutError:
             log.warning("turn: timed out after %.0f s", self.turn_timeout_s)
@@ -623,6 +625,7 @@ class TurnRunner:
         *,
         transcript: str | None = None,
         hint: str = "",
+        audio: bool = True,
     ) -> TurnResult:
         result = TurnResult()
         self._trace = trace
@@ -677,6 +680,11 @@ class TurnRunner:
 
         async def say(text: str) -> None:
             nonlocal tts_provider, result
+            # Text channels want the answer, not a TTS bill and a second of latency.
+            # The model's reply and history are assembled elsewhere; skipping `say`
+            # leaves audio_bytes at zero and keeps the same tool/session behavior.
+            if not audio:
+                return
             # Everything that leaves the speaker is remembered, filler included: the old
             # build's self-echo incident was exactly its own 「我想想」 coming back.
             if self.spoken is not None:

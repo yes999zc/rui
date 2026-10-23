@@ -18,6 +18,7 @@ const routes = [
   { path: '/setup', component: () => import('./views/SetupView.vue') },
 
   // Hand-written maintenance pages that the registry does not own.
+  { path: '/channels', component: () => import('./views/ChannelsView.vue') },
   { path: '/secrets', component: () => import('./views/SecretsView.vue') },
   { path: '/diagnostics', component: () => import('./views/HealthView.vue') },
   { path: '/tools', component: () => import('./views/ToolsView.vue') },
