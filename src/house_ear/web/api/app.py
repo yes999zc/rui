@@ -336,6 +336,15 @@ async def _volume_command(app: FastAPI, clean: str, runner, client, trace,
     runner.idle.touch()
     spoken = await runner.say(line, _speaking(app, client), trace)
     _light_after_audio(app, spoken, _voice_rate(client), "listening")
+    # Volume is the one command whose answer is the music itself: bring it back
+    # the moment the confirmation ends, not after the 6 s follow-up window
+    # (measured 09:12: 「音量调到60%了」 then several seconds of silence).
+    async def _resume_soon() -> None:
+        seconds = spoken / 2 / max(1, _voice_rate(client))
+        await asyncio.sleep(seconds + 0.15)
+        with contextlib.suppress(Exception):
+            await client.resume_music()
+    asyncio.create_task(_resume_soon(), name="volume-resume")
     app.state.last_turn = {
         "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
         "tools": ["volume"], "stages": {},
@@ -1041,14 +1050,15 @@ def create_app(
             raise HTTPException(status_code=409, detail="a turn is already running")
         trace = TurnTrace(device_id="debug")
         _light(app, "thinking")
-        if await _music_transport(app, text, runner, client, trace, traces) is not None:
-            _light_after_audio(app, app.state.last_turn["audio_bytes"] or 0,
-                               cfg.audio.voice.rate)
-            return {
-                "reply": app.state.last_turn["reply"], "error": "", "tools":
-                    app.state.last_turn["tools"], "stages": {}, "audio_bytes":
-                    app.state.last_turn["audio_bytes"],
-            }
+        for fast in (_music_transport, _volume_command):
+            if await fast(app, text, runner, client, trace, traces) is not None:
+                _light_after_audio(app, app.state.last_turn["audio_bytes"] or 0,
+                                   cfg.audio.voice.rate)
+                return {
+                    "reply": app.state.last_turn["reply"], "error": "", "tools":
+                        app.state.last_turn["tools"], "stages": {}, "audio_bytes":
+                        app.state.last_turn["audio_bytes"],
+                }
         result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
         await client.reply_finished()
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate)
