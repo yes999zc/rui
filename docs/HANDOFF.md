@@ -487,3 +487,58 @@ SenseVoice+VAD，**KWS 唤醒模型和 keywords.txt 不在自动安装里**、`s
 local_asr/vad/provider endpoint → 「一条命令到第一句」目前不成立（C1/P14 的硬缺口）；
 ③ `config/schema.py` 的 `secrets_path` 生产默认值带个人目录约定。
 
+### 12.9 2026-10-23 下午：生产化 / D1c 收尾 / 冷装补齐 / 平面看门狗（已 push）
+
+**HEAD `3fa2e2a`，487 passed，ruff clean，前端 typecheck+build clean。** 9哥 本轮不配合真机，
+音箱可自由出声，全部自测。
+
+**控制台（上午，§12.8）**：`c5c0b20` 逐页复核 + 11 项修复；`docs/console-audit.md`。
+
+**AudioPlaneSupervisor 看门狗（`9c38a90`）**：plane 只在启动时 spawn 一次，崩了没人管
+（Docker 不会因 unhealthy 重启容器）。新增 `watch()`：1 s 轮询、1→60 s 退避、成功即重置；
+`PlaneHandle` 把回合回调（on_utterance/on_wake/on_vendor/on_playback_finished）在每次重连时
+重新绑定——否则重连出来的 plane「健康但聋」。启动异常改为全捕获（设备配置错不能杀控制台）。
+**真机实测**：`kill -9` plane pid → 1 s 内 running=false → **2 s 内新 pid（restarts=1）** →
+音箱自动重连 → 一个 `debug/say` 回合 1.17 s 成功（78080 B）。单测覆盖 handle 重绑 + SIGKILL 重启。
+
+**D1c ✅ 阶段 1/2A/2B（`4f57127`/`3b8946a`/`e8a821a`）**：
+- 阶段 1：`library_index`（每首歌语言索引，真实库 5736 首/0.78 s）+ `semantic` 描述式点歌
+  （「放几首日文歌」790 ms 首次、之后 1–3 ms；「来点安静的钢琴」4 首；「九十年代粤语老歌」20 首）
+  + `music_search` 多候选（晴天 3 候选、富士山下 5 版本）。
+- 阶段 2：停止词二分接线（放歌中=停歌不散场、没放歌=散场、退下吧放歌中先停歌）；
+  日报直通（`Briefing` 原文播报、跳过模型第二轮、原文进 history 供「第三条再说说」，
+  模型消息只含 notice）。真实 60s 日报实测：1 次 LLM round、9 个 TTS 片、reply==speech_text。
+  **未验**：③ 的媒体分支真机听感（需要真唤醒，9哥嗓子）；④ 真机出声由 d1c 2C 补。
+
+**冷装补齐（`7aacbd5`，P14/C1 的硬缺口）**：
+- `setup` 不再写 schema 空壳，改写生产模板 `src/house_ear/config/template.yaml`
+  （实测音频值、providers 三条链、VAD/KWS 模型路径、`devices: []`、无密钥），并**自动生成
+  keywords.txt**（`n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞`，与生产文件逐字一致）。
+- `fetch-models` 增加 **KWS 唤醒模型**下载解包（GitHub release 32.9 MB，chunk-8 文件，
+  `--kws-dest /data/models/kws`、`--kws-url`、`--no-kws`）；`house-ear keywords --config`
+  从 `devices[].wake_words` 重生成关键词文件（控制台/向导换唤醒词后不会留旧词）。
+- **playback 默认 48000/2ch 是错的**：LX06 客户端只收 mono，adapter 会拒绝 → 默认改成
+  16000/1ch（config.example 同步改）；`music.enabled` 无 `secrets_path` 现在校验报错，
+  生产默认不再带 `~/.hermes` 个人目录。
+- 测试：`tests/test_install.py` 7 条（模板可加载/关键词逐字/换唤醒词/fetch 解包布局/
+  playback 默认可播/music 凭据校验）。**「一条命令到第一句」从「不可能」变成「差 devices 一行」。**
+
+**P15 生产化 ✅（`3fa2e2a`，p15 agent）**：compose 日志轮转 10m×3、config-aware healthcheck、
+`./data/models:/data/models` 第三挂载（修 fetch-models 与 config 路径对不上的真 bug）、
+stop_grace、Dockerfile 加 **ffmpeg 静态二进制**（音乐 resolve 依赖；容器内实测真实 Navidrome
+resolve 8,581,722 B / 16k mono s16 / 268.2 s）、OCI labels/VERSION、国内镜像 build args、
+**`.github/workflows/docker-publish.yml`（原来 CI 只 build 从不 push，而 install.sh 默认拉
+ghcr:latest——镜像根本没发布过）**、`docs/runbook.md` 新建 + `docs/deploy.md` 重写。
+实测：冷构建 91.8 s / 增量 49.5 s / 镜像 428,815,328 B（409 MiB，arm64）；容器 `/health` 1 s、
+healthy 6 s；三类卷 down→up 全保留；SIGTERM 进程退出自动重启（HTTP 2 s / healthy 6 s）；
+`docker kill -9` 视为手动停机不重启（已写 runbook）；哑设备与空 token 都保持 `/health` 200
+（plane down）、不崩。**未验**：NAS 断电、真机重连时序、x86_64 NAS、3 天长稳。
+
+**下一步**：
+1. **P15b**（p15 进行中）：与 `7aacbd5` 对齐 install.sh/deploy.md/runbook（KWS 自动安装）、
+   重建镜像验证看门狗自愈与 template 进镜像、公开仓清债（tests 内网 IP / 个人模型路径）。
+2. **d1c 2C**：真机声音验证日报直通 + 音量 + 音乐工具（已授权）。
+3. **Lead：C-UI P4–P6**（首次安装向导、设备添加/探测、MCP/HA 管理页）——功能已定稿，可以做。
+4. **容器冷装排练**（本机 OrbStack 按 install.sh 全流程走一遍，含真 setup/fetch-models/health），
+   然后再谈 NAS 上 C1（需要 9哥 点头动他的生产机）。
+
