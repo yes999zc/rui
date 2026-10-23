@@ -435,8 +435,55 @@ form 422 按字段标红、token 输入（401 自动提示）、日志 tail（2M
 - 语言请求走流派池（J-Pop/K-Pop）优先于字面搜索
 
 ### 12.7 下一步（9哥 定）
-1. **D2 完成后逐页复核控制台**（一页一页过，功能债与文案都在这一轮暴露）
+1. **D2 完成后逐页复核控制台**（一页一页过，功能债与文案都在这一轮暴露）→ ✅ 2026-10-23 12:2x 完成，见 §12.8
 2. 然后：**D1c 调研落地**（library_index 语言索引、semantic 描述式、停止词二分 media/bare、日报直通、
    点歌多候选）→ **C-UI P4–P6**（安装向导/设备添加/MCP-HA 管理页，功能定稿后才做，排在部署测试前）
    → **P15 生产化** → **验收日**（D3 20 次唤醒 + 灯环 + 控制台肉眼 + C1 冷装）→ E1
 3. 真机仍需耳朵确认：让位 V4（已通过）、音乐话术、音量、留声/告别边界
+
+### 12.8 2026-10-23 中午：控制台逐页复核完成 / D1c 阶段 1 / P15 进行中
+
+**9哥 本轮指示**：他有事不能配合真机验收；**音箱可以随便用、可以出声**；继续开发、打磨、测试、
+及时更新文档并 push；老项目的实测数据是可以参考的宝库。
+
+**控制台逐页复核 ✅（Lead）**：14 条路由（8 面板 + 6 手写页）headless Chrome 逐页开图 +
+真调每个 source/按钮，0 console error、0 4xx。修掉 11 项，明细与证据在 **`docs/console-audit.md`**。
+最重要的四条：① `/panel/*` 深链/刷新返回 JSON 404（SPA 无 history fallback）→ 服务端 catch-all 修掉，
+`/api/*` 仍 JSON 404；② 体检页路由 `/health` 被 API 同名端点抢走 → 移到 `/diagnostics`；
+③ 「试一试」`POST /api/v1/debug/say` 与设备音量读写**只存在于已死的手写页面里**，界面上丢了 →
+新增声明式 `say` / `volume` 两种 block，控制台恢复入口；④ 日志面板 41,839 字里 95% 是 2 s 一行的
+`[level] voice peak` → log block 支持 `hide`，默认隐藏 264 行。
+另：删除 4 个死页面（Assistant/Overview/Devices/Logs 的旧手写版）、2 个重复入口；
+新增 `tests/test_panels.py` 9 条注册表契约测试（深链可开 / API 不入壳 / source 与 href 是真的 /
+设置面板字段集合 / 日志隐藏模式）。
+
+**真机验证（音箱已可出声，12:09–12:2x）**：① 试一试「现在几点」→ 1.81 s 返回
+「现在是中午12点09分。」`audio_bytes=74240`、设备 owner `dialogue`、`playback_s` 2.7→3.5；
+② 音乐 transport `playing→paused→playing→next(壹块钱)→idle`，真出声、队列 20；
+③ 设备音量 `178→150→178`（已还原）。
+**顺手修的环境坑**：dev 启动脚本没 pin PATH，重启后 `resolve` 每首歌报
+`No such file or directory: 'ffmpeg'`（症状是「能点歌但全部 skip」）；`serve-dev.sh` 已加
+`export PATH=/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH`。生产侧同一缺口由 P15 在
+Dockerfile 里装 ffmpeg 解决。
+
+**D1c 阶段 1 ✅（d1c agent，task-2）**：`music/library_index.py`（每首歌语言索引，标题优先、
+kana/hangul 直判、汉字日文靠 override 表、7 天 TTL 原子缓存）+ `music/semantic.py`
+（描述式点歌 = 语言/流派/关键词/情绪/年代取交集，空交集按情绪→流派→年代→关键词放宽，
+**点歌路径不调 LLM**）+ `local.music_search` 候选通道 + `music_play` 带 `options`。
+真实 Navidrome 实测：索引 **5736 首 / 12 请求 / 0.78 s / 1189 KiB**；「放几首日文歌」首次 790 ms
+（含建索引）之后 1–3 ms；「来点安静的钢琴」4 首、「九十年代的粤语老歌」20 首；
+「晴天」3 候选、「富士山下」5 版本。测试 456 passed。方案与风险 `docs/d1c-notes.md`。
+**阶段 2（③停止词二分 ④日报直通）等 app.py 交接。**
+
+**P15 进行中（p15 agent，task-3）**：compose 日志轮转（10m×3）、healthcheck 脚本、
+`./data/models:/data/models` 第三挂载（原来 install.sh 的 fetch-models 写 `/data/models`，
+compose 只挂 `./data:/var/lib/house-ear`，容器里路径根本不存在——真 bug）、`stop_grace_period`、
+Dockerfile 加 ffmpeg（Navidrome 转码依赖）与 OCI labels/VERSION、install.sh 用 `--user uid:gid`、
+新增 `.github/workflows/docker-publish.yml`（原来 CI 只 build 不 push，而 install.sh 默认拉
+`ghcr.io/...:latest`——**镜像从来没有发布过**）、docs/deploy.md 重写 + docs/runbook.md 新建。
+**P15 报告的 src 缺口（Lead 接下来做）**：① `AudioPlaneSupervisor` 只在启动时 start，plane 子进程
+崩溃不会重建（Docker 也不会因 unhealthy 重启容器）→ 要加 watch/重启；② `fetch-models` 只下
+SenseVoice+VAD，**KWS 唤醒模型和 keywords.txt 不在自动安装里**、`setup` 默认配置也没有
+local_asr/vad/provider endpoint → 「一条命令到第一句」目前不成立（C1/P14 的硬缺口）；
+③ `config/schema.py` 的 `secrets_path` 生产默认值带个人目录约定。
+
