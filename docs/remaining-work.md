@@ -5,12 +5,12 @@
 
 ## A. v1 验收门槛（需要 9哥 / 外部条件）
 
-1. **仓库已公开 + raw 安装脚本 200 ✅**；**GHCR 包仍 private**（GitHub REST 不支持个人 package
-   改可见性，需网页 Settings 一次点击）→ 一键装 pull 仍 401；`deploy/install.sh` 已加「拉不到镜像就从公开源码 build」回退，所以一键装本身可用。
+1. **仓库公开 + GHCR public ✅**（`ghcr.io/yes999zc/rui:latest` 匿名 pull 200，amd64/arm64）；
+   一键装 raw 200；`deploy/install.sh` 仍保留「拉不到镜像就从公开源码 build」回退。
 2. **git 历史凭据**：round-1 记录的旧 commit 含真实凭据/LAN IP/用户名；公开前必须全历史扫描 →
    轮换所有真实凭据 → filter-repo/BFG 重写（需 9哥 授权，会冻结并行工作）。
 3. **NAS 部署 ✅ 2026-10-23**：本机 Docker 构建 + NAS 运行 + 音箱切换 + LAN/Tailscale 实测
-   （health、KWS/VAD、debug say、speaker audition）；「一键脚本」还差 GHCR public。
+   （health、KWS/VAD、debug say、speaker audition）；一键脚本可用。
 4. **D3 唤醒门槛**：80% 音量放歌 20 次唤醒 ≥19；含 3–4 米远场正式计数。
 5. **打断 ≤300 ms 口径**：当前服务端 `silence_after_ms=0`，但设备端剩余 lead 约 420 ms，需按
    300 ms 口径实测并决定是否继续调。
@@ -40,7 +40,7 @@
 12. 设备 token/控制台 token 已轮换；**音箱 root 密码因 squashfs 只读未能改**（建议厂商方式/仅可信 LAN）。
 13. 安全审计 P2：安全响应头、鉴权审计日志、SSRF/端口探测 allowlist、用户数据文件 0644 →
     0600（memory/music_history/reminders/.ha_entities）、容器非 root、依赖 CVE 扫描。
-14. P15b 镜像重建（品牌/新功能之后）与 GHCR 发布复验。
+14. P15b 镜像重建（品牌/新功能之后）与 GHCR 发布复验：品牌轮镜像已重建并 public ✅。
 
 ## D. 体验 / 控制台
 
@@ -49,7 +49,7 @@
     桌面 provider 输入框 32px，可选提到 40px。
 17. 中文未内嵌 CJK webfont（保持系统栈）；如要求全平台一致需再定。
 18. Logo GIF 未导出（页面用 SVG/CSS 动效）；需要文档/社媒素材时可抓帧生成。
-19. 完整改名：repo/package/CLI/README/GitHub 仍是 house-ear；本轮只改显示层。
+19. 改名边界：GitHub repo/镜像已是 `rui`；Python 包/CLI/配置路径仍 house-ear（兼容）。完整迁移留待单独窗口。
 
 ## E. 本轮已完成（不要重复）
 
@@ -57,3 +57,7 @@ ASR 用量额度卡、Providers v2、SiliconFlow TTS 下线、通用 MCP（含 s
 P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品牌、本地字体、2026 Pantone
 配色、动效像素 logo、音箱优先的音色试听。
 
+## F. License（待 9哥 拍板）
+
+- 当前 MIT；讨论见本轮会话。候选：MIT（最简单）、Apache-2.0（专利/商标条款、更企业友好）、AGPL-3.0（防闭源托管）。
+- 注意容器内的静态 ffmpeg 仍是 GPL/LGPL 第三方组件，代码许可证不覆盖它。

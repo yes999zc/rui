@@ -1,5 +1,12 @@
 # Architecture
 
+> **Status note (2026-10):** this document was written during the v1 build-up. The layer
+> diagram, process model and IPC contract below are still authoritative; some of the
+> "not built / to build" notes in the diagram and the debt table in §6 are historical.
+> Music, Home Assistant over MCP, generic MCP, playback arbitration and the console have
+> since landed. For the current shipped state see the README and
+> [`docs/remaining-work.md`](remaining-work.md).
+
 **One rule decides every question in this document: adding a speaker must touch one new
 module and one registry line — nothing else.** Where the code does not meet that yet, it is
 listed in §6 as a debt with a name, not left as an intention.
@@ -50,7 +57,7 @@ listed in §6 as a debt with a name, not left as an intention.
 │ L4 coordinator = the layer that decides     web/api/app.py                  │
 │   ① turn boundaries        session/turn.py                                   │
 │   ② session state          session/state.py  (SessionStateMachine)           │
-│   ③ playback arbitration   Output (claim/release)  ← to build               │
+│   ③ playback arbitration   Output (claim/release)  (P0–P3 owner)             │
 │   ④ rules and policy       session/{rules,idle,filler,vendor,text,prompts}   │
 └──────────────┬────────────────────────────────────────────┬─────────────────┘
      ToolSpec  │                                            │ config/log/trace
@@ -58,9 +65,9 @@ listed in §6 as a debt with a name, not left as an intention.
 │ L3 application  tools/       │             │ L2 capabilities  providers/     │
 │  info (weather/news/search)  │             │  chain: per-stage fallback       │
 │  reminders (tools+scheduler) │             │  openai_compat · xfyun_tts      │
-│  music (not built; will ask  │             │  sherpa_asr · siliconflow        │
+│  music (asks for a playback  │             │  sherpa_asr · siliconflow        │
 │         for a playback claim)│             │                                  │
-│  HA via MCP (not wired)      │             │                                  │
+│  HA via MCP                  │             │                                  │
 └──────────────────────────────┘             └──────────────────────────────────┘
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ L1 infrastructure   config/{schema,store} · secrets · log_setup · trace ·    │
