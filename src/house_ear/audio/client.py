@@ -49,6 +49,12 @@ class AudioPlaneError(RuntimeError):
 
 log = logging.getLogger(__name__)
 
+# The crash watchdog polls the child cheaply and backs off a crash loop: 1 s
+# doubling to 60 s, reset as soon as a launch greets us. The cap matters on a
+# NAS where a restart loop would otherwise burn CPU forever.
+WATCH_INTERVAL_S = 1.0
+RESTART_BACKOFF_S = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 60.0)
+
 
 class AudioPlaneClient:
     """A connected audio plane: send control, receive PCM and metrics."""
@@ -274,6 +280,56 @@ class AudioPlaneClient:
             await self.writer.wait_closed()
 
 
+class PlaneHandle:
+    """A stable facade over whichever plane connection is live right now.
+
+    The supervisor restarts a crashed child and connects a brand-new
+    AudioPlaneClient. The control plane wires the turn callbacks (on_utterance,
+    on_wake, ...) once at startup, so they are attached here and re-applied on
+    every bind; reads delegate to the current connection. Without this, a
+    restarted plane would be healthy but deaf: no callbacks on the new client,
+    every utterance silently dropped.
+    """
+
+    _CALLBACKS = ("on_utterance", "on_wake", "on_vendor", "on_playback_finished")
+
+    def __init__(self) -> None:
+        self._callbacks: dict[str, object] = {}
+        self._client: AudioPlaneClient | None = None
+
+    @property
+    def client(self) -> AudioPlaneClient | None:
+        return self._client
+
+    @property
+    def ready(self) -> Ready | None:
+        return self._client.ready if self._client is not None else None
+
+    @property
+    def metrics(self) -> Metrics | None:
+        return self._client.metrics if self._client is not None else None
+
+    def bind(self, client: AudioPlaneClient | None) -> None:
+        self._client = client
+        if client is not None:
+            for name, fn in self._callbacks.items():
+                setattr(client, name, fn)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in self._CALLBACKS:
+            self._callbacks[name] = value
+            if self._client is not None:
+                setattr(self._client, name, value)
+            return
+        object.__setattr__(self, name, value)
+
+    def __getattr__(self, name: str) -> object:
+        client = self._client
+        if client is None:
+            raise AttributeError(f"no audio plane connected ({name})")
+        return getattr(client, name)
+
+
 class AudioPlaneSupervisor:
     """Spawns the audio plane as a child process and keeps a connection to it."""
 
@@ -290,7 +346,11 @@ class AudioPlaneSupervisor:
         self.device_id = device_id
         self.proc: asyncio.subprocess.Process | None = None
         self.client: AudioPlaneClient | None = None
+        self.handle = PlaneHandle()
         self._stderr_task: asyncio.Task[None] | None = None
+        self._watch_task: asyncio.Task[None] | None = None
+        self._stopping = False
+        self.restarts = 0
         self.error = ""
 
     def _pick_device(self) -> str | None:
@@ -307,6 +367,10 @@ class AudioPlaneSupervisor:
         device = self._pick_device()
         if device is None:
             raise AudioPlaneError("no device this build can drive")
+        # A restart after a crash may still hold the dead child's stderr task and
+        # half-open socket; clear them before spawning the replacement.
+        self._stopping = False
+        await self._kill_child()
 
         self.proc = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -328,9 +392,70 @@ class AudioPlaneSupervisor:
             # Whatever went wrong, the console must be able to say why: keep the reason
             # and take the half-started child down instead of leaving it running blind.
             self.error = str(exc)
-            await self.stop()
+            await self._kill_child()
             raise
+        self.handle.bind(self.client)
         return self
+
+    def watch(self) -> None:
+        """Arm the crash watchdog (idempotent).
+
+        Docker does not restart a container because a healthcheck turned
+        unhealthy, so nothing outside this process notices that the only thing
+        touching the microphone died: /health keeps answering, the console keeps
+        rendering, and the room goes deaf. This loop is what makes "the plane
+        crashed" a few seconds of silence instead of a manual restart on the NAS.
+        """
+        if self._watch_task is not None and not self._watch_task.done():
+            return
+        self._stopping = False
+        self._watch_task = asyncio.create_task(self._watch(), name="plane-watchdog")
+
+    async def _watch(self) -> None:
+        failures = 0
+        while not self._stopping:
+            await asyncio.sleep(WATCH_INTERVAL_S)
+            if self._stopping:
+                return
+            if self.running:
+                failures = 0
+                continue
+            delay = RESTART_BACKOFF_S[min(failures, len(RESTART_BACKOFF_S) - 1)]
+            log.warning("audio plane is down (%s); restarting in %.0f s",
+                        self.error or "child exited", delay)
+            await asyncio.sleep(delay)
+            if self._stopping:
+                return
+            failures += 1
+            try:
+                await self.start()
+            except Exception as exc:  # noqa: BLE001 - keep watching, never die here
+                self.error = f"{type(exc).__name__}: {exc}"
+                log.warning("audio plane restart failed: %s", self.error)
+                continue
+            self.restarts += 1
+            log.info("audio plane restarted (#%d, pid=%s)", self.restarts,
+                     self.proc.pid if self.proc is not None else "?")
+
+    async def _kill_child(self) -> None:
+        """Take the child and its connection down, leaving the watchdog alone."""
+        if self.client is not None:
+            await self.client.close()
+            self.client = None
+            self.handle.bind(None)
+        if self.proc is not None and self.proc.returncode is None:
+            self.proc.terminate()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self.proc.wait(), timeout=5)
+            if self.proc.returncode is None:
+                self.proc.kill()
+        if self._stderr_task is not None:
+            self._stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._stderr_task
+            self._stderr_task = None
+        self.proc = None
+
 
     async def _pump_stderr(self) -> None:
         """Read the plane's stderr for as long as it runs.
@@ -391,21 +516,13 @@ class AudioPlaneSupervisor:
         raise AudioPlaneError(f"audio plane did not accept a connection in {timeout_s:.0f}s")
 
     async def stop(self) -> None:
-        if self.client is not None:
-            await self.client.close()
-            self.client = None
-        if self.proc is not None and self.proc.returncode is None:
-            self.proc.terminate()
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(self.proc.wait(), timeout=5)
-            if self.proc.returncode is None:
-                self.proc.kill()
-        if self._stderr_task is not None:
-            self._stderr_task.cancel()
+        self._stopping = True
+        if self._watch_task is not None:
+            self._watch_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._stderr_task
-            self._stderr_task = None
-        self.proc = None
+                await self._watch_task
+            self._watch_task = None
+        await self._kill_child()
 
     @property
     def running(self) -> bool:
@@ -423,6 +540,7 @@ class AudioPlaneSupervisor:
         out: dict = {
             "running": running,
             "pid": self.proc.pid if self.proc is not None else None,
+            "restarts": self.restarts,
             "error": self.error or ("" if running else "audio plane is not running"),
         }
         if ready is not None:

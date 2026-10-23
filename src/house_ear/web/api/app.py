@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
-from ...audio.client import AudioPlaneError, AudioPlaneSupervisor
+from ...audio.client import AudioPlaneSupervisor
 from ...audio.kws import keyword_meta
 from ...audio.protocol import PlayFile, StopAudio
 from ...config.schema import CONFIG_VERSION, LED_STATES, Config
@@ -662,11 +662,17 @@ def create_app(
                     ready.capture_rate if ready else "?",
                     ready.capture_channels if ready else "?",
                 )
-            except AudioPlaneError as exc:
-                supervisor.error = str(exc)
+            except Exception as exc:  # noqa: BLE001 - a device problem must not kill the console
+                supervisor.error = f"{type(exc).__name__}: {exc}"
                 log.warning("audio plane did not start: %s", exc)
+            # Armed even when the first launch failed: the watchdog is what turns
+            # "plane crashed" into a few seconds of silence instead of a manual
+            # restart on the NAS (Docker does not restart on an unhealthy check).
+            supervisor.watch()
             app.state.audio = supervisor
-            client = supervisor.client
+            # The handle stays valid across restarts (callbacks are re-applied on
+            # every bind), so the turn path is wired once, not once per launch.
+            client = supervisor.handle
             if client is not None:
                 async def on_utterance(pcm: bytes) -> None:
                     if vendor.muted():
