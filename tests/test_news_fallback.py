@@ -101,3 +101,50 @@ def _today() -> str:
     import datetime as _dt
 
     return _dt.date.today().isoformat()
+
+
+def test_the_search_fallback_is_a_short_spoken_digest(cfg, monkeypatch) -> None:
+    """607 chars of titles+summaries timed the 13:41 turn out mid-briefing.
+
+    The fallback reads out headlines, not article summaries: the turn queues all of
+    its TTS before returning and the turn budget is 30 s.
+    """
+
+    class FakeResponse:
+        def raise_for_status(self) -> None: ...
+        def json(self) -> dict:
+            return {"results": [{"title": "很长的标题" * 12, "summary": "摘要" * 80}
+                                for _ in range(6)]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None: ...
+        async def __aenter__(self) -> FakeClient:
+            return self
+        async def __aexit__(self, *exc) -> bool:
+            return False
+        async def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(info.secrets, "get", lambda name: "test-key")
+    monkeypatch.setattr(info.httpx, "AsyncClient", FakeClient)
+    brief = asyncio.run(info._news_from_search(cfg, 5))
+    assert brief is not None
+    assert brief.count == 5
+    assert len(brief.speech_text) < 320
+    assert max(len(item) for item in brief.items) <= 43  # 42 + the added full stop
+
+
+def test_a_long_direct_script_is_cut_for_the_turn_budget() -> None:
+    """A verbatim briefing longer than the turn can synthesise is truncated at a
+    sentence boundary; history still carries the whole script."""
+    from house_ear.session.briefing import from_news
+    from house_ear.web.api.app import DIRECT_SPEECH_MAX_CHARS, _direct_speech
+
+    items = [f"第{i}条新闻的内容" * 20 + "。" for i in range(6)]
+    brief = from_news(items, date=_today(), limit=6)
+    speech = _direct_speech("news", "念新闻", brief)
+    assert speech is not None
+    assert len(speech.text) <= DIRECT_SPEECH_MAX_CHARS
+    assert speech.text.rstrip().endswith(("。", "！", "？"))
+    assert speech.history is not None
+    assert sum(len(m["content"]) for m in speech.history) > len(speech.text)

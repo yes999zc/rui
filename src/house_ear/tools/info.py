@@ -273,11 +273,13 @@ async def _news_from_search(cfg: Config, count: int) -> briefing.Briefing | None
         return None
     items: list[str] = []
     for item in (data or {}).get("results") or []:
-        title = str(item.get("title") or "").strip()
-        summary = (item.get("summary") or item.get("snippet") or "").replace("\n", " ").strip()
+        title = " ".join(str(item.get("title") or "").split())
         if not title:
             continue
-        items.append(title if not summary else f"{title}：{summary[:90]}")
+        # Headlines only: this script is read out verbatim and a turn may queue at
+        # most ~30 s of TTS before its timeout (measured: 607 chars of titles+summaries
+        # timed the turn out mid-briefing). A short list is what a spoken digest is.
+        items.append(title[:42])
         if len(items) >= count:
             break
     if not items:

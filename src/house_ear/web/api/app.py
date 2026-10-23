@@ -124,8 +124,18 @@ def _direct_speech(name: str, transcript: str, output: object) -> DirectSpeech |
     """
     if not isinstance(output, Briefing):
         return None
+    text = output.speech_text
+    # The turn synthesises everything before it returns (30 s budget measured 13:41:
+    # a 607-char briefing timed out mid-read). Read the opening, keep the whole script
+    # in history, and say why in the log rather than dying silently.
+    if len(text) > DIRECT_SPEECH_MAX_CHARS:
+        head = text[:DIRECT_SPEECH_MAX_CHARS]
+        cut = max(head.rfind("。"), head.rfind("！"), head.rfind("？"))
+        text = head[: cut + 1] if cut > 0 else head
+        log.info("direct speech: truncated script %d -> %d chars for the turn budget",
+                 len(output.speech_text), len(text))
     return DirectSpeech(
-        text=output.speech_text,
+        text=text,
         notice=output.model_notice(),
         history=output.history_messages(transcript),
     )
@@ -157,6 +167,12 @@ async def _probe_host(host: str) -> dict:
         return {"host": host, "usable": True, "ssh": ssh, "hint": ""}
     return {"host": host, "usable": False, "ssh": ssh,
             "hint": "端口通了但没有 SSH banner（VPN/代理可能假阳性），换一个地址登记吧"}
+
+
+# A verbatim script longer than this is cut at a sentence boundary: the turn queues
+# all of its TTS before returning, and the turn timeout is 30 s. 420 chars is roughly
+# the 260-char 60s digest plus headroom; history keeps the untruncated script.
+DIRECT_SPEECH_MAX_CHARS = 420
 
 
 def _context_provider(app: FastAPI, ha: HaBridge | None):
