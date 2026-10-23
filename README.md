@@ -20,7 +20,7 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 - `house-ear doctor` — hardware probe: measured AEC real-time factor, configured
   capture/playback layouts, and a capacity number that names its assumption
 - `house-ear serve` — control-plane API (health, config, devices, tools, doctor,
-  traces) plus the six-page console
+  traces) plus the bilingual admin console (four-tier config center)
 - Config v2 — capture/voice/playback rates and layouts are explicit, atomic writes,
   timestamped backups, secrets only as environment-variable names, v1 files migrate
   on load

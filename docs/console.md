@@ -124,3 +124,69 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 **风险与对策**：协议过度设计 → 10 种 block + 单等值 + 逃生舱；面板与 API 漂移 →
 `tests/test_panels.py` 钉住「每个 PanelSpec 的 source/href 都存在且 200 / 是真路由」。
 
+---
+
+## 12. 控制台 2.0（2026-10-23，含审计修复）
+
+设计契约全文：**`docs/console-redesign.md`**（方向/信息架构/设计系统/QA 报告）；参数契约：
+**`docs/config-catalog-contract.md`**；审计与修复状态：**`docs/audit-round-1.md`**。
+
+**一句话**：控制台从「手写设置面板」变成「catalog 驱动的配置中心 + 双语气象仪器界面」。
+
+### 12.1 界面
+
+- **设计**：暖纸底 + 墨色 + 铁锈色唯一强调；衬线 h1、等宽遥测、发丝线分块；签名元素是页面顶部
+  signal ledger（`● 正在听 · 音频面 开 · 运行 05:45 · 音箱 1 · 唤醒 0`，全部是 /health+/audio 真数据）。
+  概览是 7/5 不对称：左「试一试 + 停止出声」，右行式遥测 ledger；不做卡片墙。
+- **i18n**：zh-Hans / en，`web/src/i18n.ts` 类型完备字典（en 缺键 typecheck 失败）、侧栏切换、
+  localStorage、`<html lang>`、document.title；后端 PanelSpec `title_en` 优先、缺失回退中文。
+- **主题**：light / dark / system，CSS 变量 token，记忆用户选择，`prefers-reduced-motion` 生效。
+- **导航**：运行（概览/对话/日志）· 生活（音乐/记忆）· 配置（助手与会话/音箱参数/外部资源/工具/
+  底子·高级）· 维护（设备/设备管理/话术/MCP-HA/密钥/体检/安装向导）；桌面 244px 索引轨，
+  手机抽屉（inert + 滚动）。旧路径 `/assistant`、`/settings`、`/voice`、`/models` 等全部重定向。
+- **响应式**：1440 与 390 双端截图与 DOM 断言：0 横向溢出；配置保存控件桌面 sticky 顶栏、手机 fixed 底条。
+
+### 12.2 配置中心（四类参数 + 效果标注）
+
+`GET /api/v1/config/catalog` 返回 4 类（tier）21 组、按配置动态生成字段（dev 157 个）：
+① 底子（system/web：data_dir、log_level、timezone、host/port、allow_anonymous）——
+   弱化 + 「改错会影响整条语音链路」警示；
+② 音箱相关（devices 每台 26 字段含 LED/唤醒词/音量/端口；audio.capture/voice/playback/aec；ack）——
+   「跟随音箱硬件变化，换音箱要重新量」；
+③ 外部资源（三条 chain：llm/asr/tts；每 provider 的 kind/base_url/model/api_key_env/timeout/retries/…）——
+   「改完重启服务让整条链重新加载」；
+④ 工具（weather/news/search/ha/mcp_servers/music）——「多数保存即生效；音源本身改完要重启」。
+
+每个字段：`label`、`hint`（改这个能达到什么效果 / 什么时候用）、`effect`（**保存生效 / 重启生效**）、
+单位、范围、选项、`advanced`、`writable`、`nullable`、`virtual`。效果落地：38 个 save 字段热生效；
+restart 字段保存后返回 `restart_fields`，界面显示 `docker compose restart` 命令与「仅重启音频面」按钮
+（`POST /api/v1/system/audio/restart`，实测 0.4 s、音箱重连）。
+
+**音乐源路径自动更新**：`music.source` 改为 `navidrome` 时自动填 `<data_dir>/lan_media.json` 与
+`<data_dir>/music_cache`；未知源保留手动值并 warning。音乐凭据可在配置中心填写
+（`PUT /api/v1/music/credentials`，写 0600 文件、值不回显）并有「测试连接」（`POST /api/v1/music/test`）。
+
+**密钥**：`catalog.secrets` 由 provider 链实际引用的 `api_key_env/app_id_env/api_secret_env` +
+设备 `token_env` + search/HA + `web.auth_token` 派生，每项带 `used_by` 与 hint；只回 `has_value`，
+写入走 `POST /api/v1/secrets`。控制台写的 key 现在对 LLM/ASR/TTS/HA/device 全部生效
+（`secrets.get` 统一解析）。
+
+### 12.3 鉴权与安全
+
+- 非 loopback 绑定且 `web.auth_token` 为空时**拒绝启动**；`house-ear setup` 生成 token 并打印一次，
+  `house-ear token` 可打印，`--rotate` 轮换。控制台在 401 时提示输入 `X-Auth-Token`。
+- `web.allow_anonymous` 只在本机开发显式打开（catalog 里标「危险」并写明后果）；
+  dev 配置 `tools-4399-dev.yaml` 已开，生产模板默认关闭。
+- `hmac.compare_digest` + 每 IP 失败限速（10 次/分钟 → 429）。
+- debug/play 只允许 data_dir 与 music cache 内文件；`*_env` 字段只读；HA 拒绝
+  lock/alarm/valve/script/scene/automation/shell_command/python_script/hassio；
+  工具输出与实体名加「不可信外部数据」清洗；config/backup/secrets/service.log 全部 0600。
+
+### 12.4 验收证据
+
+- Lead 集成探针（`/tmp/lead-int/`）：17 页 × headless Chrome，0 意外 console error、0 横向溢出；
+  zh/en + light/dark 截图；**真实 UI 保存** 120→121→120（API 复核一致）；真实 422 → 红框 + 中文行内；
+  手机 390 概览/配置 0 溢出。
+- console-ui QA：32 场景截图 `/tmp/console-ui/shots/`，报告 `/tmp/console-ui/report.json`，
+  critic 首轮 top-5 已修（保存控件常驻、概览行式 ledger、禁用主按钮中性、focus 统一、手机抽屉滚动）。
+

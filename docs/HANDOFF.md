@@ -738,3 +738,51 @@ origin/main 同步。**
 14 个面板全部 `title_en`，旧 settings 面板由配置中心取代。前端 `console-ui` 仍在实现 i18n + 现代设计 +
 配置中心（设计方向 `docs/console-redesign.md`，走 deep-design-qa 截图 critic 循环）。
 
+### 12.18 2026-10-23 傍晚：控制台 2.0 交付 + 四角色审计修复 + 安全硬化
+
+**9哥 的验收口径（原话）**：控制台 i18n + 现代风格；所有可前台改的参数开放输入口，
+标注「改这个能达到什么效果」与「保存生效/重启生效」，参数分四类（底子/音箱/外部资源/工具）；
+音乐音源定后路径自动更新；多 agent 审计（老项目多开发者、手持音箱新人、运维、安全）后自行修复。
+
+**交付（全部已集成、dev :8091 实测）**
+- **控制台 2.0**（`console-ui`）：暖纸/墨/铁锈单强调的「安静的仪器」设计（`docs/console-redesign.md`）：
+  衬线 h1 + 等宽遥测 + 信号行（真实 /health+/audio）；14 面板按 运行/生活/配置/维护 四组；
+  **zh/en 双语**（类型完备字典、侧栏切换、`<html lang>`、旧路径全部重定向）；light/dark/system
+  记忆；手机 390 抽屉 + 无横向溢出。
+- **配置中心**（catalog 驱动）：实测 **157 fields / 21 groups / 4 tiers（22/65/41/28）/ effect
+  save 3·restart 36（speaker 页）/ 字段 hint 44 条**；行式字段 = label + hint（改这个达到什么效果）+
+  效果徽章（保存生效/重启生效）+ 范围/单位/选项/只读折叠；tier1 弱化 + 警示；dirty/save/reset；
+  422 按 dotted path 红框 + 中文行内；`restart_required` 显示 `docker compose restart` + 「仅重启音频面」。
+- **后端**（`console-api`）：`GET /api/v1/config/catalog`、`PUT /api/v1/config/values`（dotted path、
+  422 分字段、`restart_required/restart_fields`）、`POST /api/v1/system/audio/restart`（0.4 s、
+  音箱重连）、音乐源切换自动填 `lan_media.json`/`music_cache`、`system.timezone`（修容器 UTC 下
+  「现在几点」差 8 h）、wake threshold/boost 可写且保留已配置值、音乐凭据端点 + 测试连接、
+  记忆去重 + 800 字注入预算、/health 加 `speaker_connected/enabled_devices`、设备状态三源合成、
+  healthcheck 只数 enabled + fail-closed。
+- **语音链路**（`turn-core`）：停止词**整句匹配**并删 关闭/关掉/关机（「关掉客厅灯」实测
+  真调 HA，不再散场）；唤醒后首句不再被吞（hold 音频全量保留，13:47「放一首告白气球」→「告白气球」、
+  13:23「怎样？」的根因）；supervisor 盲区（pump 死 → /health 变 false → 看门狗重建）；
+  打断 `silence_after_ms` 生产打点；`[level]` 日志 2 s→30 s；长回答服务端按句截断（default/search/long
+  三档，后台可改、保存即下一轮生效）。
+- **安全**（`sec-fix` + Lead）：控制台鉴权 **fail-closed**（非 loopback + 空 token 拒绝启动；
+  `house-ear setup` 生成 token、`house-ear token` 打印/轮换；`hmac.compare_digest` + 每 IP 失败限速）；
+  `web.allow_anonymous` 仅 dev 显式打开（dev 配置已开、catalog 里标危险）；debug/play 只允许
+  data_dir/cache 内文件（`/etc/passwd` → 泛化 404）；catalog 的 `*_env` 只读；secret 解析统一
+  （providers/xfyun/ha/adapter/music 走 `secrets.get` + 音频面 `secrets.configure`）；
+  HA 危险域扩到 script/scene/automation/shell_command/python_script/hassio；音乐缓存文件名 hash；
+  config/backup/secrets/service.log 全部 0600；`.github/workflows/secret-scan.yml` 拦后续泄漏。
+  审计全文 `docs/audit-round-1.md`（含 15 条安全 finding 与修复状态）。
+
+**Lead 独立集成验证（`/tmp/lead-int/`）**：17 页全量 headless Chrome，**0 意外 console error、
+0 横向溢出**（1440/390）；zh/en + light/dark 截图；**真实 UI 保存** `assistant.reply_max_chars`
+120→121→120（GET 复核一致），真实 422 → 字段红框 + 「校验失败：1 个字段需要修正」；
+手机抽屉可滚动；`docs/console-redesign.md` 设计契约与 QA 报告在 `/tmp/console-ui/report.json`。
+`pytest` 全量绿（628 passed / 15 skipped）、`ruff` clean、`npm run typecheck/build` 绿。
+
+**仍待 9哥（不阻塞代码）**：
+1. **仓库公开前**：清理 git 历史（`8f0b3ff` 含音箱 root 密码/LAN/NAS 标识）并轮换音箱 root 密码、
+   NAS 凭据、设备 token；secret-scan CI 已就位。
+2. 真机验收：`一装一配一用`（C1/D3）、唤醒 20 次计数、打断听感 ≤300 ms、唤醒后首句不丢、
+   「关掉客厅灯」类 HA 短命令不再散场（代码已修，需他出声复测）。
+3. NAS 上跑新 healthcheck（启用设备停音频面 → unhealthy；全禁用 → healthy）。
+

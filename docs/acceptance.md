@@ -87,3 +87,19 @@ curl -fsSL https://raw.githubusercontent.com/yes999zc/house-ear/main/deploy/inst
 - 回滚演练：`.env` 里换上一版 tag → `docker compose up -d` → healthy（记录耗时）；
 - 把上面所有数字按日期补进 `docs/HANDOFF.md`（新一节）和 `docs/ROADMAP.md` 状态；
 - 若任一条未过：**记下现象+证据+下一步**，不修改门槛。
+
+## 7. 控制台 2.0 与安全（2026-10-23 新增）
+
+| # | 检查 | 期望 |
+|---|---|---|
+| 7.1 | `house-ear setup` 的输出 | 打印 `console token: …`；`docker compose restart` 后控制台要求 token（401 时页面有输入框） |
+| 7.2 | 不带 token 访问 `http://NAS:8080/api/v1/turns` | 401；带 `X-Auth-Token` 200 |
+| 7.3 | 空 token + `0.0.0.0` 启动 | 服务拒绝启动并打印原因（或 `allow_anonymous: true` 显式放行） |
+| 7.4 | 配置中心 4 类 | 底子/音箱/外部资源/工具四组都有字段；每个字段有 hint（改这个能达到什么效果）与「保存生效/重启生效」徽章 |
+| 7.5 | 改一个 save 字段（如 `assistant.reply_max_chars` 120→160） | 立即保存，下一句生效；无需重启 |
+| 7.6 | 改一个 restart 字段（如 `audio.playback.queue_ms`） | 提示重启字段；点「仅重启音频面」后 3 s 内音箱恢复（`/health` speaker_connected true） |
+| 7.7 | 语言切换 中文/EN | 全站文案与 `<html lang>` 切换，刷新记住 |
+| 7.8 | 手机 390 px 打开概览/助手与会话/音箱参数 | 无横向滚动，保存条在底部，抽屉可滚动 |
+| 7.9 | 音乐源切到 navidrome | `secrets_path`/`cache_dir` 自动填 `<data_dir>/…`；「测试连接」返回 ok/延迟 |
+| 7.10 | 安全烟测 | `POST /api/v1/debug/play {"file":"/etc/passwd"}` → 404；`ha_call_service` 对 `script.*`/`scene.*` → denied；`service.log`/config 权限 0600 |
+

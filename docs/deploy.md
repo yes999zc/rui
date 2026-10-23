@@ -17,6 +17,19 @@
   只有 arm64，**不能直接搬到 x86_64 NAS**：要么用 GHCR 镜像，要么在 NAS 上带
   `--platform linux/amd64` 构建。
 
+### 控制台令牌（安全审计后必读）
+
+`install.sh` 里的 `house-ear setup` 会生成随机 `web.auth_token` 并打印一次：
+
+```bash
+docker compose logs house-ear | grep "console token"   # 或：
+docker compose exec house-ear house-ear token
+docker compose exec house-ear house-ear token --rotate  # 轮换
+```
+
+控制台没有 token 会返回 401（页面会提示输入 `X-Auth-Token`）。**只有在本机开发**才可以显式
+`web.allow_anonymous: true` 关闭鉴权；生产模板默认关闭，且非 loopback + 空 token 会拒绝启动。
+
 ## 2. 一条命令
 
 ```bash
