@@ -1,6 +1,7 @@
 # Channel Gateway — Telegram + 微信 iLink/ClawBot 开发清单
 
-> 状态：**提案 / 待 9 哥 确认后开工**。本文只定义范围、任务、验收和需要人配合的点，尚未写功能代码。
+> 状态：**M0–M6 已实现**（2026-10-23）。M3/M4 的真实 Telegram 消息与微信扫码仍需要 9 哥 的手机/token 配合；
+> 代码、测试和 Channels 控制台页已落地。
 >
 > 目标：让小瑞除音箱/控制台外，还能通过 **Telegram** 和 **微信 iLink Bot / ClawBot** 收发文字与语音。
 > 原则：channel 只做 I/O 和身份，复用控制面现有 LLM/tools/session；**不依赖音频面**（音箱离线也能用）。
@@ -162,3 +163,38 @@ house-ear 控制面
 4. M6 控制台、M7 部署/验收。
 5. 最后再考虑 Hermes/Agent 接入；channel 是 I/O，Agent 是执行，两者不要混在一起。
 
+
+
+## 8. 实现状态（2026-10-23）
+
+- 控制面：`POST /api/v1/chat`（文本回合，可选 TTS）、`POST /api/v1/asr`（语音转写）、
+  `GET/PUT /api/v1/channels`（通道配置，token 只回 `token_configured`）。
+- 文本回合不依赖音频面；`audio=false` 时跳过 TTS，直接返回文字。
+- channel gateway：`src/house_ear/channels/`，独立进程 `house-ear-channels`。
+  - Telegram：长轮询、allowlist（默认拒绝未知 chat）、文字/语音输入、语音回复、typing、分片。
+  - 微信 iLink：QR 登录、getupdates 游标、context_token、2000 字分片、typing、`.silk` 入站重转写、音频文件回复。
+  - 未知 peer 默认拒绝；临时联调可加 `--telegram-allow-all` / `--weixin-allow-all`（不要对公网 bot 用）。
+- Channels 控制台页：`/channels`，启用/allowlist/回复模式、微信绑定指令、gateway 启动命令；中英双语。
+- 测试：`tests/test_channels.py`、`tests/test_chat_api.py`；全量 `743 passed, 1 skipped`。
+
+### 运行
+
+```bash
+# 1) 控制面已启动（NAS/Mac），提供 token
+export HOUSE_EAR_CONTROL_URL=http://127.0.0.1:8080
+export HOUSE_EAR_CONSOLE_TOKEN=...
+# 2) Telegram：独立 bot token；先填 allowlist，或临时 --telegram-allow-all 配对
+export HOUSE_EAR_TELEGRAM_TOKEN=...
+house-ear-channels --telegram-token "$HOUSE_EAR_TELEGRAM_TOKEN" \
+  --telegram-allow "<your_chat_id>" --channels-config /data/channels.json
+# 3) 微信：手机扫码（二维码 URL 会打印）
+house-ear-channels --login-weixin --weixin-data /data/channels/weixin
+house-ear-channels --weixin-data /data/channels/weixin \
+  --weixin-allow "<your_user_id>" --channels-config /data/channels.json
+```
+
+### 仍需 9 哥 配合
+
+1. Telegram：给 bot 发一条消息，提供/确认 chat_id（默认 allowlist 会拒绝未知会话）。
+2. 微信：手机扫描 `--login-weixin` 打印的二维码，并允许小瑞使用一个**独立** iLink bot 账号。
+3. 真机验收：两个通道各发 2 条文字 + 1 条语音。

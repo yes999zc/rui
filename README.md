@@ -159,6 +159,17 @@ docker compose up -d
 - 音乐层：[docs/music.md](docs/music.md)；通用 MCP：[docs/mcp-generic.md](docs/mcp-generic.md)
 - 日常运维（起停、日志、升级、回滚）：[docs/runbook.md](docs/runbook.md)
 
+### 远程通道（Telegram / 微信）
+
+小瑞可以额外通过 Telegram 或微信 iLink/ClawBot 接收文字和语音，不需要音箱在线：
+
+- 独立进程 `house-ear-channels`，复用控制面的 LLM/工具/会话，不依赖音频面；
+- Telegram：长轮询、allowlist、语音输入、语音回复；
+- 微信 iLink：扫码登录、`context_token`、`.silk` 重转写、音频文件回复；
+- 控制台 **通道 / Channels** 页：启用、allowlist、回复模式、绑定/启动指令。
+
+详见 [docs/channel-gateway.md](docs/channel-gateway.md)。
+
 ### 状态与已知缺口
 
 **状态：v1 开发中。** 已跑通：完整语音回合、本地 ASR、音乐、HA/MCP、记忆、控制台、品牌/双语文案、Docker 多架构镜像与一键安装（含源码回退）。
