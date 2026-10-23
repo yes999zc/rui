@@ -204,9 +204,9 @@ class AudioPlaneClient:
         """
         await self.send(LedState(effect=effect, repaint=repaint))
 
-    async def reply_finished(self) -> None:
+    async def reply_finished(self, hold_music_s: float | None = None) -> None:
         """Tell the plane the turn is over (its cue for the follow-up gate)."""
-        await self.send(ReplyFinished())
+        await self.send(ReplyFinished(hold_music_s=hold_music_s))
 
     async def pause_music(self) -> None:
         """「暂停」: park the track where it is; only resume_music lifts it."""

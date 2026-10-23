@@ -473,3 +473,39 @@ def test_volume_reconciles_to_the_configured_target(tmp_path: Path) -> None:
         assert writes == [219], "volume 0 means do not manage"
 
     asyncio.run(run())
+
+
+def test_a_reply_can_cancel_the_music_window(tmp_path: Path, monkeypatch) -> None:
+    """Volume confirmations want the song back the moment the reply drains:
+    ReplyFinished(hold_music_s=0) skips both the window and the arm."""
+    import house_ear.audio.process as proc
+
+    monkeypatch.setattr(proc, "MUSIC_FOLLOWUP_MS", 5000)
+
+    async def run() -> None:
+        plane, _ = make_plane(tmp_path)
+        gate = StubGate()
+        plane.gate = gate  # type: ignore[assignment]
+        song = tmp_path / "song.wav"
+        write_wav(song, seconds=30.0)
+        plane._file_cfg = (song, False, 1.0)
+        plane._file_position = 0
+        plane._speech_paused = True
+        plane._reply_finished = True
+        plane._reply_hold = 0.0        # what ReplyFinished(hold_music_s=0) sets
+
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            await asyncio.sleep(0.9)   # one drain tick
+            assert gate.arms == 0, "no follow-up window for a 0 s hold"
+            assert plane._speech_paused is False, "the song did not come back"
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            if plane._playback_task is not None:
+                plane._playback_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await plane._playback_task
+
+    asyncio.run(run())

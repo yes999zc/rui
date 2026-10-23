@@ -336,15 +336,11 @@ async def _volume_command(app: FastAPI, clean: str, runner, client, trace,
     runner.idle.touch()
     spoken = await runner.say(line, _speaking(app, client), trace)
     _light_after_audio(app, spoken, _voice_rate(client), "listening")
-    # Volume is the one command whose answer is the music itself: bring it back
-    # the moment the confirmation ends, not after the 6 s follow-up window
+    # Volume is the one command whose answer is the music itself: the plane brings
+    # it back the moment this reply drains (hold 0), not after the 6 s window
     # (measured 09:12: 「音量调到60%了」 then several seconds of silence).
-    async def _resume_soon() -> None:
-        seconds = spoken / 2 / max(1, _voice_rate(client))
-        await asyncio.sleep(seconds + 0.15)
-        with contextlib.suppress(Exception):
-            await client.resume_music()
-    asyncio.create_task(_resume_soon(), name="volume-resume")
+    with contextlib.suppress(Exception):
+        await client.reply_finished(hold_music_s=0)
     app.state.last_turn = {
         "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
         "tools": ["volume"], "stages": {},

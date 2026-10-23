@@ -311,6 +311,8 @@ class AudioPlane:
         # first block disarms the gate, so gate state alone would release the song
         # before the window ever armed.
         self._music_hold_until: float | None = None
+        # Per-turn override of the music window (ReplyFinished.hold_music_s).
+        self._reply_hold: float | None = None
         # The control-plane socket, for plane -> control events (PlayFinished).
         self._ctl_writer: asyncio.StreamWriter | None = None
         self._ctl_connected: asyncio.Event | None = None
@@ -904,6 +906,7 @@ class AudioPlane:
                                  reply_chunks, reply_lead_max * 1000)
                     finished_reply = self._reply_finished
                     self._reply_finished = False
+                    reply_hold, self._reply_hold = self._reply_hold, None
                     reply_chunks = 0
                     reply_lead_max = 0.0
                     self._release("dialogue")
@@ -938,14 +941,19 @@ class AudioPlane:
                         self._turn_pending = False
                     if finished_reply and self._speech_paused and self.gate is not None:
                         # The turn ended with a song waiting: hold it for the follow-up
-                        # window instead of resuming between turns.
+                        # window instead of resuming between turns. A turn may shorten
+                        # or cancel its own window (volume confirmations: 0).
                         delay = max(0.0, pacer.due - time.monotonic()) + 1.0
+                        hold_ms = (MUSIC_FOLLOWUP_MS if reply_hold is None
+                                   else max(0, int(reply_hold * 1000)))
                         self._music_hold_until = (
-                            time.monotonic() + delay + MUSIC_FOLLOWUP_MS / 1000.0)
-                        asyncio.create_task(
-                            self._arm_followup_later(delay,
-                                                     max_wait_ms=MUSIC_FOLLOWUP_MS),
-                            name="followup-gate")
+                            time.monotonic() + delay + hold_ms / 1000.0)
+                        if hold_ms > 0:
+                            asyncio.create_task(
+                                self._arm_followup_later(delay, max_wait_ms=hold_ms),
+                                name="followup-gate")
+                        else:
+                            self._music_hold_until = None   # resume on this very tick
                     now = time.monotonic()
                     holding = self._music_hold_until is not None and (
                         now < self._music_hold_until
@@ -1456,6 +1464,7 @@ class AudioPlane:
                     self._segment_pending = True
                 elif isinstance(msg, ReplyFinished):
                     self._reply_finished = True
+                    self._reply_hold = msg.hold_music_s
                 elif isinstance(msg, SpeakFinished):
                     log.info("speak finished, %s chunks still queued (%.1f s of audio)",
                              self._speak_queue.qsize(), self._speak_queued_s)
