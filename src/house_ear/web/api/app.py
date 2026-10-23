@@ -1214,6 +1214,16 @@ def create_app(
         # clears history, so a typed try must not inherit the previous try either
         # (measured 10:45:21: a weather answer added "周杰伦的歌没放上").
         runner.reset_history()
+        if rules.verbless_device_name(text):
+            # Same rule as the spoken path: a bare device name asks which way.
+            line = phrases.book.render("device.ask_verb")
+            runner.idle.touch()
+            spoken = await runner.say(line, _speaking(app, client), trace)
+            _record_turn(app, {"transcript": text, "reply": line, "audio_bytes": spoken,
+                               "error": "", "tools": ["clarify.verb"], "stages": {}})
+            _light_after_audio(app, spoken, cfg.audio.voice.rate)
+            return {"reply": line, "error": "", "tools": ["clarify.verb"],
+                    "stages": {}, "audio_bytes": spoken}
         for fast in (_music_transport, _volume_command):
             if await fast(app, text, runner, client, trace, traces) is not None:
                 _light_after_audio(app, app.state.last_turn["audio_bytes"] or 0,
