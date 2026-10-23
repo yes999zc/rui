@@ -261,6 +261,10 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         line = phrases.book.render(key, **result.payload)
         runner.idle.touch()
         spoken = await runner.say(line, _speaking(app, client), trace)
+        _light_after_audio(app, spoken, _voice_rate(client),
+                           "music" if tracks else "off")
+        with contextlib.suppress(Exception):
+            await client.reply_finished()
         app.state.last_turn = {
             "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
             "tools": ["music_play"], "stages": {},
@@ -292,6 +296,13 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
             else ("music.not_playing" if action == "pause" else "music.not_paused"))
     runner.idle.touch()
     spoken = await runner.say(line, _speaking(app, client), trace)
+    # The ring must answer 「暂停」 with amber and stay there: the reply's own
+    # speaking/listening states were overriding the park's LED within 300 ms.
+    _light_after_audio(app, spoken, _voice_rate(client), _music_light(action, service))
+    # Keeps the conversation open like a normal turn: the follow-up window must
+    # re-arm, or the next 「继续」 needs the wake word again.
+    with contextlib.suppress(Exception):
+        await client.reply_finished()
     app.state.last_turn = {
         "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
         "tools": [f"music_{action}"], "stages": {},
@@ -299,6 +310,20 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
     traces.add(trace)
     log.info("music transport: %r -> %s", clean, action)
     return line
+
+
+def _voice_rate(client: object) -> int:
+    ready = getattr(client, "ready", None)
+    return int(getattr(ready, "voice_rate", 0) or 16000)
+
+
+def _music_light(action: str, service: object) -> str:
+    """Where the ring belongs after a transport word, in music terms."""
+    if action == "pause":
+        return "music_paused"
+    if action in ("resume", "next", "prev"):
+        return "music"
+    return "off"
 
 
 def create_app(
