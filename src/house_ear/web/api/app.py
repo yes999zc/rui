@@ -1773,8 +1773,11 @@ def create_app(
         if not isinstance(values, dict) or not values:
             raise HTTPException(status_code=422, detail="values must be a non-empty object")
         for name, value in values.items():
+            if not isinstance(value, str):
+                raise HTTPException(status_code=422,
+                                    detail=f"secret {name} must be a string")
             try:
-                secrets.put(str(name), str(value))
+                secrets.put(str(name), value)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _wizard_state()
@@ -1806,8 +1809,14 @@ def create_app(
         host = str(value or "").strip()
         if not host:
             raise HTTPException(status_code=422, detail="host is required")
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]           # [::1] -> ::1, which is what connect() wants
+        if "://" in host:
+            raise HTTPException(status_code=422, detail="host 只填地址，不要带 http://")
         if len(host) > 64 or any(char.isspace() for char in host):
             raise HTTPException(status_code=422, detail="host 不能含空格，最长 64 字符")
+        if host.startswith("-") or host.endswith("-"):
+            raise HTTPException(status_code=422, detail="host 不能以连字符开头或结尾")
         return host
 
     def _room(value: object) -> str:
@@ -1828,7 +1837,7 @@ def create_app(
             current = load_config(Path(config_path))
         except ConfigError as exc:
             raise HTTPException(status_code=409, detail=f"config is not readable: {exc}") from exc
-        device_id = str(payload.get("id") or "living").strip() or "living"
+        device_id = (str(payload.get("id") or "living").strip() or "living").lower()
         existing = next((dev for dev in current.devices if dev.id == device_id), None)
         # Merge onto the device that is already there: a wizard edit must not silently
         # drop fields it does not show (listen_port, LED colours, volume target).

@@ -592,4 +592,11 @@ keywords.txt 内容逐字一致、probe 返回不可达原因、无音频面时�
 
 **P4 后的向导复验（d1c 2D-A/B）与修复见 §12.10；P6 设计在 `docs/phrasebook-editor.md`（d1c），
 Lead 已拍板：49 键全开/占位符硬拒绝/只交 pytest 场景契约；d1c 正在实现后端。**
+**P4.2 修 d1c 复验剩余的 4 条（同一轮）**：① 手机未完成态 progress 里的「缺 key」长串把页面撑宽
+（实测 innerW 454 / scrollW 857）→ 缺失项改成每 stage 一行、可断词；② 首装未完成时深链被偶发弹回
+`/setup`（`main.ts` 在 `router.isReady()` 前就 mount，App 看到的是瞬态 `/`）→ 改成等首帧导航完成
+再 mount，实测 `/panel/devices`、`/diagnostics` 等深链保持原地；③ `setup/keys` 接受非字符串 value
+（会写进 `secrets.yaml: None` 并让 stage 谎报 true）→ 422；④ host 松校验（`http://…`、`-bad-`、
+`[::1]`）→ 拒绝 URL/连字符开头结尾、`[v6]` 自动去括号，向导设备 id 统一小写。
+验证：fresh 实例 390px 三页 overflow 0px、深链不弹回、`/setup` 无 console 异常；全量 pytest 绿、ruff clean。
 

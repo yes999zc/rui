@@ -141,18 +141,26 @@ onMounted(load)
 
   <div v-if="state" class="card">
     <h2>进度 <span class="sub" style="margin: 0">{{ state.next_step === 'done' ? '全部完成' : '下一步：' + stepTitle(state.next_step) }}</span></h2>
-    <div v-for="step in state.steps" :key="step.id" class="row">
-      <span :class="step.done ? 'ok' : 'warn'" style="width: 24px">{{ step.done ? '✓' : '○' }}</span>
-      <span class="v">{{ step.title }}</span>
-      <span class="k" style="width: auto">
-        <template v-if="step.id === 'device' && state.device">{{ state.device.host }} · {{ state.device.room }}</template>
-        <template v-else-if="step.id === 'wake' && state.keywords_exists">{{ state.device?.wake_words.join(' / ') }}</template>
-        <template v-else-if="step.id === 'models' && !step.done">缺：{{ Object.entries(step.detail).filter(([, v]) => !v).map(([k]) => k).join(', ') }}</template>
-        <template v-else-if="step.id === 'keys' && !step.done">
-          缺：{{ Object.entries(missingByStage).map(([stage, names]) => stage + ' → ' + names.join(' / ')).join('；') }}
-        </template>
-      </span>
-    </div>
+    <template v-for="step in state.steps" :key="step.id">
+      <div class="row">
+        <span :class="step.done ? 'ok' : 'warn'" style="width: 24px">{{ step.done ? '✓' : '○' }}</span>
+        <span class="v">{{ step.title }}</span>
+        <span class="k" style="width: auto">
+          <template v-if="step.id === 'device' && state.device">{{ state.device.host }} · {{ state.device.room }}</template>
+          <template v-else-if="step.id === 'wake' && state.keywords_exists">{{ state.device?.wake_words.join(' / ') }}</template>
+          <template v-else-if="step.id === 'models' && !step.done">缺：{{ Object.entries(step.detail).filter(([, v]) => !v).map(([k]) => k).join(', ') }}</template>
+          <template v-else-if="step.id === 'keys' && !step.done">缺 key</template>
+        </span>
+      </div>
+      <!-- Long env lists must not be a single unwrappable line: on a phone that
+           widened the page and clipped the card (P4 review). -->
+      <div v-if="step.id === 'keys' && !step.done" class="missing">
+        <div v-for="(names, stage) in missingByStage" :key="stage" class="missing-line">
+          <span class="missing-stage">{{ stage }}</span>
+          <span class="fail">{{ names.join(' / ') }}</span>
+        </div>
+      </div>
+    </template>
   </div>
 
   <div class="card">
@@ -256,6 +264,9 @@ button.link {
   font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line);
   border-radius: 8px; flex: 1;
 }
+.missing { padding: 0 0 8px 36px; }
+.missing-line { font-size: 12px; overflow-wrap: anywhere; padding: 1px 0; }
+.missing-stage { color: var(--muted); display: inline-block; width: 40px; }
 .said {
   margin-top: 10px; padding: 10px 12px; background: #f7f8fa; border: 1px solid var(--line);
   border-radius: 8px; font-size: 13px; white-space: pre-wrap;

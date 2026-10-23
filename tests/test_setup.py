@@ -128,6 +128,24 @@ def test_invalid_device_fields_answer_422_not_500(wizard) -> None:
         assert response.json()["detail"]
 
 
+def test_key_values_must_be_strings(wizard) -> None:
+    client, _path = wizard
+    for values in ({"HOUSE_EAR_LLM_KEY": None}, {"HOUSE_EAR_TTS_KEY": 123}):
+        response = client.post("/api/v1/setup/keys", json={"values": values})
+        assert response.status_code == 422, response.text
+
+
+def test_host_rejects_urls_and_normalises_bracketed_ipv6(wizard) -> None:
+    client, path = wizard
+    for bad in ("http://127.0.0.1", "-bad-", "has space"):
+        assert client.post("/api/v1/setup/device", json={"host": bad}).status_code == 422, bad
+    assert client.post("/api/v1/setup/device",
+                       json={"host": "[::1]", "id": "Living"}).status_code == 200
+    device = load_config(path).devices[0]
+    assert device.host == "::1"
+    assert device.id == "living"
+
+
 def test_wake_endpoint_rejects_a_broken_word(wizard) -> None:
     client, _path = wizard
     client.post("/api/v1/setup/device", json={"host": "speaker.local"})
