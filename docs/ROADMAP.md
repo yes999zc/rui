@@ -120,6 +120,7 @@ fetch-models 含 KWS + keywords 生成；「一条命令到第一句」只差 de
 **新想法（2026-10-24 记录，未排期）**：多类型音箱适配标准 —— 按权限等级分 A 类（原厂共存/低权限，
 如小爱 LX06）与 B 类（高权限/完整控制，如 dot2），做能力矩阵 + 接入契约 + 降级策略，建议文件
 `docs/speaker-adapter-standard.md`；v1 四门槛过后再开，详见 `docs/remaining-work.md` §I。
+后台「设备管理」参考 EchoMuse Device Management（MIT，可照抄），见 `docs/remaining-work.md` §J。
 
 ## 3. 明确不做（这一版）
 

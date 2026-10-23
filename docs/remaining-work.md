@@ -94,3 +94,15 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
   client 接入契约（ws URL + token + 端口 + 心跳/重连）、无能力时的降级（无灯、无播放、无 AEC）、
   移植步骤与验收清单、已知机型差异与故障排查。
 - 原则：机型差异全部收在 adapter 层，控制面/音频面不为某个品牌加分支；现有 LX06 实现作为 A 类样板。
+
+## J. 后台设备管理参考 EchoMuse（2026-10-24 记录，未排期，冻结期只记录不动代码）
+
+- 想法（9 哥）：rui 控制台「设备管理」的**后台逻辑可以参考 EchoMuse 的 Device Management，能照抄就照抄**
+  （上游 `wilbowes/EchoMuse` controller，MIT；本机部署在 `01_Code/services/echomuse-controller`，
+  镜像 `ghcr.io/wilbowes/echomuse-controller`，dashboard 与 HA add-on 同一套 controller）。
+- 值得对照/照抄的点：设备注册与 approve 流程、setup wizard（USB 发现 → 装固件 → 连 Wi-Fi → 审批）、
+  每设备配置（唤醒词在设备端还是 controller、自定义唤醒词、OTA）、在线状态与重连、
+  多设备「谁听得最响谁答」、每设备端口/证书分配、数据库模型（devices/config/users）、控制台页面结构。
+- 边界：只借鉴后台逻辑与交互，**不引入 HA Assist 依赖**（EchoMuse pipeline 硬编码 HA Assist，rui 自己就是助手）；
+  rui 仍由 adapter 层吸收机型差异（见 `rui-dot2-bridge/docs/adr-0001-adapter-as-controller.md`）。
+- 时机与合规：v1 四门槛过后再评估；若照抄代码需保留 MIT 版权/许可声明并注明来源。
