@@ -646,3 +646,30 @@ def test_the_music_query_is_always_the_users_words(monkeypatch) -> None:
     asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living"),
                            transcript="播放战车乐队的歌"))
     assert seen == [{"query": "播放战车乐队的歌"}], "the model's query must lose"
+
+
+def test_a_new_wake_starts_with_no_history(monkeypatch) -> None:
+    """Measured 10:41:26: a weather answer ended with 「周杰伦的歌想听哪首？」 -
+    the previous session's music turns were still in the history window. The old
+    build cleared it in begin_session(), on every wake."""
+    llm = ScriptedLlm([
+        [ChatChunk(delta="好，放《晴天》。")],
+        [ChatChunk(delta="沈阳今天毛雨。")],
+    ])
+    patch_chains(monkeypatch, asr=FakeAsr("查"), llms=[llm], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers)
+
+    async def speak(_pcm: bytes, *, segment_start: bool = False) -> None:
+        return None
+
+    asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living"),
+                           transcript="播放周杰伦的歌"))
+    assert len(runner.history) == 2
+
+    runner.reset_history()
+    asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living"),
+                           transcript="今天天气怎么样"))
+    second_prompt = " ".join(m.get("content", "") for m in llm.seen[1]["messages"]
+                             if m.get("role") == "user")
+    assert "周杰伦" not in second_prompt
+    assert "今天天气怎么样" in second_prompt

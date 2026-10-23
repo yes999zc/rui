@@ -740,6 +740,10 @@ def create_app(
                     # goodbye 15 s later (measured 10:22:17 - the user woke the box,
                     # said nothing, and got 「我先下啦」). The session opens with the
                     # first turn; its end starts the countdown.
+                    # A wake is also a new conversation: the previous session's turns
+                    # must not bleed in (10:41:26: a weather answer ended by asking
+                    # which 周杰伦 song to play). Old build: begin_session().
+                    runner.reset_history()
 
                     if getattr(msg, "barge", False):
                         # The plane already stopped the speaker and dropped its queue;

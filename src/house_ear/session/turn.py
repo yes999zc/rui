@@ -272,6 +272,18 @@ class TurnRunner:
                     text = f"{text}\n{extra}"
         return text
 
+    def reset_history(self) -> None:
+        """A new wake starts a new conversation: no context carried over.
+
+        The old build did exactly this in `begin_session()` (`history = []` on
+        every wake), keeping history only inside one session. Without it the
+        model answered a weather question and then asked which 周杰伦 song to
+        play, because the previous session's music turns were still in the
+        window (measured 10:41:26). Memory, when D2 lands, is a separate,
+        curated store injected through `extra_context` - not this list.
+        """
+        self.history.clear()
+
     def abort(self) -> None:
         """Stop speaking the current answer (barge-in)."""
         self._abort.set()
