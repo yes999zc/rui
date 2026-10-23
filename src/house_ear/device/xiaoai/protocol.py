@@ -190,6 +190,11 @@ def parse_vendor_signal(event: dict, ts: float = 0.0) -> VendorSignal | None:
     payload = line.get("payload") or {}
     namespace = str(header.get("namespace") or "")
     name = str(header.get("name") or "")
+    if namespace == "Dialog" and name == "Finish":
+        # The vendor's dialog is over. Its `playing idle` event is not always sent
+        # (measured 08:49:14-15: Playing arrived, Idle never did), so this is the
+        # reliable end signal for giving music back (V4).
+        return VendorSignal(kind="dialog_end", ts=ts)
     if namespace != "SpeechRecognizer":
         return None
     if name == "RecognizeResult" and payload.get("is_final"):

@@ -73,3 +73,13 @@ def test_reply_parsing() -> None:
 def test_base64_helper_matches_stdlib() -> None:
     assert protocol.stream("play", b"abc", base64_bytes=True)
     assert base64.b64encode(b"abc") == b"YWJj"
+
+
+def test_a_vendor_dialog_finish_is_the_end_signal() -> None:
+    """Measured 08:49: the vendor sent `playing Playing` but never `playing Idle`;
+    Dialog.Finish is the end that actually arrives, and V4 gives music back on it."""
+    from house_ear.device.xiaoai.protocol import parse_vendor_signal
+
+    line = {"header": {"namespace": "Dialog", "name": "Finish"}, "payload": {}}
+    signal = parse_vendor_signal({"event": "instruction", "data": {"NewLine": line}})
+    assert signal is not None and signal.kind == "dialog_end"
