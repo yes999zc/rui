@@ -1561,6 +1561,11 @@ def create_app(
                     log.info("session closed: %r", line)
 
         app.state.idle_task = asyncio.create_task(idle_watch(), name="idle-watch")
+        # Managed channel gateway: auto-start when a channel is enabled, then watchdog.
+        # The console's Start/Stop buttons are the only other owners of this switch.
+        await app.state.channel_supervisor.start()
+        app.state.channel_watch = asyncio.create_task(
+            app.state.channel_supervisor.watch(), name="channel-watch")
 
         # P10. The reminders were a complete island: tools with 44 tests, a scheduler
         # that walks due items, and no caller anywhere. One tick fires them, one queue
@@ -1632,6 +1637,11 @@ def create_app(
             login_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await login_task
+        channel_watch = getattr(app.state, "channel_watch", None)
+        if channel_watch is not None and not channel_watch.done():
+            channel_watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await channel_watch
         channel_supervisor = getattr(app.state, "channel_supervisor", None)
         if channel_supervisor is not None:
             await channel_supervisor.stop()

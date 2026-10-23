@@ -31,6 +31,8 @@ class ChannelSupervisor:
         self._lock = asyncio.Lock()
         self.started_at = 0.0
         self.last_error = ""
+        self._want_running = False
+        self._watch_task: asyncio.Task[None] | None = None
 
     def _config(self) -> dict[str, Any]:
         try:
@@ -90,6 +92,7 @@ class ChannelSupervisor:
                 logf.close()
             self.started_at = time.time()
             self.last_error = ""
+            self._want_running = True
             log.info("channel supervisor: started pid=%s", self._proc.pid)
             return self.status()
 
@@ -105,8 +108,18 @@ class ChannelSupervisor:
                     await proc.wait()
                 log.info("channel supervisor: stopped")
             self.started_at = 0.0
+            self._want_running = False
             return self.status()
 
     async def restart(self) -> dict[str, Any]:
         await self.stop()
         return await self.start()
+
+    async def watch(self) -> None:
+        """Keep a started gateway alive; a manual Stop is respected."""
+        while True:
+            await asyncio.sleep(5.0)
+            if not self._want_running or self.running() or not self.enabled():
+                continue
+            log.warning("channel supervisor: gateway exited; restarting")
+            await self.start()
