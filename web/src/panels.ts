@@ -56,6 +56,17 @@ export interface PanelBlock {
   columns?: PanelColumn[]
   follow?: boolean
   filter?: boolean
+  /** Log lines containing this text are hidden until the reader unticks the box. */
+  hide?: string
+  hide_label?: string
+  /** `say` block: where a typed turn is posted. */
+  href?: string
+  placeholder?: string
+  hint?: string
+  /** `volume` block: label, device floor, and the sentence under the slider. */
+  label?: string
+  min?: number
+  note?: string
 }
 
 export interface PanelColumn {
@@ -78,6 +89,8 @@ export interface PanelSpec {
   extra_sources?: Record<string, string>
   refresh_s?: number
   blocks: PanelBlock[]
+  /** Escape hatch: a hand-written component id replaces the blocks (panelComponents.ts). */
+  component?: string
 }
 
 export interface PanelsDoc {
@@ -95,6 +108,20 @@ export function lookup(expr: unknown, data: unknown): unknown {
     cur = (cur as Record<string, unknown>)[part]
   }
   return cur
+}
+
+/**
+ * A label that mixes literals and lookups: `"$.room · $.id"` -> `客厅 · living`.
+ * The spec examples in docs/console.md use this form for list subtitles, so the
+ * renderer has to evaluate every `$.path` in the string, not just a bare path.
+ */
+export function format(expr: unknown, data: unknown): string {
+  if (typeof expr !== 'string') return expr == null ? '' : String(expr)
+  if (!expr.includes('$.')) return expr
+  return expr.replace(/\$(\.[A-Za-z0-9_.]*)?/g, (_m, path: string | undefined) => {
+    const value = lookup(`$${path ?? ''}`, data)
+    return value == null ? '' : String(value)
+  })
 }
 
 export function display(card: PanelCard, data: unknown): string {

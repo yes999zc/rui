@@ -32,15 +32,16 @@ const groups = computed(() => {
   }))
 })
 
-/** Hand-written views that have not migrated into PanelSpecs yet. */
+/**
+ * Hand-written views that have not migrated into PanelSpecs yet: read-only
+ * reference pages whose value is the curated prose, not a form.
+ */
 const legacy = [
-  { path: '/assistant', label: '助手' },
   { path: '/voice', label: '语音' },
   { path: '/models', label: '模型' },
   { path: '/tools', label: '工具' },
   { path: '/secrets', label: '密钥' },
-  { path: '/health', label: '体检' },
-  { path: '/logs', label: '日志' },
+  { path: '/diagnostics', label: '体检' },
 ]
 
 onMounted(async () => {

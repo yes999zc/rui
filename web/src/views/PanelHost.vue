@@ -4,10 +4,11 @@
  * data. The panel's own component escape hatch lands here too (a hand-written
  * view replaces the blocks when a spec declares `component`).
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../api'
 import { usePanels } from '../composables/usePanels'
+import { PANEL_COMPONENTS } from '../components/panelComponents'
 import BlockStats from '../components/BlockStats.vue'
 import BlockNow from '../components/BlockNow.vue'
 import BlockActions from '../components/BlockActions.vue'
@@ -16,6 +17,8 @@ import BlockForm from '../components/BlockForm.vue'
 import BlockTable from '../components/BlockTable.vue'
 import BlockLog from '../components/BlockLog.vue'
 import BlockMemory from '../components/BlockMemory.vue'
+import BlockSay from '../components/BlockSay.vue'
+import BlockVolume from '../components/BlockVolume.vue'
 
 const route = useRoute()
 const { panels } = usePanels()
@@ -24,6 +27,14 @@ const main = ref<Record<string, unknown>>({})
 const extras = ref<Record<string, unknown>>({})
 const error = ref('')
 let timer: number | undefined
+
+/** Escape hatch: a spec that declares `component` renders a hand-written view. */
+const custom = computed(() => {
+  const id = panel.value?.component
+  if (!id) return null
+  const loader = PANEL_COMPONENTS[id]
+  return loader ? defineAsyncComponent(loader) : null
+})
 
 function dataFor(block: { source?: string }): unknown {
   return block.source ? extras.value[block.source] : main.value
@@ -75,8 +86,11 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
   <template v-else>
     <h1>{{ panel.title }}</h1>
     <p v-if="error" class="sub fail">{{ error }}（显示的是最后一次成功的数据）</p>
-    <component :is="null" />
-    <template v-for="block in panel.blocks" :key="block.type + (block.title ?? '')">
+    <div v-if="panel.component && !custom" class="card">
+      <p class="fail">面板「{{ panel.id }}」声明了组件 {{ panel.component }}，但前端没有注册它。</p>
+    </div>
+    <component :is="custom" v-else-if="custom" />
+    <template v-else v-for="block in panel.blocks" :key="block.type + (block.title ?? '')">
       <BlockStats v-if="block.type === 'stats'" :block="block" :data="dataFor(block)" />
       <BlockNow v-else-if="block.type === 'now'" :block="block" :data="dataFor(block)" />
       <BlockActions v-else-if="block.type === 'actions'" :block="block" :data="dataFor(block)" :refresh="poll" />
@@ -85,6 +99,8 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
       <BlockTable v-else-if="block.type === 'table'" :block="block" :data="dataFor(block)" />
       <BlockLog v-else-if="block.type === 'log'" :block="block" :data="dataFor(block)" />
       <BlockMemory v-else-if="block.type === 'memory'" :block="block" :data="dataFor(block)" :refresh="poll" />
+      <BlockSay v-else-if="block.type === 'say'" :block="block" :data="dataFor(block)" />
+      <BlockVolume v-else-if="block.type === 'volume'" :block="block" :data="dataFor(block)" />
     </template>
   </template>
 </template>

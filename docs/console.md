@@ -65,13 +65,39 @@ Docker 两阶段构建）——「零构建 vs 框架」已被项目回答：保
 1. 前端拉注册表 → 按 group/order 生成导航 → 单个 `PanelHost.vue` 渲染一切。
 2. `enabled=false` 的面板**灰化显示原因**，不消失（「为什么没有音乐面板」本身就是信息）。
 3. 表达式刻意极小：`$.path` 取值 + `map` 翻译 + `enabled_when: "$.state=playing"` 单等值
-   比较。**不搞图灵完备**；表达不了的交互走逃生舱：PanelSpec 声明 `"component": "xxx"`，
-   前端按 id 懒加载专有 Vue 组件（覆盖 80% 常规 + 20% 手写，防协议被扭曲）。
+   比较。**不搞图灵完备**；表达不了的交互走逃生舱（见 §2.4）。
+   列表标题/副标题允许「一个字面串里混多个 `$.path`」（`panels.ts: format`），例如
+   `"$.room · $.id"`、`"$.host · $.adapter · $.model · $.status"`。
 4. 轮询统一 `usePanelPoll(spec)`：不可见不轮、document.hidden 暂停、滑条拖动期跳过回写、
    失败显示 errbox 保留旧数据。
 5. actions 统一：busy → 带token请求 → 失败显示后端 detail 原文 → `refresh:true` 重拉。
 6. form block 统一：draft/baseline/dirty 三态 + `PUT /api/v1/config` + 422 按 loc 回字段
    红框（抽 AssistantView 的 issueKey 成 `useConfigForm`）。
+7. **控制台路由是 SPA**：任何非 `/api/*` 路径由服务端回 `index.html`（`web/api/app.py: console`），
+   刷新/收藏/深链都必须能开；`/api/*` 打错仍回 JSON 404。`/health` 已归 API，体检页在
+   `/diagnostics`。
+
+### 2.4 block 词表（2026-10-23 复核后）
+
+| type | 用途 | 关键字段 |
+|---|---|---|
+| `stats` | 数字卡片 | `cards[{label,value,unit,map,tone}]` |
+| `now` | 现在在播/当前状态 | `title,sub,empty` |
+| `actions` | 按钮（声明 method/href/body） | `buttons[{id,label,method,href,body,confirm,danger,enabled_when,refresh}]` |
+| `list` | 简单列表 | `items,item_title,item_sub,empty,max` |
+| `form` | 配置表单（PUT /api/v1/config） | `section,fields[],apply` |
+| `table` | 表格 | `items,columns[],empty` |
+| `log` | 日志 tail | `follow,filter,hide,hide_label` |
+| `memory` | 记忆 CRUD | `title,empty` |
+| `say` | 试一试：打字走一整轮 | `href,placeholder,hint` |
+| `volume` | 设备混音器读写 | `href,label,min,max,note` |
+
+### 2.5 逃生舱（已实现，当前无使用者）
+
+PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComponents.ts`
+懒加载手写 Vue 组件替换 blocks。注册表现在是空的：现有页面都被 block 覆盖，
+机制先就位，等第一个真需要专属交互的面板（P4 向导/设备探测）再用。
+
 
 ### 需新增后端端点（最小集）
 
@@ -86,10 +112,13 @@ Docker 两阶段构建）——「零构建 vs 框架」已被项目回答：保
 
 | 期 | 内容 | 验收 |
 |---|---|---|
-| **P1** | PanelSpec + /panels + POST /music + search；前端 usePanels/PanelHost + stats/now/actions/list 四种 block + usePanelPoll；迁移概览/设备/音乐三面板 | 切 `music.enabled` 导航自动出现/灰化音乐面板；控制台按钮与语音「暂停」同一条路径 |
-| P2 | form block + useConfigForm；密钥/体检/系统迁入；401 时 token 输入 UI；全局 toast + 生效时机标签 | 配置改动全走注册表 |
-| P3 | /logs + LogStream（轮询版）；最近对话面板（turns/traces） | 日志页不再是占位 |
-| P4（可选） | websocket 替换轮询（仅日志/进度需要亚秒级） | — |
+| **P1** ✅ | PanelSpec + /panels + POST /music + search；前端 usePanels/PanelHost + stats/now/actions/list 四种 block + usePanelPoll；迁移概览/设备/音乐三面板 | 切 `music.enabled` 导航自动出现/灰化音乐面板；控制台按钮与语音「暂停」同一条路径 |
+| **P2** ✅ | form block + useConfigForm；5 个 form 面板（设置/密钥/体检/系统/会话）；401 时 token 输入 UI；生效时机标签 | 配置改动全走注册表 |
+| **P3** ✅ | `GET /api/v1/logs` + log block（轮询/过滤/跟随）；table block + 对话面板；memory block + 记忆面板 | 日志页不再是占位 |
+| **P3.5** ✅ 2026-10-23 | **逐页复核**：SPA 深链 fallback、`/diagnostics`、`say`/`volume` 两种 block、列表串插值、日志隐藏噪声、删掉 4 个死页面与 2 个重复入口、9 条注册表契约测试 | `docs/console-audit.md` |
+| P4 | 首次安装向导（欢迎 → key → 加音箱 → 唤醒词 → 试一句验收）；P5 设备添加/探测 + MCP/HA 管理页；P6 PhraseBook 编辑区 + 剧本测试 | 功能定稿后做，排在部署测试之前 |
+| P4（旧，可选） | websocket 替换轮询（仅日志/进度需要亚秒级） | — |
 
-**风险与对策**：协议过度设计 → 只 6 种 block + 单等值 + 逃生舱；面板与 API 漂移 →
-test_api 加「每个 PanelSpec 的 source/href 都存在且 200」契约测试。
+**风险与对策**：协议过度设计 → 10 种 block + 单等值 + 逃生舱；面板与 API 漂移 →
+`tests/test_panels.py` 钉住「每个 PanelSpec 的 source/href 都存在且 200 / 是真路由」。
+

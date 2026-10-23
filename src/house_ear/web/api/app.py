@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -178,6 +178,9 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "source": "/health", "extra_sources": {"audio": "/api/v1/audio"},
             "refresh_s": 5,
             "blocks": [
+                {"type": "say", "title": "试一试", "href": "/api/v1/debug/say",
+                 "placeholder": "现在几点？",
+                 "hint": "打字等于说一句：同一套回合、工具、TTS 和播放。每次都是新的一句（不带上下文）。"},
                 {"type": "stats", "cards": [
                     {"label": "服务", "value": "$.status", "tone": {"ok": "ok"}},
                     {"label": "运行", "value": "$.uptime_s", "unit": "s"},
@@ -206,7 +209,12 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "source": "/api/v1/devices", "refresh_s": 10,
             "blocks": [
                 {"type": "list", "title": "在线设备", "items": "$",
-                 "item_title": "$.id", "item_sub": "$.adapter · $.model · $.status"},
+                 "item_title": "$.room · $.id",
+                 "item_sub": "$.host · $.adapter · $.model · $.status"},
+                {"type": "volume", "title": "设备音量", "href": "/api/v1/device/volume",
+                 "label": "mysoftvol（设备原生刻度 0–255）", "min": 1, "max": 255,
+                 "note": "读的是设备自己的混音器，不是配置里的 devices[].volume；厂商会自己改这个值，"
+                         "所以这里显示的永远是设备实际音量。"},
             ],
         },
         {
@@ -229,7 +237,10 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/logs?lines=300", "refresh_s": 2,
             "blocks": [
-                {"type": "log", "follow": True, "filter": True},
+                # The plane's level line lands every 2 s and would drown the 300-line
+                # tail; the reader can reveal it with one checkbox.
+                {"type": "log", "follow": True, "filter": True,
+                 "hide": "[level] voice peak", "hide_label": "隐藏 level 噪声"},
             ],
         },
         {
@@ -249,7 +260,10 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                 {"type": "form", "section": "assistant", "title": "助手",
                  "apply": "下一轮生效", "fields": [
                     {"key": "name", "label": "名字", "kind": "text", "hint": "1–12 字"},
-                    {"key": "persona", "label": "人设", "kind": "textarea"},
+                    {"key": "persona", "label": "人设", "kind": "textarea",
+                     "hint": "追加在内置提示词后面。只写身份，别写「说话要简短」这类规则。"},
+                    {"key": "system_prompt", "label": "系统提示词", "kind": "textarea",
+                     "hint": "整段替换内置提示词。留空 = 用内置的（推荐留空）。"},
                     {"key": "reply_max_chars", "label": "日常回答上限", "kind": "number",
                      "min": 10, "max": 300, "unit": "字"},
                     {"key": "reply_max_chars_search", "label": "查资料时上限", "kind": "number",
@@ -1581,11 +1595,30 @@ def create_app(
         """Latency marks for recent turns. Empty until a turn runs through the plane."""
         return {"limit": max(1, min(limit, 200)), "turns": traces.recent(limit)}
 
+    # The console is a Vue SPA with history routing: /panel/music is not a file on
+    # disk, yet a reload, a bookmark or a link from the NAS dashboard must still
+    # land on the app. So: mount the hashed asset directory, then answer every
+    # remaining non-API path with index.html. Registered after all API routes, a
+    # real endpoint always wins, and an /api/* typo stays a JSON 404 instead of
+    # silently becoming the HTML shell.
     if WEB_DIST.is_dir():
-        app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
-    else:
-        @app.get("/", response_class=HTMLResponse)
-        async def index() -> str:
-            return FALLBACK
+        assets = WEB_DIST / "assets"
+        if assets.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    @app.get("/{full_path:path}", response_class=HTMLResponse)
+    async def console(full_path: str) -> HTMLResponse:
+        """Serve the SPA shell for console routes; never for API paths."""
+        if full_path.startswith(("api/", "ws")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        if WEB_DIST.is_dir():
+            root = WEB_DIST.resolve()
+            candidate = (root / full_path).resolve()
+            if candidate.is_file() and root in candidate.parents:
+                return FileResponse(candidate)
+            index = root / "index.html"
+            if index.is_file():
+                return FileResponse(index)
+        return HTMLResponse(FALLBACK)
 
     return app

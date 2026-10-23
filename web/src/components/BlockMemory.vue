@@ -29,6 +29,14 @@ const draft = ref('')
 const error = ref('')
 const busy = ref('')
 
+/** Where a line came from, in the room's language (`source` is a backend enum). */
+const SOURCE_LABELS: Record<string, string> = {
+  voice: '语音',
+  turn: '对话里提到',
+  console: '控制台',
+}
+const sourceLabel = (source: string) => SOURCE_LABELS[source] ?? source
+
 async function send(action: string, payload: Record<string, unknown>) {
   busy.value = action + String(payload.id ?? '')
   error.value = ''
@@ -54,7 +62,7 @@ async function send(action: string, payload: Record<string, unknown>) {
       <div class="group-label">已记住 · 每轮都会带上</div>
       <div v-for="item in confirmed" :key="item.id" class="row">
         <span class="v">{{ item.text }}</span>
-        <span class="tag">{{ item.source }}</span>
+        <span class="tag">{{ sourceLabel(item.source) }}</span>
         <button class="small" :disabled="busy === 'remove' + item.id"
                 @click="send('remove', { id: item.id })">删除</button>
       </div>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { PanelBlock } from '../panels'
-import { lookup } from '../panels'
+import { format, lookup } from '../panels'
 
 const props = defineProps<{ block: PanelBlock; data: unknown }>()
 
@@ -8,7 +8,7 @@ function items(): unknown[] {
   const raw = lookup(props.block.items, props.data)
   return Array.isArray(raw) ? raw.slice(0, props.block.max ?? 10) : []
 }
-const field = (item: unknown, expr?: string) => lookup(expr, item)
+const field = (item: unknown, expr?: string) => format(expr, item)
 </script>
 
 <template>

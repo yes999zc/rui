@@ -14,12 +14,25 @@ const props = defineProps<{ block: PanelBlock; data: unknown }>()
 const filter = ref('')
 const follow = ref(true)
 const box = ref<HTMLElement | null>(null)
+/** Line noise the spec asks to hide by default (the plane's level line every 2 s). */
+const hideNoise = ref(props.block.hide != null)
 
-const lines = computed<string[]>(() => {
+const all = computed<string[]>(() => {
   const raw = (props.data as { lines?: unknown } | undefined)?.lines
-  const all = Array.isArray(raw) ? raw.map(String) : []
+  return Array.isArray(raw) ? raw.map(String) : []
+})
+const hiddenCount = computed(() => {
+  const pattern = props.block.hide
+  if (!pattern) return 0
+  return all.value.filter((line) => line.includes(pattern)).length
+})
+const lines = computed<string[]>(() => {
+  const pattern = props.block.hide
+  const visible = hideNoise.value && pattern
+    ? all.value.filter((line) => !line.includes(pattern))
+    : all.value
   const needle = filter.value.trim().toLowerCase()
-  return needle ? all.filter((line) => line.toLowerCase().includes(needle)) : all
+  return needle ? visible.filter((line) => line.toLowerCase().includes(needle)) : visible
 })
 
 function atBottom(): boolean {
@@ -57,6 +70,10 @@ function onScroll() {
       <label class="check">
         <input v-model="follow" type="checkbox" />
         跟随最新
+      </label>
+      <label v-if="block.hide" class="check">
+        <input v-model="hideNoise" type="checkbox" />
+        {{ block.hide_label || '隐藏噪声' }}<template v-if="hiddenCount">（{{ hiddenCount }} 行）</template>
       </label>
       <span class="count">{{ lines.length }} 行</span>
     </div>

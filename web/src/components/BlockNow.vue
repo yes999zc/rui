@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import type { PanelBlock } from '../panels'
-import { lookup } from '../panels'
+import { format } from '../panels'
 
 const props = defineProps<{ block: PanelBlock; data: unknown }>()
-const title = () => lookup(props.block.title, props.data)
-const sub = () => lookup(props.block.sub, props.data)
+const title = () => format(props.block.title, props.data)
+const sub = () => format(props.block.sub, props.data)
 </script>
 
 <template>
