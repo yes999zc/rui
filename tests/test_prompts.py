@@ -166,8 +166,12 @@ def test_without_a_music_tool_it_says_it_cannot_play_music() -> None:
 
 
 def test_the_note_disappears_once_a_music_tool_exists() -> None:
-    text = prompts.build(tool_names=["local.weather", "music.play"])
-    assert "没有播放音乐" not in text
+    """Names arrive namespaced; the check must look at the tool part, or the note
+    told the model it had no music while music_play was registered (09:20:59)."""
+    for name in ("local.music_play", "music.play", "music_play"):
+        text = prompts.build(tool_names=["local.weather", name])
+        assert "没有播放音乐" not in text, name
+        assert "你有音乐能力" in text, name
 
 
 def test_transport_words_are_recognised_before_the_dismiss_list() -> None:

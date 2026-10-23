@@ -38,6 +38,10 @@ PLAY_MAP = {"ok": "music.started", "ok_one": "music.started_one",
 async def _search(source: MusicSource, p: q.QueryPlan) -> list[Track]:
     """Where a second source will plug in: today only the NAS library."""
     try:
+        if p.artist and not p.title:
+            # An artist-only ask: search the artist, not an empty title (which
+            # the source would answer with a random batch).
+            return await source.search(p.artist, 25)
         if p.artist:
             hits = await source.search(p.title, 25)
             keep = [t for t in hits if q.accepts(t.artist, p.artist)]

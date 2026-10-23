@@ -61,18 +61,27 @@ def extract_title(q: str) -> str:
     return _DESCRIPTIVE.sub("", t).strip() or t
 
 
+# A tail that is just "songs" says "this artist's songs", not "a song called 歌".
+_GENERIC_TAIL = ("歌", "歌曲", "的歌", "音乐", "的歌吧", "的歌曲")
+
+
 def split_artist(term: str) -> tuple[str, str]:
     """「周杰伦的晴天」 -> (周杰伦, 晴天); head must look like a name (2-12 chars).
 
     Old build `_artist_hint` (music.py:320-327): shorter is noise, longer is a
-    sentence, and both make worse searches than the bare term.
+    sentence, and both make worse searches than the bare term. A generic tail
+    (「周杰伦的歌」) means the artist alone - searching the title 「歌」 found
+    nothing (measured 09:20:59).
     """
     if "的" not in term:
         return "", term
     head, _, tail = term.partition("的")
     if not (2 <= len(head) <= 12) or not tail.strip():
         return "", term
-    return head.strip(), tail.strip()
+    head, tail = head.strip(), tail.strip()
+    if tail in _GENERIC_TAIL:
+        return head, ""
+    return head, tail
 
 
 def accepts(candidate: str, want: str) -> bool:
@@ -100,4 +109,11 @@ def plan(raw: str) -> QueryPlan:
     artist, rest = split_artist(title)
     if artist and rest:
         return QueryPlan(raw=raw, title=rest, artist=artist, term=f"{rest} {artist}")
+    if artist:
+        # 《周杰伦的歌》 - the artist's pool, no title to match.
+        return QueryPlan(raw=raw, artist=artist, term=artist)
+    # 「周杰伦歌曲」 / 「陈奕迅歌」 without 的: the same artist-pool ask.
+    m = re.match(r"^(.{2,12}?)(?:歌曲|的歌|歌)$", title)
+    if m:
+        return QueryPlan(raw=raw, artist=m.group(1), term=m.group(1))
     return QueryPlan(raw=raw, title=title, term=title or cleaned)

@@ -115,7 +115,10 @@ def build(
         except (KeyError, IndexError, ValueError):
             pass
         text += "\n" + persona
-    if not any(name.startswith("music") for name in tool_names):
+    # Tool names arrive namespaced ("local.music_play"); the check has to look at
+    # the tool part or every music tool looks absent - measured 09:20:59, the model
+    # answered 「我现在还没有播放音乐的能力」 with the music tools registered.
+    if not any(name.rsplit(".", 1)[-1].startswith("music") for name in tool_names):
         # Measured 2026-10-22: with music playing and no music tool, it answered
         # 「好，接着放。」 - a promise it had no way to keep. Saying so is the only honest
         # option until the music layer exists.

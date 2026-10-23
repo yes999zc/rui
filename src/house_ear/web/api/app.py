@@ -264,7 +264,7 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         _light_after_audio(app, spoken, _voice_rate(client),
                            "music" if tracks else "off")
         with contextlib.suppress(Exception):
-            await client.reply_finished()
+            await client.reply_finished(hold_music_s=0)
         app.state.last_turn = {
             "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
             "tools": ["music_play"], "stages": {},
@@ -301,10 +301,11 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
     # The ring must answer 「暂停」 with amber and stay there: the reply's own
     # speaking/listening states were overriding the park's LED within 300 ms.
     _light_after_audio(app, spoken, _voice_rate(client), _music_light(action, service))
-    # Keeps the conversation open like a normal turn: the follow-up window must
-    # re-arm, or the next 「继续」 needs the wake word again.
+    # A music command's confirmation is the last thing before the song: hold 0 so
+    # the plane starts it the moment the reply drains (the 6 s follow-up window
+    # made 「放首歌」 take ~18 s to be heard, measured 09:21).
     with contextlib.suppress(Exception):
-        await client.reply_finished()
+        await client.reply_finished(hold_music_s=0)
     app.state.last_turn = {
         "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
         "tools": [f"music_{action}"], "stages": {},
