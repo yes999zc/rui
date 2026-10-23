@@ -197,12 +197,19 @@ def parse_vendor_signal(event: dict, ts: float = 0.0) -> VendorSignal | None:
         return VendorSignal(kind="dialog_end", ts=ts)
     if namespace != "SpeechRecognizer":
         return None
-    if name == "RecognizeResult" and payload.get("is_final"):
+    if name == "RecognizeResult":
         results = payload.get("results") or [{}]
         text = str((results[0] or {}).get("text") or "")
-        # Only a final recognition means the vendor wake fired; StopCapture is its dialog
-        # ending and would re-trigger us in the middle of a session.
-        return VendorSignal(kind="wake", text=text, ts=ts) if text else None
+        if payload.get("is_final"):
+            # A final recognition means the vendor wake fired; StopCapture is its
+            # dialog ending and would re-trigger us mid-session.
+            return VendorSignal(kind="wake", text=text, ts=ts) if text else None
+        # An intermediate result means the vendor's recognizer is already hearing
+        # someone - 0.7 s after its wake, ~2.5 s before the final transcript
+        # (measured 08:58:29). The music should get out of the way right then;
+        # this signal is deliberately weaker: it parks music and nothing else
+        # (no 12 s quiet window, which could swallow our own turn).
+        return VendorSignal(kind="vendor_listening", text=text, ts=ts)
     if name == "StartCapture":
         # The vendor's recognizer opens the microphone the moment its wake fires. This
         # arrives before its final transcription, which was too late: both assistants

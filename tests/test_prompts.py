@@ -187,3 +187,17 @@ def test_transport_words_are_recognised_before_the_dismiss_list() -> None:
     # and the transports do not swallow a real dismissal
     assert rules.music_transport("退下吧") == ""
     assert rules.music_transport("停止播放") == ""
+
+
+def test_volume_words_are_recognised_without_a_model() -> None:
+    """Measured 09:03: 「音量调到50%」 answered 「调到50%了」 with no tool call."""
+    from house_ear.session import rules
+
+    assert rules.volume_level("音量大一点") == "up"
+    assert rules.volume_level("声音小点") == "down"
+    assert rules.volume_level("音量调到50%") == "50"
+    assert rules.volume_level("音量 30%") == "30"
+    assert rules.volume_level("静音") == "mute"
+    assert rules.volume_level("音量多少") == ""
+    assert rules.volume_level("今天天气怎么样") is None
+    assert rules.volume_level("帮我放一首歌") is None

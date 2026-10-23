@@ -95,6 +95,33 @@ MUSIC_RANDOM_WORDS = (
 )
 
 
+# Volume words, deterministic for the same reason as the transports: measured
+# 09:03, 「音量调到50%」 and 「30%」 each got 「音量调到50%了」 with zero tool calls.
+_VOLUME_UP = ("大一点", "大点", "大声", "调大", "大些", "响一点")
+_VOLUME_DOWN = ("小一点", "小点", "小声", "调小", "小些", "轻一点")
+
+
+def volume_level(transcript: str) -> str | None:
+    """up | down | mute | a 0-100 string | "" (query) | None (not a volume ask)."""
+    t = normalize(transcript)
+    if not t or len(t) > 10:
+        return None
+    if not any(w in t for w in ("音量", "声音", "喇叭")):
+        return None
+    if "静音" in t:
+        return "mute"
+    if any(w in t for w in _VOLUME_UP):
+        return "up"
+    if any(w in t for w in _VOLUME_DOWN):
+        return "down"
+    digits = re.search(r"(\d{1,3})", t)
+    if digits:
+        return digits.group(1)
+    if any(w in t for w in ("多少", "多大", "几")):
+        return ""
+    return None
+
+
 def is_music_random(transcript: str) -> bool:
     t = normalize(transcript)
     if not t or len(t) > 8:

@@ -36,10 +36,12 @@ def test_a_final_recognition_is_a_vendor_wake() -> None:
 
 
 def test_a_partial_recognition_is_not_a_wake() -> None:
+    """It is a softer signal: the vendor is listening, so music should get out of
+    the way - but it must not open the quiet window a real wake opens."""
     signal = protocol.parse_vendor_signal(
         instruction("SpeechRecognizer", "RecognizeResult", {"is_final": False, "results": [{"text": "今天"}]})
     )
-    assert signal is None
+    assert signal is not None and signal.kind == "vendor_listening"
 
 
 def test_the_stop_capture_event_is_the_dialog_ending_not_a_wake() -> None:

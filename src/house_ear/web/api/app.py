@@ -319,6 +319,32 @@ def _voice_rate(client: object) -> int:
     return int(getattr(ready, "voice_rate", 0) or 16000)
 
 
+async def _volume_command(app: FastAPI, clean: str, runner, client, trace,
+                          traces) -> str | None:
+    """Volume words reach the mixer without a model round trip (measured 09:03)."""
+    level = rules.volume_level(clean)
+    handler = getattr(app.state, "volume_tool", None)
+    if level is None or handler is None:
+        return None
+    result = await handler({"level": level})
+    spec_key = ({"ok": "volume.set", "ok_read": "volume.read",
+                 "unknown": "volume.unknown", "unreachable": "volume.failed"}
+                .get(getattr(result, "status", "")))
+    if not spec_key:
+        return None
+    line = phrases.book.render(spec_key, **getattr(result, "payload", {}))
+    runner.idle.touch()
+    spoken = await runner.say(line, _speaking(app, client), trace)
+    _light_after_audio(app, spoken, _voice_rate(client), "listening")
+    app.state.last_turn = {
+        "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
+        "tools": ["volume"], "stages": {},
+    }
+    traces.add(trace)
+    log.info("volume command: %r -> %s", clean, line)
+    return line
+
+
 def _music_light(action: str, service: object) -> str:
     """Where the ring belongs after a transport word, in music terms."""
     if action == "pause":
@@ -493,6 +519,9 @@ def create_app(
                     if await _music_transport(app, clean, runner, client, trace,
                                               traces) is not None:
                         return
+                    if await _volume_command(app, clean, runner, client, trace,
+                                             traces) is not None:
+                        return
                     if rules.stop_intent(clean, cfg.session.end_words):
                         # A stop word with a song owning the speaker stops the sound;
                         # 「退下吧」 only dismisses the conversation and the song keeps
@@ -615,6 +644,12 @@ def create_app(
                                 # The old build's 0.6 s tail: let the TTS ring out.
                                 asyncio.create_task(service.give_back_if_parked(0.6),
                                                     name="vendor-giveback")
+                    elif kind == "vendor_listening":
+                        # The vendor's recognizer is hearing someone: get the song
+                        # out of the way now (only music, no quiet window).
+                        if service is not None and service.state == "playing":
+                            asyncio.create_task(service.park_for_vendor(),
+                                                name="vendor-park")
                     elif kind == "wake":
                         # A new vendor dialog: the silent-wake watchdog starts fresh.
                         vendor_state["playing"] = False
@@ -709,6 +744,7 @@ def create_app(
                     local_tools.append((volume_spec, volume_tool))
                 # Make every tool registered in this lifespan visible to the model.
                 runner.set_tools(local_tools)
+                app.state.volume_tool = volume_tool
         # Session end. Polled rather than timed: one loop, 1 s resolution, and the
         # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
         async def idle_watch() -> None:
