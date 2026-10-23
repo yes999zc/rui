@@ -224,3 +224,18 @@ house-ear-channels --weixin-data /data/channels/weixin \
   - 日志写入 `data/channels-gateway.log`。
 - 当前 NAS 部署策略：**只启用 Telegram**；微信保留 adapter/API/控制台绑定接口，但 `weixin.enabled=false`，不参与长轮询。
 - 同一 bot/账号只能有一个长轮询消费者：切换托管模式前必须停掉外部 `house-ear-channels` 进程。
+
+
+### 10.1 NAS rollout (2026-10-24)
+
+- Control plane image now installs the channel code and auto-starts a managed gateway
+  when `channels.json` has an enabled channel. The supervisor logs to
+  `data/channels-gateway.log`, restarts a crashed child, and the console Start/Stop/Restart
+  buttons operate that child.
+- **NAS `.168` currently enables Telegram only** (`telegram.enabled=true`,
+  `weixin.enabled=false`). WeChat adapter, APIs and QR UI remain available for later.
+- NAS has no direct Telegram egress; the gateway child inherits `HTTPS_PROXY`/`HTTP_PROXY`
+  pointing at a small LAN CONNECT proxy on the Mac (`192.168.5.27:7899`). If the Mac sleeps,
+  Telegram stops — move the proxy to the NAS/router or give the NAS a VPN before relying
+  on this permanently.
+- Gateway status is exposed in `GET /api/v1/channels` and the Channels page.

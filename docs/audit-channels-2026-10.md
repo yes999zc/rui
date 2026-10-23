@@ -31,6 +31,9 @@ or user IDs are repeated here.
 - WeChat QR login has no server-side cancel endpoint yet; leaving the console stops the
   frontend polling but the login task may continue until timeout. Low risk, single-user
   console.
+- NAS Telegram egress currently relies on a Mac LAN CONNECT proxy. This is an operational
+  dependency, not a code secret; move the proxy to the NAS/router or use a NAS VPN for a
+  standalone deployment.
 - `GET /channels` does not return the last validated Telegram bot username; the UI caches
   it locally. Minor UX only.
 - The managed gateway is a child of the control plane. If the control-plane process is
