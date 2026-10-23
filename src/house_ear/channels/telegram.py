@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -25,9 +26,23 @@ API = "https://api.telegram.org"
 MAX_TEXT = 4096
 
 
+def ffmpeg_path() -> str:
+    """PATH on launchd/Mac shells is not the login shell's PATH; look in the usual places."""
+    explicit = os.getenv("HOUSE_EAR_FFMPEG")
+    if explicit:
+        return explicit
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+        if os.path.isfile(candidate):
+            return candidate
+    return "ffmpeg"
+
+
 async def _ffmpeg(*args: str, timeout: float = 30.0) -> None:
     proc = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args,
+        ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y", *args,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
     )
     try:

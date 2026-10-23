@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -362,6 +363,7 @@ class WeixinAdapter:
             log.warning("weixin: voice decrypt failed: %s", exc)
             return None
         with tempfile.TemporaryDirectory(prefix="house-ear-wx-") as td:
+            ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
             silk = Path(td) / "voice.silk"
             wav = Path(td) / "voice.wav"
             pcm = Path(td) / "voice.pcm"
@@ -374,7 +376,7 @@ class WeixinAdapter:
             try:
                 pilk.silk_to_wav(str(silk), str(wav))
                 subprocess.run(
-                    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(wav),
+                    [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(wav),
                      "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000",
                      str(pcm)],
                     check=True, timeout=30,
@@ -426,7 +428,8 @@ class WeixinAdapter:
             mp3 = Path(td) / "reply.mp3"
             raw.write_bytes(pcm)
             subprocess.run(
-                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "s16le",
+                [shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg",
+                 "-hide_banner", "-loglevel", "error", "-y", "-f", "s16le",
                  "-ar", str(sample_rate), "-ac", "1", "-i", str(raw), "-codec:a", "libmp3lame",
                  "-b:a", "48k", str(mp3)],
                 check=True, timeout=30,

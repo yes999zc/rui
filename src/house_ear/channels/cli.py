@@ -126,7 +126,9 @@ def main(argv: list[str] | None = None) -> int:
     for noisy in ("httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     if args.login_weixin:
-        data = Path(args.weixin_data or args.data_dir) / "weixin"
+        # An explicit --weixin-data is the account directory itself; only the default
+        # (no flag) gets a "weixin" child under the shared channel data dir.
+        data = Path(args.weixin_data) if args.weixin_data else Path(args.data_dir) / "weixin"
         return asyncio.run(_login_weixin(data))
     try:
         return asyncio.run(_run(args))
