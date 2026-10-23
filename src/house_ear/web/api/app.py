@@ -1277,10 +1277,12 @@ def create_app(
                 def on_wake(msg: object) -> None:
                     vendor.ours_spoke()
                     _light(app, "wake")
-                    # No idle clock here: a wake that hears nothing must not become a
-                    # goodbye 15 s later (measured 10:22:17 - the user woke the box,
-                    # said nothing, and got 「我先下啦」). The session opens with the
-                    # first turn; its end starts the countdown.
+                    # Unified idle rule (9哥, 16:1x): ANY interaction in a session ends
+                    # with 「我先下啦」 after session.timeout_s of silence - a wake that
+                    # heard nothing, a finished answer, a finished song. The clock is
+                    # started here, kept alive while a turn/playback/gate is active, and
+                    # closed by the single goodbye in idle_watch.
+                    runner.idle.start()
                     # A wake is also a new conversation: the previous session's turns
                     # must not bleed in (10:41:26: a weather answer ended by asking
                     # which 周杰伦 song to play). Old build: begin_session().
@@ -1295,14 +1297,15 @@ def create_app(
                         runner.abort()
 
                 def on_wake_idle(msg: object) -> None:
-                    # A wake that heard nothing ends the session - silently. The old
-                    # build said goodbye 15 s later and 9哥 asked for that to stop; but
-                    # leaving the light in listening forever is not an exit either
-                    # (measured 16:10:38: 「你好小瑞」 then silence, nothing ended).
-                    runner.idle.stop()
+                    # The listening gate closed with nothing said. Do NOT close the
+                    # session here: the unified rule says a silent wake still gets the
+                    # 「我先下啦」 goodbye after session.timeout_s (9哥, 16:1x). The idle
+                    # clock was started in on_wake and keeps running; only the light is
+                    # turned off because nobody is being listened to any more.
                     _light(app, "off")
-                    log.info("session closed: wake without speech (%.1f s)",
-                             float(getattr(msg, "waited_ms", 0.0)) / 1000.0)
+                    log.info("wake without speech (%.1f s); idle goodbye in %.0f s",
+                             float(getattr(msg, "waited_ms", 0.0)) / 1000.0,
+                             max(0.0, runner.idle.remaining()))
 
                 client.on_wake = on_wake
                 client.on_wake_idle = on_wake_idle
@@ -1389,6 +1392,11 @@ def create_app(
                 def busy(state=live) -> bool:
                     metrics = getattr(getattr(state, "client", None), "metrics", None)
                     if metrics is not None and metrics.output_owner:
+                        return True
+                    # Someone is speaking right now: a long sentence must not be cut in
+                    # half. Merely waiting (gate armed for a follow-up) is NOT activity -
+                    # counting it made the 15 s goodbye arrive after 30 s.
+                    if metrics is not None and metrics.gate_speaking:
                         return True
                     # A song parked for the vendor is music about to come back:
                     # the farewell must not talk over the give-back (old build's
@@ -2038,6 +2046,9 @@ def create_app(
         else:
             raise HTTPException(
                 status_code=422, detail="action must be play/pause/resume/stop/next/prev")
+        # A console-started song is an interaction too: arm the unified idle clock so it
+        # ends with the same goodbye when the music stops.
+        app.state.runner.idle.touch()
         return await music_status()
 
     @app.post("/api/v1/debug/tool", dependencies=[Depends(auth)])

@@ -118,6 +118,9 @@ class Metrics(BaseModel):
     # Why a wake produced no turn: still listening, or gave the segment up (too short,
     # nothing said). Without these two the console can only show "0".
     gate_armed: bool = False
+    # Speech is being captured right now (not just "the gate is open waiting"): the
+    # idle goodbye must not count a 15 s listening window as activity.
+    gate_speaking: bool = False
     gate_discarded: int = 0
     gate_interrupted: int = 0
     playback_s: float = 0.0

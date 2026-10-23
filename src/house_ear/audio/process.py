@@ -1307,6 +1307,7 @@ class AudioPlane:
             vad_enabled=self.gate is not None,
             utterances=self.utterances,
             gate_armed=bool(self.gate.armed) if self.gate is not None else False,
+            gate_speaking=bool(self.gate.speaking) if self.gate is not None else False,
             gate_discarded=self.gate.discarded if self.gate is not None else 0,
             gate_interrupted=self.gate.interrupted if self.gate is not None else 0,
             speaker_connected=bool(getattr(self.adapter, "health", lambda: {})().get("connected"))

@@ -99,6 +99,16 @@ class UtteranceGate:
         self._max_wait_ms = self.cfg.max_wait_ms
 
     @property
+    def speaking(self) -> bool:
+        """True while a request/follow-up is being spoken into the gate.
+
+        `armed` alone is the whole listening window (up to 15 s of waiting for the next
+        sentence); a silence timeout must not count that as activity, or the goodbye
+        arrives 15 s too late. Only actual speech extends the idle clock.
+        """
+        return self._started
+
+    @property
     def speech_ms(self) -> float:
         """Speech gathered for the open turn: what a second wake is about to throw away."""
         return self._speech_ms

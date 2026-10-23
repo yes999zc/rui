@@ -428,10 +428,13 @@ def _session_fields() -> list[dict]:
     return [
         _field("session.timeout_s", "session", "number",
                _t("空闲多久告别", "Idle goodbye"),
-               _t("一轮结束后多久没动静就告别并关会话。调小更省事，调大更「陪着」。"
-                  "0 = 永不超时。保存后下一轮按新值计时。",
-                  "How long after a turn the session says goodbye. 0 = never time out. "
-                  "The next turn uses the new value."),
+               _t("统一空闲规则：只要在会话里（唤醒没说话、回答结束、歌放完、停止播放后），"
+                  "这么久没有新的输入就告别（「我先下啦」）并结束会话。调小更省事，调大更"
+                  "「陪着」。0 = 永不超时。保存后立即按新值计时（进行中的窗口也生效）。",
+                  "Unified idle rule: inside a session (a silent wake, a finished answer, "
+                  "a finished song, after stop), this many seconds without new input says "
+                  "the goodbye and ends it. 0 = never time out. Applies immediately, "
+                  "including to an open window."),
                unit=_t("秒", "s"), minimum=0, maximum=300),
         _field("session.farewell", "session", "select",
                _t("告别方式", "Farewell mode"),
