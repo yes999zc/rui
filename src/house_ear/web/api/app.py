@@ -538,10 +538,13 @@ def create_app(
                         # the wake's duck has already released the output by the time
                         # this runs, so `output_owner == "music"` was never true and
                         # 「停止」 left the song playing (measured 08:35).
+                        # Stop words stop the song, dismissal included: the old build's
+                        # stop_words path did MUSIC.stop + farewell, and 9哥 heard the
+                        # song come back 12 s after 「退下吧」 as a bug (measured 09:17).
                         service = getattr(app.state, "music", None)
                         music_active = service is not None and service.state in (
                             "playing", "paused")
-                        if music_active and not rules.is_dismiss(clean):
+                        if music_active:
                             try:
                                 await service.stop()
                             except Exception as exc:  # noqa: BLE001 - never crash the app

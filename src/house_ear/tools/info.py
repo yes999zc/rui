@@ -10,6 +10,7 @@ tends to answer the question anyway.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 import time
@@ -84,10 +85,27 @@ def _today() -> dt.date:
 
 
 async def _get_json(url: str, timeout: float, params: dict | None = None) -> Any:
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        resp = await client.get(url, params=params, headers={"User-Agent": "house-ear/0.1"})
-        resp.raise_for_status()
-        return resp.json()
+    """One GET, retried once on a transport blip.
+
+    open-meteo fails intermittently from this network with an exception whose
+    str() is empty (measured 09:17); a second attempt a moment later succeeds.
+    The retry is cheap and only for transport errors - a 4xx is a real answer.
+    """
+    last: Exception | None = None
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                resp = await client.get(url, params=params,
+                                        headers={"User-Agent": "house-ear/0.1"})
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPStatusError:
+            raise
+        except (httpx.TransportError, httpx.HTTPError, OSError) as exc:
+            last = exc
+            if attempt == 0:
+                await asyncio.sleep(0.4)
+    raise last if last is not None else RuntimeError("no attempt ran")
 
 
 async def _geocode(city: str, timeout: float) -> tuple[float, float, str] | None:
@@ -138,7 +156,8 @@ async def weather(cfg: Config, args: dict) -> str:
             conf.timeout_s,
         )
     except Exception as exc:  # noqa: BLE001
-        log.warning("weather: forecast failed: %s", exc)
+        # Include the type: transport errors here can have an empty message.
+        log.warning("weather: forecast failed: %s: %r", type(exc).__name__, exc)
         return "天气没查到，直接说查不到，让用户稍后再问。"
     daily = (data or {}).get("daily") or {}
     dates = daily.get("time") or []
