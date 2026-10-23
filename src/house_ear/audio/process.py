@@ -99,6 +99,11 @@ FADE_IN_MS = 12
 # music back after this long - the old build's silent-wake watchdog used 4 s for the
 # same "do not keep the song down forever" rule.
 NO_REPLY_RESUME_S = 4.0
+# While a conversation is open the song stays down: a follow-up window is armed
+# right after every reply, and music may only return once that window has closed.
+# Without the hold the reply drained first and the song blipped back in between
+# turns (measured 08:30-08:35, "对话间隙音乐出声音").
+MUSIC_FOLLOWUP_MS = 6000
 
 
 class Pacer:
@@ -299,6 +304,11 @@ class AudioPlane:
         # between the question and 现在是晚上9点07分).
         self._turn_pending = False
         self._turn_pending_ts = 0.0
+        # Wall-clock deadline of a follow-up window that is holding the song down
+        # (None = not holding). A deadline, not "gate is closed": the reply's own
+        # first block disarms the gate, so gate state alone would release the song
+        # before the window ever armed.
+        self._music_hold_until: float | None = None
         # The control-plane socket, for plane -> control events (PlayFinished).
         self._ctl_writer: asyncio.StreamWriter | None = None
         self._ctl_connected: asyncio.Event | None = None
@@ -900,12 +910,15 @@ class AudioPlane:
                     # after a reply that actually spoke - this branch also runs on every
                     # idle timeout, and re-arming there left the gate open forever
                     # (measured: a turn 42 s after the last one, with no wake word).
-                    if finished_reply and self.gate is not None and not self.gate.armed:
+                    if (finished_reply and self.gate is not None and not self.gate.armed
+                            and not self._speech_paused):
                         # The last block was *sent*; the device is still playing what is
                         # in its buffer. Opening the gate now makes the assistant answer
                         # its own voice - measured 2026-10-22: reply queued at 18:23:13,
                         # a 1.58 s "segment" at 18:23:15 that became a turn. Wait for the
                         # pacer to drain, then the old build's 1 s echo tail.
+                        # With a song waiting the block below arms it with the music
+                        # window instead (shorter max_wait, and the song stays down).
                         delay = max(0.0, pacer.due - time.monotonic()) + 1.0
                         asyncio.create_task(
                             self._arm_followup_later(delay), name="followup-gate"
@@ -921,13 +934,29 @@ class AudioPlane:
                     # build's vendor_silence_watchdog, assistant_v3.py:2185).
                     if finished_reply:
                         self._turn_pending = False
-                    if self.gate is None or not self.gate.armed:
-                        waiting = (
-                            self._turn_pending
-                            and time.monotonic() - self._turn_pending_ts < NO_REPLY_RESUME_S
-                        )
-                        if not waiting:
-                            self._resume_after_speech()
+                    if finished_reply and self._speech_paused and self.gate is not None:
+                        # The turn ended with a song waiting: hold it for the follow-up
+                        # window instead of resuming between turns.
+                        delay = max(0.0, pacer.due - time.monotonic()) + 1.0
+                        self._music_hold_until = (
+                            time.monotonic() + delay + MUSIC_FOLLOWUP_MS / 1000.0)
+                        asyncio.create_task(
+                            self._arm_followup_later(delay,
+                                                     max_wait_ms=MUSIC_FOLLOWUP_MS),
+                            name="followup-gate")
+                    now = time.monotonic()
+                    holding = self._music_hold_until is not None and (
+                        now < self._music_hold_until
+                        or (self.gate is not None and self.gate.armed))
+                    if not holding:
+                        self._music_hold_until = None
+                        if self.gate is None or not self.gate.armed:
+                            waiting = (
+                                self._turn_pending
+                                and now - self._turn_pending_ts < NO_REPLY_RESUME_S
+                            )
+                            if not waiting:
+                                self._resume_after_speech()
                     # The player is deliberately left alone here: the next reply closes
                     # it and opens a fresh one (see the first-chunk branch below). Closing
                     # it now would cut the tail still playing out of the device buffer.
@@ -1020,7 +1049,8 @@ class AudioPlane:
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
 
-    async def _arm_followup_later(self, delay: float) -> None:
+    async def _arm_followup_later(self, delay: float,
+                                  max_wait_ms: int | None = None) -> None:
         """Open the follow-up gate after the speaker has finished, not after sending."""
         try:
             await asyncio.sleep(max(0.0, delay))
@@ -1032,11 +1062,14 @@ class AudioPlane:
             # window must not open over our own audio, or its lyrics become the next
             # request. The wake word is the way in while anything owns the speaker.
             log.info("follow-up gate stays shut: %s owns the speaker", self._owner)
+            self._music_hold_until = None   # nothing is held; resume next tick
             return
         if gate is not None and not gate.armed and not self._stop.is_set():
             log.info("follow-up gate open (%.1f s after the last block)", delay)
-            gate.arm(followup=True,
-                     max_wait_ms=int(self.cfg.session.timeout_s * 1000) or None)
+            gate.arm(
+                followup=True,
+                max_wait_ms=max_wait_ms or int(self.cfg.session.timeout_s * 1000) or None,
+            )
 
     def _disarm_gate_for_our_audio(self) -> None:
         """Our own playback closes an armed follow-up gate.
@@ -1160,6 +1193,7 @@ class AudioPlane:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
         self._playback_task = None
+        self._music_hold_until = None
         if self._paused_explicit and self._file_cfg is not None:
             # A hand-parked song makes no sound. StopAudio here is for the speech
             # tail and the device (the vendor took the line mid-song and kills our

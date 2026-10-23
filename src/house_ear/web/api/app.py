@@ -501,17 +501,22 @@ def create_app(
                         # stop and the music tools. Measured 21:10: 「停止」 answered
                         # 好。 and the music played on. Through the service so the
                         # queue state dies with the sound.
-                        metrics = client.metrics
-                        if (metrics is not None and metrics.output_owner == "music"
-                                and not rules.is_dismiss(clean)):
-                            service = getattr(app.state, "music", None)
+                        # Decide by the music service, not by who owns the speaker:
+                        # the wake's duck has already released the output by the time
+                        # this runs, so `output_owner == "music"` was never true and
+                        # 「停止」 left the song playing (measured 08:35).
+                        service = getattr(app.state, "music", None)
+                        music_active = service is not None and service.state in (
+                            "playing", "paused")
+                        if music_active and not rules.is_dismiss(clean):
                             try:
-                                if service is not None:
-                                    await service.stop()
-                                else:
-                                    await client.send(StopAudio())
+                                await service.stop()
                             except Exception as exc:  # noqa: BLE001 - never crash the app
                                 log.info("stop music failed: %s", exc)
+                        elif not music_active and client.metrics is not None \
+                                and client.metrics.output_owner == "music":
+                            with contextlib.suppress(Exception):
+                                await client.send(StopAudio())
                         # dismiss() closes the session before the reply: the idle clock
                         # used to keep running behind it and the farewell said goodbye a
                         # second time 15 s later (measured 20:42:16 -> 20:42:34).

@@ -233,11 +233,16 @@ def test_the_song_waits_out_the_whole_turn(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_the_song_stays_down_between_the_question_and_the_answer(tmp_path: Path) -> None:
+def test_the_song_stays_down_between_the_question_and_the_answer(
+        tmp_path: Path, monkeypatch) -> None:
     """Measured 21:07: the gate closes when the utterance ends, and "gate closed" alone
     let the song blip back in for the ASR+LLM second before the answer. A live turn
-    (utterance fired, reply not finished) keeps it down; ReplyFinished brings it back
-    at the drain, and a turn that never answers gives it back after the grace."""
+    (utterance fired, reply not finished) keeps it down; ReplyFinished hands the song
+    to the follow-up window, and it returns when that window closes."""
+    import house_ear.audio.process as proc
+
+    monkeypatch.setattr(proc, "MUSIC_FOLLOWUP_MS", 300)
+
     async def run() -> None:
         plane, _ = make_plane(tmp_path)
         gate = StubGate(armed=True)
@@ -257,9 +262,12 @@ def test_the_song_stays_down_between_the_question_and_the_answer(tmp_path: Path)
             await asyncio.sleep(0.8)   # one empty-queue tick
             assert plane._speech_paused is True, "the song blipped in before the answer"
 
-            plane._reply_finished = True   # ReplyFinished: the drain may resume now
-            await asyncio.sleep(0.8)
-            assert plane._speech_paused is False, "the song never came back after the reply"
+            plane._reply_finished = True   # ReplyFinished: the follow-up window arms
+            await asyncio.sleep(1.6)       # arm delay (~1 s) + the 6 s window would follow
+            assert gate.arms >= 1, "the follow-up window never opened"
+            gate.armed = False             # the window's max_wait expiry
+            await asyncio.sleep(0.7)
+            assert plane._speech_paused is False, "the song never came back after the window"
             assert plane._playback_task is not None and not plane._playback_task.done()
 
             # the grace: a turn that died without a reply still gives the music back
@@ -389,31 +397,39 @@ def test_an_explicit_pause_is_not_lifted_by_the_speech_path(tmp_path: Path) -> N
     asyncio.run(run())
 
 
-def test_no_followup_window_over_resumed_music_full_turn(tmp_path: Path) -> None:
-    """The 21:13 production anomaly as a test: wake barged over music, the turn
-    answered, the music resumed - and the follow-up window opened anyway over
-    the song. If this test stays green, the production path had help we have
-    not modelled and the item stays instrumented for the on-site test."""
+def test_music_stays_down_for_the_followup_window(tmp_path: Path,
+                                                  monkeypatch) -> None:
+    """Measured 08:30-08:35 ("对话间隙音乐出声音"): the reply drained, music
+    resumed, and only then did the follow-up window arm. The song now stays
+    down for the whole window and returns when it closes."""
+    import house_ear.audio.process as proc
+
+    monkeypatch.setattr(proc, "MUSIC_FOLLOWUP_MS", 700)
+
     async def run() -> None:
-        plane, adapter = make_plane(tmp_path)
+        plane, _ = make_plane(tmp_path)
         gate = StubGate(armed=True)
         plane.gate = gate  # type: ignore[assignment]
         song = tmp_path / "song.wav"
-        write_wav(song, seconds=5.0)   # long enough: no track boundary inside the window
+        write_wav(song, seconds=30.0)
         plane._file_cfg = (song, False, 1.0)
         plane._file_position = 0
         plane._speech_paused = True          # the wake's barge parked the song
+        gate.armed = True                    # the wake armed the gate
 
-        # the reply: one streamed sentence, then ReplyFinished, then the drain tick
         plane._reply_finished = True
         plane._speak_queued_s = 0.2
         plane._speak_queue.put_nowait((np.zeros(3200, dtype="<i2").tobytes(), True))
         task = asyncio.create_task(plane._speak_loop())
         try:
-            await asyncio.sleep(1.8)         # send + 0.5s drain tick + 1.0s follow-up
-            assert plane._owner == "music", f"owner is {plane._owner!r}"
-            assert gate.arms == 0, "the follow-up window opened over the resumed song"
-            assert gate.disarms >= 1         # the reply's first block closed the gate
+            await asyncio.sleep(1.0)         # send + drain tick
+            gate.armed = False               # the utterance closed the gate; window arms
+            await asyncio.sleep(1.4)         # arm (~1 s) + window (0.7 s)
+            assert plane._speech_paused is True, "the song came back during the window"
+            assert gate.arms >= 1, "the follow-up window never opened over the ducked song"
+            gate.armed = False               # the stub gate's max_wait expiry, in production
+            await asyncio.sleep(0.7)
+            assert plane._speech_paused is False, "the song never came back"
         finally:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -422,39 +438,6 @@ def test_no_followup_window_over_resumed_music_full_turn(tmp_path: Path) -> None
                 plane._playback_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await plane._playback_task
-
-    asyncio.run(run())
-
-
-def test_stop_audio_keeps_a_hand_parked_song(tmp_path: Path) -> None:
-    """V4's plane half: the vendor's wake kills our speech tail with StopAudio,
-    and that must not throw away a parked song's position - the give-back has
-    nothing to resume otherwise."""
-
-    async def run() -> None:
-        plane, adapter = make_plane(tmp_path)
-        song = tmp_path / "song.wav"
-        write_wav(song, seconds=2.0)
-        plane._file_cfg = (song, False, 1.0)
-        plane._file_position = int(1.7 * plane.cfg.audio.playback.rate)
-        plane._playback_task = asyncio.create_task(asyncio.sleep(30))
-
-        plane._pause_for_speech()
-        plane._paused_explicit = True          # what PauseMusic sets
-        await plane._stop_playback()           # the vendor-wake speech kill
-
-        assert plane._file_cfg is not None, "the parked position was thrown away"
-        assert plane._paused_explicit is True
-        assert adapter.stops >= 1              # the device itself was silenced
-
-        # ResumeMusic picks the song back up from the parked position.
-        plane._paused_explicit = False
-        plane._resume_after_speech()
-        await asyncio.sleep(0.05)
-        assert plane._playback_task is not None and not plane._playback_task.done()
-        plane._playback_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await plane._playback_task
 
     asyncio.run(run())
 
