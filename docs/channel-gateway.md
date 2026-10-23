@@ -198,3 +198,18 @@ house-ear-channels --weixin-data /data/channels/weixin \
 1. Telegram：给 bot 发一条消息，提供/确认 chat_id（默认 allowlist 会拒绝未知会话）。
 2. 微信：手机扫描 `--login-weixin` 打印的二维码，并允许小瑞使用一个**独立** iLink bot 账号。
 3. 真机验收：两个通道各发 2 条文字 + 1 条语音。
+
+
+## 9. 控制台 0-1 与网关管理（2026-10-23 补充）
+
+- `/channels` 页现在提供：
+  - 网关状态（运行/停止、PID/uptime/last_error）与 `启动 / 停止 / 重启` 按钮；
+  - Telegram token 的 write-only 输入 + “保存并验证”（服务端 getMe，失败本地化提示）；
+  - 微信“扫码绑定”按钮：控制面发起 QR 登录、每 2s 轮询、内联 SVG 二维码；确认后保存账号；
+  - 保存配置/Token/绑定后不自动启动，显示“重启网关后生效”的 banner。
+- 控制面新增：
+  - `ChannelSupervisor`（子进程管理，非音频面）；
+  - `POST /api/v1/channels/gateway/{start|stop|restart}`；
+  - `PUT /api/v1/channels/telegram/token`（写 secrets，永不回显）；
+  - `POST/GET /api/v1/channels/weixin/login`（QR 状态）。
+- **注意**：控制台托管模式与 Mac 外部 `house-ear-channels` 只能二选一；同一 bot 不能同时长轮询。
