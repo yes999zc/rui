@@ -53,6 +53,17 @@ export interface PanelBlock {
   section?: string
   apply?: string
   fields?: PanelField[]
+  columns?: PanelColumn[]
+  follow?: boolean
+  filter?: boolean
+}
+
+export interface PanelColumn {
+  key: string
+  label: string
+  width?: string
+  truncate?: number
+  join?: boolean
 }
 
 export interface PanelSpec {

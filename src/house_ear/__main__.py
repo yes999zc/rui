@@ -10,7 +10,7 @@ from pathlib import Path
 from . import __version__
 from .config import Config, ConfigError, default_config_path, load_config, save_config
 from .doctor import run_doctor
-from .log_setup import setup_logging
+from .log_setup import LOG_FILE_NAME, setup_logging
 
 
 def _config_path(args: argparse.Namespace) -> Path:
@@ -122,7 +122,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     cfg = load_config(path) if path.exists() else Config()
     host = args.host or cfg.web.host
     port = args.port or cfg.web.port
-    setup_logging(cfg.system.log_level)
+    setup_logging(cfg.system.log_level,
+                  Path(cfg.system.data_dir) / LOG_FILE_NAME)
     app = create_app(cfg, config_path=path if path.exists() else None,
                      start_audio=not args.no_audio)
     uvicorn.run(app, host=host, port=port, log_level=cfg.system.log_level.lower())

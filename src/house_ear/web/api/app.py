@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import logging
 import os
@@ -26,6 +27,7 @@ from ...config.schema import CONFIG_VERSION, LED_STATES, Config
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
+from ...log_setup import LOG_FILE_NAME, tail_lines
 from ...music import MusicService, NavidromeSource, PlayHistory
 from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
@@ -206,6 +208,29 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
+            "id": "turns", "title": "对话", "icon": "☰", "group": "status", "order": 25,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/turns?limit=20", "refresh_s": 5,
+            "blocks": [
+                {"type": "table", "title": "最近对话", "items": "$.turns",
+                 "empty": "还没有对话",
+                 "columns": [
+                    {"key": "ts", "label": "时间", "width": "70px"},
+                    {"key": "transcript", "label": "听到的"},
+                    {"key": "reply", "label": "回答", "truncate": 60},
+                    {"key": "tools", "label": "工具", "width": "120px", "join": True},
+                 ]},
+            ],
+        },
+        {
+            "id": "logs", "title": "日志", "icon": "≡", "group": "system", "order": 60,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/logs?lines=300", "refresh_s": 2,
+            "blocks": [
+                {"type": "log", "follow": True, "filter": True},
+            ],
+        },
+        {
             "id": "settings", "title": "设置", "icon": "⚙", "group": "config", "order": 40,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/config", "refresh_s": 0,
@@ -360,10 +385,10 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
     # or lyrics become commands). 2 s, then the song returns.
     with contextlib.suppress(Exception):
         await client.reply_finished(hold_music_s=MUSIC_COMMAND_WINDOW_S)
-    app.state.last_turn = {
+    _record_turn(app, {
         "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
         "tools": [f"music_{action}"], "stages": {},
-    }
+    })
     traces.add(trace)
     log.info("music transport: %r -> %s", clean, action)
     return line
@@ -396,6 +421,16 @@ def _turn_hold(result: object) -> float | None:
     return None
 
 
+def _record_turn(app: FastAPI, turn: dict) -> None:
+    """Keep the last N turns for the console's conversation panel."""
+    app.state.last_turn = turn
+    ring = getattr(app.state, "recent_turns", None)
+    if ring is None:
+        ring = collections.deque(maxlen=50)
+        app.state.recent_turns = ring
+    ring.append({**turn, "ts": time.strftime("%H:%M:%S")})
+
+
 def _voice_rate(client: object) -> int:
     ready = getattr(client, "ready", None)
     return int(getattr(ready, "voice_rate", 0) or 16000)
@@ -423,10 +458,10 @@ async def _volume_command(app: FastAPI, clean: str, runner, client, trace,
     # (measured 09:12: 「音量调到60%了」 then several seconds of silence).
     with contextlib.suppress(Exception):
         await client.reply_finished(hold_music_s=0)
-    app.state.last_turn = {
+    _record_turn(app, {
         "transcript": clean, "reply": line, "audio_bytes": spoken, "error": "",
         "tools": ["volume"], "stages": {},
-    }
+    })
     traces.add(trace)
     log.info("volume command: %r -> %s", clean, line)
     return line
@@ -646,10 +681,10 @@ def create_app(
                         # No reply_finished here: the session is closing, so the plane
                         # must not open a follow-up window after the goodbye.
                         _light_after_audio(app, spoken, cfg.audio.voice.rate, "off")
-                        app.state.last_turn = {
+                        _record_turn(app, {
                             "transcript": clean, "reply": "", "session_action": "stop",
                             "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
-                        }
+                        })
                         traces.add(trace)
                         log.info("stop intent: %r -> session closed", clean)
                         return
@@ -670,7 +705,7 @@ def create_app(
                         return
                     if asr_report is not None:
                         result.stages.setdefault("asr", asr_report)
-                    app.state.last_turn = result.to_dict()
+                    _record_turn(app, result.to_dict())
                     traces.add(trace)
                     # A music/volume turn wants the song back the moment the reply
                     # drains, not after the follow-up window (measured 09:21: ~10 s).
@@ -1161,7 +1196,7 @@ def create_app(
         await client.reply_finished(hold_music_s=_turn_hold(result))
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
                            _turn_light(result))
-        app.state.last_turn = result.to_dict()
+        _record_turn(app, result.to_dict())
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)
         return {
@@ -1378,9 +1413,24 @@ def create_app(
         return {"count": len(registry.names()), "names": registry.names()}
 
     @app.get("/api/v1/turns", dependencies=[Depends(auth)])
-    async def last_turn() -> dict:
-        """The last turn as it ran: transcript, reply, per-stage provider and timing."""
-        return getattr(app.state, "last_turn", None) or {"error": "no turn yet"}
+    async def turns(limit: int = 20) -> dict:
+        """Recent turns, newest first - the console's 对话 panel.
+
+        `/api/v1/turns` without a limit used to mean "the last turn only"; the
+        conversation panel reads the ring, and the single-turn shape is still
+        available as `turns[0]`.
+        """
+        ring = getattr(app.state, "recent_turns", None) or []
+        recent = list(ring)[-max(1, min(limit, 200)):]
+        recent.reverse()
+        return {"turns": recent, "last": getattr(app.state, "last_turn", None)}
+
+    @app.get("/api/v1/logs", dependencies=[Depends(auth)])
+    async def logs(lines: int = 200) -> dict:
+        """The tail of the service log. Polled by the console's 日志 panel."""
+        path = Path(cfg.system.data_dir) / LOG_FILE_NAME
+        return {"lines": tail_lines(path, max(1, min(lines, 2000))),
+                "path": str(path), "exists": path.is_file()}
 
     @app.get("/api/v1/traces", dependencies=[Depends(auth)])
     async def recent_traces(limit: int = 20) -> dict:

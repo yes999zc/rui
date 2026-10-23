@@ -13,6 +13,8 @@ import BlockNow from '../components/BlockNow.vue'
 import BlockActions from '../components/BlockActions.vue'
 import BlockList from '../components/BlockList.vue'
 import BlockForm from '../components/BlockForm.vue'
+import BlockTable from '../components/BlockTable.vue'
+import BlockLog from '../components/BlockLog.vue'
 
 const route = useRoute()
 const { panels } = usePanels()
@@ -79,6 +81,8 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
       <BlockActions v-else-if="block.type === 'actions'" :block="block" :data="dataFor(block)" :refresh="poll" />
       <BlockList v-else-if="block.type === 'list'" :block="block" :data="dataFor(block)" />
       <BlockForm v-else-if="block.type === 'form'" :block="block" :data="dataFor(block)" :refresh="poll" />
+      <BlockTable v-else-if="block.type === 'table'" :block="block" :data="dataFor(block)" />
+      <BlockLog v-else-if="block.type === 'log'" :block="block" :data="dataFor(block)" />
     </template>
   </template>
 </template>
