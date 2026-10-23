@@ -6,9 +6,10 @@ Self-hosted voice endpoint for SSH-enabled smart speakers.
 wake word, speech, reasoning, and playback all run on your own box, and tools
 (Home Assistant, MCP servers, local commands) are exposed through one registry.
 
-> Status: **M1 in progress (S0–S3 done)** — control plane, contracts, latency ruler,
-> the audio-plane process, the inbound LX06 adapter, echo cancellation and the wake word
-> are in place; ASR/LLM/TTS wiring is next (S4). v1 supports exactly one speaker model:
+> Status: **v1 in progress** — the whole turn (wake → ASR → LLM → speech → playback),
+> music (Navidrome), Home Assistant over MCP, reminders, memory, the console and the
+> one-command Docker deploy are in. What is left is cold-install acceptance on the NAS
+> (see [`docs/ROADMAP.md`](docs/ROADMAP.md)). v1 supports exactly one speaker model:
 > Xiaomi 小爱音箱 Pro (LX06).
 
 > **Picking this up mid-flight?** Read [`docs/HANDOFF.md`](docs/HANDOFF.md) first: current
@@ -57,6 +58,20 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
   boost 2.0, threshold 0.20), `Wake` events over the IPC seam
 - `scripts/measure_wake.py` — plays music, listens, prints every wake with its timestamp,
   ERLE and reference state; `--save-voice` keeps the exact stream KWS saw
+- Music from your own library — Navidrome (Subsonic) source, queue with natural
+  end-of-track advance, pause/resume/next/prev/stop, search and taste tools; token+salt
+  auth and a persistent queue/history. Enable with `music.enabled: true`; see
+  [docs/deploy.md](docs/deploy.md)
+- Home Assistant — MCP client plus a six-tool whitelist (state, call service, areas,
+  search, batch read, system status), entity names injected without state, hard refusal
+  for lock/alarm/valve, and degradation instead of a crash when HA is down
+- Memory and a context switch — curated entries extracted in the background, confirmed
+  from the console, injected into the prompt; "关闭上下文/打开上下文" works by voice
+- Console — panels for overview, devices, conversations, logs, music, memory and
+  settings, with form/table/log blocks declared by the server
+- Docker one-command deploy — one image, three volumes (`config`, `data`, `models`),
+  health check, log rotation and a documented rollback; see
+  [docs/deploy.md](docs/deploy.md) and [docs/runbook.md](docs/runbook.md)
 
 ## Measured so far
 
@@ -84,6 +99,17 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
 
 ## Quick start
 
+On the NAS (production), one command — details, config and models in
+[docs/deploy.md](docs/deploy.md):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yes999zc/house-ear/main/deploy/install.sh | sh
+```
+
+Then open `http://<nas-ip>:8080/` and run `docker compose exec house-ear house-ear doctor`.
+
+On a development machine:
+
 ```bash
 uv sync
 uv run house-ear doctor
@@ -91,6 +117,9 @@ uv run house-ear serve
 ```
 
 Then open `http://127.0.0.1:8080/`.
+
+Operations (start/stop, logs, changing config, upgrading, rolling back, common failures)
+are in [docs/runbook.md](docs/runbook.md).
 
 ## M1 acceptance
 
@@ -106,7 +135,9 @@ Then open `http://127.0.0.1:8080/`.
 - [docs/adapter-contract.md](docs/adapter-contract.md) — how a new speaker is supported
 - [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md) — the LX06 wire protocol we depend on
 - [docs/audio-pipeline.md](docs/audio-pipeline.md) — three rates, AEC, bit-depth scaling, barge-in
-- [docs/deploy.md](docs/deploy.md) — NAS deployment
+- [docs/deploy.md](docs/deploy.md) — NAS deployment, music/HA config, volumes, image tags
+- [docs/runbook.md](docs/runbook.md) — operations: start/stop, logs, config, upgrade, rollback, failures
+- [docs/music.md](docs/music.md) — the music layer and its sources
 - [docs/adr/](docs/adr/) — the decisions and what they cost
 
 ## License

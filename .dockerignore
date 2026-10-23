@@ -1,8 +1,20 @@
 .git
+.github
 .venv
 node_modules
 web/node_modules
 web/dist
 tests
+docs
 data
 *.log
+# A local .env holds generated tokens and provider keys; never ship it in the build
+# context (it is not COPYed today, but one careless COPY . would leak it into a layer).
+.env
+.env.*
+pytest_cache
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.pyc
+.DS_Store
