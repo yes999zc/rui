@@ -184,9 +184,9 @@ restart 字段保存后返回 `restart_fields`，界面显示 `docker compose re
 
 ### 12.4 验收证据
 
-- Lead 集成探针（`/tmp/lead-int/`）：17 页 × headless Chrome，0 意外 console error、0 横向溢出；
+- Lead 集成探针（截图存 `docs/console-shots/`）：17 页 × headless Chrome，0 意外 console error、0 横向溢出；
   zh/en + light/dark 截图；**真实 UI 保存** 120→121→120（API 复核一致）；真实 422 → 红框 + 中文行内；
   手机 390 概览/配置 0 溢出。
-- console-ui QA：32 场景截图 `/tmp/console-ui/shots/`，报告 `/tmp/console-ui/report.json`，
+- console-ui QA：32 场景截图报告 `docs/console-shots/qa-report.md`（原始 JSON 在会话产物中），
   critic 首轮 top-5 已修（保存控件常驻、概览行式 ledger、禁用主按钮中性、focus 统一、手机抽屉滚动）。
 

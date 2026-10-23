@@ -773,10 +773,10 @@ origin/main 同步。**
   config/backup/secrets/service.log 全部 0600；`.github/workflows/secret-scan.yml` 拦后续泄漏。
   审计全文 `docs/audit-round-1.md`（含 15 条安全 finding 与修复状态）。
 
-**Lead 独立集成验证（`/tmp/lead-int/`）**：17 页全量 headless Chrome，**0 意外 console error、
+**Lead 独立集成验证（截图存 `docs/console-shots/`）**：17 页全量 headless Chrome，**0 意外 console error、
 0 横向溢出**（1440/390）；zh/en + light/dark 截图；**真实 UI 保存** `assistant.reply_max_chars`
 120→121→120（GET 复核一致），真实 422 → 字段红框 + 「校验失败：1 个字段需要修正」；
-手机抽屉可滚动；`docs/console-redesign.md` 设计契约与 QA 报告在 `/tmp/console-ui/report.json`。
+手机抽屉可滚动；`docs/console-redesign.md` 设计契约与 QA 报告见 `docs/console-shots/qa-report.md` / `docs/console-redesign.md`。
 `pytest` 全量绿（628 passed / 15 skipped）、`ruff` clean、`npm run typecheck/build` 绿。
 
 **仍待 9哥（不阻塞代码）**：
