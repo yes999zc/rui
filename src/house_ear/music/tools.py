@@ -117,17 +117,22 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
             elif p.random:
                 tracks = await source.random(batch)
             else:
-                tracks = await _search(source, p, service.names)
-                if not tracks:
-                    # 「放几首日文歌」 has no title to search: try the language's genre
-                    # tags (the old build's pre-index answer). Better than 「没找到」.
-                    for genre in q.language_genres(p.term or p.raw):
-                        by_genre = getattr(source, "by_genre", None)
-                        if by_genre is None:
-                            break
+                # A pure language ask (「放几首日文歌」) has no title to match: the
+                # genre pool comes FIRST, as in the old build's lang_pool - the
+                # literal search answered it with 《OAOA (日文版)》-五月天, a Chinese
+                # song whose title says 日文 (measured 10:37:50).
+                genres = q.language_genres(p.term) if len(p.term) <= 6 else []
+                tracks: list[Track] = []
+                by_genre = getattr(source, "by_genre", None)
+                if genres and by_genre is not None:
+                    for genre in genres:
                         tracks = await by_genre(genre, limit=batch)
                         if tracks:
+                            log.info("music: %r -> genre %s (%d tracks)",
+                                     p.raw, genre, len(tracks))
                             break
+                if not tracks:
+                    tracks = await _search(source, p, service.names)
         except SourceError as exc:
             log.info("music_play: %s", exc)
             return ToolResult(status="unreachable")
