@@ -33,12 +33,14 @@ from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
 from ...session import phrases, prompts, rules
 from ...session.ack import ensure_ack_wav
+from ...session.memory import MemoryStore
 from ...session.text import strip_wake
 from ...session.turn import TurnRunner
 from ...session.vendor import VendorWindow
 from ...tools import build_local_tools, build_scheduler
 from ...tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from ...tools.ha import HaBridge
+from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
 
@@ -113,7 +115,7 @@ def _context_provider(app: FastAPI, ha: HaBridge | None):
     ha_ctx = _ha_context(ha) if ha is not None else (lambda: "")
 
     def provider() -> str:
-        parts = [ha_ctx()]
+        parts = [ha_ctx(), _memory_context(app)]
         service = getattr(app.state, "music", None)
         if service is not None and service.state in ("playing", "paused"):
             parts.append(prompts.MUSIC_HINT)
@@ -411,6 +413,39 @@ def _is_music_turn(result: object) -> bool:
     return any(str(n).rsplit(".", 1)[-1].startswith("music") for n in tools)
 
 
+async def _context_command(app: FastAPI, clean: str, runner, client, trace,
+                           traces) -> str | None:
+    """「关闭上下文」/「打开上下文」: a config edit, persisted, no model."""
+    action = rules.context_command(clean)
+    if not action:
+        return None
+    cfg = app.state.cfg
+    cfg.session.keep_context = action == "on"
+    runner.apply_session(cfg.session)
+    path = getattr(app.state, "config_path", None)
+    if path is not None:
+        with contextlib.suppress(Exception):
+            save_config(path, cfg)
+    line = phrases.book.render("context.on" if action == "on" else "context.off")
+    runner.idle.touch()
+    spoken = await runner.say(line, _speaking(app, client), trace)
+    _record_turn(app, {"transcript": clean, "reply": line, "audio_bytes": spoken,
+                       "error": "", "tools": [f"context.{action}"], "stages": {}})
+    log.info("context: %s (keep_context=%s)", action, cfg.session.keep_context)
+    return line
+
+
+def _memory_context(app: FastAPI) -> str:
+    """Confirmed memory only - candidates wait for the console (old build's rule)."""
+    store = getattr(app.state, "memory", None)
+    if store is None:
+        return ""
+    texts = store.confirmed_texts(limit=20)
+    if not texts:
+        return ""
+    return "（你记得这些事，用户说过：\n" + "\n".join(f"- {t}" for t in texts) + "）"
+
+
 def _turn_hold(result: object) -> float | None:
     """0 when this turn's tools were about the song itself (music/volume)."""
     tools = getattr(result, "tools", None) or []
@@ -486,6 +521,8 @@ def create_app(
     # One assembly for everything local: information tools and reminders. Reminders used
     # to be reachable only through tools.reminders.build_tools, which nothing imported -
     # the tools existed, the scheduler existed, and the model could never call them.
+    # Memory is independent of the music layer: curated entries plus candidates.
+    memory = MemoryStore(Path(cfg.system.data_dir) / "memory.json")
     local_tools = build_local_tools(cfg)
     for spec, _handler in local_tools:
         registry.register(spec)
@@ -648,6 +685,9 @@ def create_app(
                     if await _volume_command(app, clean, runner, client, trace,
                                              traces) is not None:
                         return
+                    if await _context_command(app, clean, runner, client, trace,
+                                              traces) is not None:
+                        return
                     if rules.stop_intent(clean, cfg.session.end_words):
                         # A stop word with a song owning the speaker stops the sound;
                         # 「退下吧」 only dismisses the conversation and the song keeps
@@ -703,6 +743,10 @@ def create_app(
                         log.info("clarify: bare device name %r -> asking the verb", clean)
                         return
                     _light(app, "thinking")
+                    # An utterance that asks to be remembered leaves a candidate
+                    # for the console; it is not injected until confirmed.
+                    with contextlib.suppress(Exception):
+                        memory.extract(clean)
                     try:
                         result = await runner.run(pcm, _speaking(app, client), trace, transcript=clean)
                     except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
@@ -911,6 +955,11 @@ def create_app(
                 if "local.volume" not in registry.names():
                     registry.register(volume_spec)
                     local_tools.append((volume_spec, volume_tool))
+                mem_specs = build_memory_tools(memory)
+                for spec, handler in mem_specs:
+                    if spec.name not in registry.names():
+                        registry.register(spec)
+                        local_tools.append((spec, handler))
                 # Make every tool registered in this lifespan visible to the model.
                 runner.set_tools(local_tools)
                 app.state.volume_tool = volume_tool
@@ -1015,6 +1064,11 @@ def create_app(
             await supervisor.stop()
 
     app = FastAPI(title="house-ear", version=__version__, lifespan=lifespan)
+    # The live config and the file it came from: voice commands that edit a
+    # setting (「关闭上下文」) persist through the same file the console writes.
+    app.state.cfg = cfg
+    app.state.config_path = config_path
+    app.state.memory = memory
     app.state.tools = registry  # the console and tests read the same registry turns use
     app.state.trace_log = traces  # scripts and tests read the same log the API serves
     if music_service is not None:
@@ -1342,6 +1396,38 @@ def create_app(
         return {"query": q, "tracks": [
             {"id": t.id, "title": t.title, "artist": t.artist, "duration": t.duration}
             for t in tracks[:20]]}
+
+    @app.get("/api/v1/memory", dependencies=[Depends(auth)])
+    async def memory_list() -> dict:
+        store = getattr(app.state, "memory", None)
+        if store is None:
+            return {"items": []}
+        return {"items": [i.as_dict() for i in store.items()]}
+
+    @app.post("/api/v1/memory", dependencies=[Depends(auth)])
+    async def memory_edit(patch: Annotated[dict, Body()]) -> dict:
+        """add / confirm / remove from the console. Candidates only become memory
+        here: the injector reads confirmed entries and nothing else."""
+        store = getattr(app.state, "memory", None)
+        if store is None:
+            raise HTTPException(status_code=409, detail="memory is not enabled")
+        action = str(patch.get("action") or "")
+        item_id = str(patch.get("id") or "")
+        text = str(patch.get("text") or "")
+        if action == "add":
+            item = store.add(text, source="console", confirmed=True)
+        elif action == "confirm":
+            item = store.confirm(item_id, text or None)
+            if item is None:
+                raise HTTPException(status_code=404, detail="no such memory item")
+        elif action == "remove":
+            if not store.remove(item_id):
+                raise HTTPException(status_code=404, detail="no such memory item")
+            item = None
+        else:
+            raise HTTPException(status_code=422, detail="action must be add/confirm/remove")
+        return {"items": [i.as_dict() for i in store.items()],
+                "item": item.as_dict() if item else None}
 
     @app.get("/api/v1/panels", dependencies=[Depends(auth)])
     async def panels() -> dict:

@@ -166,6 +166,23 @@ def claims_device_success(transcript: str, reply: str) -> bool:
     return bool(DEVICE_CMD.search(transcript or "") or DEVICE_NOUN.search(transcript or ""))
 
 
+CONTEXT_OFF_WORDS = ("关闭上下文", "别记着前面", "不记上下文", "忘掉前面", "不要上下文",
+                     "别记上下文", "每句独立")
+CONTEXT_ON_WORDS = ("打开上下文", "记住上下文", "接着前面聊", "带上上下文", "记着上下文")
+
+
+def context_command(transcript: str) -> str:
+    """on | off | "" - whether to keep multi-turn context from now on."""
+    t = normalize(transcript)
+    if not t or len(t) > 10:
+        return ""
+    if any(w in t for w in CONTEXT_OFF_WORDS):
+        return "off"
+    if any(w in t for w in CONTEXT_ON_WORDS):
+        return "on"
+    return ""
+
+
 # Words that make an utterance a music ask at all. The model is allowed to call
 # music_play only when one of these is in what the user actually said.
 _MUSIC_INTENT = ("放", "播", "歌", "音乐", "听", "来点", "来首", "曲", "唱")

@@ -484,6 +484,10 @@ class SessionConfig(BaseModel):
         "暂停", "别唱", "不听了", "退下吧", "退下", "关机", "不聊了", "够了",
         "退出", "结束", "再见", "拜拜", "睡了", "睡吧", "晚安",
     ])
+    # Whether a turn may see the earlier turns of this conversation. Off = every
+    # turn stands alone (history cleared after each one). Editable from the
+    # console's 设置 panel and by voice (「关闭上下文」/「打开上下文」).
+    keep_context: bool = True
     # Rounds (a user+assistant pair each) handed to the model. The old build read this
     # from `conversation.history_rounds` (6); house-ear had it hard-coded to 4, which is
     # why a repeated question collapsed into its own previous answer.

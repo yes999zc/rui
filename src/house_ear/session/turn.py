@@ -198,6 +198,7 @@ class TurnRunner:
         # Held as the model (not copied into fields) so a console edit is one
         # `apply_session` away instead of a list of attributes to keep in sync.
         self.session = session or SessionConfig()
+        self.keep_context = self.session.keep_context
         # Injected, so the 15 s boundary can be tested without sleeping 15 s. Production
         # gets the monotonic clock and the configured window.
         self.idle = idle if idle is not None else IdleWatch(self.session.timeout_s)
@@ -318,6 +319,9 @@ class TurnRunner:
         """
         self.session = session
         self.idle.timeout_s = session.timeout_s
+        self.keep_context = session.keep_context
+        if not self.keep_context:
+            self.history.clear()
 
     def history_messages(self, transcript: str) -> list[dict]:
         """The last `history_turns` rounds, minus earlier copies of the question asked now.
@@ -334,7 +338,7 @@ class TurnRunner:
         the convergence. The question is still not fed twice: history is context, not a
         transcript to copy.
         """
-        if self.history_turns <= 0:
+        if self.history_turns <= 0 or not self.keep_context:
             return []
         window = self.history[-2 * self.history_turns:]
         groups: list[list[dict]] = []
@@ -773,9 +777,12 @@ class TurnRunner:
         # The reply is what was actually spoken, not the raw deltas: markup that never
         # reached the speaker must not reach the API response or the next turn's history.
         result.reply = clean_reply("".join(spoken_parts))
-        self.history.append({"role": "user", "content": transcript})
-        if result.reply:
-            self.history.append({"role": "assistant", "content": result.reply})
+        if self.keep_context:
+            self.history.append({"role": "user", "content": transcript})
+            if result.reply:
+                self.history.append({"role": "assistant", "content": result.reply})
+        else:
+            self.history.clear()   # stateless: nothing carries to the next turn
         return result
 
     async def say(self, text: str, speak: SpeakFn,

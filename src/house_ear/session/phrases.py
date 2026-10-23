@@ -51,6 +51,15 @@ DEFAULTS: dict[str, str] = {
     "volume.read": "现在音量 {pct}%。",
     "volume.failed": "音量没调成，音箱没回应。",
     "volume.unknown": "没听清要调到多少，现在是 {pct}%。",
+    # --- memory and conversation context ------------------------------------
+    "memory.saved": "好，我记住了：{text}。",
+    "memory.empty_text": "要记什么？说清楚一点我再记。",
+    "memory.forgotten": "好，忘掉「{text}」了。",
+    "memory.not_found": "没找到要忘掉的那条。",
+    "memory.recall_empty": "我这儿还没有记住的事。",
+    "memory.recall": "我记住的有：{items}。",
+    "context.off": "好，之后每句话我都当新的一句，不带上下文。",
+    "context.on": "好，之后会接着上下文聊。",
     # --- devices over HA (V2's first application) ----------------------------
     "device.done": "好，{device}{action}。",
     "device.unreachable": "{device}这会儿连不上，没能执行，别当我成功了。",
