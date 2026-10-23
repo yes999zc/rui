@@ -99,3 +99,23 @@ def test_entity_list_strips_states_and_filters_noise(tmp_path: Path) -> None:
         assert "儿童房主灯=light.kids" in ctx and '"state"' not in ctx
 
     asyncio.run(run())
+
+
+def test_a_bare_service_and_a_json_list_of_ids_still_reach_ha(tmp_path: Path) -> None:
+    """Measured 11:15:50: 「关闭儿童房的灯」 sent service="turn_off" (no domain) and
+    entity_id as a JSON string; HA refused for a missing domain."""
+    import json as _json
+
+    async def run() -> None:
+        bridge = make(tmp_path, tools=["call_service"])
+        specs = {s.name: h for s, h in bridge.tool_specs()}
+        out = await specs["local.ha_call_service"]({
+            "service": "turn_off",
+            "entity_id": _json.dumps(["switch.a", "switch.b"]),
+        })
+        assert out.status == "ok", out
+        sent = bridge.client.calls[-1][1]
+        assert sent["domain"] == "switch" and sent["service"] == "turn_off"
+        assert sent["entity_id"] == "switch.a, switch.b"
+
+    asyncio.run(run())

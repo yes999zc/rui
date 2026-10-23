@@ -182,14 +182,31 @@ class HaBridge:
 
     async def _call_service(self, args: dict[str, Any]) -> ToolResult:
         # HA's MCP wants `domain` and `service` separately; a model (or a test)
-        # may hand over the combined "light.turn_on" spelling - accept both.
+        # may hand over the combined "light.turn_on" spelling, a bare "turn_off",
+        # or the entity list as a JSON string. Measured 11:15:50: 「关闭儿童房的灯」
+        # sent {"service": "turn_off", "entity_id": "[\"switch.x\", ...]"} and HA
+        # refused for a missing domain.
         service = str(args.get("service") or "")
         args = dict(args)
-        if "." in service and not args.get("domain"):
-            args["domain"], args["service"] = service.split(".", 1)
         target = args.get("entity_id") or ""
+        if isinstance(target, str) and target.strip().startswith("["):
+            try:
+                parsed = json.loads(target)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, list):
+                target = parsed
         if isinstance(target, list):
             target = ", ".join(str(t) for t in target)
+            args["entity_id"] = target
+        if "." in service:
+            head, tail = service.split(".", 1)
+            # "turn_off" alone: the domain lives in the entity id.
+            args.setdefault("domain", head)
+            args["service"] = tail
+        elif not args.get("domain") and "." in str(target):
+            args["domain"] = str(target).split(".", 1)[0]
+            args["service"] = service
         if not target:
             return ToolResult(status="empty")
         # The refusal the old build never had server-side (gap report §3.4-7).
