@@ -1,5 +1,11 @@
 # Deploy
 
+**Target: the NAS, in Docker.** The Mac is the development host (`uv run house-ear
+serve` on :8091 with the device pointed at it); production is the NAS running the
+image below on :8080 with `--network host`, and the speaker's client dialling the
+NAS's address. Every acceptance run (C1 cold install) happens on the NAS, not on
+the Mac.
+
 ## Requirements
 
 - x86_64 or arm64, 4 cores, 4 GB RAM, 2 GB free disk

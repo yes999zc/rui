@@ -389,7 +389,11 @@ C1 冷装。
 ## 12. 2026-10-23 白天：V2 / HA 调试 / 控制台 P2–P3 / D2 完成
 
 **代码**：HEAD 见 git log，**410 passed**，ruff clean，前端 `vue-tsc` + build 通过。
-**运行**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh >> ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`
+**部署目标**：**生产是 NAS 上的 Docker**（`docs/deploy.md`：`install.sh` 一条命令、`:8080`、
+`network_mode: host`、配置在 `~/house-ear/config`）；Mac 只是开发机（`:8091`、dev 版 serve-dev.sh）。
+C1 冷装验收在 NAS 上做。
+
+**运行（开发机）**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh >> ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`
 （注意 `>>` 追加；重启前先 `mv` 轮转旧日志，用 `>` 截断会让新旧进程交错写同一文件，时序不可信）。
 **acek**：`ack.mode: tts`「在呢。」；`devices[].volume: 86`（≈220 档）。
 
