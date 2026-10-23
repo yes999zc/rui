@@ -30,7 +30,7 @@ house-ear 控制面
 1. **channel-gateway 不放进音频面**；它是独立进程/容器，崩溃不影响语音。
 2. **微信和 Telegram 共用一个 gateway 核心**，只写两个 adapter；以后接其他平台只加 adapter。
 3. **默认独立会话**：`telegram:<chat_id>` / `weixin:<user_id>`，不与客厅 session 混用；需要“继续客厅话题”时再显式关联。
-4. **文字优先**：先跑通文字；语音输入是增强；语音回复最后做。
+4. **文字优先**：先跑通文字；语音输入直接下载原始 `.silk` 重转写；语音回复以**文件附件**发送，不承诺语音气泡。
 5. **权限先只读**：channel 里可以查/说，但危险动作必须二次确认，不能直接执行。
 
 ## 2. 里程碑与任务
@@ -42,7 +42,7 @@ house-ear 控制面
 | M2 | gateway 骨架 | adapter 协议、allowlist、去重、持久化、任务队列、日志脱敏 | M0 | 否 |
 | M3 | Telegram adapter | 长轮询、文字、语音输入、语音回复、命令、测试 | M1/M2 | **是**（独立 bot token + chat id） |
 | M4 | 微信 iLink adapter | 扫码登录、getupdates、context_token、sendmessage、文字 | M1/M2 | **是**（扫码 + 测试消息） |
-| M5 | 微信语音/媒体 | `voice_item.text`、CDN AES、SILK 转 PCM、可选语音回复 | M4 | 是（语音测试） |
+| M5 | 微信语音/媒体 | CDN AES 下载 `.silk` → pilk 转 WAV → ASR 重转写；回复发音频文件 | M4 | 是（语音测试） |
 | M6 | 控制台 Channels 页 | 绑定/解绑、二维码、状态、allowlist、回复模式、日志 | M3/M4 | 否 |
 | M7 | 部署/安全/验收 | 独立进程/容器、compose、文档、速率限制、E2E | M3–M6 | 是（真机 E2E） |
 
@@ -95,12 +95,14 @@ house-ear 控制面
 - [ ] 接入 `/api/v1/chat`：文字进、文字出，控制台/音箱可选。
 - [ ] 测试：协议 fixture；真机需要**新的 iLink bot 账号扫码**（不要和 Hermes/OpenClaw 共用同一个 bot，长轮询只能一个消费者）。
 
-### M5 — 微信语音/媒体（2–4 天，可延后）
+### M5 — 微信语音/媒体（2–3 天）
 
-- [ ] 入站 VOICE：优先用 `voice_item.text`（微信转写）；没有则 CDN 下载 → AES-128-ECB 解密 → SILK/AMR/PCM 转码 → `/api/v1/asr`。
-- [ ] 出站语音：先验证 iLink 的 voice 上传是否稳定；不稳定就只发文字，语音回复留到后续。
+- [ ] 入站 VOICE：**不用**腾讯 `voice_item.text`；按 Hermes 的做法下载原始 `.silk` → CDN AES-128-ECB 解密 → `pilk.silk_to_wav` 转 WAV → `/api/v1/asr` 重新转写。
+- [ ] `pilk` 作为 optional extra（懒安装）；解码失败时退回 `voice_item.text`，并在回复/日志标记“腾讯转写回退”。
+- [ ] 出站语音：**作为文件附件发送（media_type=FILE）**，不是语音气泡；Hermes 的 `send_voice(force_file_attachment=True)` 已证明这条路径可用。
+- [ ] 产物格式优先 `.mp3`（ffmpeg 从 TTS PCM 转），兼容性比 `.silk` 好；附一句“语音回复已作为文件发送”。
 - [ ] 图片/文件：后续版本，不在第一版。
-- [ ] 注意：`voice_item.text` 对非中文不可靠；中文可用，但保留“重新转写”开关。
+- [ ] 验收：微信发语音 → 重新转写正确；小瑞回音频文件 → 微信可下载/播放。
 
 ### M6 — 控制台 Channels 页（1–2 天）
 
@@ -146,7 +148,7 @@ house-ear 控制面
 
 - 微信 iLink 处于 Public Beta，协议可能变；adapter 必须隔离，不能侵入控制面。
 - 微信语音编码多为 SILK，ffmpeg 不原生支持，需要额外解码；第一版可用 `voice_item.text` 绕过。
-- 微信语音**发送**没有稳定公开 helper，第一版不承诺语音回复。
+- 微信**语音气泡**发送没有稳定公开 helper；**音频文件附件**已验证可行（Hermes 当前实现），第一版用文件方式。
 - 同一 bot 账号只能一个 `getupdates` 消费者：不要与 Hermes/OpenClaw 共用。
 - `context_token` 是会话锚点；主动推送不可靠，agent 通知优先走 Telegram/控制台。
 - Telegram/微信消息经平台云，非端到端加密；控制台需明示。
