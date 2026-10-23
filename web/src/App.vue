@@ -57,7 +57,9 @@ onMounted(async () => {
   }
   // A fresh install lands on the wizard, not on an overview of nothing. Only the
   // landing route is redirected: a bookmark to a panel is a deliberate act.
-  if (route.path === '/panel/overview') {
+  // The router may still be resolving the '/' redirect when App mounts, so both
+  // spellings of "the landing page" are checked.
+  if (route.path === '/' || route.path === '/panel/overview') {
     try {
       const setup = await api.setup()
       if (setup.next_step !== 'done') await router.replace('/setup')
