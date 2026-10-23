@@ -74,4 +74,5 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
 
 - Telegram + 微信 iLink/ClawBot 的 backend、gateway、Channels 页已完成；测试 743 passed。
 - 真机验收仍需要：Telegram allowlist chat_id、微信扫码、两通道语音/文字测试。
-- M7（独立 gateway 常驻服务/容器、开机自启、生产日志轮转）尚未做。
+- M7（托管 gateway 自动启动/watchdog、控制台 Start/Stop/Restart、NAS 部署）已完成；
+  NAS 当前只启用 Telegram，微信只保留接口。NAS Telegram 出网走本机 mihomo SOCKS。
