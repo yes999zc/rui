@@ -10,4 +10,9 @@ __all__ = [
     "load_config",
     "redacted",
     "save_config",
+    "RecoveryInfo",
+    "load_with_recovery",
+    "remember_last_good",
+    "restore",
 ]
+from .recovery import RecoveryInfo, load_with_recovery, remember_last_good, restore

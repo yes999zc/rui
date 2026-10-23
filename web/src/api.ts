@@ -513,6 +513,17 @@ export interface ChannelGatewayStatus {
   enabled: boolean
 }
 
+export interface ConfigRecovery {
+  active: boolean
+  mode: '' | 'last-good' | 'defaults' | string
+  bad_path: string
+  last_good_path: string
+  last_good_exists: boolean
+  at: number
+  note: string
+  config_path: string
+}
+
 export interface ChannelsGateway {
   command: string
   config_note: string
@@ -716,6 +727,22 @@ export const api = {
     }>('/api/v1/setup/probe', { method: 'POST', body: JSON.stringify({ host }) }),
   setDeviceVolume: (value: number) =>
     request<{ volume: number }>('/api/v1/device/volume', { method: 'PUT', body: JSON.stringify({ value }) }),
+
+  /* — config recovery (last-good / defaults) ————————————————— */
+
+  configRecovery: () => request<ConfigRecovery>('/api/v1/config/recovery'),
+  restoreConfigRecovery: (mode: 'last-good' | 'defaults') =>
+    request<{ ok: boolean; message: string; restart_required: boolean }>(
+      '/api/v1/config/recovery/restore', { method: 'POST', body: JSON.stringify({ mode }) },
+    ),
+  recoveryBadConfig: async (): Promise<Blob> => {
+    const headers = new Headers()
+    const t = token.get()
+    if (t) headers.set('X-Auth-Token', t)
+    const res = await fetch('/api/v1/config/recovery/bad', { headers })
+    if (!res.ok) throw new ApiError(res.status, res.statusText, null)
+    return res.blob()
+  },
 
   /* — channel gateway (Telegram + WeChat) ————————————————— */
 

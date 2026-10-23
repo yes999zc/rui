@@ -8,7 +8,14 @@ import time
 from pathlib import Path
 
 from . import __version__
-from .config import Config, ConfigError, default_config_path, load_config
+from .config import (
+    Config,
+    ConfigError,
+    default_config_path,
+    load_config,
+    load_with_recovery,
+    restore,
+)
 from .doctor import run_doctor
 from .log_setup import LOG_FILE_NAME, setup_logging
 
@@ -275,7 +282,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from .web.api.app import create_app
 
     path = _config_path(args)
-    cfg = load_config(path) if path.exists() else Config()
+    cfg, recovery = load_with_recovery(path) if path.exists() else (Config(), None)
+    if recovery is not None:
+        print(f"config recovery: {recovery.mode}; bad file kept at {recovery.bad_path or '<none>'}")
     host = args.host or cfg.web.host
     port = args.port or cfg.web.port
     reason = insecure_bind(host, cfg.web.auth_token, cfg.web.allow_anonymous)
@@ -285,8 +294,21 @@ def cmd_serve(args: argparse.Namespace) -> int:
     setup_logging(cfg.system.log_level,
                   Path(cfg.system.data_dir) / LOG_FILE_NAME)
     app = create_app(cfg, config_path=path if path.exists() else None,
-                     start_audio=not args.no_audio)
+                     start_audio=not args.no_audio, recovery=recovery)
     uvicorn.run(app, host=host, port=port, log_level=cfg.system.log_level.lower())
+    return 0
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+    path = _config_path(args)
+    mode = "last-good" if args.last_good else "defaults"
+    if path.exists():
+        cfg, _recovery = load_with_recovery(path)
+    else:
+        cfg = Config()
+    message = restore(path, cfg, mode)
+    print(message)
+    print("restart the service to apply it")
     return 0
 
 
@@ -432,6 +454,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_tok = _leaf("token", "print (or --rotate) the console X-Auth-Token")
     p_tok.add_argument("--rotate", action="store_true")
     p_tok.set_defaults(func=cmd_token)
+
+    p_cfg = _leaf("config", "config recovery commands")
+    p_cfg_sub = p_cfg.add_subparsers(dest="config_command")
+    p_cfg_restore = p_cfg_sub.add_parser("restore", help="restore last-good or schema defaults",
+                                         parents=[_config_parent(argparse.SUPPRESS)])
+    mode = p_cfg_restore.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--last-good", action="store_true",
+                      help="restore config.last-good.yaml")
+    mode.add_argument("--defaults", action="store_true",
+                      help="write schema defaults (does not delete secrets/models)")
+    p_cfg_restore.set_defaults(func=cmd_config)
 
     p_kw = _leaf("keywords", "rewrite keywords.txt from the config's wake words")
     p_kw.add_argument("--dest", default="", help="target file (default: next to the config)")

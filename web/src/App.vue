@@ -9,6 +9,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import SideNav from './components/SideNav.vue'
 import BrandMark from './components/BrandMark.vue'
+import RecoveryBanner from './components/RecoveryBanner.vue'
 import AppIcon from './components/AppIcon.vue'
 import { api, token } from './api'
 import { usePanels } from './composables/usePanels'
@@ -214,6 +215,7 @@ onUnmounted(() => {
       </div>
 
       <main id="main" class="content" tabindex="-1">
+        <RecoveryBanner />
         <RouterView v-slot="{ Component }">
           <Transition name="fade" mode="out-in">
             <component :is="Component" :key="route.path" />

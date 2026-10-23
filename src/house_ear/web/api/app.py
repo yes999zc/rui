@@ -47,6 +47,8 @@ from ...config.catalog import (
 from ...config.catalog import (
     document as config_catalog,
 )
+from ...config.recovery import RecoveryInfo, clear_marker, remember_last_good
+from ...config.recovery import restore as restore_config
 from ...config.schema import (
     CONFIG_VERSION,
     LED_STATES,
@@ -1040,6 +1042,7 @@ def create_app(
     cfg: Config,
     config_path: Path | None = None,
     start_audio: bool = False,
+    recovery: RecoveryInfo | None = None,
 ) -> FastAPI:
     secrets.configure(cfg.system.data_dir)
     # The injected clock line ("现在几点") follows `system.timezone`: a container inherits
@@ -1566,6 +1569,10 @@ def create_app(
         await app.state.channel_supervisor.start()
         app.state.channel_watch = asyncio.create_task(
             app.state.channel_supervisor.watch(), name="channel-watch")
+        if recovery is None and config_path is not None:
+            remember_last_good(config_path)
+            with contextlib.suppress(Exception):
+                clear_marker(cfg)
 
         # P10. The reminders were a complete island: tools with 44 tests, a scheduler
         # that walks due items, and no caller anywhere. One tick fires them, one queue
@@ -1665,6 +1672,7 @@ def create_app(
     }
     app.state.weixin_login_task: asyncio.Task | None = None
     app.state.config_path = config_path
+    app.state.config_recovery = recovery
     # The wizard can add a device at runtime; endpoints read this attribute, not a
     # startup closure, so a fresh probe does not need a control-plane restart.
     app.state.adapters = adapters
@@ -1746,6 +1754,47 @@ def create_app(
     @app.get("/api/v1/doctor", dependencies=[Depends(auth)])
     async def doctor() -> dict:
         return run_doctor(cfg).to_dict()
+
+    @app.get("/api/v1/config/recovery", dependencies=[Depends(auth)])
+    async def config_recovery() -> dict:
+        info = getattr(app.state, "config_recovery", None)
+        from ...config.recovery import last_good_path
+        path = getattr(app.state, "config_path", None)
+        last_good = last_good_path(Path(path)) if path is not None else None
+        return {
+            "active": info is not None,
+            "mode": getattr(info, "mode", ""),
+            "bad_path": getattr(info, "bad_path", ""),
+            "last_good_path": getattr(info, "last_good_path", ""),
+            "last_good_exists": bool(last_good and last_good.is_file()),
+            "at": getattr(info, "at", 0.0),
+            "note": getattr(info, "note", ""),
+            "config_path": str(path) if path is not None else "",
+        }
+
+    @app.post("/api/v1/config/recovery/restore", dependencies=[Depends(auth)])
+    async def config_recovery_restore(patch: Annotated[dict, Body()]) -> dict:
+        path = getattr(app.state, "config_path", None)
+        if path is None:
+            raise HTTPException(status_code=409, detail="no config path is known")
+        mode = str(patch.get("mode") or "")
+        try:
+            message = restore_config(Path(path), getattr(app.state, "cfg", cfg), mode)
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        app.state.config_recovery = None
+        return {"ok": True, "message": message, "restart_required": True}
+
+    @app.get("/api/v1/config/recovery/bad", dependencies=[Depends(auth)])
+    async def config_recovery_bad() -> FileResponse:
+        info = getattr(app.state, "config_recovery", None)
+        bad = getattr(info, "bad_path", "") if info is not None else ""
+        if not bad:
+            raise HTTPException(status_code=404, detail="no failed config recorded")
+        path = Path(bad)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="failed config no longer exists")
+        return FileResponse(path, filename=path.name, media_type="text/yaml")
 
     @app.get("/api/v1/config", dependencies=[Depends(auth)])
     async def get_config() -> dict:

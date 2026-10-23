@@ -309,6 +309,17 @@ Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.m
 
 Audio and local recognition stay on your box; only the providers you configure receive the corresponding requests. Keys are injected via `.env` / `secrets.yaml` (0600) and are write-only through the API. The console uses a generated token and refuses to start on a non-loopback bind without one. Keep `:8080` on a trusted network (or put it behind TLS/VPN); the device token is equivalent to speaker control. See [docs/runbook.md](docs/runbook.md).
 
+### 配置恢复
+
+成功启动会把当前配置存为 `config.last-good.yaml`。如果下次启动时 `config.yaml` 校验失败，服务会保留坏文件、回退到 last-good（没有则用 schema 默认值），并在控制台顶部显示恢复 banner，可一键恢复；也可以：
+
+```bash
+house-ear config restore --last-good
+house-ear config restore --defaults
+```
+
+详见 [docs/config-recovery.md](docs/config-recovery.md)。
+
 ### Support
 
 如果小瑞帮到了你，可以请我喝杯咖啡：
