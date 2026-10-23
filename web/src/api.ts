@@ -429,6 +429,21 @@ export interface CatalogField {
   writable?: boolean
   /** True means an empty value is allowed (sent as null). */
   nullable?: boolean
+  /** Present on TTS voice fields: the pair the audition endpoint needs. */
+  audition?: { stage: string; provider: string }
+}
+
+/** Volcano account/usage summary for the diagnostics page. */
+export interface BillingQuota {
+  available_balance: string | null
+  cash_balance?: string | null
+  credit_limit?: string | null
+  currency: string
+  tts_chars_today: number | null
+  tts_chars_7d: number | null
+  packs: { name: string; remaining?: unknown }[]
+  updated_at: string
+  errors: string[]
 }
 
 export interface CatalogDoc {
@@ -558,4 +573,39 @@ export const api = {
     request<{ restarted: boolean; error: string }>('/api/v1/system/audio/restart', {
       method: 'POST', body: JSON.stringify({}),
     }),
+
+  /* — voice audition + Volcano quota (console-voice) ————————————— */
+
+  /** Voices a TTS provider offers, for the select and the audition button. */
+  voices: () => request<{ tts: Record<string, { value: string; label: LocalizedText }[]>; asr: Record<string, unknown[]> }>('/api/v1/providers/voices'),
+
+  /** Synthesise one line with a provider + voice and return the wav bytes. */
+  audition: async (stage: string, provider: string, voice: string, text?: string): Promise<Blob> => {
+    const headers = new Headers({ 'Content-Type': 'application/json' })
+    const authToken = token.get()
+    if (authToken) headers.set('X-Auth-Token', authToken)
+    const res = await fetch(`/api/v1/providers/${stage}/${encodeURIComponent(provider)}/audition`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ voice, ...(text ? { text } : {}) }),
+    })
+    if (res.status === 401) window.dispatchEvent(new Event('house-ear-401'))
+    if (!res.ok) {
+      let detail: unknown = null
+      const raw = await res.text()
+      if (raw) {
+        try {
+          detail = (JSON.parse(raw) as { detail?: unknown }).detail ?? raw
+        } catch {
+          detail = raw
+        }
+      }
+      throw new ApiError(res.status, res.statusText, detail)
+    }
+    return res.blob()
+  },
+
+  /** Volcano balance + TTS character usage + resource packs (server caches 300 s). */
+  billingQuota: (force = false) =>
+    request<BillingQuota>(`/api/v1/billing/quota${force ? '?force=true' : ''}`),
 }

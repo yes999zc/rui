@@ -9,7 +9,9 @@
 # The two things you still add by hand on a cold install:
 #   devices:  - your speaker (id/adapter/host/room/wake_words)
 #   .env:     - HOUSE_EAR_LLM_KEY / HOUSE_EAR_ASR_KEY / HOUSE_EAR_TTS_KEY
-#               (plus XFYUN_APPID / XFYUN_API_KEY / XFYUN_API_SECRET for 讯飞 TTS)
+#               (plus XFYUN_APPID / XFYUN_API_KEY / XFYUN_API_SECRET for 讯飞 TTS;
+#                VOLC_API_KEY for 火山豆包 TTS / ASR; VOLC_ACCESS_KEY_ID +
+#                VOLC_SECRET_ACCESS_KEY only for the console's quota card)
 version: 2
 system:
   data_dir: /var/lib/house-ear
@@ -108,6 +110,12 @@ providers:
       app_id_env: XFYUN_APPID
       api_key_env: XFYUN_API_KEY
       api_secret_env: XFYUN_API_SECRET
+    volc_tts:
+      kind: volc_tts
+      model: seed-tts-2.0          # picks the 2.0 voice + billing item
+      voice: zh_female_xiaohe_uranus_bigtts   # 小荷 2.0; the console can audition others
+      api_key_env: VOLC_API_KEY
+      timeout_s: 15.0
     siliconflow_tts:
       kind: openai_compat
       base_url: https://api.siliconflow.cn/v1

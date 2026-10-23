@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
-import { api, type AudioStatus, type DoctorReport } from '../api'
+import { api, type AudioStatus, type BillingQuota, type DoctorReport } from '../api'
 import { formatCount, t, type MsgKey } from '../i18n'
 
 const report = ref<DoctorReport | null>(null)
 const audio = ref<AudioStatus | null>(null)
+const quota = ref<BillingQuota | null>(null)
 const busy = ref(false)
 const error = ref('')
 
@@ -36,6 +37,17 @@ async function run() {
   try {
     report.value = await api.doctor()
     audio.value = await api.audio()
+    // Separate call: a billing endpoint that cannot be reached must not hide the audio
+    // diagnostics (and vice versa).
+    try {
+      quota.value = await api.billingQuota()
+    } catch (exc) {
+      quota.value = {
+        available_balance: null, currency: 'CNY', tts_chars_today: null,
+        tts_chars_7d: null, packs: [], updated_at: '',
+        errors: [exc instanceof Error ? exc.message : String(exc)],
+      }
+    }
   } catch (exc) {
     error.value = exc instanceof Error ? exc.message : String(exc)
   } finally {
@@ -86,6 +98,35 @@ onMounted(run)
       <span class="health-k">{{ t('health.measuredAt') }}</span>
       <span class="health-v mono measured">{{ report.measured_at }}</span>
     </div>
+  </section>
+
+  <section v-if="quota" class="block">
+    <div class="block-head">
+      <h2>{{ t('health.quotaTitle') }}</h2>
+      <span class="badge">{{ t('health.quotaSource') }}</span>
+    </div>
+    <div class="row">
+      <span class="k">{{ t('health.quotaBalance') }}</span>
+      <span class="v mono">{{ quota.currency }} {{ quota.available_balance ?? '—' }}</span>
+    </div>
+    <div class="row">
+      <span class="k">{{ t('health.quotaToday') }}</span>
+      <span class="v mono">{{ quota.tts_chars_today ?? '—' }}</span>
+    </div>
+    <div class="row">
+      <span class="k">{{ t('health.quota7d') }}</span>
+      <span class="v mono">{{ quota.tts_chars_7d ?? '—' }}</span>
+    </div>
+    <div class="row">
+      <span class="k">{{ t('health.quotaPacks') }}</span>
+      <span class="v">{{ quota.packs.length ? quota.packs.map((pack) => pack.name).join(' / ') : t('health.quotaNoPacks') }}</span>
+    </div>
+    <div class="row">
+      <span class="k">{{ t('health.quotaUpdated') }}</span>
+      <span class="v mono measured">{{ quota.updated_at || '—' }}</span>
+    </div>
+    <p v-if="quota.errors.length" class="note fail">{{ quota.errors.join(' · ') }}</p>
+    <p class="note">{{ t('health.quotaNote') }}</p>
   </section>
 
   <section v-if="audio" class="block">

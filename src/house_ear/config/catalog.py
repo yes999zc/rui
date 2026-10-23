@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import secrets
+from ..providers.volc_voices import voices_for
 from .schema import LED_STATES, Config
 from .store import redacted
 
@@ -192,6 +193,7 @@ def _field(
     writable: bool = True,
     nullable: bool = False,
     virtual: bool = False,
+    audition: dict[str, Any] | None = None,
 ) -> dict:
     """One catalog entry. The contract keys are fixed; `nullable`/`virtual` are additive.
 
@@ -201,7 +203,7 @@ def _field(
     tier = _GROUPS[group][1]
     if effect not in ("save", "restart"):
         raise ValueError(f"bad effect {effect!r} for {path}")
-    return {
+    field = {
         "path": path,
         "group": group,
         "tier": tier,
@@ -218,6 +220,9 @@ def _field(
         "nullable": nullable,
         "virtual": virtual,
     }
+    if audition is not None:
+        field["audition"] = audition
+    return field
 
 
 # ---------------------------------------------------------------- path helpers
@@ -748,9 +753,10 @@ def _provider_fields(cfg: Config) -> list[dict]:
     ]
     hints = {
         "kind": _t("这一条用哪种客户端：openai_compat 是通用 API，sherpa 是本地模型，"
-                   "xfyun 是讯飞。改错这一条链就用不了。",
+                   "xfyun 是讯飞，volc_tts 是火山豆包语音合成。改错这一条链就用不了。",
                    "Which client this entry is: openai_compat (generic API), sherpa "
-                   "(local model), xfyun. A wrong value breaks this chain entry."),
+                   "(local model), xfyun, volc_tts (Volcano Doubao TTS). A wrong value "
+                   "breaks this chain entry."),
         "base_url": _t("API 地址。换自建/中转服务时改这里；改错后这一级会失败，才轮到兜底链。",
                        "API endpoint. Change it for a self-hosted/proxy service; if it is "
                        "wrong this level fails and the fallback is used."),
@@ -804,11 +810,25 @@ def _provider_fields(cfg: Config) -> list[dict]:
             if key in ("app_id_env", "api_secret_env") and str(
                     getattr(provider, "kind", "")) != "xfyun":
                 continue
+            audition = None
+            hint = hints[key]
+            if key == "voice" and stage == "tts":
+                kind = "select"
+                options = voices_for(str(getattr(provider, "kind", ""))) or None
+                hint = _t(
+                    "TTS 说话用的音色（火山 2.0 这类提供方给出官方音色名）。改完保存后"
+                    "重启服务生效；可点旁边的「试听」先用当前选择念一句，试听不写配置。",
+                    "The speaking voice for this TTS provider (火山 2.0 lists its official "
+                    "speakers). Save then restart the service to apply; use 「试听」 to hear "
+                    "the current choice first - it does not write config.")
+                advanced = False  # the voice picker is a first-class control now
+                if options:
+                    audition = {"stage": "tts", "provider": name}
             fields.append(_field(
                 f"providers.catalog.{name}.{key}", "providers.catalog", kind,
-                {"zh": f"{name} · {zh}", "en": f"{name} · {en}"}, hints[key],
+                {"zh": f"{name} · {zh}", "en": f"{name} · {en}"}, hint,
                 effect="restart", unit=unit, minimum=lo, maximum=hi, options=options,
-                advanced=advanced))
+                advanced=advanced, audition=audition))
     names = list(cfg.providers.catalog)
     for stage in ("asr", "tts", "llm"):
         fields.append(_field(

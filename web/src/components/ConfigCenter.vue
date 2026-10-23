@@ -38,6 +38,9 @@ const draft = ref<Record<string, Value>>({})
 const baseline = ref<Record<string, Value>>({})
 const errors = ref<Record<string, string>>({})
 const filter = ref('')
+const auditionState = reactive<Record<string, 'idle' | 'loading' | 'playing'>>({})
+const auditionError = ref('')
+let auditionAudio: HTMLAudioElement | null = null
 const showAdvanced = ref(false)
 const saving = ref(false)
 const saveError = ref('')
@@ -389,6 +392,42 @@ function revert(): void {
   savedInfo.value = null
 }
 
+function stopAudition(): void {
+  if (auditionAudio) {
+    auditionAudio.pause()
+    auditionAudio = null
+  }
+  for (const path of Object.keys(auditionState)) auditionState[path] = 'idle'
+}
+
+/** 试听: synthesise the current (possibly unsaved) voice and play it here. */
+async function playAudition(field: CatalogField): Promise<void> {
+  if (!field.audition) return
+  stopAudition()
+  auditionError.value = ''
+  auditionState[field.path] = 'loading'
+  try {
+    const voice = String(draft.value[field.path] ?? '')
+    const blob = await api.audition(field.audition.stage, field.audition.provider, voice)
+    const url = URL.createObjectURL(blob)
+    auditionAudio = new Audio(url)
+    auditionAudio.onended = () => {
+      auditionState[field.path] = 'idle'
+      URL.revokeObjectURL(url)
+    }
+    auditionAudio.onerror = () => {
+      auditionState[field.path] = 'idle'
+      auditionError.value = t('config.auditionFailed')
+      URL.revokeObjectURL(url)
+    }
+    auditionState[field.path] = 'playing'
+    await auditionAudio.play()
+  } catch (exc) {
+    auditionState[field.path] = 'idle'
+    auditionError.value = exc instanceof Error ? exc.message : String(exc)
+  }
+}
+
 function fieldPathsFromIssue(issue: { loc?: (string | number)[] }): string | undefined {
   const loc = (issue.loc ?? []).map(String)
   const known = new Set(fields.value.map((field) => field.path))
@@ -506,6 +545,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', beforeUnload)
   if (copyTimer) window.clearTimeout(copyTimer)
+  stopAudition()
 })
 
 onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave')) : true))
@@ -672,7 +712,7 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
                 </label>
               </template>
 
-              <template v-else-if="field.kind === 'select'">
+              <template v-else-if="field.kind === 'select' && (field.options?.length ?? 0) > 0">
                 <select
                   :id="`f-${field.path}`"
                   :value="draft[field.path]"
@@ -742,6 +782,25 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
                   @input="setValue(field, ($event.target as HTMLInputElement).value)"
                 />
               </template>
+
+              <div v-if="field.audition" class="cfg-audition">
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="auditionState[field.path] === 'loading'"
+                  @click="auditionState[field.path] === 'playing' ? stopAudition() : playAudition(field)"
+                >
+                  <AppIcon :name="auditionState[field.path] === 'playing' ? 'stop' : 'play'" :size="13" />
+                  {{
+                    auditionState[field.path] === 'playing'
+                      ? t('config.auditionStop')
+                      : auditionState[field.path] === 'loading'
+                        ? t('config.auditionLoading')
+                        : t('config.audition')
+                  }}
+                </button>
+                <span v-if="auditionError" class="fail small">{{ auditionError }}</span>
+              </div>
 
               <p v-if="errors[field.path]" class="field-error">{{ errors[field.path] }}</p>
             </div>
@@ -1293,5 +1352,20 @@ details.cfg-readonly {
   .cfg-savebar .actions .btn {
     flex: 1;
   }
+}
+</style>
+
+<style scoped>
+.cfg-audition {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+  flex-wrap: wrap;
+}
+
+.cfg-audition .fail {
+  color: var(--fail);
+  overflow-wrap: anywhere;
 }
 </style>

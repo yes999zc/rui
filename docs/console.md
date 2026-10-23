@@ -146,6 +146,14 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
   手机抽屉（inert + 滚动）。旧路径 `/assistant`、`/settings`、`/voice`、`/models` 等全部重定向。
 - **响应式**：1440 与 390 双端截图与 DOM 断言：0 横向溢出；配置保存控件桌面 sticky 顶栏、手机 fixed 底条。
 
+### 12.2b 音色试听与火山额度（2026-10-23 晚）
+
+- 外部资源页每个 TTS provider 的「音色」是官方音色下拉（火山 2.0 20 个，含小荷/Vivi/邻家男孩），
+  旁边「试听」用当前选择（即使未保存）合成 15 字示例并在浏览器播放；试听不写配置、不影响 dirty。
+- 体检页「火山用量与额度」行式卡片：可用余额、今日/近 7 天 TTS 字符、资源包、更新时间；
+  数据来自 `GET /api/v1/billing/quota`（火山账单/用量 API，缓存 5 分钟，缺 AK/SK 时给提示）。
+- 截图：`docs/console-shots/voice-audition.png`、`quota-card.png`。
+
 ### 12.2 配置中心（四类参数 + 效果标注）
 
 `GET /api/v1/config/catalog` 返回 4 类（tier）21 组、按配置动态生成字段（dev 157 个）：

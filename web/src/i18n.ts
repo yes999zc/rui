@@ -137,6 +137,10 @@ const zh = {
   'config.effect.save': '保存生效',
   'config.effect.restart': '重启生效',
   'config.effect.legend': '生效方式',
+  'config.audition': '试听',
+  'config.auditionLoading': '合成中…',
+  'config.auditionStop': '停止试听',
+  'config.auditionFailed': '试听失败',
   'config.advancedBadge': '高级',
   'config.tier1Warning': '底子设置：改错会影响整条语音链路。不确定的项先别动，改完先用「试一试」验证。',
   'config.tier1Badge': '谨慎',
@@ -475,6 +479,15 @@ const zh = {
   'health.leadNote':
     '唤醒 → 成段 → 回合是三步，各有自己的计数器：唤醒引擎没加载时「已成段」永远是 0。播放缓冲余量在播报时应稳定在 300–1000 ms，一直贴着 0 就是卡顿；空闲时报 0 属正常。',
   'health.error': '体检失败：{message}',
+  'health.quotaTitle': '火山用量与额度',
+  'health.quotaSource': '火山引擎 · 账户实时',
+  'health.quotaBalance': '可用余额',
+  'health.quotaToday': '今日 TTS 字符',
+  'health.quota7d': '近 7 天 TTS 字符',
+  'health.quotaPacks': '资源包',
+  'health.quotaNoPacks': '未购买资源包（按量计费）',
+  'health.quotaUpdated': '更新时间',
+  'health.quotaNote': '余额/用量来自火山账单与用量接口；调用量统计有几分钟延迟。缺失凭据时在 .env 配置 VOLC_ACCESS_KEY_ID / VOLC_SECRET_ACCESS_KEY。',
 
   // — backend string bridge (PanelSpec copy) ————————————————
   'backend.overview': '概览',
@@ -674,6 +687,10 @@ const en: Record<MsgKey, string> = {
   'config.effect.save': 'Instant',
   'config.effect.restart': 'Needs restart',
   'config.effect.legend': 'Applies',
+  'config.audition': 'Preview',
+  'config.auditionLoading': 'Synthesising…',
+  'config.auditionStop': 'Stop preview',
+  'config.auditionFailed': 'Preview failed',
   'config.advancedBadge': 'Advanced',
   'config.tier1Warning':
     'Foundation settings: a wrong value can affect the whole voice path. Leave uncertain fields alone and verify with “Try a sentence”.',
@@ -1007,6 +1024,15 @@ const en: Record<MsgKey, string> = {
   'health.leadNote':
     'Wake → segment → turn are three steps with their own counters: with no wake engine loaded, “segments” stays 0. Buffer lead should sit at 300–1000 ms while speaking; pinned near 0 means underruns — 0 while idle is normal.',
   'health.error': 'Diagnostics failed: {message}',
+  'health.quotaTitle': 'Volcano usage & quota',
+  'health.quotaSource': 'Volcano Engine · live',
+  'health.quotaBalance': 'Available balance',
+  'health.quotaToday': 'TTS characters today',
+  'health.quota7d': 'TTS characters, last 7 days',
+  'health.quotaPacks': 'Resource packs',
+  'health.quotaNoPacks': 'No pack (pay as you go)',
+  'health.quotaUpdated': 'Updated',
+  'health.quotaNote': 'Balance and usage come from the Volcano billing/usage APIs; usage counters lag a few minutes. Without credentials, set VOLC_ACCESS_KEY_ID / VOLC_SECRET_ACCESS_KEY in .env.',
 
   'backend.overview': 'Overview',
   'backend.devices': 'Speakers',

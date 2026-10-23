@@ -18,11 +18,11 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
-from ... import __version__, secrets
+from ... import __version__, billing, secrets
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneSupervisor
@@ -50,6 +50,8 @@ from ...log_setup import LOG_FILE_NAME, tail_lines
 from ...music import MusicService, NavidromeSource, PlayHistory
 from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
+from ...providers.chain import build_stage
+from ...providers.volc_voices import voices_for
 from ...session import phrasebook, phrases, prompts, rules
 from ...session.ack import ensure_ack_wav
 from ...session.briefing import Briefing
@@ -2228,6 +2230,86 @@ def create_app(
                          [str(key) for key in keys] if keys is not None else None)
         log.info("phrasebook: reset %s", "all" if keys is None else len(keys))
         return phrasebook.document(Path(cfg.system.data_dir))
+
+    def _wav_bytes(pcm: bytes, rate: int) -> bytes:
+        import struct
+
+        header = b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+        header += struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+        header += b"data" + struct.pack("<I", len(pcm))
+        return header + pcm
+
+    @app.get("/api/v1/providers/voices", dependencies=[Depends(auth)])
+    async def provider_voices() -> dict:
+        """Voices a provider can speak with, for the console's select and audition."""
+        cfg_now = getattr(app.state, "cfg", cfg)
+        tts: dict[str, list[dict]] = {}
+        for name in cfg_now.providers.tts.chain:
+            provider = cfg_now.providers.catalog.get(name)
+            kind = str(getattr(provider, "kind", "")) if provider is not None else ""
+            voices = voices_for(kind)
+            if voices:
+                tts[name] = voices
+        return {"tts": tts, "asr": {}}
+
+    @app.post("/api/v1/providers/{stage}/{name}/audition", dependencies=[Depends(auth)])
+    async def provider_audition(stage: str, name: str,
+                                patch: Annotated[dict, Body()] | None = None) -> Response:
+        """Synthesise one short line with a provider + voice, as a playable wav.
+
+        This is the console's 试听: it never touches the saved config, and it uses the
+        same chain object the turn runner uses, so what you hear is what the speaker will
+        say. Bounded to ~15 s of audio so a stuck vendor cannot hold the request forever.
+        """
+        cfg_now = getattr(app.state, "cfg", cfg)
+        if stage != "tts":
+            raise HTTPException(status_code=422, detail="only tts can be auditioned")
+        try:
+            chain = build_stage(cfg_now.providers, "tts",
+                                sample_rate=cfg_now.audio.voice.rate)
+        except Exception as exc:  # noqa: BLE001 - a bad chain is a user-visible config error
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        provider = next((candidate for provider_name, candidate in chain
+                         if provider_name == name), None)
+        if provider is None:
+            raise HTTPException(status_code=404, detail=f"no tts provider named {name!r}")
+        text = str((patch or {}).get("text") or "你好，我是小瑞。这是音色试听。")
+        voice = str((patch or {}).get("voice") or "")
+        pcm = bytearray()
+        try:
+            async for chunk in provider.synthesize(text, voice):
+                pcm.extend(chunk)
+                if len(pcm) >= 16000 * 2 * 20:
+                    break
+        except Exception as exc:  # noqa: BLE001 - the UI shows the reason
+            raise HTTPException(
+                status_code=502,
+                detail=f"{type(exc).__name__}: {str(exc)[:200]}") from exc
+        if not pcm:
+            raise HTTPException(status_code=502, detail="provider returned no audio")
+        return Response(
+            content=_wav_bytes(bytes(pcm), cfg_now.audio.voice.rate),
+            media_type="audio/wav",
+            headers={"Content-Disposition": "inline; filename=audition.wav",
+                     "Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/v1/billing/quota", dependencies=[Depends(auth)])
+    async def billing_quota(force: bool = False) -> dict:
+        """Volcano balance, TTS character usage and resource packs (cached 300 s)."""
+        cached = getattr(app.state, "quota_cache", None)
+        now = time.time()
+        if not force and cached and now - cached[0] < 300:
+            return cached[1]
+        try:
+            data = await billing.quota_summary()
+        except Exception as exc:  # noqa: BLE001 - the card shows errors instead of 500
+            data = {"available_balance": None, "currency": "CNY",
+                    "tts_chars_today": None, "tts_chars_7d": None, "packs": [],
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "errors": [f"{type(exc).__name__}: {str(exc)[:120]}"]}
+        app.state.quota_cache = (now, data)
+        return data
 
     @app.get("/api/v1/panels", dependencies=[Depends(auth)])
     async def panels() -> dict:

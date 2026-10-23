@@ -814,3 +814,38 @@ origin/main 同步。**
 访问 https://example.com/x 看看，注意：不要读冒号。」→ 回复 37 字、音频 **3.7 s**（URL 不再逐字符）。
 音色/语速仍由供应商决定（讯飞 payload 目前 speed/volume/pitch 固定 50），可后续开放为配置项。
 
+### 12.20 2026-10-23 下午：接入火山豆包语音 2.0（TTS）+ 音色试听 + 额度卡片 + ASR 评估
+
+**9哥 提供火山引擎凭据（控制台 API Key + AK/SK），要求：小荷 2.0 / Vivi 2.0 / 邻家男孩 2.0
+三个音色设置上、控制台要有音色选择+试听；把 ASR 换到火山并看效果；额度剩余情况集成后台。**
+
+**已接通（真机验证）**
+- **TTS（豆包语音合成 2.0，HTTP 流式）**：`providers/volc_tts.py`，新控制台 API Key 走
+  `X-Api-Key`，`X-Api-Resource-Id: seed-tts-2.0`，请求 PCM 16 kHz 直出（不用解码）。实测
+  22 字 **ttfb 0.58 s / 总 0.9 s / 2.38 s 音频**；三个音色全部 200：`zh_female_xiaohe_uranus_bigtts`
+  （小荷 2.0）、`zh_female_vv_uranus_bigtts`（Vivi 2.0）、`zh_male_linjiananhai_uranus_bigtts`
+  （邻家男孩 2.0）。dev 的 TTS 链已切为 `[volc-tts, xfyun-tts, sf-tts]`，真实回合
+  `tts used=volc-tts`（32 字 → 6.73 s 音频）。
+- **音色目录**：`providers/volc_voices.py` 收录 20 个 2.0 音色（含 3 个指定）；catalog 的
+  `providers.catalog.<name>.voice` 变成 select（数据即音色表），带 `audition:{stage,provider}`
+  元数据，且不再折叠进「高级项」。
+- **试听**：`GET /api/v1/providers/voices` + `POST /api/v1/providers/tts/<name>/audition`
+  （body `{voice,text?}`，返回 `audio/wav`，用当前未保存的选中音色合成 ~15 字示例；不写配置）。
+  控制台字段行有「试听」按钮（播放/停止/失败态），实测三个音色各返回 2.6–3.0 s wav。
+- **额度/用量**：`billing.py` 用 AK/SK 做火山 V4 签名，查 `QueryBalanceAcct`（billing）、
+  `UsageMonitoring`（TTS 字符，`volc.service_type.10029`）、`ResourcePacksStatus`；
+  `GET /api/v1/billing/quota`（缓存 300 s，缺凭据只报 errors 不 500）。体检页新增
+  「火山用量与额度」卡片：可用余额 / 今日字符 / 近 7 天 / 资源包 / 更新时间 / 说明。
+  实测：余额 0 CNY、用量 0（统计有延迟/未出账）、资源包空（按量计费）。
+- **凭据**：只存在开发 secrets.yaml（0600，名字 `VOLC_API_KEY` / `VOLC_ACCESS_KEY_ID` /
+  `VOLC_SECRET_ACCESS_KEY`），代码一律 `secrets.get`；仓库与日志不含明文。生产模板/example
+  已加 `volc_tts` provider 与 `.env` 变量说明（默认链仍是讯飞，可在控制台切换）。
+- **ASR 评估（未切换，原因明确）**：火山「大模型录音文件识别（标准版）」实测可用且准确
+  （JFK 音频逐字正确），但它是**异步文件接口**：submit 要公网音频 URL、query 轮询，
+  端到端 **~9 s**，无法用于实时对话；账号的**流式识别 WS 返回 403（未开通）**。
+  代码侧已确认两点：AUC 客户端未接入实时链；要接实时 ASR 需 9哥 在控制台开通
+  「大模型流式语音识别」或一句话识别（资源包/服务），开通后按 sauc/bigmodel WS 协议接入。
+
+**验证**：`pytest` 全绿（新增 12 条火山 TTS/额度测试）、ruff clean、typecheck/build 绿；
+控制台截图 `docs/console-shots/voice-audition.png`、`quota-card.png`。
+

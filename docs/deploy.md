@@ -19,6 +19,15 @@
 
 ### 控制台令牌（安全审计后必读）
 
+### 火山豆包语音（可选）
+
+- TTS：`.env` 里填 `VOLC_API_KEY`（控制台 API Key），把 `config.yaml` 的
+  `providers.tts.chain` 改成 `[volc_tts, xfyun_tts, siliconflow_tts]` 即启用；
+  音色在控制台「外部资源 → volc_tts → 音色」选并「试听」，保存后重启服务生效。
+- 额度卡片：`.env` 再填 `VOLC_ACCESS_KEY_ID` / `VOLC_SECRET_ACCESS_KEY`（只用于只读查询账户余额/用量）。
+- ASR：录音文件识别是异步接口（需公网音频 URL，约 9 s），不适合实时对话；实时 ASR 需在
+  火山控制台开通「大模型流式语音识别」，开通后项目再接入。
+
 `install.sh` 里的 `house-ear setup` 会生成随机 `web.auth_token` 并打印一次：
 
 ```bash

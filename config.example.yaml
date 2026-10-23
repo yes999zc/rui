@@ -137,6 +137,13 @@ providers:
       app_id_env: XFYUN_APPID
       api_key_env: XFYUN_API_KEY
       api_secret_env: XFYUN_API_SECRET
+    # 火山豆包语音合成 2.0（可选；把 tts.chain 里的名字换上来才会用）
+    volc_tts:
+      kind: volc_tts
+      model: seed-tts-2.0
+      voice: zh_female_xiaohe_uranus_bigtts
+      api_key_env: VOLC_API_KEY
+      timeout_s: 15.0
     siliconflow_tts:
       kind: openai_compat
       base_url: https://api.siliconflow.cn/v1
