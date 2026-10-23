@@ -33,6 +33,7 @@ from . import phrases, prompts, rules
 from .filler import filler_phrase, should_speak_filler
 from .idle import IdleWatch, farewell_line
 from .rules import stop_reply
+from .speech_text import gap_after, prepare_for_speech
 from .text import clean_reply, sanitize_spoken, strip_wake
 
 # The speak callable is the audio plane's client.speak: one call per TTS chunk, with
@@ -47,9 +48,9 @@ SpeakFn = Callable[..., Awaitable[None]]
 SENTENCE_GAP_MS = 350
 
 
-def _sentence_gap(rate: int) -> bytes:
+def _sentence_gap(rate: int, ms: int = SENTENCE_GAP_MS) -> bytes:
     """The inter-sentence gap as mono s16 PCM at ``rate``."""
-    return b"\x00\x00" * (rate * SENTENCE_GAP_MS // 1000)
+    return b"\x00\x00" * (rate * ms // 1000)
 
 log = logging.getLogger(__name__)
 
@@ -159,6 +160,11 @@ def split_sentences(
             out.append(buffer[start:i + 1].strip())
             start = i + 1
         elif clauses and ch in SOFT_ENDINGS and i - start + 1 >= SOFT_MIN_CHARS:
+            # Never split inside a URL: the scheme colon alone is 10 characters into
+            # "看这里 https://...", so the clause rule used to cut it in half and the
+            # vendor spoke "a.cn，x" instead of a sentence (measured 2026-10-23).
+            if ch in "：:" and re.search(r"(?:https?|ftp)$", buffer[max(0, i - 5):i].lower()):
+                continue
             out.append(buffer[start:i + 1].strip())
             start = i + 1
         elif i - start + 1 >= MAX_SENTENCE_CHARS:
@@ -497,9 +503,18 @@ class TurnRunner:
     ) -> tuple[str, int, StageReport | None, str]:
         """Synthesise one sentence, taking the first provider that actually streams.
 
+        The vendor gets `prepare_for_speech(text)`, never the raw reply: measured
+        2026-10-23, a URL was spelled out ("h t t p s 冒号 ...", 4.17 s) and a Markdown
+        "## " was read as a symbol name. Punctuation that only acts as a pause is left
+        to the gap logic below.
+
         Returns (provider name, bytes spoken, report, error). The caller keeps the name so
         the next sentence goes straight to the same provider instead of re-probing.
         """
+        speakable = prepare_for_speech(text)
+        if not speakable:
+            return "", 0, None, ""
+        text = speakable
         attempts: list[dict] = []
         for name, provider in chain:
             spoken = 0
@@ -525,8 +540,12 @@ class TurnRunner:
                     # sentence they join seamlessly - no marker, no fade. The sentence end
                     # is the junction: true silence after it, the old build's shape, so
                     # the next sentence starts from silence and AEC gets a clean window.
-                    if spoken:
-                        await speak(_sentence_gap(self.sample_rate))
+                    # A clause split is different: the vendor already rendered the comma
+                    # pause, and another 350 ms of silence made mid-sentence speech sound
+                    # stitched together (measured 2026-10-23).
+                    gap_ms = gap_after(text)
+                    if spoken and gap_ms:
+                        await speak(_sentence_gap(self.sample_rate, gap_ms))
             except Exception as exc:  # noqa: BLE001 - fall through to the next vendor
                 attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
                 log.warning("tts: %s failed: %s", name, exc)
