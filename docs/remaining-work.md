@@ -19,7 +19,7 @@
 
 - **回复结束后的免唤醒追问首字丢失**：已按旧项目方案实现 follow-up echo-tail replay
   （`7693a4f`）：`pacer.due` 到 gate arm 之间缓存麦克风帧，arm 后回放给 VAD；日志会打印
-  `follow-up gate replayed … ms of gated tail`。**已部署 NAS，待真机复测「紧着说明天呢」。**
+  `follow-up gate replayed … ms of gated tail`。**已部署 NAS，9哥 真机复测「紧着说明天呢」成功 ✅。**
 
 ## B. 真机 / 功能遗留
 
