@@ -1418,6 +1418,12 @@ class AudioPlane:
                             if msg.value is None:
                                 raise ValueError("set needs a value")
                             await services.set_volume(int(msg.value))
+                            # Learn it: the user just chose this level. Without it the
+                            # reconciler (own copy of the config, separate process)
+                            # put the old target back within 16 s - measured 08:57.
+                            for dev in self.cfg.devices:
+                                if dev.id == self.device_id:
+                                    dev.volume = round(int(msg.value) * 100 / 255)
                         volume = await services.read_volume()
                         self.device_volume = volume
                     except Exception as exc:  # noqa: BLE001 - report, never crash

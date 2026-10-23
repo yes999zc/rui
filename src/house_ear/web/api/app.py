@@ -422,10 +422,7 @@ def create_app(
                 for spec, handler in ha.tool_specs():
                     registry.register(spec)
                     local_tools.append((spec, handler))
-                runner._handlers = {spec.llm_name: handler
-                                    for spec, handler in local_tools}
-                runner._interactions = {spec.llm_name: spec.interaction
-                                        for spec, _ in local_tools}
+                runner.set_tools(local_tools)
                 runner.extra_context = _ha_context(ha)
                 app.state.ha = ha
                 log.info("ha: %d tools registered", len(ha.tool_specs()))
@@ -710,8 +707,8 @@ def create_app(
                 if "local.volume" not in registry.names():
                     registry.register(volume_spec)
                     local_tools.append((volume_spec, volume_tool))
-                runner._handlers["volume"] = volume_tool
-                runner._interactions["volume"] = volume_spec.interaction
+                # Make every tool registered in this lifespan visible to the model.
+                runner.set_tools(local_tools)
         # Session end. Polled rather than timed: one loop, 1 s resolution, and the
         # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
         async def idle_watch() -> None:

@@ -238,6 +238,23 @@ class TurnRunner:
     def llm_tools(self) -> list[dict]:
         return [spec.as_llm_tool() for spec, _ in self.tools]
 
+    def set_tools(self, tools: Sequence[tuple[Any, Any]]) -> None:
+        """Adopt tools registered after construction (music, HA, volume).
+
+        `self.tools` is a tuple built in __init__; the app registers some tools
+        inside the lifespan, once the plane client and config are known. Without
+        this, those tools existed in the registry but the model never saw them -
+        measured 08:57:57: 「音量大一点」 got 「我这边没法调音量」 with zero
+        tool calls, HA's six tools likewise unreachable by the model.
+        """
+        self.tools = tuple(tools)
+        self._handlers = {spec.llm_name: handler for spec, handler in self.tools}
+        self._interactions = {spec.llm_name: spec.interaction for spec, _ in self.tools}
+        self.info_tool_names = {
+            spec.llm_name for spec, _ in self.tools
+            if spec.llm_name in ("news", "web_search")
+        }
+
     def build_prompt(self) -> str:
         text = self.system_prompt
         if text is None:

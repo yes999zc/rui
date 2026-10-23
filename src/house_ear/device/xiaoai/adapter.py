@@ -396,6 +396,11 @@ class XiaoaiAdapter(DeviceAdapter):
             if kind == "instruction":
                 line = protocol._unwrap_new_line(event.get("data")) or {}
                 header = line.get("header") or {}
+                if not header.get("namespace"):
+                    # An unnamed frame: the wake notification may be this one (measured
+                    # 08:58:29, right at 小爱同学, before any recognizer result). Log the
+                    # body so its shape can be identified instead of guessed at.
+                    log.info("xiaoai: unnamed instruction %s", str(event.get("data"))[:300])
                 log.info("xiaoai: instruction %s.%s", header.get("namespace"), header.get("name"))
             elif kind not in {"consumed"}:
                 log.info("xiaoai: event %s %s", kind, str(event.get("data"))[:80])
