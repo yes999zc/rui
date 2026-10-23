@@ -49,16 +49,25 @@ _PUNCT = re.compile(r"[\s。，、！？；：,.!?;:…—\-]")
 # ends the session, 「关掉客厅灯」 is a device command (S5e's problem, not this one).
 _STOP_MAX_CHARS = 6
 
-# A stop word said while music plays means two different things: 「退下吧」 dismisses
-# the conversation and leaves the song running, 「停止」「别放」 ends the sound. The old
-# build split these between the conversation stop and the music tools; until those land
-# (D1) the caller uses this to decide whether a stop intent also stops the player.
+# A stop word said while music plays means two different things: 「停止」「别放」 ends
+# the sound, 「退下吧」 dismisses the conversation. D1 split the old single stop path;
+# `stop_scope` below is the pure decision the app wires (D1c ③).
 DISMISS_WORDS = ("退下吧", "退下", "不聊了", "关机")
+
+# The two outcomes of a stop word. Kept as constants so the app cannot typo one.
+MEDIA_STOP = "media_stop"   # a song owns the request: stop the sound, keep listening
+BARE_STOP = "bare_stop"     # nothing is playing: the stop word ends the conversation
 
 
 def is_dismiss(transcript: str) -> bool:
-    """True when the stop word sends the assistant away rather than the sound."""
+    """True when the stop word sends the assistant away rather than the sound.
+
+    An ASR slip of a dismissal is still a dismissal: 「对一下吧」 was measured for
+    「退下吧」, and `stop_scope` must not call that a media stop just because a song
+    happens to be playing.
+    """
     t = normalize(transcript)
+    t = ALIASES.get(t, t)
     return any(word in t for word in DISMISS_WORDS)
 
 
@@ -247,6 +256,33 @@ def stop_intent(transcript: str, words: tuple[str, ...] | list[str] | None = Non
 
 def stop_reply(index: int = 0) -> str:
     return STOP_REPLIES[index % len(STOP_REPLIES)]
+
+
+def stop_scope(transcript: str, music_playing: bool,
+               words: tuple[str, ...] | list[str] | None = None) -> str:
+    """Which of the two stop meanings this request has: media_stop or bare_stop.
+
+    The measured rule (old build, 2026-10-20; docs/music.md §2.4):
+
+    * a song is playing -> ``media_stop``: 「停止播放」「别放了」 stops the sound; the
+      conversation stays open, so the next sentence still reaches us;
+    * **no song is playing -> ``bare_stop``: 「停止播放」 means end the conversation**
+      (散场). There is nothing to stop, so the only useful reading is "go away".
+
+    Dismiss words (「退下吧」「关机」「不聊了」) are ``bare_stop`` either way: they
+    name the conversation, not the speaker. Whether that path also silences a playing
+    song is the caller's business (the old build measured that it must - a song
+    coming back 12 s after 「退下吧」 was heard as a bug, 2026-10-21 09:17).
+
+    Returns "" when the transcript is not a stop request at all (a question that
+    contains 「关掉」, a compound request, a long sentence). Pure: no speaker, no
+    service, no config - `words` is the configured end-word list.
+    """
+    if not stop_intent(transcript, words):
+        return ""
+    if is_dismiss(transcript):
+        return BARE_STOP
+    return MEDIA_STOP if music_playing else BARE_STOP
 
 
 

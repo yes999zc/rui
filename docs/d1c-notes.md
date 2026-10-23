@@ -8,7 +8,7 @@
 
 | 项 | 结果 |
 |---|---|
-| 全量测试 | **456 passed**（本次新增 38 条：`test_music_index.py` 20、`test_music_semantic.py` 11、`test_music_tools.py` +7） |
+| 全量测试 | **469 passed**（D1c 新增：阶段 1 共 38 条——`test_music_index.py` 20、`test_music_semantic.py` 11、`test_music_tools.py` +7；阶段 2A 共 11 条——`test_briefing.py` 8、`test_session.py` +3） |
 | lint | `uv run ruff check src tests scripts` clean |
 | 真实 Navidrome 建索引 | **5736 首 / search3 12 页 / 0.78 s / 缓存 1189 KiB**（data_dir/library_index.json） |
 | 语言分布（真实库） | ja 20 · ko 3 · zh 5333 · en 377 · other 3 · unknown 0 |
@@ -138,19 +138,72 @@
 5. **索引文件无控制台入口**：目前只能删文件/等 TTL 重建；C-UI 阶段可加“曲库索引状态/重建”面板。
 6. **真机听感未验收**：按分工本阶段不对真机下发声音；D1c 的“语言/描述式点歌各 1 例”目前是
    HTTP + 单元测试证据，等 Lead 调度一次真机点歌做耳朵确认。
-7. **阶段 2 未动**：③ 停止词二分、④ 日报直通都要改 `web/api/app.py`，与 Lead 控制台任务同文件，
-   等显式交接。
+7. **阶段 2 只完成纯逻辑**：`rules.stop_scope` 与 `session/briefing.py` 已就绪且有测试；接线要改
+   `web/api/app.py`（日报直通可能还要 `session/turn.py` 配合拦截 `briefing` 状态），等 Lead 显式交接。
+   本机 PATH 没有 `/opt/homebrew/bin/ffmpeg`，真实音频 resolve 前须补 PATH，否则每首歌都会静默跳过
+   （Lead 实测）。
 
-## 7. 阶段 2 待交接（③ ④）
+## 7. 阶段 2A：停止词二分 / 日报直通的纯逻辑（已完成，未接线）
 
-- ③ `media_stop` vs `bare_stop`：放歌中「停止播放」= 停歌（现有 `_music_transport` 已覆盖大部分）；
-  **没在放歌时说「停止播放」= 散场**（结束会话），需要在 app.py 的确定性词分支里按
-  `app.state.music.state` 二分。验收要能看到两种语义的不同处理路径。
-- ④ 日报直通 `briefing`：播报文本不进 LLM、原文进 history 支持「第三条再说说」。现有
-  `tools/info.py:news()` 返回字符串进模型，需要 app.py 加确定性直通状态与 history 原文槽位。
-- 这两项都在 Lead 的 `app.py` 写作用域内，本任务不动；Lead 明确交接后再做。
+Lead 把阶段 2 拆成两半：先做不碰 `app.py` 的纯逻辑（本节），接线等交接。已完成：
 
-## 8. 复现/运维片段
+### 7.1 ③ 停止词二分（`session/rules.py`）
+
+- 新增 `stop_scope(transcript, music_playing, words=None) -> "media_stop" | "bare_stop" | ""`
+  （常量 `MEDIA_STOP` / `BARE_STOP`）：
+  - 不是停止请求 → `""`（长句、含「关掉」的别的问题都不算）；
+  - **没在放歌 → `bare_stop`（散场）**；放歌中 → `media_stop`（停歌）；
+  - 「退下吧/退下/关机/不聊了」无论是否在放歌都归 `bare_stop`：用户是让助手走，不是让喇叭闭嘴；
+    ASR 错听「对一下吧」现在也被 `is_dismiss` 认成 `退下吧`（老项目实测）。
+- 判据原话写进 docstring：「没在放歌时说『停止播放』= 散场」。
+- 纯函数、无 service/speaker/config；`words` 直接复用 `stop_intent` 的配置词表。
+- 测试：`tests/test_session.py` +3（放歌/没放歌两义、dismiss 恒散场、非停止请求返回空）。
+
+### 7.2 ④ 日报直通（`session/briefing.py`，新）
+
+老项目行号（都指 `xiaoai-voice-entry/server/`）：
+
+| 老代码 | 作用 |
+|---|---|
+| `tools/news.py:126-136` `_briefing()` | 生成 `{date, count, source, text}`：日期头 + 「第一，…。第二，…。」 + 可选「最后一句微语」 |
+| `assistant_v3.py:906-913` | 工具返回 `@@BRIEF` 标记；dispatcher 把 payload 放进 `lat["brief"]`，**只给模型**「播报已准备好（N 条，…），直接念给用户听。」 |
+| `assistant_v3.py:1017-1024` | `lat["brief"]` 路径：直接返回脚本原文（不做第二轮 LLM），并把 user 原话 + `assistant text[:800]` 原样写进 history |
+| `assistant_v3.py:3492-3512` | 播报按原文流式朗读（comment：「read the daily briefing as written」），barge-in 照常 |
+| `assistant_v3.py:3496` | 同上，强调不重新总结 |
+| `prompts.py:24` | prompt 只要求「问新闻时调用 news 工具」，不要求模型总结 |
+
+新模块（纯逻辑，不 fetch、不发声、不碰 session）：
+
+- `Briefing`（frozen dataclass）：`date`(ISO) / `items`(已编号、已补句号) / `tip` / `source`；
+  `count`、`speech_text`（真正朗读的原文，含「今天是X月X日，星期X」+ 第一/第二… + 微语）。
+- `from_news(news, date=None, tip="", source="60s", limit=5) -> Briefing | None`：
+  接受 `list[str]` / `list[{"title": ...}]` / 整个 digest `{"news": [...], "tip": ...}`；
+  空白折叠、缺句号补「。」、limit 夹在 1–10、空日报返回 `None`（让调用方说「没取到」，不念空头）。
+- `to_payload()`：**故意不含 `text`**，只有 `{status:"briefing", date, count, source}`——
+  防止 payload 被 `_render_tool_result` JSON 化后把播报原文喂给模型。
+- `model_notice()`：老 dispatcher 原话「播报已准备好（N 条，date），直接念给用户听。」
+- `history_messages(transcript)`：`[user 原话, assistant speech_text[:800]]`，这是「第三条再说说」的依据。
+- `item_at(n)` / `item_index("第三条再说说")`：1-based、支持中文数字和「第3条」、越界返回 None，
+  给将来确定性追问留口子（history 路径仍覆盖自由问法）。
+- 测试：`tests/test_briefing.py` 8 条（脚本形状、输入形状/标点/上限、空日报、payload 不含原文、
+  history 支持第三条、800 字截断、中文/数字序号、日期默认与覆盖）。
+
+接线时（阶段 B）的硬约束：`briefing` 状态必须在 `_render_tool_result` **之前**被 system 层拦下；
+朗读 `speech_text`；把 `history_messages()` 追加进会话；同一轮的 LLM 绝不看到 `speech_text`。
+
+## 8. 阶段 2B 待交接（接线）
+
+- ③ 接线：app.py 的停止词分支把当前 `music_active` 传给 `rules.stop_scope(clean, music_active,
+  cfg.session.end_words)`，按 `media_stop`（service.stop，会话继续）与 `bare_stop`
+  （runner.dismiss，会话关闭）分两条路。现有 `_music_transport` 仍先跑，暂停/继续不受影响。
+- ④ 接线：`tools/info.py:news()` 改为产出 `Briefing`（或 app 直接构造）；`briefing` 状态必须在
+  `_render_tool_result` 之前被拦下，朗读 `speech_text`，把 `history_messages()` 写进会话。
+  现有新闻工具是「字符串进模型」，要换掉这条路径。若拦截点必须放在 `session/turn.py`，
+  需要 Lead 把那一小段也一起交接（最小改动优先）。
+- 验收：两种停止语义各一条路径；日报能追问「第三条再说说」且同轮模型 messages 里没有播报原文。
+- 两项都等 Lead 的 `app.py` 交接；本任务不先改。
+
+## 9. 复现/运维片段
 
 ```bash
 # 重建索引（等价于首次描述式点歌触发；7 天 TTL，--force 语义用 force=True）
