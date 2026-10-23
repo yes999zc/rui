@@ -146,15 +146,32 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
   手机抽屉（inert + 滚动）。旧路径 `/assistant`、`/settings`、`/voice`、`/models` 等全部重定向。
 - **响应式**：1440 与 390 双端截图与 DOM 断言：0 横向溢出；配置保存控件桌面 sticky 顶栏、手机 fixed 底条。
 
-### 12.2b 音色试听与火山额度（2026-10-23 晚）
+### 12.2b 外部资源页 Providers v2 与火山额度（2026-10-23 晚）
 
-- 外部资源页每个 TTS provider 的「音色」是官方音色下拉（火山 2.0 20 个，含小荷/Vivi/邻家男孩），
-  旁边「试听」用当前选择（即使未保存）合成 15 字示例并在浏览器播放；试听不写配置、不影响 dirty。
-- 体检页「火山用量与额度」行式卡片：可用余额、今日/近 7 天 TTS 字符、资源包、更新时间；
-  数据来自 `GET /api/v1/billing/quota`（火山账单/用量 API，缓存 5 分钟，缺 AK/SK 时给提示）。
-- 同组还有「语速」（-50..100，0 正常）、「情感」（默认/开心/难过/生气/惊讶/害怕/厌恶/兴奋/冷漠/平静）、
-  「情感强度」（1–5）；保存后重启生效，点「试听」会把未保存的这三项一起合成，先听再存。
-- 截图：`docs/console-shots/voice-audition.png`、`quota-card.png`。
+**为什么重做**：9哥 认为配置中心把 provider 字段平铺出来太复杂。`/panel/providers` 改成专用页
+（PanelSpec `component: "providers-v2"`，`web/src/views/ProvidersView.vue` + `web/src/components/providers/*`），
+数据仍走 `GET /api/v1/config/catalog`、`PUT /api/v1/config/values`、`GET /api/v1/providers/voices`、
+`POST /api/v1/providers/{stage}/{name}/audition`，没有新增后端端点。
+
+- **三段式**：语言模型（LLM）/ 语音识别（ASR）/ 语音合成（TTS）。每段左侧是**链路轨**：
+  有序 provider、主用/兜底角色、显式上移/下移/移出、从该阶段可选 provider 中添加；
+  右侧是**provider 卡片**：显示名、id、kind、密钥配置状态（来自 `catalog.secrets[*].used_by`）、
+  model/voice 摘要；核心字段内联编辑，超时/重试/线程数等 `advanced` 字段折叠在「高级设置」里。
+- **生效时机**：provider 链与字段都是 `effect: restart`。每段独立保存（dirty/save/reset），
+  保存后段头给出「已保存；重启服务后生效」+ `docker compose restart` 命令（可复制），不会自动重启。
+- **音色与试听**：TTS 的 voice 是官方音色下拉（火山 2.0 20 个，含小荷/Vivi/邻家男孩），
+  旁边「试听」用**未保存的**音色/语速/情感合成 15 字示例并在浏览器播放；试听不写配置、不影响 dirty。
+  语速 -50..100（0 正常）、情感（默认/开心/难过/…/平静）、情感强度 1–5。
+- **SiliconFlow TTS 下线**：控制台 TTS 不再提供 `sf-tts`（加链选项与 provider 卡片编辑均禁止）；
+  dev 配置与 `config.example.yaml`、`config/template.yaml` 的 TTS 默认链已移除它，
+  定义仍保留在配置里，页面收进底部「未使用的定义」折叠区（标注「不再提供」，只读）。
+  ASR 可选 `volc-asr` / `local-asr`（`sf-asr` 仍保留为可选兜底）；TTS 可选 `volc-tts` / `xfyun-tts`。
+- 体检页「火山用量与额度」行式卡片：可用余额、今日/近 7 天 TTS 字符、**今日/近 7 天 ASR 秒数**、
+  资源包、更新时间；数据来自 `GET /api/v1/billing/quota`（火山账单/用量 API，缓存 5 分钟，缺 AK/SK 时给提示）。
+- 截图：`docs/console-shots/providers-v2.png`（整页，1440）、`voice-audition.png`、`quota-card.png`。
+  Providers v2 截图时 dev 控制面尚未重启：仅用只读 CDP 夹具把 PanelSpec 的 component 换成
+  `providers-v2`，并把 catalog 的 TTS chain 预演为重启后的 `[volc-tts, xfyun-tts]`（与已改的
+  dev config 一致）；voices / audition 走真 API。保存态另用 mock PUT 验证，未写 dev 配置。
 
 ### 12.2 配置中心（四类参数 + 效果标注）
 
@@ -164,7 +181,7 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 ② 音箱相关（devices 每台 26 字段含 LED/唤醒词/音量/端口；audio.capture/voice/playback/aec；ack）——
    「跟随音箱硬件变化，换音箱要重新量」；
 ③ 外部资源（三条 chain：llm/asr/tts；每 provider 的 kind/base_url/model/api_key_env/timeout/retries/…）——
-   「改完重启服务让整条链重新加载」；
+   「改完重启服务让整条链重新加载」；**这项已由 §12.2b 的专用 Providers v2 页承载**，不再走配置中心平铺；
 ④ 工具（weather/news/search/ha/mcp_servers/music）——「多数保存即生效；音源本身改完要重启」。
 
 每个字段：`label`、`hint`（改这个能达到什么效果 / 什么时候用）、`effect`（**保存生效 / 重启生效**）、

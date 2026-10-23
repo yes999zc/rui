@@ -30,7 +30,8 @@ def test_setup_writes_the_production_template(tmp_path) -> None:
     cfg = load_config(path)
     assert cfg.devices == []
     assert cfg.providers.asr.chain == ["local_asr", "siliconflow_asr"]
-    assert cfg.providers.tts.chain == ["xfyun_tts", "siliconflow_tts"]
+    # SiliconFlow TTS left the template chain 2026-10-23; Volcano is the fallback.
+    assert cfg.providers.tts.chain == ["xfyun_tts", "volc_tts"]
     assert cfg.providers.llm.chain == ["deepseek_llm"]
     assert cfg.audio.voice.kws_enabled is True
     assert cfg.audio.voice.vad_model_path == "/data/models/silero_vad.onnx"

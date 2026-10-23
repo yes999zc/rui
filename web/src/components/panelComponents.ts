@@ -17,4 +17,6 @@ export const PANEL_COMPONENTS: Record<string, () => Promise<{ default: Component
   'phrasebook-editor': () => import('./PhrasebookEditor.vue'),
   'device-manager': () => import('./DeviceManager.vue'),
   'mcp-manager': () => import('./McpManager.vue'),
+  // Dedicated providers page (LLM/ASR/TTS chains, voice audition, advanced collapsed).
+  'providers-v2': () => import('../views/ProvidersView.vue'),
 }

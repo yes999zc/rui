@@ -62,7 +62,11 @@ def test_state_reports_an_unconfigured_ha(console) -> None:
     assert body["ha"]["wired"] is False
     assert body["ha"]["connected"] is False
     assert body["ha"]["has_token"] is False
-    assert body["generic_wired"] is False
+    # Generic MCP is wired now (task-16); an empty config simply has no servers.
+    assert body["generic_wired"] is True
+    assert body["stdio_enabled"] is False
+    assert body["generic"] == {"enabled": 0, "connected": 0, "tools": 0,
+                               "stdio_enabled": False}
     assert body["servers"] == []
 
 

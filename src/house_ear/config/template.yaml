@@ -8,7 +8,7 @@
 #
 # The two things you still add by hand on a cold install:
 #   devices:  - your speaker (id/adapter/host/room/wake_words)
-#   .env:     - HOUSE_EAR_LLM_KEY / HOUSE_EAR_ASR_KEY / HOUSE_EAR_TTS_KEY
+#   .env:     - HOUSE_EAR_LLM_KEY / HOUSE_EAR_ASR_KEY / XFYUN_* / VOLC_API_KEY
 #               (plus XFYUN_APPID / XFYUN_API_KEY / XFYUN_API_SECRET for 讯飞 TTS;
 #                VOLC_API_KEY for 火山豆包 TTS / ASR; VOLC_ACCESS_KEY_ID +
 #                VOLC_SECRET_ACCESS_KEY only for the console's quota card)
@@ -125,14 +125,6 @@ providers:
       emotion_scale: 4             # 1..5 strength, used when emotion is set
       api_key_env: VOLC_API_KEY
       timeout_s: 15.0
-    siliconflow_tts:
-      kind: openai_compat
-      base_url: https://api.siliconflow.cn/v1
-      model: FunAudioLLM/CosyVoice2-0.5B
-      voice: FunAudioLLM/CosyVoice2-0.5B:charles
-      api_key_env: HOUSE_EAR_TTS_KEY
-      timeout_s: 20.0
-      retries: 1
     deepseek_llm:
       kind: openai_compat
       base_url: https://api.deepseek.com
@@ -145,7 +137,7 @@ providers:
   asr:
     chain: [local_asr, siliconflow_asr]
   tts:
-    chain: [xfyun_tts, siliconflow_tts]
+    chain: [xfyun_tts, volc_tts]
   llm:
     chain: [deepseek_llm]
 tools:

@@ -17,7 +17,7 @@ from house_ear.web.api.app import create_app
 
 def test_an_exposed_console_without_a_token_refuses_to_start() -> None:
     assert insecure_bind("0.0.0.0", "", False)
-    assert insecure_bind("<LAN-IP>", "", False)
+    assert insecure_bind("192.0.2.10", "", False)
     assert insecure_bind("::", "", False)
     # loopback, a token, or an explicit development opt-in are all fine
     assert insecure_bind("127.0.0.1", "", False) == ""

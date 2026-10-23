@@ -11,16 +11,32 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
-import { api, ApiError, type SetupState } from '../api'
-import { localizeBackend, t, type MsgKey } from '../i18n'
+import { api, ApiError, type CatalogDoc, type SetupState } from '../api'
+import { localizeBackend, pickLocalized, providerName, t, type MsgKey } from '../i18n'
 
 const state = ref<SetupState | null>(null)
 const error = ref('')
 const busy = ref('')
 
-const keys = ref({ HOUSE_EAR_LLM_KEY: '', HOUSE_EAR_ASR_KEY: '', HOUSE_EAR_TTS_KEY: '' })
-const optionalKeys = ref({ XFYUN_APPID: '', XFYUN_API_KEY: '', XFYUN_API_SECRET: '' })
-const showOptional = ref(false)
+const catalog = ref<CatalogDoc | null>(null)
+const keyDrafts = ref<Record<string, string>>({})
+
+type Stage = 'llm' | 'asr' | 'tts'
+const STAGES: Stage[] = ['llm', 'asr', 'tts']
+const STAGE_LABELS: Record<Stage, MsgKey> = {
+  llm: 'setup.keys.stage.llm',
+  asr: 'setup.keys.stage.asr',
+  tts: 'setup.keys.stage.tts',
+}
+
+interface SetupKey {
+  name: string
+  stages: Stage[]
+  providers: string[]
+  hasValue: boolean
+  hint: string
+  missing: boolean
+}
 
 const host = ref('')
 const room = ref('')
@@ -46,7 +62,13 @@ function stepTitle(id: string): string {
 
 async function load() {
   try {
-    state.value = await api.setup()
+    const [next, cat] = await Promise.all([
+      api.setup(),
+      api.catalog().catch(() => null),
+    ])
+    state.value = next
+    catalog.value = cat
+    keyDrafts.value = {}
     if (state.value.device) {
       host.value = state.value.device.host
       room.value = state.value.device.room || room.value
@@ -72,14 +94,14 @@ async function run(label: string, action: () => Promise<SetupState>) {
 
 function saveKeys() {
   const values: Record<string, string> = {}
-  for (const [name, value] of Object.entries({ ...keys.value, ...optionalKeys.value })) {
+  for (const [name, value] of Object.entries(keyDrafts.value)) {
     if (value.trim()) values[name] = value.trim()
   }
   if (!Object.keys(values).length) return
   void run('keys', async () => {
     const next = await api.setupKeys(values)
-    keys.value = { HOUSE_EAR_LLM_KEY: '', HOUSE_EAR_ASR_KEY: '', HOUSE_EAR_TTS_KEY: '' }
-    optionalKeys.value = { XFYUN_APPID: '', XFYUN_API_KEY: '', XFYUN_API_SECRET: '' }
+    keyDrafts.value = {}
+    catalog.value = await api.catalog().catch(() => catalog.value)
     return next
   })
 }
@@ -135,9 +157,59 @@ const missingByStage = computed<Record<string, string[]>>(() => {
   return detail?.missing_by_stage ?? {}
 })
 
-const anyKeyInput = computed(() =>
-  [...Object.values(keys.value), ...Object.values(optionalKeys.value)].some((value) => value.trim()),
+/**
+ * The keys the wizard must show, derived from the live catalog rather than a
+ * hard-coded list: active chain order → provider env var names → secrets table.
+ * That is why VOLC_API_KEY appears and the retired HOUSE_EAR_TTS_KEY does not.
+ */
+const missingLines = computed(() =>
+  Object.entries(missingByStage.value).filter(([, names]) => names.length > 0),
 )
+
+const requiredKeys = computed<SetupKey[]>(() => {
+  const doc = catalog.value
+  if (!doc) return []
+  const missing = new Set<string>()
+  for (const names of Object.values(missingByStage.value)) {
+    for (const name of names) missing.add(name)
+  }
+  const buckets = new Map<string, SetupKey>()
+  for (const stage of STAGES) {
+    const rawChain = doc.values[`providers.${stage}.chain`]
+    const chain = Array.isArray(rawChain) ? rawChain.map(String) : []
+    for (const provider of chain) {
+      const prefix = `providers.catalog.${provider}.`
+      for (const field of doc.fields) {
+        if (!field.path.startsWith(prefix)) continue
+        if (!/(api_key_env|app_id_env|api_secret_env)$/.test(field.path)) continue
+        const env = String(doc.values[field.path] ?? '').trim()
+        if (!env) continue
+        const meta = doc.secrets?.[env]
+        const existing = buckets.get(env)
+        if (existing) {
+          if (!existing.stages.includes(stage)) existing.stages.push(stage)
+          if (!existing.providers.includes(provider)) existing.providers.push(provider)
+          continue
+        }
+        buckets.set(env, {
+          name: env,
+          stages: [stage],
+          providers: [provider],
+          hasValue: Boolean(meta?.has_value),
+          hint: pickLocalized(meta?.hint),
+          missing: missing.has(env) || !meta?.has_value,
+        })
+      }
+    }
+  }
+  return [...buckets.values()]
+})
+
+function stageLabel(stage: Stage): string {
+  return t(STAGE_LABELS[stage])
+}
+
+const anyKeyInput = computed(() => Object.values(keyDrafts.value).some((value) => value.trim()))
 
 const audioState = computed(() =>
   state.value?.audio_plane ? t('setup.audioOnline') : t('setup.audioOffline'),
@@ -192,8 +264,8 @@ onMounted(load)
             </span>
           </div>
         </div>
-        <div v-if="Object.keys(missingByStage).length" class="missing-list">
-          <div v-for="(names, stage) in missingByStage" :key="stage" class="missing-line">
+        <div v-if="missingLines.length" class="missing-list">
+          <div v-for="[stage, names] in missingLines" :key="stage" class="missing-line">
             <span class="missing-stage mono">{{ stage }}</span>
             <span class="fail">{{ names.join(' / ') }}</span>
           </div>
@@ -206,43 +278,36 @@ onMounted(load)
       <div class="setup-body">
         <h2>{{ t('setup.keys.title') }}</h2>
         <p class="field-hint">{{ t('setup.keys.lede') }}</p>
-        <div class="setup-fields">
-          <div class="field-row">
-            <div class="field-meta"><label class="field-label" for="setup-llm">{{ t('setup.keys.llm') }}</label></div>
-            <div class="field-control">
-              <input id="setup-llm" v-model="keys.HOUSE_EAR_LLM_KEY" type="password" placeholder="sk-…" autocomplete="off" />
+        <div v-if="requiredKeys.length" class="setup-fields">
+          <div v-for="key in requiredKeys" :key="key.name" class="field-row setup-key-row">
+            <div class="field-meta">
+              <div class="field-label">
+                <code class="mono">{{ key.name }}</code>
+              </div>
+              <div class="setup-key-tags">
+                <span v-for="stage in key.stages" :key="stage" class="badge">{{ stageLabel(stage) }}</span>
+                <span class="field-hint">{{ t('setup.keys.usedBy', { providers: key.providers.map(providerName).join(' / ') }) }}</span>
+              </div>
+              <p v-if="key.hint" class="field-hint setup-key-hint">{{ key.hint }}</p>
             </div>
-          </div>
-          <div class="field-row">
-            <div class="field-meta"><label class="field-label" for="setup-asr">{{ t('setup.keys.asr') }}</label></div>
             <div class="field-control">
-              <input id="setup-asr" v-model="keys.HOUSE_EAR_ASR_KEY" type="password" placeholder="sk-…" autocomplete="off" />
-            </div>
-          </div>
-          <div class="field-row">
-            <div class="field-meta"><label class="field-label" for="setup-tts">{{ t('setup.keys.tts') }}</label></div>
-            <div class="field-control">
-              <input id="setup-tts" v-model="keys.HOUSE_EAR_TTS_KEY" type="password" placeholder="sk-…" autocomplete="off" />
+              <div class="setup-key-line">
+                <span class="badge" :class="key.missing ? 'badge-warn' : 'badge-ok'">
+                  {{ key.missing ? t('setup.keys.missing') : t('setup.keys.configured') }}
+                </span>
+                <input
+                  :id="`setup-key-${key.name}`"
+                  v-model="keyDrafts[key.name]"
+                  type="password"
+                  autocomplete="off"
+                  :placeholder="t('secrets.placeholder')"
+                />
+              </div>
             </div>
           </div>
         </div>
-        <button type="button" class="btn btn-ghost btn-sm" @click="showOptional = !showOptional">
-          {{ showOptional ? t('common.close') : t('setup.keys.optionalToggle') }}
-        </button>
-        <div v-if="showOptional" class="setup-fields">
-          <div class="field-row">
-            <div class="field-meta"><label class="field-label" for="setup-xf-appid">XFYUN_APPID</label></div>
-            <div class="field-control"><input id="setup-xf-appid" v-model="optionalKeys.XFYUN_APPID" autocomplete="off" /></div>
-          </div>
-          <div class="field-row">
-            <div class="field-meta"><label class="field-label" for="setup-xf-key">XFYUN_API_KEY</label></div>
-            <div class="field-control"><input id="setup-xf-key" v-model="optionalKeys.XFYUN_API_KEY" type="password" autocomplete="off" /></div>
-          </div>
-          <div class="field-row">
-            <div class="field-meta"><label class="field-label" for="setup-xf-secret">XFYUN_API_SECRET</label></div>
-            <div class="field-control"><input id="setup-xf-secret" v-model="optionalKeys.XFYUN_API_SECRET" type="password" autocomplete="off" /></div>
-          </div>
-        </div>
+        <p v-else-if="!catalog" class="field-hint">{{ t('setup.keys.unavailable') }}</p>
+        <p v-else class="field-hint">{{ t('setup.keys.none') }}</p>
         <div class="actions" style="margin-top: var(--s3)">
           <button type="button" class="btn btn-primary" :disabled="busy !== '' || !anyKeyInput" @click="saveKeys">
             {{ busy === 'keys' ? t('common.saving') : t('setup.keys.save') }}
@@ -369,6 +434,42 @@ onMounted(load)
 
 .setup-fields {
   margin-top: var(--s3);
+}
+
+.setup-key-row {
+  align-items: start;
+}
+
+.setup-key-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.setup-key-tags .field-hint {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.setup-key-hint {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.setup-key-line {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.setup-key-line input {
+  flex: 1;
+  min-width: 180px;
 }
 
 .progress-list {

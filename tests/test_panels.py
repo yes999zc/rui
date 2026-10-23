@@ -134,7 +134,6 @@ CONFIG_CENTER_PANELS = {
     # tier 2: everything that follows the speaker hardware (devices + DSP + ack).
     "speaker": {"devices", "audio.capture", "audio.voice", "audio.playback",
                 "audio.aec", "ack"},
-    "providers": {"providers.catalog", "providers.asr", "providers.tts", "providers.llm"},
     "tools": {"tools.weather", "tools.news", "tools.search", "tools.ha",
               "tools.mcp", "tools.exposure", "music"},
     # tier 1 process foundations only; assistant/session is its own panel.
@@ -155,6 +154,15 @@ def test_the_config_center_panels_render_from_the_catalog() -> None:
     declared_groups = {group["id"] for group in catalog["groups"]}
     paths = {field["path"] for field in catalog["fields"]}
     covered: set[str] = set()
+    provider_groups = {"providers.catalog", "providers.asr", "providers.tts",
+                       "providers.llm"}
+    assert provider_groups <= declared_groups
+    # Providers has its own page since 2026-10-23 (three stage chains, cards, audition);
+    # its fields still live in the same catalog, so no setting loses a home.
+    providers = found["providers"]
+    assert providers["component"] == "providers-v2"
+    assert providers["blocks"] == []
+    assert providers["source"] == "/api/v1/config/catalog"
     for panel_id, groups in CONFIG_CENTER_PANELS.items():
         panel = found[panel_id]
         assert panel["component"] == "config-center", panel_id

@@ -383,6 +383,10 @@ class McpServerConfig(BaseModel):
     transport: Literal["stdio", "http"] = "http"
     url: str = ""
     command: list[str] = Field(default_factory=list)
+    # Explicit environment for a stdio server (the manager never passes the service
+    # environment). Values end up in config.yaml, so keep secrets out unless the file
+    # itself is 0600 and private.
+    env: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
 
 
@@ -430,6 +434,10 @@ class ToolsConfig(BaseModel):
     expose: ExposeMode = "domain"
     whitelist: list[str] = Field(default_factory=list)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
+    # Security gate for MCP stdio: a stdio server is a local child process, i.e.
+    # arbitrary command execution. Off by default so a config (or a pasted config from
+    # the internet) cannot start one by accident; the console switch says so explicitly.
+    mcp_allow_stdio: bool = False
     ha: HaConfig = Field(default_factory=HaConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)

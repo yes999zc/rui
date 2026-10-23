@@ -276,9 +276,12 @@ def test_the_production_template_renders_its_own_key_names(tmp_path) -> None:
     cfg = load_config(path)
     names = set(document(cfg)["secrets"])
     # The template's actual env names, which the old hard-coded secrets page missed.
-    assert {"HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY", "HOUSE_EAR_LLM_KEY",
+    # SiliconFlow TTS is off the template chain (2026-10-23); Volcano is the fallback,
+    # so its API key replaces the old HOUSE_EAR_TTS_KEY entry.
+    assert {"HOUSE_EAR_ASR_KEY", "HOUSE_EAR_LLM_KEY",
             "XFYUN_APPID", "XFYUN_API_KEY", "XFYUN_API_SECRET",
-            "DEEPSEEK_API_KEY", "HOUSE_EAR_HA_TOKEN", "web.auth_token"} <= names
+            "DEEPSEEK_API_KEY", "HOUSE_EAR_HA_TOKEN", "VOLC_API_KEY",
+            "web.auth_token"} <= names
 
 
 # ------------------------------------------------- 4. the wake gate is writable
@@ -368,7 +371,11 @@ def test_each_config_panel_owns_exactly_its_tier_groups(tmp_path) -> None:
     for group in catalog["groups"]:
         by_tier.setdefault(group["tier"], set()).add(group["id"])
     assert set(panels["speaker"]["component_args"]["groups"]) == by_tier[2]
-    assert set(panels["providers"]["component_args"]["groups"]) == by_tier[3]
+    # Providers moved to a dedicated page (providers-v2) but its tier-3 groups stay
+    # catalogued, so every provider field keeps its single home.
+    assert panels["providers"]["component"] == "providers-v2"
+    assert {"providers.catalog", "providers.asr", "providers.tts",
+            "providers.llm"} <= by_tier[3]
     assert set(panels["tools"]["component_args"]["groups"]) == by_tier[4]
     # Tier 1 is split by meaning: conversational fields vs process foundations.
     assert set(panels["assistant-session"]["component_args"]["groups"]) == {

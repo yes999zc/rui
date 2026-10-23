@@ -42,7 +42,13 @@ from ...config.catalog import (
 from ...config.catalog import (
     document as config_catalog,
 )
-from ...config.schema import CONFIG_VERSION, LED_STATES, Config, DeviceConfig
+from ...config.schema import (
+    CONFIG_VERSION,
+    LED_STATES,
+    Config,
+    DeviceConfig,
+    McpServerConfig,
+)
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
@@ -62,6 +68,8 @@ from ...session.vendor import VendorWindow
 from ...tools import build_local_tools, build_scheduler
 from ...tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from ...tools.ha import HaBridge
+from ...tools.mcp_manager import MCPManager
+from ...tools.mcp_manager import test_server as test_generic_mcp_server
 from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
@@ -417,12 +425,10 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "icon": "⇄", "group": "config", "order": 43,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
-            "component": "config-center",
-            "component_args": {
-                "groups": ["providers.catalog", "providers.asr", "providers.tts",
-                           "providers.llm"],
-                "tier": 3,
-            },
+            # Dedicated page: three stage chains, provider cards, voice audition.
+            # The generic catalog editor was too dense for this page (9哥 review).
+            "component": "providers-v2",
+            "component_args": {},
         },
         {
             "id": "tools", "title": "工具", "title_en": "Tools",
@@ -976,6 +982,36 @@ def create_app(
                 registry.register(spec)
                 local_tools.append((spec, handler))
             log.info("music: source=%s tools=%d", cfg.music.source, len(local_tools))
+    # Generic MCP servers (`tools.mcp_servers`): one task per server, tools registered
+    # as `mcp.<server>_<tool>`. The manager only owns connections/status; registration
+    # stays here so the runner's tool list remains the single wiring point. HA keeps its
+    # own bridge and naming (`local.ha_*`) - this is additive, not a replacement.
+    mcp_manager = MCPManager(cfg.tools.mcp_servers,
+                            allow_stdio=cfg.tools.mcp_allow_stdio)
+
+    def _sync_generic_mcp() -> None:
+        """Register/replace the generic MCP tools from the manager's live servers.
+
+        Called on startup, after a config save, and whenever a server connects late
+        (the manager's `on_change` hook). Idempotent: it always unregisters the old
+        `mcp.*` set first, so late connects and hot re-applies cannot duplicate tools.
+        """
+        registry.unregister([name for name in registry.names()
+                             if name.startswith("mcp.")])
+        local_tools[:] = [(spec, handler) for spec, handler in local_tools
+                          if not spec.name.startswith("mcp.")]
+        for spec, handler in mcp_manager.tool_pairs():
+            try:
+                registry.register(spec, handler)
+            except Exception as exc:  # noqa: BLE001 - one bad tool must not drop the rest
+                log.warning("mcp: cannot register %s: %s", spec.name, exc)
+                continue
+            local_tools.append((spec, handler))
+        runner = getattr(app.state, "runner", None)
+        if runner is not None:
+            runner.set_tools(list(local_tools))
+
+    mcp_manager.on_change = _sync_generic_mcp
     adapters = build_adapters(cfg)
     traces = TraceLog()
     for dev_id, err in adapters.errors.items():
@@ -1049,6 +1085,14 @@ def create_app(
                 log.warning("ha: MCP connect failed (%s) - device tools degrade",
                             ha.client.last_error)
                 app.state.ha = ha
+        # Generic MCP servers start concurrently and are allowed to fail individually:
+        # a dead server degrades only its own tools, exactly like a dead HA. Tools are
+        # registered through the same path a late connect uses (`on_change`).
+        await mcp_manager.apply(cfg.tools.mcp_servers)
+        _sync_generic_mcp()
+        generic = mcp_manager.status()
+        log.info("mcp generic: %d/%d server(s) connected, %d tool(s)",
+                 generic["connected"], generic["enabled"], generic["tools"])
         # Warm the instances the turns will use. This used to build its own chain and
         # warm that, which loaded the real one cold.
         await runner.warm()
@@ -1479,6 +1523,9 @@ def create_app(
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
+        # MCP sessions first: an HTTP session gets its own connection closed, a stdio
+        # server is a child process that must not outlive the control plane.
+        await mcp_manager.stop()
         supervisor = getattr(app.state, "audio", None)
         if supervisor is not None:
             await supervisor.stop()
@@ -1493,6 +1540,7 @@ def create_app(
     app.state.adapters = adapters
     app.state.memory = memory
     app.state.tools = registry  # the console and tests read the same registry turns use
+    app.state.mcp_manager = mcp_manager  # generic MCP sessions/status (console reads it)
     app.state.trace_log = traces  # scripts and tests read the same log the API serves
     if music_service is not None:
         music_service.sender = _music_sender(app)
@@ -1673,6 +1721,13 @@ def create_app(
             if service is None:
                 return False
             app.state.music = service
+            # Runtime enable must bind the natural-end callback that the startup path
+            # binds at :1359. Without it the radio queue never advances after the first
+            # song (audit round 2 P1-5).
+            supervisor = getattr(app.state, "audio", None)
+            client = supervisor.client if supervisor is not None else None
+            if client is not None:
+                client.on_playback_finished = service.on_finished
             for spec, handler in build_music_tools(updated, service):
                 registry.register(spec, handler)
                 local_tools.append((spec, handler))
@@ -1732,6 +1787,11 @@ def create_app(
             app.state.ack_task = asyncio.create_task(render_ack_wav(updated), name="ack-render")
         if any(path.startswith("tools.ha.") for path in applied):
             await _apply_ha(updated)
+        if "tools.mcp_allow_stdio" in changed:
+            # Declared `restart`, but turning the gate OFF must take effect now: a running
+            # stdio child must not keep executing until the next restart. Turning it on
+            # re-applies immediately too, so a saved local server can start.
+            await _apply_generic_mcp(updated)
         if "music.enabled" in applied and not await _apply_music(updated):
             applied.remove("music.enabled")
             restart_fields.append("music.enabled")
@@ -2486,6 +2546,11 @@ def create_app(
             if kind == "sherpa":
                 model = str(getattr(provider, "model", "") or "")
                 return bool(model and Path(model).expanduser().exists())
+            # 火山 TTS/ASR and 讯飞 have the vendor endpoint built into the provider:
+            # their base_url is legitimately empty, and demanding one made the setup
+            # wizard claim "keys missing" forever (concurrent providers-v2 test 17:46).
+            if kind in ("volc_tts", "volc_asr", "xfyun"):
+                return True
             return bool(getattr(provider, "base_url", ""))
         stage_ok: dict[str, bool] = {}
         missing_keys: set[str] = set()
@@ -2917,11 +2982,41 @@ def create_app(
             runner.set_tools(list(local_tools))
             runner.extra_context = _context_provider(app, bridge)
 
+    async def _apply_generic_mcp(updated: Config) -> None:
+        """Re-apply `tools.mcp_servers` at runtime (hot, per-server isolation).
+
+        `MCPManager.apply` keeps unchanged sessions alive, reconnects only changed ones
+        and starts/ stops the rest; `_sync_generic_mcp` then replaces the `mcp.*` tools
+        so the next turn sees exactly the new set. A server that fails to connect stays
+        in the list with its error and keeps retrying - it never removes another's tools.
+        `tools.mcp_allow_stdio` is applied first: turning it off stops any stdio child
+        immediately instead of waiting for the declared restart.
+        """
+        mcp_manager.allow_stdio = bool(updated.tools.mcp_allow_stdio)
+        await mcp_manager.apply(updated.tools.mcp_servers)
+        _sync_generic_mcp()
+        generic = mcp_manager.status()
+        log.info("mcp generic: re-applied, %d/%d connected, %d tool(s), stdio=%s",
+                 generic["connected"], generic["enabled"], generic["tools"],
+                 generic["stdio_enabled"])
+
     def _mcp_state() -> dict:
-        ha = cfg.tools.ha
+        cfg_now = getattr(app.state, "cfg", cfg)
+        ha = cfg_now.tools.ha
         bridge = getattr(app.state, "ha", None)
         status = bridge.status if bridge is not None else {
             "connected": False, "latency_ms": None, "tools": 0, "entities": 0}
+        generic = mcp_manager.status()
+        # Configured order is the user's order; status comes from the live manager.
+        by_name = {row["name"]: row for row in generic["servers"]}
+        servers: list[dict] = []
+        for server in cfg_now.tools.mcp_servers:
+            row = server.model_dump(mode="json")
+            row.update(by_name.get(server.name) or {
+                "connected": False, "tools": 0, "tool_names": [],
+                "latency_ms": None, "error": "", "last_seen": None,
+            })
+            servers.append(row)
         return {
             "ha": {
                 "base_url": ha.base_url,
@@ -2931,10 +3026,19 @@ def create_app(
                 **status,
                 "error": getattr(getattr(bridge, "client", None), "last_error", "") or "",
             },
-            "servers": [server.model_dump(mode="json") for server in cfg.tools.mcp_servers],
-            # tools.mcp_servers is a reserved shape: the generic MCP client exists, but
-            # only HA is wired end to end. Say so instead of pretending.
-            "generic_wired": False,
+            # Per-server generic status: the console renders add/edit/remove and the
+            # connected/tools/latency/error of each entry from this list.
+            "servers": servers,
+            "generic_wired": True,
+            # Security gate for local (stdio) servers; the console shows a switch and
+            # explains that it means code execution on the host.
+            "stdio_enabled": bool(cfg_now.tools.mcp_allow_stdio),
+            "generic": {
+                "enabled": generic["enabled"],
+                "connected": generic["connected"],
+                "tools": generic["tools"],
+                "stdio_enabled": generic["stdio_enabled"],
+            },
         }
 
     @app.get("/api/v1/mcp", dependencies=[Depends(auth)])
@@ -2943,7 +3047,12 @@ def create_app(
 
     @app.put("/api/v1/mcp", dependencies=[Depends(auth)])
     async def mcp_update(payload: Annotated[dict, Body()]) -> dict:
-        """Write the HA endpoint (and optionally its token), then reconnect live."""
+        """Write HA and/or generic servers, then reconnect what changed.
+
+        Keeping the old HA shape; `{"servers": [...]}` replaces `tools.mcp_servers`.
+        A stdio server is refused while `tools.mcp_allow_stdio` is false (security audit
+        round 2, P0-1: it is arbitrary command execution on this host).
+        """
         if config_path is None or not Path(config_path).exists():
             raise HTTPException(status_code=409, detail="there is no config file on disk to write")
         try:
@@ -2969,6 +3078,17 @@ def create_app(
         if "servers" in payload:
             if not isinstance(payload["servers"], list):
                 raise HTTPException(status_code=422, detail="servers must be a list")
+            gate = bool(merged["tools"].get("mcp_allow_stdio", False))
+            local = [index for index, server in enumerate(payload["servers"])
+                     if isinstance(server, dict)
+                     and str(server.get("transport") or "http") == "stdio"]
+            if local and not gate:
+                raise HTTPException(status_code=422, detail=[
+                    {"loc": ["servers", index, "transport"],
+                     "msg": "stdio MCP is disabled (tools.mcp_allow_stdio=false); "
+                            "enable the gate before adding a local server"}
+                    for index in local
+                ])
             merged["tools"]["mcp_servers"] = payload["servers"]
         try:
             updated = Config.model_validate(merged)
@@ -2980,12 +3100,37 @@ def create_app(
         save_config(Path(config_path), updated)
         _apply_config(updated)
         await _apply_ha(updated)
-        log.info("mcp: config written from the console (ha=%s)", updated.tools.ha.base_url)
+        await _apply_generic_mcp(updated)
+        log.info("mcp: config written from the console (ha=%s, %d generic server(s))",
+                 updated.tools.ha.base_url, len(updated.tools.mcp_servers))
         return _mcp_state()
 
     @app.post("/api/v1/mcp/test", dependencies=[Depends(auth)])
     async def mcp_test(payload: Annotated[dict, Body()]) -> dict:
-        """Connect a throwaway HA bridge and report what it lists; nothing is saved."""
+        """Probe one server without saving: HA ({base_url}) or generic ({transport,url|command}).
+
+        HA keeps its old shape (`base_url` -> HaBridge). A payload carrying `transport`,
+        `url` or `command` is a generic server probe: the manager opens one throwaway
+        session, lists its tools and disconnects.
+        """
+        if any(key in payload for key in ("transport", "url", "command")):
+            raw = {key: payload[key] for key in
+                   ("name", "transport", "url", "command", "enabled") if key in payload}
+            raw.setdefault("name", "probe")
+            raw.setdefault("enabled", True)
+            try:
+                probe_server = McpServerConfig.model_validate(raw)
+            except ValidationError as exc:
+                raise HTTPException(status_code=422, detail=[
+                    {"loc": list(error.get("loc", ())), "msg": str(error.get("msg", ""))}
+                    for error in exc.errors(include_url=False)
+                ]) from exc
+            result = await test_generic_mcp_server(
+                probe_server, allow_stdio=bool(cfg.tools.mcp_allow_stdio))
+            log.info("mcp test: %s %s ok=%s attempted=%s tools=%d",
+                     probe_server.transport, probe_server.name, result["ok"],
+                     result.get("attempted", True), result["tools"])
+            return result
         base_url = str(payload.get("base_url") or cfg.tools.ha.base_url or "").strip()
         if not base_url or not base_url.startswith(("http://", "https://")):
             raise HTTPException(status_code=422,

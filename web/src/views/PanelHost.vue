@@ -15,6 +15,7 @@ import { api } from '../api'
 import { usePanels } from '../composables/usePanels'
 import { PANEL_COMPONENTS } from '../components/panelComponents'
 import { groupTitle, localizeBackend, panelTitle, t } from '../i18n'
+import { panelNavGroup } from '../panels'
 import AppIcon from '../components/AppIcon.vue'
 import BlockStats from '../components/BlockStats.vue'
 import BlockNow from '../components/BlockNow.vue'
@@ -146,7 +147,7 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
   <template v-else>
     <header class="page-head">
       <div>
-        <div class="kicker">{{ groupTitle(panel.group) }}</div>
+        <div class="kicker">{{ groupTitle(panelNavGroup(panel)) }}</div>
         <h1>{{ panelTitle(panel) }}</h1>
       </div>
       <div v-if="!panel.enabled" class="page-head-side">
@@ -191,7 +192,7 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
           <BlockList v-else-if="block.type === 'list'" :block="block" :data="dataFor(block)" />
           <BlockForm v-else-if="block.type === 'form'" :block="block" :data="dataFor(block)" :refresh="poll" />
           <BlockTable v-else-if="block.type === 'table'" :block="block" :data="dataFor(block)" />
-          <BlockLog v-else-if="block.type === 'log'" :block="block" :data="dataFor(block)" />
+          <BlockLog v-else-if="block.type === 'log'" :block="block" :data="dataFor(block)" :hide-title="!block.title" />
           <BlockMemory v-else-if="block.type === 'memory'" :block="block" :data="dataFor(block)" :refresh="poll" />
           <BlockSay v-else-if="block.type === 'say'" :block="block" :data="dataFor(block)" />
           <BlockVolume v-else-if="block.type === 'volume'" :block="block" :data="dataFor(block)" />

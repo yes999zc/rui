@@ -377,7 +377,8 @@ def test_secret_scan_workflow_covers_the_agreed_patterns() -> None:
         r"10\.[0-9]",
         "password[[:space:]]*[:=]",
         "Bearer [A-Za-z0-9_-]{20,}",
-        "docs/audit",
+        # Round-2 audits are excluded too (they quote reviewed evidence).
+        "docs/*audit*",
         "tests/fixtures",
         "pull_request",
         "push:",

@@ -22,11 +22,12 @@
 ### 火山豆包语音（可选）
 
 - TTS：`.env` 里填 `VOLC_API_KEY`（控制台 API Key），把 `config.yaml` 的
-  `providers.tts.chain` 改成 `[volc_tts, xfyun_tts, siliconflow_tts]` 即启用；
+  `providers.tts.chain` 改成 `[volc_tts, xfyun_tts]` 即启用；
   音色在控制台「外部资源 → volc_tts → 音色」选并「试听」，保存后重启服务生效。
 - 额度卡片：`.env` 再填 `VOLC_ACCESS_KEY_ID` / `VOLC_SECRET_ACCESS_KEY`（只用于只读查询账户余额/用量）。
-- ASR：录音文件识别是异步接口（需公网音频 URL，约 9 s），不适合实时对话；实时 ASR 需在
-  火山控制台开通「大模型流式语音识别」，开通后项目再接入。
+- ASR：项目已接入豆包流式语音识别 2.0（`volc_asr`，双向 WebSocket）。先在火山控制台
+  开通「大模型流式语音识别」资源并拿到 `VOLC_API_KEY`，再把 `providers.asr.chain` 改成
+  `[volc-asr, local-asr]`；流式识别比本地 SenseVoice 多约 1 s 延迟，可在控制台随时切回。
 
 `install.sh` 里的 `house-ear setup` 会生成随机 `web.auth_token` 并打印一次：
 
@@ -94,7 +95,7 @@ devices:
 ```yaml
 providers:
   asr: {chain: [local_asr, siliconflow_asr]}   # 本地优先，云端兜底
-  tts: {chain: [xfyun_tts, siliconflow_tts]}   # 讯飞优先，SiliconFlow 兜底
+  tts: {chain: [xfyun_tts, volc_tts]}           # 讯飞优先，火山兜底（无硅基流动）
   llm: {chain: [deepseek_llm]}
 ```
 
@@ -105,13 +106,13 @@ providers:
 | 本地 ASR | — | `fetch-models` 放模型，不需要 key；缺模型时走 `siliconflow_asr` |
 | 云端 ASR 兜底 | `HOUSE_EAR_ASR_KEY` | SiliconFlow |
 | TTS 主 | `XFYUN_APPID`、`XFYUN_API_KEY`、`XFYUN_API_SECRET` | 讯飞 websocket TTS |
-| TTS 兜底 | `HOUSE_EAR_TTS_KEY` | SiliconFlow |
+| TTS 兜底 | `VOLC_API_KEY` | 火山豆包 TTS 2.0（`volc_tts`） |
 | LLM | `HOUSE_EAR_LLM_KEY` | DeepSeek（模板用 `deepseek-flash`） |
 | HA | `HOUSE_EAR_HA_TOKEN` | 见 §5 |
 | 搜索（可选） | `DEEPSEEK_API_KEY` | 模板里 `tools.search.enabled: false`，开了才需要 |
 
 密钥只放 `~/house-ear/.env`（或控制台「设置→密钥」写入 `data/secrets.yaml`，写后不可读回），
-**不要写进 config.yaml**。容器里 `env_file: .env` 注入。要换 provider（例如全用 SiliconFlow）
+**不要写进 config.yaml**。容器里 `env_file: .env` 注入。要换 provider（例如全用火山）
 就改 `providers.catalog` + 三条链，`config.example.yaml` 有完整写法。
 
 ### 3.3 模型（`fetch-models` 一次装齐）
@@ -151,7 +152,7 @@ docker run --rm -v ~/house-ear/config:/config ghcr.io/yes999zc/house-ear:<tag> \
 ```bash
 HOUSE_EAR_LLM_KEY=...        # DeepSeek（模板 llm 链）
 HOUSE_EAR_ASR_KEY=...        # SiliconFlow（云端 ASR 兜底）
-HOUSE_EAR_TTS_KEY=...        # SiliconFlow（TTS 兜底）
+VOLC_API_KEY=...             # 火山豆包 TTS/ASR（模板 tts 兜底；ASR 可选）
 XFYUN_APPID=...              # 讯飞 TTS（模板 tts 主）
 XFYUN_API_KEY=...
 XFYUN_API_SECRET=...
@@ -160,8 +161,9 @@ HOUSE_EAR_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个
 HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:0.0.1   # 可选：固定版本
 ```
 
-只填模板链里实际用到的即可：没有讯飞 key 就留空（自动落到 SiliconFlow）；没有 SiliconFlow
-ASR key 时本地 ASR 顶上（需已跑 `fetch-models`）。
+只填模板链里实际用到的即可：没有讯飞 key 就留空（自动落到火山 `volc_tts`，需要
+`VOLC_API_KEY`）；没有 SiliconFlow ASR key 时本地 ASR 顶上（需已跑 `fetch-models`）。
+硅基流动 TTS 已从控制台与模板链下线（2026-10-23），旧的 `HOUSE_EAR_TTS_KEY` 不再使用。
 
 改完 `.env` / `config.yaml` 后：`docker compose up -d`（配置读盘，无需重建镜像）。
 

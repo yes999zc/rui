@@ -170,3 +170,30 @@ export function navGroup(group: string | undefined): string {
   if (!group) return 'run'
   return LEGACY_GROUPS[group] ?? group
 }
+
+/**
+ * Panel id → designed nav group. A few panels arrive in a historical group
+ * (`devices` in `status`, `mcp`/`devices-admin` in `config`); the console cares
+ * about where the operator looks for them, so the placement is explicit here and
+ * shared by the rail and the page kicker (they used to disagree for Logs).
+ */
+export const PANEL_NAV_GROUPS: Record<string, string> = {
+  overview: 'run',
+  turns: 'run',
+  logs: 'run',
+  music: 'life',
+  memory: 'life',
+  'assistant-session': 'config',
+  speaker: 'config',
+  providers: 'config',
+  tools: 'config',
+  foundation: 'config',
+  devices: 'maintain',
+  'devices-admin': 'maintain',
+  phrases: 'maintain',
+  mcp: 'maintain',
+}
+
+export function panelNavGroup(panel: { id: string; group: string }): string {
+  return PANEL_NAV_GROUPS[panel.id] ?? navGroup(panel.group)
+}

@@ -355,6 +355,29 @@ export interface DeviceDetail {
 }
 
 /** HA over MCP: the endpoint, whether it answers, and how much it lists. */
+export interface McpServerStatus {
+  name: string
+  transport: 'http' | 'stdio' | string
+  url: string
+  command: string[]
+  /** Present once the backend schema carries per-server env (stdio only). */
+  env?: Record<string, string>
+  enabled: boolean
+  connected: boolean
+  tools: number
+  tool_names?: string[]
+  latency_ms: number | null
+  error: string
+  last_seen: string | null
+}
+
+export interface McpGenericStatus {
+  enabled: number
+  connected: number
+  tools: number
+  stdio_enabled: boolean
+}
+
 export interface McpState {
   ha: {
     base_url: string
@@ -367,16 +390,41 @@ export interface McpState {
     entities: number
     error: string
   }
-  servers: { name: string; transport: string; url: string; enabled: boolean }[]
+  /** Configured generic servers, in config order, merged with live status. */
+  servers: McpServerStatus[]
   generic_wired: boolean
+  /** Local command execution gate (`tools.mcp_allow_stdio`), off by default. */
+  stdio_enabled?: boolean
+  generic?: McpGenericStatus
 }
+
+/** What `PUT /api/v1/mcp` accepts for one generic server. */
+export interface McpServerPayload {
+  name: string
+  transport: 'http' | 'stdio'
+  url?: string
+  command?: string[]
+  env?: Record<string, string>
+  enabled: boolean
+}
+
+/** What `POST /api/v1/mcp/test` accepts: HA `{base_url}` or one generic server. */
+export type McpTestPayload =
+  | { base_url: string }
+  | { name: string; transport: 'http' | 'stdio'; url?: string; command?: string[]; enabled?: boolean }
 
 export interface McpProbe {
   ok: boolean
-  connected: boolean
+  /** False when the stdio gate refused to even try (no process was spawned). */
+  attempted?: boolean
+  connected?: boolean
+  transport?: string
+  name?: string
   latency_ms: number | null
   tools: number
-  entities: number
+  tool_names?: string[]
+  /** HA probes report entities; generic probes do not. */
+  entities?: number
   error: string
 }
 
@@ -441,6 +489,8 @@ export interface BillingQuota {
   currency: string
   tts_chars_today: number | null
   tts_chars_7d: number | null
+  asr_seconds_today?: number | null
+  asr_seconds_7d?: number | null
   packs: { name: string; remaining?: unknown }[]
   updated_at: string
   errors: string[]
@@ -453,7 +503,7 @@ export interface CatalogDoc {
   /** Dotted path → current value. Secrets never appear here. */
   values: Record<string, unknown>
   /** Secret slots the catalog knows about; `has_value` is the only fact exposed. */
-  secrets?: Record<string, { has_value: boolean }>
+  secrets?: Record<string, { has_value: boolean; used_by?: string[]; hint?: LocalizedText | string }>
   restart_command?: string
   writable_root?: string[]
 }
@@ -529,10 +579,10 @@ export const api = {
       '/api/v1/devices/probe', { method: 'POST', body: JSON.stringify({ host }) }),
   /** P5: HA over MCP (write endpoint/token, test a throwaway connection). */
   mcp: () => request<McpState>('/api/v1/mcp'),
-  saveMcp: (payload: { ha?: { base_url?: string; token?: string }; servers?: unknown[] }) =>
+  saveMcp: (payload: { ha?: { base_url?: string; token?: string }; servers?: McpServerPayload[] }) =>
     request<McpState>('/api/v1/mcp', { method: 'PUT', body: JSON.stringify(payload) }),
-  testMcp: (base_url: string) =>
-    request<McpProbe>('/api/v1/mcp/test', { method: 'POST', body: JSON.stringify({ base_url }) }),
+  testMcp: (payload: McpTestPayload) =>
+    request<McpProbe>('/api/v1/mcp/test', { method: 'POST', body: JSON.stringify(payload) }),
   /** P6: every phrase template, plus what the override file currently holds. */
   phrases: () => request<PhraseDoc>('/api/v1/phrases'),
   savePhrases: (overrides: Record<string, string>) =>

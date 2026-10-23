@@ -171,12 +171,19 @@ def test_effects_match_where_the_value_is_read() -> None:
     fields = {field["path"]: field for field in document(Config())["fields"]}
     # Conversational fields are rebuilt per turn / per call.
     for path in ("assistant.name", "session.timeout_s", "tools.weather.city",
-                 "tools.news.enabled", "tools.search.count", "system.timezone"):
+                 "tools.search.count", "system.timezone"):
         assert fields[path]["effect"] == "save", path
     # The audio plane and the providers load their config once, at process start.
     for path in ("audio.playback.queue_ms", "audio.voice.vad_end_silence_ms",
-                 "ack.mode", "system.data_dir", "web.port"):
+                 "ack.mode", "system.data_dir", "web.port",
+                 # Tools are registered at startup by these switches (audit round 2 P1-4).
+                 "tools.news.enabled", "tools.search.enabled", "tools.search.kind"):
         assert fields[path]["effect"] == "restart", path
+    # An env NAME decides which secret is sent where; the console must not edit it
+    # (security audit round 2 P1-7).
+    env_paths = [path for path in fields if path.endswith(".api_key_env")]
+    for path in env_paths + ["tools.search.api_key_env", "tools.ha.token_env"]:
+        assert fields[path]["writable"] is False, path
     # The ack text is a rendered file the plane re-reads, so it is a save.
     assert fields["ack.text"]["effect"] == "save"
     # The music source needs the service rebuilt.

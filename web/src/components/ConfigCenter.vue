@@ -15,7 +15,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import { onBeforeRouteLeave } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import { api, ApiError, type CatalogDoc, type CatalogField, type CatalogGroup, type LocalizedText } from '../api'
-import { localizeBackend, localizeIssue, pickLocalized, t, type MsgKey } from '../i18n'
+import { isEnglish, localizeBackend, localizeIssue, pickLocalized, t } from '../i18n'
 
 const props = defineProps<{
   /** Catalog group ids to render (supports `providers.*`); omitted = every group. */
@@ -42,6 +42,8 @@ const auditionState = reactive<Record<string, 'idle' | 'loading' | 'playing'>>({
 const auditionError = ref('')
 let auditionAudio: HTMLAudioElement | null = null
 const showAdvanced = ref(false)
+/** Dotted config paths are a diagnostic detail, hidden behind one toolbar toggle. */
+const showTech = ref(false)
 const saving = ref(false)
 const saveError = ref('')
 const savedInfo = ref<{ applied: string[]; restart: boolean; restartFields: string[]; warnings: string[] } | null>(null)
@@ -114,20 +116,6 @@ async function load(silent = false): Promise<void> {
 }
 
 /** Tier metadata, with a dictionary fallback if the catalog omits it. */
-const TIER_FALLBACK: Record<number, MsgKey> = {
-  1: 'config.tierFallback.1',
-  2: 'config.tierFallback.2',
-  3: 'config.tierFallback.3',
-  4: 'config.tierFallback.4',
-}
-
-function tierTitle(tier: number): string {
-  const found = doc.value?.tiers?.find((item) => Number(item.id) === tier)
-  if (found) return pickLocalized(found.title)
-  const key = TIER_FALLBACK[tier]
-  return key ? t(key) : `T${tier}`
-}
-
 function tierHint(tier: number): string {
   const found = doc.value?.tiers?.find((item) => Number(item.id) === tier)
   return found ? pickLocalized(found.hint) : ''
@@ -180,13 +168,20 @@ const visibleFields = computed<CatalogField[]>(() => {
   })
 })
 
+/** One effect badge per group instead of the same tiny badge on every row. */
+function groupEffect(fields: CatalogField[]): 'save' | 'restart' | 'mixed' {
+  const effects = new Set(fields.map((field) => field.effect))
+  if (effects.size > 1) return 'mixed'
+  return fields[0]?.effect === 'restart' ? 'restart' : 'save'
+}
+
 /** Groups that still have something to show after filter + advanced rules. */
 const renderedGroups = computed(() =>
   selectedGroups.value
-    .map((group) => ({
-      group,
-      fields: visibleFields.value.filter((field) => field.group === group.id),
-    }))
+    .map((group) => {
+      const fields = visibleFields.value.filter((field) => field.group === group.id)
+      return { group, fields, effect: groupEffect(fields) }
+    })
     .filter((entry) => entry.fields.length > 0),
 )
 
@@ -262,11 +257,18 @@ function fieldHint(field: CatalogField): string {
   return pickLocalized(field.hint)
 }
 
+/** Long copy is clamped to one line and expands in place; short copy stays plain. */
+function hintIsLong(field: CatalogField): boolean {
+  const text = fieldHint(field)
+  return text.length > (isEnglish.value ? 96 : 42)
+}
+
 function fieldUnit(field: CatalogField): string {
   return pickLocalized(field.unit)
 }
 
 function effectLabel(effect: string): string {
+  if (effect === 'mixed') return t('config.effect.mixed')
   return effect === 'restart' ? t('config.effect.restart') : t('config.effect.save')
 }
 
@@ -577,17 +579,16 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
 
     <template v-else>
       <div class="cfg-toolbar">
-        <div class="cfg-legend">
-          <span class="kicker">{{ t('config.effect.legend') }}</span>
-          <span class="badge badge-save">{{ t('config.effect.save') }}</span>
-          <span class="badge badge-restart">{{ t('config.effect.restart') }}</span>
-        </div>
         <div class="cfg-toolbar-tools">
           <label class="sr-only" for="cfg-filter">{{ t('config.filter') }}</label>
           <input id="cfg-filter" v-model="filter" type="search" class="cfg-filter" :placeholder="t('config.filter')" />
           <label v-if="fields.some((f) => f.advanced)" class="cfg-advanced">
             <input v-model="showAdvanced" type="checkbox" />
             <span>{{ showAdvanced ? t('config.hideAdvanced') : t('config.showAdvanced') }}</span>
+          </label>
+          <label class="cfg-advanced">
+            <input v-model="showTech" type="checkbox" />
+            <span>{{ t('config.techDetails') }}</span>
           </label>
           <span v-if="isDirty" class="badge badge-warn cfg-dirty">{{ t('config.modified', { n: dirtyPaths.length }) }}</span>
           <div v-if="isDirty || saveError || saving" class="cfg-save-inline">
@@ -639,10 +640,10 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
             <p v-if="entry.group.hint" class="field-hint">{{ pickLocalized(entry.group.hint) }}</p>
           </div>
           <div class="cfg-group-badges">
-            <span class="badge" :class="entry.group.tier === 1 ? 'badge-warn' : ''">
-              {{ tierTitle(entry.group.tier) }}
+            <span class="badge" :class="entry.effect === 'restart' ? 'badge-restart' : entry.effect === 'mixed' ? 'badge-warn' : 'badge-save'">
+              {{ effectLabel(entry.effect) }}
             </span>
-            <span v-if="entry.group.tier === 1 && warningText" class="badge badge-warn">{{ t('config.tier1Badge') }}</span>
+            <span class="cfg-group-count meta">{{ t('config.itemsCount', { n: entry.fields.length }) }}</span>
           </div>
         </header>
 
@@ -657,7 +658,7 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
               <label class="field-label" :for="`f-${field.path}`">
                 <span v-if="isDirty && dirtyPaths.includes(field.path)" class="dot live" :title="t('config.dirtyTooltip')" />
                 {{ fieldLabel(field) }}
-                <span class="badge" :class="field.effect === 'restart' ? 'badge-restart' : 'badge-save'">
+                <span v-if="entry.effect === 'mixed'" class="badge" :class="field.effect === 'restart' ? 'badge-restart' : 'badge-save'">
                   {{ effectLabel(field.effect) }}
                 </span>
                 <span v-if="field.writable === false" class="badge">
@@ -666,8 +667,14 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
                 </span>
                 <span v-if="field.advanced" class="badge badge-muted">{{ t('config.advancedBadge') }}</span>
               </label>
-              <p v-if="fieldHint(field)" :id="`h-${field.path}`" class="field-hint">{{ fieldHint(field) }}</p>
-              <div class="field-meta-line">
+              <details v-if="fieldHint(field) && hintIsLong(field)" :id="`h-${field.path}`" class="cfg-hint">
+                <summary :title="fieldHint(field)">
+                  <span class="cfg-hint-text">{{ fieldHint(field) }}</span>
+                  <AppIcon name="chevronDown" :size="12" class="cfg-hint-chevron" />
+                </summary>
+              </details>
+              <p v-else-if="fieldHint(field)" :id="`h-${field.path}`" class="field-hint cfg-hint-short">{{ fieldHint(field) }}</p>
+              <div v-if="showTech || field.min != null || field.max != null || fieldUnit(field) || field.nullable" class="field-meta-line">
                 <span v-if="field.min != null || field.max != null">
                   {{
                     t('config.range', {
@@ -678,9 +685,8 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
                   }}
                 </span>
                 <span v-else-if="fieldUnit(field)">{{ t('config.unitLabel', { unit: fieldUnit(field) }) }}</span>
-                <span v-if="field.options?.length">{{ t('config.options', { n: field.options.length }) }}</span>
                 <span v-if="field.nullable" class="badge badge-muted">{{ t('common.optional') }}</span>
-                <span class="cfg-path">{{ field.path }}</span>
+                <span v-if="showTech" class="cfg-path">{{ field.path }}</span>
               </div>
             </div>
 
@@ -977,19 +983,13 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
   z-index: 15;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--s3);
   flex-wrap: wrap;
   padding: 10px 0 12px;
   margin-bottom: var(--s2);
   border-bottom: 1px solid var(--line);
   background: var(--bg);
-}
-
-.cfg-legend {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
 }
 
 .cfg-toolbar-tools {
@@ -1014,6 +1014,121 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
   color: var(--ink-2);
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* — compact field rows: the default view is a ledger, not a form dump ————— */
+.cfg-group {
+  margin-top: var(--s5);
+  scroll-margin-top: 90px;
+}
+
+.cfg-group-head {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: var(--s2) var(--s3);
+  padding-bottom: 10px;
+  align-items: start;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.cfg-group-title h2 {
+  font-size: 17px;
+}
+
+.cfg-group-title .field-hint {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 2px;
+  line-height: 1.45;
+}
+
+.cfg-group-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.cfg-index {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  padding-top: 3px;
+}
+
+.cfg-fields .field-row {
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: 4px var(--s4);
+  padding: 8px 0;
+}
+
+.cfg-fields .field-label {
+  gap: 6px;
+  font-size: 13.5px;
+}
+
+.cfg-fields .field-control {
+  max-width: 440px;
+}
+
+.cfg-fields .field-meta-line {
+  margin-top: 3px;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.cfg-hint {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.cfg-hint summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 3px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.cfg-hint summary::-webkit-details-marker {
+  display: none;
+}
+
+.cfg-hint-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cfg-hint-chevron {
+  flex: none;
+  margin-top: 3px;
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.cfg-hint[open] .cfg-hint-text {
+  display: block;
+  overflow: visible;
+}
+
+.cfg-hint[open] .cfg-hint-chevron {
+  transform: rotate(180deg);
+}
+
+.cfg-hint-short {
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .cfg-advanced input {
@@ -1071,32 +1186,6 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
 
 .cfg-empty {
   padding: var(--s6) 0;
-}
-
-.cfg-group {
-  margin-top: var(--s6);
-  scroll-margin-top: 90px;
-}
-
-.cfg-group-head {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
-  gap: var(--s3);
-  align-items: baseline;
-  padding-bottom: var(--s3);
-  border-bottom: 1px solid var(--line-strong);
-}
-
-.cfg-index {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--accent);
-  letter-spacing: 0.06em;
-  font-variant-numeric: tabular-nums;
-}
-
-.cfg-group-title h2 {
-  font-size: 21px;
 }
 
 .cfg-group-badges {
@@ -1299,12 +1388,24 @@ details.cfg-readonly {
     scrollbar-width: none;
   }
 
+  .cfg-indexchip {
+    min-height: 44px;
+    padding: 8px 10px;
+  }
+
   .cfg-indexbar::-webkit-scrollbar {
     display: none;
   }
 
   .cfg-group-head {
     grid-template-columns: 28px minmax(0, 1fr);
+    gap: var(--s2);
+  }
+
+  .cfg-fields .field-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+    padding: 10px 0;
   }
 
   .cfg-group-badges {

@@ -213,3 +213,25 @@ def test_device_needs_a_config_file_on_disk(tmp_path) -> None:
     client = TestClient(create_app(Config()))
     response = client.post("/api/v1/setup/device", json={"host": "speaker.local"})
     assert response.status_code == 409
+
+
+def test_builtin_endpoint_providers_do_not_need_a_base_url(tmp_path, monkeypatch) -> None:
+    """A volc_tts/volc_asr/xfyun provider has the vendor endpoint built in.
+
+    Requiring a non-empty base_url marked them permanently unusable: the wizard asked
+    for keys forever and a fresh console stayed on /setup (found 2026-10-23 17:46).
+    """
+    from house_ear.config.schema import ProviderConfig
+
+    monkeypatch.setenv("VOLC_API_KEY", "test-key")
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.providers.catalog["volc-tts"] = ProviderConfig(
+        kind="volc_tts", api_key_env="VOLC_API_KEY", model="seed-tts-2.0")
+    cfg.providers.tts.chain = ["volc-tts"]
+    path = tmp_path / "config.yaml"
+    save_config(path, cfg)
+    body = TestClient(create_app(cfg, config_path=path)).get("/api/v1/setup").json()
+    keys = body["steps"][0]
+    assert keys["detail"]["stages"]["tts"] is True
+    assert keys["detail"]["missing_by_stage"].get("tts", []) == []

@@ -224,9 +224,13 @@ def test_quota_summary_parses_balance_usage_and_packs(monkeypatch) -> None:
             return {"Result": {"AvailableBalance": "12.5", "CashBalance": "10",
                                "CreditLimit": "0", "Currency": "CNY"}}
         if action == "UsageMonitoring":
-            return {"Result": {"UsageMonitoring": [
-                {"Day": "2026-10-22", "UsageType": "text_words", "Value": 120},
-                {"Day": "2026-10-23", "UsageType": "text_words", "Value": 30}]}}
+            # Only the 2.0 resource carries characters; the legacy 10029 resource is
+            # queried too and must not double count.
+            if kwargs["body"]["ResourceID"] == billing.TTS_RESOURCE_IDS[0]:
+                return {"Result": {"UsageMonitoring": [
+                    {"Day": "2026-10-22", "UsageType": "text_words", "Value": 120},
+                    {"Day": "2026-10-23", "UsageType": "text_words", "Value": 30}]}}
+            return {"Result": {"UsageMonitoring": []}}
         return {"Result": {"Packs": [{"ResourceName": "TTS 2.0", "Remaining": 50000}]}}
 
     monkeypatch.setattr(billing, "_post", fake_post)

@@ -9,7 +9,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import { usePanels } from '../composables/usePanels'
-import { GROUP_ORDER, navGroup, type PanelSpec } from '../panels'
+import { GROUP_ORDER, panelNavGroup, type PanelSpec } from '../panels'
 import { groupTitle, locale, localizeBackend, panelTitle, setLocale, t } from '../i18n'
 import { setThemePref, themePref } from '../theme'
 
@@ -84,32 +84,9 @@ function iconFor(panel: PanelSpec): string {
   return PANEL_ICONS[panel.id] ?? panel.icon ?? 'dot'
 }
 
-/**
- * The designed navigation (docs/console-redesign.md §3) does not match the
- * backend's historical group ids: logs arrive in `system`, the live speaker page
- * in `status`, and device/MCP/phrase admin pages in `config`. The contract's IA
- * is authoritative, so known panel ids are placed explicitly; unknown panels
- * fall back to their declared group so a new backend panel still shows up.
- */
-const PANEL_GROUPS: Record<string, string> = {
-  overview: 'run',
-  turns: 'run',
-  logs: 'run',
-  music: 'life',
-  memory: 'life',
-  'assistant-session': 'config',
-  speaker: 'config',
-  providers: 'config',
-  tools: 'config',
-  foundation: 'config',
-  devices: 'maintain',
-  'devices-admin': 'maintain',
-  phrases: 'maintain',
-  mcp: 'maintain',
-}
-
+/** The rail and the page kicker share this placement (panels.ts). */
 function groupOf(panel: PanelSpec): string {
-  return PANEL_GROUPS[panel.id] ?? navGroup(panel.group)
+  return panelNavGroup(panel)
 }
 
 /** Groups in the designed order, then any unknown group the backend sends. */
@@ -515,8 +492,19 @@ watch(
     display: none;
   }
 
+  .nav-item {
+    min-height: 44px;
+  }
+
+  /* Language / theme / token stay reachable without scrolling the whole rail. */
   .rail-foot {
-    margin-top: var(--s4);
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin: var(--s4) -14px 0;
+    padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    border-top: 1px solid var(--line);
   }
 
   .sidebar::after {

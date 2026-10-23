@@ -61,6 +61,11 @@ def setup_logging(level: str = "info", log_file: Path | None = None) -> None:
     """
     root = logging.getLogger()
     level_no = getattr(logging, level.upper(), logging.INFO)
+    # httpx logs every request URL at INFO. For Navidrome that URL carries the
+    # reusable token+salt (security audit round 2, P1-3) and it drowned the turn/audio
+    # lines in the console's log panel.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(max(level_no, logging.WARNING))
     if root.handlers:  # uvicorn or pytest already owns the output
         root.setLevel(level_no)
         return

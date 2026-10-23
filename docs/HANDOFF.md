@@ -1011,3 +1011,40 @@ system 附加说明进入模型，**不进** transcript、历史、上限判断�
 「放一首周杰伦的歌」应直接播放（不反问）；只在唤醒后说「周杰伦的」应反问要哪首，**不再**
 出现「反问完突然开始放」。
 
+### 12.27 2026-10-23 17:xx：控制台专业化 + 通用 MCP + ASR 额度（多智能体）
+
+**本轮目标（9哥）**：Providers 页太复杂、控制台不够专业、补齐功能、派出智能体审计、完成 MCP 通用服务。
+
+**交付**
+1. **ASR 额度接入**：额度卡新增「今日 / 近 7 天 ASR 秒数」（`billing.py` 查询
+   `volc.seedasr.sauc.duration` 的 `audio_duration`，API 单位小时→秒）。同时发现并修正 TTS
+   用量资源：豆包 2.0 记账在 `volc.seedtts.default`，旧 `volc.service_type.10029` 全 0；
+   现在两个资源都查、不重复计。实测 17:1x：TTS 2458 字符、ASR 40 秒（当天）。
+2. **Providers v2**：`/panel/providers` 改为专用页（`ProvidersView.vue` + `components/providers/*`）：
+   LLM/ASR/TTS 三段、左侧链路轨（上移/下移/移出/添加）、provider 卡片（密钥状态、model/voice
+   摘要、高级折叠、音色选择+试听、保存后重启提示）。页面高度 7458→3234 px（-57%）。
+3. **SiliconFlow TTS 下线**：TTS 链（dev/模板/example）改为 `[volc-tts, xfyun-tts]` /
+   模板 `[xfyun_tts, volc_tts]`；控制台不再提供 sf-tts；dev 配置删除 sf-tts 定义。
+4. **控制台 polish**：ConfigCenter 默认隐藏 dotted path（技术详情）、字段行 141→79 px、
+   首屏 3→6 行、徽章收敛；导航改名（AI 供应商/语音与音箱/系统与高级）；Logs 默认只看问题
+   （httpx INFO 已在后端降 WARNING）；SetupView keys 按链动态渲染（含 VOLC_API_KEY，移除
+   HOUSE_EAR_TTS_KEY）；手机触控 ≥44 px、抽屉 footer sticky。详见 `docs/ux-audit-round-2.md`。
+5. **通用 MCP 服务**：`tools/mcp_manager.py` 多服务器（http/stdio）并发、独立重连、失败隔离、
+   热 apply；工具注册为 `mcp.<server>_<tool>`，结果加不可信数据前缀；`/api/v1/mcp` 返回每
+   server 状态；控制台 McpManager 支持增删改/测试。**安全闸** `tools.mcp_allow_stdio`
+   默认 false，三处强制（启动/PUT/test），stdio 子进程只拿最小环境（不继承 `.env`）。
+6. **审计**：`docs/audit-round-2.md`（功能，P0×1/P1×8）、`docs/ux-audit-round-2.md`
+   （65 张截图）、`docs/security-audit-round-2.md`（P0×3/P1×6）。已修：`*_env` 字段改只读
+   （防 secret 外带）、`news/search` 工具开关改 restart（诚实）、运行期开音乐补绑
+   `on_playback_finished`、httpx 日志降噪、deploy.md 的 SiliconFlow 过时说明、setup 向导
+   `provider_usable` 对内置端点（volc/xfyun）不再要求 base_url（此前向导永远缺 key）、
+   secret-scan 白名单/忽略新截图。
+
+**验证**：真 VAD 全量 **703 passed / 1 skipped**、ruff clean、前端 typecheck+build 绿；
+dev 已重启：`/api/v1/setup` next_step=verify complete=true、providers-v2 生效、
+`generic_wired=true stdio=false`、配额卡 ASR 40 s。
+
+**待 9哥/后续**：① 仓库公开 + GHCR public（一键装 C1 仍 404/401）；② git 历史凭据轮换+
+filter-repo（需授权）；③ 音乐凭据 UI、对话卡片化、Providers 阶段标题/手机触控微调、
+设备添加忽略 plane 重启错误；④ 新截图/审计 doc 不入库（`.gitignore` 已挡新截图）。
+

@@ -832,7 +832,11 @@ def _provider_fields(cfg: Config) -> list[dict]:
                 f"providers.catalog.{name}.{key}", "providers.catalog", kind,
                 {"zh": f"{name} · {zh}", "en": f"{name} · {en}"}, hint,
                 effect="restart", unit=unit, minimum=lo, maximum=hi, options=options,
-                advanced=advanced, audition=audition))
+                advanced=advanced, audition=audition,
+                # Security (audit round 2 P1-7): an env NAME decides which secret is
+                # sent where; making it writable let a console token exfiltrate any
+                # ambient secret by pointing it at another variable.
+                writable=key not in ("api_key_env", "app_id_env", "api_secret_env")))
         if stage == "tts":
             fields.append(_field(
                 f"providers.catalog.{name}.speech_rate", "providers.catalog", "number",
@@ -920,9 +924,11 @@ def _tool_fields(cfg: Config) -> list[dict]:
                unit=_t("秒", "s"), minimum=2, maximum=30, advanced=True),
         _field("tools.news.enabled", "tools.news", "bool",
                _t("启用新闻", "News enabled"),
-               _t("关掉后模型没有新闻/日报能力（会如实说查不到）。保存后下一轮生效。",
+               _t("关掉后模型没有新闻/日报能力（会如实说查不到）。工具只在启动时按开关"
+                  "注册，改完重启服务生效。",
                   "Off removes the news/digest ability (the model says it cannot check). "
-                  "Next turn.")),
+                  "Tools are registered at startup, so restart to apply."),
+               effect="restart"),
         _field("tools.news.source", "tools.news", "text",
                _t("新闻源", "News source"),
                _t("每日摘要的公开镜像代号（默认 60s）。换源需要对应的镜像地址；普通用户不用改。"
@@ -939,16 +945,19 @@ def _tool_fields(cfg: Config) -> list[dict]:
                unit=_t("秒", "s"), minimum=2, maximum=30, advanced=True),
         _field("tools.search.enabled", "tools.search", "bool",
                _t("启用联网搜索", "Search enabled"),
-               _t("关掉后不再实时查资料（价格/比分/新闻类问题会如实说查不到）。保存后下一轮生效。",
+               _t("关掉后不再实时查资料（价格/比分/新闻类问题会如实说查不到）。工具只在"
+                  "启动时按开关注册，改完重启服务生效。",
                   "Off removes live lookups (prices/scores/news answer honestly that they "
-                  "cannot check). Next turn.")),
+                  "cannot check). Tools are registered at startup, so restart to apply."),
+               effect="restart"),
         _field("tools.search.kind", "tools.search", "select",
                _t("搜索客户端", "Search client"),
-               _t("deepseek = 走 DeepSeek 搜索端点；none = 停用该类客户端。选 none 等价于关闭搜索。"
-                  "保存后下一次调用生效。",
+               _t("deepseek = 走 DeepSeek 搜索端点；none = 停用该类客户端。选 none 等价于关闭"
+                  "搜索。工具只在启动时注册，改完重启服务生效。",
                   "deepseek = the DeepSeek search endpoint; none = disable this client "
-                  "(same as turning search off). Applies on the next call."),
-               options=["deepseek", "none"]),
+                  "(same as turning search off). Tools are registered at startup, so "
+                  "restart to apply."),
+               options=["deepseek", "none"], effect="restart"),
         _field("tools.search.base_url", "tools.search", "text",
                _t("搜索地址", "Search URL"),
                _t("搜索 API 地址。换供应商/自建中转时改；保存后下一次调用生效。",
@@ -956,10 +965,12 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "next call.")),
         _field("tools.search.api_key_env", "tools.search", "text",
                _t("搜索密钥变量名", "Search key variable"),
-               _t("搜索密钥所在的环境变量名（不是密钥）。密钥值去「密钥」页填；"
-                  "改完下一次调用生效。",
+               _t("搜索密钥所在的环境变量名（不是密钥）。密钥值去「密钥」页填。"
+                  "只读：env 名决定哪个 secret 被发往哪里，不在控制台改。",
                   "Variable name holding the search key (not the key). Fill the value on "
-                  "the Secrets page; applies on the next call.")),
+                  "the Secrets page. Read-only: an env name decides which secret is sent "
+                  "where, so it is not editable from the console."),
+               writable=False),
         _field("tools.search.count", "tools.search", "number",
                _t("结果条数", "Result count"),
                _t("一次搜索取几条结果（1–10）。条数多给模型更多资料，也更占提示词。"
@@ -981,19 +992,35 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "tools live, no restart; empty = HA off.")),
         _field("tools.ha.token_env", "tools.ha", "text",
                _t("HA token 变量名", "HA token variable"),
-               _t("HA 长期令牌所在的环境变量名（不是令牌）。值去「密钥」页或 MCP / HA 管理页填；"
-                  "保存后重连即用。",
+               _t("HA 长期令牌所在的环境变量名（不是令牌）。值去「密钥」页或 MCP / HA 管理页填。"
+                  "只读：env 名决定哪个 secret 被发往哪里。",
                   "Variable name holding the HA long-lived token (not the token). Fill the "
-                  "value on the Secrets or MCP / HA page; the reconnect picks it up."),
-               advanced=True),
+                  "value on the Secrets or MCP / HA page. Read-only: an env name decides "
+                  "which secret is sent where."),
+               advanced=True, writable=False),
         _field("tools.mcp_servers", "tools.mcp", "list",
                _t("MCP 服务器列表", "MCP servers"),
-               _t("通用 MCP 服务器列表（name/transport/url/command/enabled）。当前只有 HA 真正"
-                  "接线，其余是预留；在「MCP / HA」页维护，这里只读。",
-                  "Generic MCP servers (name/transport/url/command/enabled). Only HA is wired "
-                  "end to end; the rest are reserved. Maintained on the MCP / HA page; "
-                  "read-only here."),
+               _t("通用 MCP 服务器列表（name/transport/url/command/enabled），每台的连接"
+                  "状态/工具数/延迟见「MCP / HA」页。在这里只读；编辑走 PUT /api/v1/mcp。"
+                  "transport=stdio 的服务器要先打开下面的「允许 stdio」开关。",
+                  "Generic MCP servers (name/transport/url/command/enabled); per-server "
+                  "connected/tools/latency is on the MCP / HA page. Read-only here; edit via "
+                  "PUT /api/v1/mcp. transport=stdio requires the allow-stdio switch below."),
                effect="save", writable=False),
+        _field("tools.mcp_allow_stdio", "tools.mcp", "bool",
+               _t("允许 stdio MCP", "Allow stdio MCP"),
+               _t("⚠ 打开后 house-ear 会在本机直接执行 stdio 服务器的命令（等于代码执行权限）。"
+                  "子进程只拿到最小环境变量（PATH/HOME/LANG + 服务器自己声明的 env），"
+                  "看不到 .env 里的模型/HA/设备密钥；但仍只应添加你完全信任的服务器。"
+                  "关闭时 PUT /api/v1/mcp 会拒绝 transport=stdio，测试端点也不会启动子进程。"
+                  "默认关闭；改完重启服务生效。",
+                  "⚠ When on, house-ear executes the stdio server's command on this host "
+                  "(code execution). The child gets a minimal environment (PATH/HOME/LANG "
+                  "plus env declared by the server itself) and cannot see the .env "
+                  "provider/HA/device keys - but only add servers you fully trust. When "
+                  "off, PUT /api/v1/mcp rejects transport=stdio and even the test endpoint "
+                  "will not spawn a child. Off by default; restart to apply."),
+               effect="restart"),
         _field("tools.expose", "tools.exposure", "select",
                _t("暴露策略", "Exposure mode"),
                _t("domain = 按域模板（推荐）；whitelist = 只放白名单里的工具；all = 全放"

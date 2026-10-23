@@ -31,7 +31,12 @@ SPEECH_SERVICE = "speech_saas_prod"
 SPEECH_REGION = "cn-north-1"
 BILLING_SERVICE = "billing"
 BILLING_REGION = "cn-beijing"
-TTS_RESOURCE_ID = "volc.service_type.10029"
+# Doubao TTS 2.0 bills under seedtts.default; 10029 is the older big-TTS resource. Query
+# both so an account that used either still sees its characters (measured 16:58: only
+# seedtts.default carried today's 2305 chars; 10029 was 0).
+TTS_RESOURCE_IDS = ("volc.seedtts.default", "volc.service_type.10029")
+# Doubao streaming ASR 2.0 hourly pack. UsageMonitoring reports audio_duration in HOURS.
+ASR_RESOURCE_ID = "volc.seedasr.sauc.duration"
 CREDENTIAL_NAMES = ("VOLC_ACCESS_KEY_ID", "VOLC_SECRET_ACCESS_KEY")
 
 
@@ -126,6 +131,18 @@ def _today() -> dt.date:
     return dt.date.today()
 
 
+def _usage_totals(rows: list[dict[str, Any]], end: str) -> tuple[float, float]:
+    """(today, seven_day_total) from UsageMonitoring rows for one resource."""
+    total = 0.0
+    today = 0.0
+    for row in rows:
+        value = float(row.get("Value") or 0)
+        total += value
+        if str(row.get("Day")) == end:
+            today += value
+    return today, total
+
+
 async def quota_summary(
     client: httpx.AsyncClient | None = None,
     getter: Callable[[str], str] | None = None,
@@ -137,6 +154,7 @@ async def quota_summary(
     out: dict[str, Any] = {
         "available_balance": None, "cash_balance": None, "credit_limit": None,
         "currency": "CNY", "tts_chars_today": None, "tts_chars_7d": None,
+        "asr_seconds_today": None, "asr_seconds_7d": None,
         "packs": [], "updated_at": dt.datetime.now().isoformat(timespec="seconds"),
         "errors": errors,
     }
@@ -162,31 +180,46 @@ async def quota_summary(
         start = (_today() - dt.timedelta(days=6)).isoformat()
         end = _today().isoformat()
         try:
+            tts_today = tts_total = 0.0
+            for resource in TTS_RESOURCE_IDS:
+                usage = await _post(client, ak=ak, sk=sk, action="UsageMonitoring",
+                                    version="2025-05-21", service=SPEECH_SERVICE,
+                                    region=SPEECH_REGION,
+                                    body={"ProjectName": "default",
+                                          "ResourceID": resource,
+                                          "Start": start, "End": end, "Mode": "daily"})
+                rows = ((usage.get("Result") or {}).get("UsageMonitoring")) or []
+                today, total = _usage_totals(rows, end)
+                tts_today += today
+                tts_total += total
+            out["tts_chars_today"] = int(tts_today)
+            out["tts_chars_7d"] = int(tts_total)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"用量查询失败: {type(exc).__name__}: {str(exc)[:120]}")
+
+        # ASR is billed by audio seconds (the API reports hours). Kept separate from the
+        # TTS counter because the two resources have different units and packs.
+        try:
             usage = await _post(client, ak=ak, sk=sk, action="UsageMonitoring",
                                 version="2025-05-21", service=SPEECH_SERVICE,
                                 region=SPEECH_REGION,
                                 body={"ProjectName": "default",
-                                      "ResourceID": TTS_RESOURCE_ID,
+                                      "ResourceID": ASR_RESOURCE_ID,
                                       "Start": start, "End": end, "Mode": "daily"})
             rows = ((usage.get("Result") or {}).get("UsageMonitoring")) or []
-            total = 0.0
-            today = 0.0
-            for row in rows:
-                value = float(row.get("Value") or 0)
-                total += value
-                if str(row.get("Day")) == end:
-                    today += value
-            out["tts_chars_today"] = int(today)
-            out["tts_chars_7d"] = int(total)
+            today_h, total_h = _usage_totals(rows, end)
+            out["asr_seconds_today"] = round(today_h * 3600.0)
+            out["asr_seconds_7d"] = round(total_h * 3600.0)
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"用量查询失败: {type(exc).__name__}: {str(exc)[:120]}")
+            errors.append(f"ASR 用量查询失败: {type(exc).__name__}: {str(exc)[:120]}")
 
         try:
             packs = await _post(client, ak=ak, sk=sk, action="ResourcePacksStatus",
                                 version="2025-05-20", service=SPEECH_SERVICE,
                                 region=SPEECH_REGION,
                                 body={"ProjectName": "default",
-                                      "ResourceIDs": [TTS_RESOURCE_ID], "Types": ["TTS"]})
+                                      "ResourceIDs": list(TTS_RESOURCE_IDS),
+                                      "Types": ["TTS"]})
             items = ((packs.get("Result") or {}).get("Packs")) or []
             out["packs"] = [
                 {"name": item.get("ResourceName") or item.get("ResourceID") or "TTS",

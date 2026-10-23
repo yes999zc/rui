@@ -12,3 +12,10 @@ data/
 *.log
 .DS_Store
 .env
+
+# Audit/polish screenshots can contain real LAN addresses, dialog text and
+# personal paths; keep them local unless a sanitized set is explicitly chosen.
+docs/console-shots/ux2-*.png
+docs/console-shots/providers-v2*.png
+docs/console-shots/polish-*.png
+docs/console-shots/mcp-v2*.png

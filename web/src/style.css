@@ -1072,6 +1072,38 @@ table.table {
 }
 
 @media (max-width: 720px) {
+  /* Touch targets: the phone is a primary console surface, not a preview. */
+  .btn,
+  .btn-sm,
+  .btn-icon,
+  .segmented button,
+  .token-button,
+  .field-control input,
+  .field-control select,
+  .field-control textarea,
+  .cfg-filter,
+  .log-filter {
+    min-height: 44px;
+  }
+
+  .btn-icon {
+    min-width: 44px;
+  }
+
+  .segmented button {
+    min-width: 44px;
+  }
+
+  .chip button {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 2px 4px;
+  }
+
+  .cfg-advanced {
+    min-height: 44px;
+  }
+
   body {
     font-size: 14px;
   }
