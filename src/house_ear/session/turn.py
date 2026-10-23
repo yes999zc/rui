@@ -710,7 +710,14 @@ class TurnRunner:
 
     async def say(self, text: str, speak: SpeakFn,
                   trace: TurnTrace) -> int:
-        """Speak one canned line. No model, no round trip: session actions are decided."""
+        """Speak one canned line. No model, no round trip: session actions are decided.
+
+        The abort flag is cleared first: a wake that barged over a song sets it, and
+        this line is a *new* intent, not the interrupted answer. Without this the
+        canned reply rendered as pure silence - measured 08:24:52, 「暂停」 was heard,
+        the session ended, and nothing was said.
+        """
+        self._abort.clear()
         chain = list(self._tts)
         if self.spoken is not None:
             self.spoken.remember(text)

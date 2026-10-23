@@ -269,6 +269,10 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         log.info("music transport: %r -> random (%s)", clean, key)
         return line
     action = rules.music_transport(clean)
+    if action and service.state == "idle":
+        # No song at all: 「暂停」/「停一下」 is the dismiss list's job ("stop
+        # talking"), not a player that does not exist. Fall through.
+        return None
     # A transport word with nothing playing still deserves words, not silence.
     fn = {"pause": service.pause, "resume": service.resume,
           "next": service.next, "prev": service.prev}[action]
@@ -459,6 +463,12 @@ def create_app(
                         # used to become a whole turn ("嗯，你说。").
                         log.info("noise, no turn: %r", clean)
                         return
+                    # Transport words before the dismiss list: 「暂停」 and 「停一下」
+                    # are both, and with a song playing they mean the player, not
+                    # the session (old build: VENDOR_PAUSE_WORDS checked first).
+                    if await _music_transport(app, clean, runner, client, trace,
+                                              traces) is not None:
+                        return
                     if rules.stop_intent(clean, cfg.session.end_words):
                         # A stop word with a song owning the speaker stops the sound;
                         # 「退下吧」 only dismisses the conversation and the song keeps
@@ -490,9 +500,6 @@ def create_app(
                         }
                         traces.add(trace)
                         log.info("stop intent: %r -> session closed", clean)
-                        return
-                    if await _music_transport(app, clean, runner, client, trace,
-                                              traces) is not None:
                         return
                     _light(app, "thinking")
                     try:

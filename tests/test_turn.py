@@ -513,3 +513,22 @@ def test_a_structured_tool_result_renders_from_the_phrase_book() -> None:
 
     plain = asyncio.run(runner._call_tool({"name": "plain", "arguments": "{}"}))
     assert plain == "自由文本照旧"
+
+
+def test_a_canned_line_is_not_silenced_by_an_earlier_barge(monkeypatch) -> None:
+    """Measured 08:24:52: the wake barged over a song, so abort was set; the
+    canned 「好。」 then rendered as pure silence. say() clears the flag - the line
+    is a new intent, not the interrupted answer."""
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("暂停"), llms=[FakeLlm(["在。"])], ttss=[tts])
+    spoken: list[int] = []
+
+    async def speak(pcm: bytes, **_kw: object) -> None:
+        spoken.append(len(pcm))
+
+    runner = TurnRunner(Config().providers)
+    runner._abort.set()          # what a barge-in leaves behind
+    spoken_bytes = asyncio.run(
+        runner.say("好。", speak, TurnTrace(device_id="test")))
+    assert spoken, "the canned line produced no audio at all"
+    assert spoken_bytes > 0

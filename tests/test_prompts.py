@@ -168,3 +168,22 @@ def test_without_a_music_tool_it_says_it_cannot_play_music() -> None:
 def test_the_note_disappears_once_a_music_tool_exists() -> None:
     text = prompts.build(tool_names=["local.weather", "music.play"])
     assert "没有播放音乐" not in text
+
+
+def test_transport_words_are_recognised_before_the_dismiss_list() -> None:
+    """Measured 08:24:52: 「暂停」 is in end_words, so the session ended and the
+    song played on. The app now asks the transport layer first; this test pins the
+    word sets that make that safe."""
+    from house_ear.session import rules
+
+    # the four transports, including the two that are also dismiss words
+    assert rules.music_transport("暂停") == "pause"
+    assert rules.music_transport("停一下。") == "pause"
+    assert rules.music_transport("继续") == "resume"
+    assert rules.music_transport("下一首") == "next"
+    # both memberships are intentional; the app's order decides which wins
+    assert rules.stop_intent("暂停")
+    assert rules.stop_intent("停一下")
+    # and the transports do not swallow a real dismissal
+    assert rules.music_transport("退下吧") == ""
+    assert rules.music_transport("停止播放") == ""
