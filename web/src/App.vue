@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api, token } from './api'
 import { usePanels } from './composables/usePanels'
 import { GROUP_TITLES } from './panels'
 
 const version = ref('')
 const online = ref(false)
+const route = useRoute()
+const router = useRouter()
 const { panels } = usePanels()
 const needToken = ref(false)
 const tokenDraft = ref(token.get())
@@ -52,6 +55,16 @@ onMounted(async () => {
   } catch {
     online.value = false
   }
+  // A fresh install lands on the wizard, not on an overview of nothing. Only the
+  // landing route is redirected: a bookmark to a panel is a deliberate act.
+  if (route.path === '/panel/overview') {
+    try {
+      const setup = await api.setup()
+      if (setup.next_step !== 'done') await router.replace('/setup')
+    } catch {
+      // 401/offline: the wizard would not load either; stay put.
+    }
+  }
 })
 </script>
 
@@ -69,6 +82,8 @@ onMounted(async () => {
             :class="{ disabled: !p.enabled }"
           >{{ p.icon ? p.icon + ' ' : '' }}{{ p.title }}</RouterLink>
         </template>
+        <div class="nav-group">开始</div>
+        <RouterLink to="/setup" :class="{ disabled: false }">安装向导</RouterLink>
         <div class="nav-group">更多</div>
         <RouterLink v-for="v in legacy" :key="v.path" :to="v.path">{{ v.label }}</RouterLink>
       </nav>

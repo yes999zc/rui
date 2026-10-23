@@ -288,6 +288,26 @@ export interface Config {
   }
 }
 
+export interface SetupStep {
+  id: string
+  title: string
+  done: boolean
+  detail: Record<string, unknown>
+}
+
+/** The install wizard's state: computed on the server from files and keys. */
+export interface SetupState {
+  next_step: string
+  steps: SetupStep[]
+  config_path: string
+  config_exists: boolean
+  audio_plane: boolean
+  device: { id: string; host: string; room: string; wake_words: string[] } | null
+  keywords_file: string
+  keywords_exists: boolean
+  models_command: string
+}
+
 export const api = {
   health: () =>
     request<{
@@ -336,6 +356,17 @@ export const api = {
     ),
   stopAudio: () => request<{ playing: string | null }>('/api/v1/debug/play', { method: 'POST', body: JSON.stringify({ stop: true }) }),
   deviceVolume: () => request<{ volume: number; range: string }>('/api/v1/device/volume'),
+  /** Install wizard (C-UI P4): what is missing, then one step at a time. */
+  setup: () => request<SetupState>('/api/v1/setup'),
+  setupKeys: (values: Record<string, string>) =>
+    request<SetupState>('/api/v1/setup/keys', { method: 'POST', body: JSON.stringify({ values }) }),
+  setupDevice: (device: { host: string; room?: string; wake_words: string[] }) =>
+    request<SetupState>('/api/v1/setup/device', { method: 'POST', body: JSON.stringify(device) }),
+  setupWake: (wake_words: string[]) =>
+    request<SetupState>('/api/v1/setup/wake', { method: 'POST', body: JSON.stringify({ wake_words }) }),
+  setupProbe: (host: string) =>
+    request<{ host: string; usable: boolean; hint: string; ssh: { open: boolean; ms?: number; error?: string } }>(
+      '/api/v1/setup/probe', { method: 'POST', body: JSON.stringify({ host }) }),
   setDeviceVolume: (value: number) =>
     request<{ volume: number }>('/api/v1/device/volume', { method: 'PUT', body: JSON.stringify({ value }) }),
 }

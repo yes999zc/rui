@@ -6,6 +6,7 @@ const routes = [
   // hand-written; the ones whose content is a panel now redirect to it.
   { path: '/', redirect: '/panel/overview' },
   { path: '/panel/:id', component: () => import('./views/PanelHost.vue') },
+  { path: '/setup', component: () => import('./views/SetupView.vue'), meta: { title: '安装向导' } },
   { path: '/overview', redirect: '/panel/overview' },
   { path: '/devices', redirect: '/panel/devices' },
   { path: '/assistant', redirect: '/panel/settings' },

@@ -21,9 +21,9 @@ from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneSupervisor
-from ...audio.kws import keyword_meta
+from ...audio.kws import keyword_meta, write_keywords_file
 from ...audio.protocol import PlayFile, StopAudio
-from ...config.schema import CONFIG_VERSION, LED_STATES, Config
+from ...config.schema import CONFIG_VERSION, LED_STATES, Config, DeviceConfig
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
@@ -47,6 +47,9 @@ from ...trace import TraceLog, TurnTrace
 
 START = time.time()
 log = logging.getLogger(__name__)
+# Keys the wizard's "fill the keys" step requires. 讯飞 TTS is optional: without
+# XFYUN_* the TTS chain falls back to SiliconFlow, which needs HOUSE_EAR_TTS_KEY only.
+SETUP_KEY_NAMES = ("HOUSE_EAR_LLM_KEY", "HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY")
 _DEFAULT_WEB_DIST = Path(__file__).resolve().parents[3].parent / "web" / "dist"
 WEB_DIST = Path(os.environ.get("HOUSE_EAR_WEB_DIR", _DEFAULT_WEB_DIST))
 
@@ -1140,6 +1143,9 @@ def create_app(
     # setting (「关闭上下文」) persist through the same file the console writes.
     app.state.cfg = cfg
     app.state.config_path = config_path
+    # The wizard can add a device at runtime; endpoints read this attribute, not a
+    # startup closure, so a fresh probe does not need a control-plane restart.
+    app.state.adapters = adapters
     app.state.memory = memory
     app.state.tools = registry  # the console and tests read the same registry turns use
     app.state.trace_log = traces  # scripts and tests read the same log the API serves
@@ -1168,8 +1174,8 @@ def create_app(
             "config_version": cfg.version,
             "config_version_supported": CONFIG_VERSION,
             "uptime_s": round(time.time() - START, 1),
-            "devices": len(adapters),
-            "device_errors": len(adapters.errors),
+            "devices": len(getattr(app.state, "adapters", adapters).adapters),
+            "device_errors": len(getattr(app.state, "adapters", adapters).errors),
             "audio_plane": bool(supervisor is not None and supervisor.running),
             "vendor": {
                 "quiet_s": cfg.session.vendor_quiet_s,
@@ -1554,6 +1560,7 @@ def create_app(
         """Every configured device, including the ones this build cannot drive yet."""
         out: list[dict] = []
         seen: set[str] = set()
+        adapters = app.state.adapters
         for adapter in adapters.adapters.values():
             info = await adapter.probe()
             seen.add(info.id)
@@ -1588,6 +1595,195 @@ def create_app(
                 }
             )
         return out
+
+    # ---------------------------------------------------------------- setup wizard
+    # A fresh install has to become a talking speaker without editing YAML by hand
+    # (C-UI P4). These endpoints expose the same steps the wizard shows: which keys
+    # exist, whether the models are on disk, and writing the first device - which
+    # also regenerates the keywords file and restarts the audio plane, because the
+    # wake model reads the keywords file once at process start.
+    def _wizard_state() -> dict:
+        cfg_now = getattr(app.state, "cfg", cfg)
+        supervisor = getattr(app.state, "audio", None)
+
+        def catalog_model(name: str) -> Path | None:
+            provider = cfg_now.providers.catalog.get(name)
+            model = str(getattr(provider, "model", "") or "")
+            return Path(model).expanduser() if model else None
+
+        def dir_has(directory: Path | None, *names: str) -> bool:
+            return bool(directory is not None and directory.is_dir()
+                        and all((directory / name).is_file() for name in names))
+
+        asr = catalog_model("local_asr")
+        voice = cfg_now.audio.voice
+        kws = Path(voice.kws_model_dir).expanduser() if voice.kws_model_dir else None
+        vad = Path(voice.vad_model_path).expanduser() if voice.vad_model_path else None
+        keywords = Path(voice.kws_keywords_file).expanduser() if voice.kws_keywords_file else None
+        keys = {name: secrets.has(name) for name in SETUP_KEY_NAMES}
+        models = {
+            "asr": dir_has(asr, "model.int8.onnx", "tokens.txt"),
+            "vad": bool(vad and vad.is_file()),
+            "kws": dir_has(kws, "tokens.txt"),
+        }
+        device = cfg_now.devices[0] if cfg_now.devices else None
+        verified = bool((getattr(app.state, "last_turn", None) or {}).get("audio_bytes"))
+        steps = [
+            {"id": "keys", "title": "填 key", "done": all(keys.values()), "detail": keys},
+            {"id": "models", "title": "本地模型", "done": all(models.values()), "detail": models},
+            {"id": "device", "title": "添加音箱", "done": device is not None,
+             "detail": ({"id": device.id, "host": device.host, "room": device.room}
+                        if device else {})},
+            {"id": "wake", "title": "唤醒词",
+             "done": bool(device and device.wake_words and keywords and keywords.is_file()),
+             "detail": {"words": list(device.wake_words) if device else [],
+                        "path": str(keywords) if keywords else ""}},
+            {"id": "verify", "title": "试一句", "done": verified},
+        ]
+        return {
+            "next_step": next((step["id"] for step in steps if not step["done"]), "done"),
+            "steps": steps,
+            "config_path": str(config_path) if config_path else "",
+            "config_exists": bool(config_path and Path(config_path).exists()),
+            "audio_plane": bool(supervisor is not None and supervisor.running),
+            "device": ({"id": device.id, "host": device.host, "room": device.room,
+                        "wake_words": list(device.wake_words)} if device else None),
+            "keywords_file": str(keywords) if keywords else "",
+            "keywords_exists": bool(keywords and keywords.is_file()),
+            "models_command": "house-ear fetch-models --dest /data/models/sensevoice "
+                              "--vad-dest /data/models/silero_vad.onnx",
+        }
+
+    def _apply_config(updated: Config) -> None:
+        """Replace the live config object in place, so every closure sees the new values."""
+        for name in Config.model_fields:
+            setattr(cfg, name, getattr(updated, name))
+        app.state.cfg = cfg
+
+    async def _write_devices(updated: Config) -> None:
+        """Persist devices[], regenerate the wake words, restart the plane."""
+        if config_path is None:
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        if not updated.audio.voice.kws_keywords_file:
+            # A config that came from schema defaults has no keywords path; the wizard
+            # still has to leave one behind, next to the config it just wrote.
+            updated.audio.voice.kws_keywords_file = str(
+                Path(config_path).resolve().parent / "keywords.txt")
+        save_config(Path(config_path), updated)
+        _apply_config(updated)
+        words = [word for device in updated.devices for word in device.wake_words]
+        keywords = updated.audio.voice.kws_keywords_file
+        if keywords and words:
+            try:
+                write_keywords_file(Path(keywords).expanduser(), words)
+            except OSError as exc:  # noqa: BLE001 - the state reports what is missing
+                log.warning("setup: could not write keywords file: %s", exc)
+        app.state.adapters = build_adapters(updated)
+        runner = getattr(app.state, "runner", None)
+        if runner is not None:
+            runner.wake_words = tuple(words)
+        supervisor = getattr(app.state, "audio", None)
+        if supervisor is not None:
+            # The plane holds the device list, the wake model and the keywords file
+            # from its own startup: a new speaker or a new wake word needs a restart.
+            supervisor.cfg = updated
+            try:
+                await supervisor.stop()
+                await supervisor.start()
+            except Exception as exc:  # noqa: BLE001 - the wizard shows this sentence
+                supervisor.error = f"{type(exc).__name__}: {exc}"
+                log.warning("audio plane restart after setup failed: %s", exc)
+            supervisor.watch()
+
+    @app.get("/api/v1/setup", dependencies=[Depends(auth)])
+    async def setup_state() -> dict:
+        """What the install wizard still needs; computed from files and keys, not claims."""
+        return _wizard_state()
+
+    @app.post("/api/v1/setup/keys", dependencies=[Depends(auth)])
+    async def setup_keys(payload: Annotated[dict, Body()]) -> dict:
+        """Store provider keys from the wizard. Values are write-only, as everywhere."""
+        values = payload.get("values")
+        if not isinstance(values, dict) or not values:
+            raise HTTPException(status_code=422, detail="values must be a non-empty object")
+        for name, value in values.items():
+            try:
+                secrets.put(str(name), str(value))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _wizard_state()
+
+    @app.post("/api/v1/setup/device", dependencies=[Depends(auth)])
+    async def setup_device(payload: Annotated[dict, Body()]) -> dict:
+        """Add (or replace) the speaker, write the wake words, restart the plane."""
+        host = str(payload.get("host") or "").strip()
+        if not host:
+            raise HTTPException(status_code=422, detail="host is required")
+        words = [str(word).strip() for word in payload.get("wake_words") or [] if str(word).strip()]
+        if config_path is None or not Path(config_path).exists():
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        try:
+            current = load_config(Path(config_path))
+        except ConfigError as exc:
+            raise HTTPException(status_code=409, detail=f"config is not readable: {exc}") from exc
+        device = DeviceConfig(
+            id=str(payload.get("id") or "living").strip() or "living",
+            adapter=str(payload.get("adapter") or "xiaoai").strip() or "xiaoai",
+            host=host,
+            room=str(payload.get("room") or "").strip(),
+            wake_words=words or ["你好小瑞"],
+            enabled=True,
+        )
+        others = [dev for dev in current.devices if dev.id != device.id]
+        merged = current.model_copy(update={"devices": [device, *others]})
+        try:
+            updated = Config.model_validate(merged.model_dump(mode="json"))
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+        await _write_devices(updated)
+        log.info("setup: device %s written (host=%s, wake=%s)", device.id, device.host,
+                 device.wake_words)
+        return _wizard_state()
+
+    @app.post("/api/v1/setup/wake", dependencies=[Depends(auth)])
+    async def setup_wake(payload: Annotated[dict, Body()]) -> dict:
+        """Change the wake words of the configured speaker and regenerate the file."""
+        words = [str(word).strip() for word in payload.get("wake_words") or [] if str(word).strip()]
+        if not words:
+            raise HTTPException(status_code=422, detail="wake_words is required")
+        if config_path is None or not Path(config_path).exists():
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        current = load_config(Path(config_path))
+        if not current.devices:
+            raise HTTPException(status_code=409, detail="add a speaker first")
+        first = current.devices[0].model_copy(update={"wake_words": words})
+        updated = current.model_copy(update={"devices": [first, *current.devices[1:]]})
+        await _write_devices(updated)
+        return _wizard_state()
+
+    @app.post("/api/v1/setup/probe", dependencies=[Depends(auth)])
+    async def setup_probe(payload: Annotated[dict, Body()]) -> dict:
+        """Is the host reachable? One TCP connect to SSH - no login, no device commands."""
+        host = str(payload.get("host") or "").strip()
+        if not host:
+            raise HTTPException(status_code=422, detail="host is required")
+
+        async def port(port_number: int) -> dict:
+            started = time.perf_counter()
+            try:
+                _reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port_number), timeout=2.0)
+            except (TimeoutError, OSError) as exc:
+                return {"open": False, "error": type(exc).__name__}
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+            return {"open": True, "ms": round((time.perf_counter() - started) * 1000)}
+
+        ssh = await port(22)
+        return {"host": host, "ssh": ssh,
+                "usable": ssh["open"],
+                "hint": "" if ssh["open"] else "SSH 端口不通：确认音箱在同一网段、已开 SSH"}
 
     # ---------------------------------------------------------------- secrets
     @app.get("/api/v1/secrets", dependencies=[Depends(auth)])
