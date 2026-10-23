@@ -230,6 +230,10 @@ class ReplyFinished(BaseModel):
     """
 
     type: Literal["reply_finished"] = "reply_finished"
+    # Seconds to hold a waiting song after this reply, replacing the default
+    # follow-up window (None = the window length). 0 = bring the music back the
+    # moment the reply drains - a volume confirmation wants the song immediately.
+    hold_music_s: float | None = None
 
 
 class SpeakFinished(BaseModel):
