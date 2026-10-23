@@ -1,0 +1,162 @@
+# Channel Gateway — Telegram + 微信 iLink/ClawBot 开发清单
+
+> 状态：**提案 / 待 9 哥 确认后开工**。本文只定义范围、任务、验收和需要人配合的点，尚未写功能代码。
+>
+> 目标：让小瑞除音箱/控制台外，还能通过 **Telegram** 和 **微信 iLink Bot / ClawBot** 收发文字与语音。
+> 原则：channel 只做 I/O 和身份，复用控制面现有 LLM/tools/session；**不依赖音频面**（音箱离线也能用）。
+
+## 1. 总体架构
+
+```
+Telegram / 微信 iLink / 控制台
+        │
+        ▼
+house-ear channel-gateway（独立进程，可选容器）
+  ├─ adapter: telegram
+  ├─ adapter: weixin-ilink
+  ├─ allowlist / pairing / dedupe / rate limit
+  ├─ inbound: text / voice / (image、file 后续)
+  └─ outbound: text / TTS voice / 可选音箱播报
+        │  HTTP + token（局域网/localhost）
+        ▼
+house-ear 控制面
+  ├─ ConversationService（从 debug/say 抽出的正式文本回合）
+  ├─ 现有 LLM / tools / session / memory
+  └─ 可选：announce 到客厅音箱
+```
+
+关键决定：
+
+1. **channel-gateway 不放进音频面**；它是独立进程/容器，崩溃不影响语音。
+2. **微信和 Telegram 共用一个 gateway 核心**，只写两个 adapter；以后接其他平台只加 adapter。
+3. **默认独立会话**：`telegram:<chat_id>` / `weixin:<user_id>`，不与客厅 session 混用；需要“继续客厅话题”时再显式关联。
+4. **文字优先**：先跑通文字；语音输入是增强；语音回复最后做。
+5. **权限先只读**：channel 里可以查/说，但危险动作必须二次确认，不能直接执行。
+
+## 2. 里程碑与任务
+
+| ID | 任务 | 产出 | 依赖 | 需要 9 哥 |
+|---|---|---|---|---|
+| M0 | API/配置契约 | `docs/channel-gateway.md`、config schema、错误码 | — | 否 |
+| M1 | 正式文本回合 | `POST /api/v1/chat`（text→reply，可选音频），复用 session/tools | M0 | 否 |
+| M2 | gateway 骨架 | adapter 协议、allowlist、去重、持久化、任务队列、日志脱敏 | M0 | 否 |
+| M3 | Telegram adapter | 长轮询、文字、语音输入、语音回复、命令、测试 | M1/M2 | **是**（独立 bot token + chat id） |
+| M4 | 微信 iLink adapter | 扫码登录、getupdates、context_token、sendmessage、文字 | M1/M2 | **是**（扫码 + 测试消息） |
+| M5 | 微信语音/媒体 | `voice_item.text`、CDN AES、SILK 转 PCM、可选语音回复 | M4 | 是（语音测试） |
+| M6 | 控制台 Channels 页 | 绑定/解绑、二维码、状态、allowlist、回复模式、日志 | M3/M4 | 否 |
+| M7 | 部署/安全/验收 | 独立进程/容器、compose、文档、速率限制、E2E | M3–M6 | 是（真机 E2E） |
+
+## 3. 详细任务清单
+
+### M0 — 契约（0.5 天）
+
+- [ ] 定义 `POST /api/v1/chat`：请求 `channel / peer_id / text / session_id? / want_audio? / speak_on_device?`；响应 `reply / audio? / session_id / latency_ms`。
+- [ ] 定义 `POST /api/v1/asr`（音频→文本）和 `POST /api/v1/tts`（文本→音频），供 channel 复用 provider 链。
+- [ ] 定义 channel 身份、会话 key、reset 命令、错误码、幂等键。
+- [ ] 定义 `channels.*` 配置：enabled、allowlist、reply_mode(text/voice/both)、mirror_to_speaker、凭证路径。
+- [ ] 安全约束：channel token、allowlist、日志不打印 token/context_token、危险动作二次确认。
+
+### M1 — 控制面正式文本回合（1–2 天）
+
+- [ ] 从 `/api/v1/debug/say` 抽出 `ConversationService`（不依赖音频面、设备、播放）。
+- [ ] `POST /api/v1/chat` 走同一套 session/LLM/tools；支持 `source=console|telegram|weixin`。
+- [ ] 可选 `want_audio`：返回 TTS PCM/文件，供 channel 发语音。
+- [ ] 可选 `speak_on_device`：把回复也投到指定音箱（复用现有 announce/debug 播放路径，默认关）。
+- [ ] 单元测试：文本回合、session 隔离、超时、空回复、工具调用、无音频面。
+
+### M2 — gateway 骨架（1–2 天）
+
+- [ ] `ChannelAdapter` 协议：`start/stop/poll`、`send_text`、`send_voice`、`send_typing`、`capabilities`。
+- [ ] `ChannelGateway`：配置加载、adapter 生命周期、每 peer 串行队列、重试、超时、优雅退出。
+- [ ] allowlist / pairing；未授权消息静默丢弃并记一条脱敏日志。
+- [ ] 去重（Telegram update_id / 微信 message_id）和持久化（offset/游标/context_token）。
+- [ ] 日志脱敏：token、context_token、语音内容、手机号/用户 ID 部分打码。
+- [ ] 单元测试：fake adapter、队列顺序、去重、异常恢复。
+
+### M3 — Telegram（2–3 天；真机需 bot）
+
+- [ ] 长轮询 `getUpdates`，不要求公网 webhook；`offset` 持久化。
+- [ ] allowlist chat_id；`/start`、`/new`、`/stop`、`/status`、`/whoami`。
+- [ ] 文字：调用 `/api/v1/chat`；4096 字符分片；HTML/纯文本转义；typing 状态。
+- [ ] 语音输入：`getFile` 下载 OGG/Opus → ffmpeg 转 16k mono PCM → `/api/v1/asr`。
+- [ ] 语音回复（可选）：TTS PCM → OGG/Opus → `sendVoice`。
+- [ ] 错误处理：网络重试、超时、消息过长、文件过大、非法格式。
+- [ ] 测试：fake Telegram API；真机需要**独立 bot token**（不要复用 Hermes 的 bot，避免 getUpdates 冲突）。
+
+### M4 — 微信 iLink/ClawBot 文字（3–4 天；真机需扫码）
+
+- [ ] 二维码登录：`get_bot_qrcode` → 轮询 `get_qrcode_status` → `confirmed`；凭证存 `data/channels/weixin/`，0600。
+- [ ] 控制台“绑定微信”显示二维码；支持重新登录/退出绑定。
+- [ ] 长轮询 `getupdates`；持久化 opaque 的 `get_updates_buf`；进程重启恢复。
+- [ ] 消息解析：TEXT/VOICE/IMAGE/FILE/VIDEO；单聊优先，群聊先禁用。
+- [ ] allowlist：只允许绑定账号的 `ilink_user_id`。
+- [ ] `context_token` 按 `(account, peer)` 持久化；sendmessage 必须回传；无 token 时只等用户先发。
+- [ ] 发送：2000 字符分片、client_id、typing（getconfig/sendtyping）、-14 重新扫码、-2 退避。
+- [ ] 接入 `/api/v1/chat`：文字进、文字出，控制台/音箱可选。
+- [ ] 测试：协议 fixture；真机需要**新的 iLink bot 账号扫码**（不要和 Hermes/OpenClaw 共用同一个 bot，长轮询只能一个消费者）。
+
+### M5 — 微信语音/媒体（2–4 天，可延后）
+
+- [ ] 入站 VOICE：优先用 `voice_item.text`（微信转写）；没有则 CDN 下载 → AES-128-ECB 解密 → SILK/AMR/PCM 转码 → `/api/v1/asr`。
+- [ ] 出站语音：先验证 iLink 的 voice 上传是否稳定；不稳定就只发文字，语音回复留到后续。
+- [ ] 图片/文件：后续版本，不在第一版。
+- [ ] 注意：`voice_item.text` 对非中文不可靠；中文可用，但保留“重新转写”开关。
+
+### M6 — 控制台 Channels 页（1–2 天）
+
+- [ ] “通道”页：Telegram/微信 两个卡片，启用/禁用、状态、最后消息时间、错误。
+- [ ] 微信：显示二维码/登录状态/解绑；Telegram：token 配置、allowlist、测试消息按钮。
+- [ ] 回复模式：仅文字 / 文字+语音 / 仅语音（按 adapter 能力灰显）。
+- [ ] “同时让客厅说”开关；默认关。
+- [ ] 中英双语、明暗主题、手机布局。
+
+### M7 — 部署与验收（1–2 天）
+
+- [ ] 独立进程 `house-ear channel-gateway`；可选 compose profile；不扩大主镜像时可做独立镜像/extra。
+- [ ] NAS/Mac 配置文档：长轮询无需公网；凭证权限 0600；日志脱敏。
+- [ ] 速率限制、超时、重试、取消、健康检查。
+- [ ] E2E 验收（需 9 哥）：
+  - Telegram 文字/语音 → 正确回复；
+  - 微信扫码 → 文字/语音 → 正确回复；
+  - 上下文连续；`/new` 清空；
+  - 非 allowlist 用户被拒；
+  - 2000/4096 长消息切分；
+  - 音箱离线时 channel 仍可用；
+  - 可选“同时客厅说”；
+  - 日志无 token/context_token。
+
+## 4. 需要 9 哥 配合的点（其余我都能先做）
+
+1. **Telegram**：创建一个**独立于 Hermes 的 bot**（BotFather），给我 token 和你的 chat_id；不要复用现有 Hermes bot，否则两个进程抢 `getUpdates`。
+2. **微信 iLink/ClawBot**：用手机扫码绑定一个**新的 iLink bot 账号**给小瑞；Hermes/OpenClaw 正在用的账号不要共用（同一 bot 只能一个长轮询消费者）。
+3. 决定默认回复：仅文字（推荐先这样）/ 文字+语音 / 仅语音。
+4. 决定是否允许“channel 消息同时让客厅音箱播报”，默认关。
+5. 真机测试时发 2–3 条文字 + 1 条语音，帮我确认链路。
+
+## 5. 验收标准
+
+- 文字：从发送到收到回复 p50 < 3 s（不含人工等待）。
+- 语音输入：≤10 s 的语音消息在 5 s 内转写并回复（网络正常）。
+- 上下文：同一 peer 连续 3 轮保持；`/new` 后清空。
+- 安全：非 allowlist 静默拒绝；token/context_token 不出现在日志；危险动作需确认。
+- 可靠性：gateway 重启后 offset/游标/context_token 恢复；Telegram/微信断线自动重连。
+- 独立性：音箱离线/音频面失败不影响文字 channel。
+
+## 6. 风险
+
+- 微信 iLink 处于 Public Beta，协议可能变；adapter 必须隔离，不能侵入控制面。
+- 微信语音编码多为 SILK，ffmpeg 不原生支持，需要额外解码；第一版可用 `voice_item.text` 绕过。
+- 微信语音**发送**没有稳定公开 helper，第一版不承诺语音回复。
+- 同一 bot 账号只能一个 `getupdates` 消费者：不要与 Hermes/OpenClaw 共用。
+- `context_token` 是会话锚点；主动推送不可靠，agent 通知优先走 Telegram/控制台。
+- Telegram/微信消息经平台云，非端到端加密；控制台需明示。
+- 工具/危险动作在 channel 里必须确认；不要在 channel 里开放 shell。
+
+## 7. 推荐顺序
+
+1. M0 → M1 → M2（我先做，不需要你）。
+2. M3 Telegram 文字 + 语音输入（需要独立 bot token）。
+3. M4 微信 iLink 文字（需要扫码）；M5 语音/媒体按需。
+4. M6 控制台、M7 部署/验收。
+5. 最后再考虑 Hermes/Agent 接入；channel 是 I/O，Agent 是执行，两者不要混在一起。
+
