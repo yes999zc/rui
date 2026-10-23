@@ -78,7 +78,16 @@ def put(name: str, value: str) -> None:
     buf = StringIO()
     _yaml.dump(data, buf)
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(buf.getvalue(), encoding="utf-8")
+    # Private before the first byte: a crash between write and replace must not leave
+    # a readable plaintext secrets file behind, even for a moment.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.chmod(tmp, 0o600)          # before the first byte, umask-proof
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(buf.getvalue())
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     os.replace(tmp, p)
     os.chmod(p, 0o600)
     log.info("secrets: %s %s", "set" if value else "cleared", name)

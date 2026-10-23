@@ -139,3 +139,65 @@ def test_watchdog_restarts_a_killed_plane(config_path, tmp_path) -> None:
     assert supervisor.status()["running"] is False      # stopped again for the test
     # The new connection carried the callback the control plane wired at startup.
     assert callback_followed
+
+
+def test_a_half_closed_socket_is_not_a_healthy_plane(config_path, tmp_path) -> None:
+    """P1 (audit 2026-10-23): only the socket's read end dies, the child keeps running.
+
+    ready + a live child used to be enough for `running`, so /health said green and the
+    watchdog never rebuilt a plane nobody was reading - the room was deaf while the
+    console claimed all was well. Feeding EOF into the reader is that exact failure:
+    the child never learns anything, the pump returns, and `running` must go false while
+    the process is still alive - then the watchdog replaces it.
+    """
+
+    async def run() -> tuple[AudioPlaneSupervisor, int, int, bool, str]:
+        cfg = load_config(config_path)
+        supervisor = AudioPlaneSupervisor(
+            cfg, config_path=config_path, socket_path=tmp_path / "audio.sock"
+        )
+        await supervisor.start()
+        supervisor.watch()          # the app arms this at startup
+        assert supervisor.running
+        first_pid = supervisor.proc.pid if supervisor.proc is not None else -1
+        first_proc = supervisor.proc
+        client = supervisor.client
+        assert client is not None
+
+        # Kill only the control side's read end: pause the transport first so no frame can
+        # arrive after the artificial EOF (that is an asyncio assertion, not a socket
+        # event), then feed EOF. The plane child itself is not signalled and keeps running.
+        transport = client.writer.transport
+        assert transport is not None
+        transport.pause_reading()
+        client.reader.feed_eof()
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 5.0
+        while loop.time() < deadline and supervisor.running:
+            await asyncio.sleep(0.02)
+        detected = not supervisor.running
+        child_was_alive = first_proc is not None and first_proc.returncode is None
+        error = supervisor.error
+
+        second_pid = first_pid
+        deadline = loop.time() + 20.0
+        while loop.time() < deadline:
+            await asyncio.sleep(0.1)
+            if (supervisor.running and supervisor.proc is not None
+                    and supervisor.proc.pid != first_pid):
+                second_pid = supervisor.proc.pid
+                break
+        try:
+            return supervisor, first_pid, second_pid, detected and child_was_alive, error
+        finally:
+            await supervisor.stop()
+
+    supervisor, first_pid, second_pid, dead_while_child_alive, error = asyncio.run(run())
+
+    assert first_pid > 0
+    assert dead_while_child_alive, "the dead reader was still reported as running"
+    assert "reader stopped" in error, error
+    assert second_pid != first_pid, "the watchdog never rebuilt the half-closed plane"
+    assert supervisor.restarts == 1
+    assert supervisor.status()["running"] is False      # stopped again for the test

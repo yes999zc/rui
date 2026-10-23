@@ -17,12 +17,12 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from email.utils import format_datetime
 from urllib.parse import quote_plus, urlencode
 
+from .. import secrets
 from ..config.schema import ProviderConfig
 from .openai_compat import MissingKey, ProviderError
 
@@ -82,9 +82,12 @@ class XfyunTts:
 
     def _credentials(self) -> tuple[str, str, str]:
         def get(name: str) -> str:
-            value = os.environ.get(name, "") if name else ""
+            # Same resolution order as every provider: environment first, then the
+            # write-only secrets file the console fills in.
+            value = secrets.get(name) if name else ""
             if not value:
-                raise MissingKey(f"environment variable {name or '(unset)'} is empty")
+                raise MissingKey(
+                    f"no value for {name or '(unset)'} (environment or secrets.yaml)")
             return value
 
         return (

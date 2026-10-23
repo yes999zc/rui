@@ -70,7 +70,10 @@ def run_wake(plane: AudioPlane) -> list[dict]:
     return [json.loads(f[5:].decode("utf-8")) for f in writer.frames if f[0] == 1]  # FrameType.CONTROL
 
 
-def test_a_wake_during_playback_stops_the_speaker() -> None:
+def test_a_wake_during_playback_stops_the_speaker(caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.INFO, logger="house_ear.audio.process")
     plane, adapter = make_plane()
     queue_seconds(plane, 3.0)
 
@@ -82,6 +85,11 @@ def test_a_wake_during_playback_stops_the_speaker() -> None:
     wake = next(f for f in frames if f.get("type") == "wake")
     assert wake["barge"] is True
     assert wake["barged_s"] == pytest.approx(3.0, abs=0.05)
+    # P1 (audit 2026-10-23): the acceptance number used to exist only in tests. Every
+    # production barge now reports the server-side stop in the log.
+    assert plane.last_barge_stop_ms is not None
+    assert 0.0 <= plane.last_barge_stop_ms < 300.0, plane.last_barge_stop_ms
+    assert any("silence_after_ms=" in r.getMessage() for r in caplog.records)
 
 
 def test_a_wake_while_the_vendor_talks_pauses_its_player() -> None:
@@ -121,8 +129,34 @@ def test_a_wake_in_silence_is_not_a_barge() -> None:
 
     assert adapter.stops == 0
     assert plane.barges == 0
+    assert plane.last_barge_stop_ms is None
     wake = next(f for f in frames if f.get("type") == "wake")
     assert wake["barge"] is False
+
+
+def test_the_control_side_exposes_the_barge_instant_for_the_trace() -> None:
+    """P1 (audit 2026-10-23): `silence_after_ms` was null in production.
+
+    The plane measures its own stop (`last_barge_stop_ms`, logged as
+    `silence_after_ms=`); the control side keeps the wake instant so app.py can mark
+    `barge_in` on the turn trace once it is wired. This test pins the data plumbing.
+    """
+    from house_ear.audio.client import AudioPlaneClient
+    from house_ear.audio.protocol import FrameType, Wake
+
+    class Dummy:
+        pass
+
+    client = AudioPlaneClient(Dummy(), Dummy())  # type: ignore[arg-type]
+    wake = Wake(ts_ms=1.0, keyword="你好小瑞", barge=True, barged_s=1.2)
+    client._dispatch(FrameType.CONTROL, wake.model_dump_json().encode("utf-8"))
+    assert client.last_barge_ms is not None
+    assert client.last_wake is not None and client.last_wake.barge
+
+    # A later wake in silence must not leave a stale barge instant behind.
+    quiet = Wake(ts_ms=2.0, keyword="你好小瑞")
+    client._dispatch(FrameType.CONTROL, quiet.model_dump_json().encode("utf-8"))
+    assert client.last_barge_ms is None
 
 
 def test_the_lead_is_bounded_and_the_barge_flushes_the_device() -> None:

@@ -118,14 +118,27 @@ def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        shutil.copy2(p, p.with_suffix(p.suffix + f".bak-{stamp}"))
+        backup = p.with_suffix(p.suffix + f".bak-{stamp}")
+        shutil.copy2(p, backup)
+        # config.yaml can name secrets and device tokens; a backup must not be more
+        # readable than the file it copies.
+        os.chmod(backup, 0o600)
         backups = sorted(p.parent.glob(p.name + ".bak-*"))
         for old in backups[:-keep_backups]:
             old.unlink(missing_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        _yaml.dump(cfg.model_dump(mode="json"), fh)
+    # Create the temp file private before a single byte is written: an aborted write
+    # must never leave a world-readable partial config behind.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.chmod(tmp, 0o600)          # chmod before the first byte, umask-proof
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            _yaml.dump(cfg.model_dump(mode="json"), fh)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     os.replace(tmp, p)  # atomic on POSIX and Windows
+    os.chmod(p, 0o600)
 
 
 def redacted(cfg: Config) -> dict:

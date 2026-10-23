@@ -676,3 +676,46 @@ def test_a_new_wake_starts_with_no_history(monkeypatch) -> None:
                              if m.get("role") == "user")
     assert "周杰伦" not in second_prompt
     assert "今天天气怎么样" in second_prompt
+
+
+def test_a_barge_marks_barge_in_and_silence_on_the_turn_trace(monkeypatch) -> None:
+    """P1 (audit 2026-10-23): `silence_after_ms` was null in production.
+
+    Only tests ever marked `barge_in`/`silence`, so the <=300 ms acceptance number had no
+    production data. `abort()` is what the control plane calls when a barge lands; it
+    marks barge_in, and the first place the turn notices the abort (stream loop, TTS
+    worker or a sentence's chunk loop) marks silence. Same trace object is added to
+    TraceLog by the app, so `/api/v1/traces` gets a real number.
+    """
+
+    class SlowLlm(FakeLlm):
+        async def chat(self, messages: list[dict], tools: list[dict]):
+            self.seen.append(messages)
+            yield ChatChunk(delta="第一句话。")
+            await asyncio.sleep(0.05)
+            yield ChatChunk(delta="第二句话。")
+
+    llm = SlowLlm([])
+    patch_chains(monkeypatch, asr=FakeAsr("随便聊聊"), llms=[llm], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers)
+    trace = TurnTrace(device_id="living")
+
+    async def speak(_pcm: bytes, *, segment_start: bool = False) -> None:
+        return None
+
+    async def run():
+        task = asyncio.create_task(runner.run(b"\x00\x00" * 800, speak, trace))
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 2.0
+        while trace.at("tts_first") is None and loop.time() < deadline:
+            await asyncio.sleep(0.005)
+        runner.abort()
+        return await task
+
+    result = asyncio.run(run())
+    assert trace.at("barge_in") is not None
+    assert trace.at("silence") is not None
+    assert trace.silence_after_ms is not None
+    assert 0.0 <= trace.silence_after_ms <= 300.0, trace.silence_after_ms
+    # The sentence after the abort is never spoken or reported.
+    assert result.reply == "第一句话。"

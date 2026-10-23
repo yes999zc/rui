@@ -71,6 +71,20 @@ SOFT_MIN_CHARS = 10
 MIN_SENTENCE_CHARS = 2
 MAX_SENTENCE_CHARS = 45
 
+# Where a reply may be cut when it runs past the console's budget: a sentence end reads
+# as punctuation, a clause end as a pause, and anything else is an unavoidable character
+# cut. Deliberately not `SENTENCE_ENDINGS`: that one also splits on "\n", which is a
+# structural line break, not a spoken pause.
+REPLY_ENDINGS = "。！？!?；;"
+REPLY_SOFT_ENDINGS = "，,、：:"
+
+# The one case where the everyday budget must not win: the user asked for the whole
+# thing. It also wins over the search budget, because 9哥 asking for a full read-out is
+# a stronger signal than the tool that fetched the material.
+EXPAND_REQUEST = re.compile(
+    r"背|全文|念全文|完整|详细|展开|讲一下|念一遍|读一遍|多说点|系统地"
+)
+
 # A follow-up whose whole meaning lives in the previous answer. Dropping that answer from
 # the window (see `history_messages`) would leave the model with 「再说一遍」 and nothing to
 # repeat, so these keep the earlier round.
@@ -166,6 +180,53 @@ def speech_pieces(text: str) -> list[str]:
     """
     pieces, _rest = split_sentences(text, force=True, clauses=False)
     return pieces
+
+
+def enforce_reply_cap(text: str, cap: int) -> tuple[str, bool]:
+    """Cut ``text`` to at most ``cap`` characters, at the least abrupt boundary.
+
+    Returns ``(text, truncated)``. A reply that already fits is returned unchanged, and
+    so is empty text (or a non-positive cap): this is a ceiling, not a target.
+
+    Preference order: the last sentence end within the cap, then the last clause end
+    (comma / enumeration comma / colon), then a hard character cut. The boundary
+    character is kept - a spoken answer that ends on 。 sounds finished, one that just
+    stops does not - and trailing whitespace is dropped.
+
+    Why this exists at all: the three budgets in ``assistant`` were only written into
+    the prompt, and the model ignored them on the real speaker (2026-10-23: 478 chars
+    over 90 s against a 300-char search budget). A prompt is a request; this is the
+    server-side answer.
+    """
+    if not text or cap <= 0 or len(text) <= cap:
+        return text, False
+    head = text[:cap]
+    for endings in (REPLY_ENDINGS, REPLY_SOFT_ENDINGS):
+        cut = max(head.rfind(char) for char in endings)
+        if cut >= 0:
+            return text[: cut + 1].rstrip(), True
+    hard = head.rstrip()
+    return (hard or head), True
+
+
+def reply_cap_for(
+    assistant: AssistantConfig, transcript: str, info_used: bool = False
+) -> tuple[int, str]:
+    """``(cap, source)`` for one turn, from the three settings the console edits.
+
+    - the user asked to expand / read it all -> ``reply_max_chars_long``;
+    - an information tool ran this turn -> ``reply_max_chars_search``;
+    - otherwise -> ``reply_max_chars``.
+
+    Expansion wins over search: both are configured ceilings, and the explicit request
+    is the more specific intent. ``source`` is only for the log line.
+    """
+    if EXPAND_REQUEST.search(transcript or ""):
+        return assistant.reply_max_chars_long, "long"
+    if info_used:
+        return assistant.reply_max_chars_search, "search"
+    return assistant.reply_max_chars, "default"
+
 
 
 async def open_stream_stage(
@@ -274,6 +335,11 @@ class TurnRunner:
         # behaviour, byte for byte: a tool result is rendered and the model answers it.
         self.direct_hook = direct_hook
         self._pending_direct: DirectSpeech | None = None
+        # The trace of the turn in flight. `abort()` is called by the control plane when a
+        # barge-in lands; marking barge_in / silence here is what turns the acceptance
+        # number (<=300 ms) from a test-only mark into a production measurement. The app
+        # adds the same trace object to TraceLog after `run()`, so both marks land.
+        self._trace: TurnTrace | None = None
 
     @property
     def llm_tools(self) -> list[dict]:
@@ -326,8 +392,20 @@ class TurnRunner:
         self.history.clear()
 
     def abort(self) -> None:
-        """Stop speaking the current answer (barge-in)."""
+        """Stop speaking the current answer (barge-in).
+
+        Marks `barge_in` on the turn in flight; the first place that notices the abort
+        marks `silence`. Together they are `TurnTrace.silence_after_ms`, which used to be
+        null in production because only tests ever set those stages (audit 2026-10-23).
+        """
         self._abort.set()
+        if self._trace is not None:
+            self._trace.mark("barge_in")
+
+    def _mark_silence(self) -> None:
+        """The first instant after a barge that this turn stops pushing audio."""
+        if self._trace is not None:
+            self._trace.mark("silence")
 
     async def warm(self) -> None:
         """Load what the first turn would otherwise load on its own.
@@ -432,6 +510,7 @@ class TurnRunner:
                     first = True
                     async for chunk in stream:
                         if self._abort.is_set():
+                            self._mark_silence()
                             return name, spoken, None, ""
                         if not chunk:
                             continue
@@ -489,6 +568,7 @@ class TurnRunner:
             return TurnResult(error=f"turn timed out after {self.turn_timeout_s:.0f} s")
         finally:
             self._in_turn = False
+            self._trace = None
             # The end of a turn is activity: the idle countdown must start after the
             # answer, not while it is still playing. A failed or timed-out turn counts
             # too - the person did speak.
@@ -503,6 +583,7 @@ class TurnRunner:
         transcript: str | None = None,
     ) -> TurnResult:
         result = TurnResult()
+        self._trace = trace
         if transcript is None:
             spoken_text, asr_report = await self.transcribe(pcm, trace)
             if asr_report is not None:
@@ -514,6 +595,16 @@ class TurnRunner:
         if not transcript.strip():
             result.error = "empty transcript"
             return result
+
+        # The reply ceiling for this turn. Applied while the answer streams (below), not
+        # after it: TTS starts on the first finished sentence, so a cut applied once the
+        # model finished would only change the text we report - the long answer would
+        # already have been synthesised. Measured 2026-10-23: 478 chars / 90 s with the
+        # prompt asking for 300, which is what a prompt-only ceiling buys.
+        cap_chars, cap_source = reply_cap_for(self.assistant, transcript)
+        generated_chars = 0   # everything the model wrote, capped or not (for the log)
+        spoken_chars = 0      # what actually went to TTS
+        capped = False
 
         messages: list[dict] = []
         system_prompt = self.build_prompt()
@@ -631,6 +722,50 @@ class TurnRunner:
             calls: list[dict] = []
             first_sentence_ms = [0.0]
 
+            def take(speakable: str) -> str:
+                """One sanitised piece against this turn's cap; "" means do not speak it.
+
+                The cap has to be spent here, while the answer is still streaming,
+                because `say` runs on its own task as each sentence completes: a cut
+                applied after the model finished would report a short reply while the
+                speaker had already read the whole long one out.
+
+                A piece that is a complete sentence or clause is dropped whole when it
+                does not fit - ending on the previous piece beats speaking half of the
+                next one. A piece cut by the 45-char split (or the tail) has no such
+                boundary, so it is cut inside with `enforce_reply_cap`.
+                """
+                nonlocal capped, generated_chars, spoken_chars
+                if not speakable:
+                    return ""
+                generated_chars += len(speakable)
+                if capped:
+                    return ""
+                room = cap_chars - spoken_chars
+                if len(speakable) <= room:
+                    parts.append(speakable)
+                    spoken_chars += len(speakable)
+                    if self.spoken is not None:
+                        self.spoken.remember(speakable)
+                    return speakable
+                if room <= 0:
+                    capped = True
+                    return ""
+                if spoken_chars > 0 and (
+                    speakable[-1] in REPLY_ENDINGS or speakable[-1] in REPLY_SOFT_ENDINGS
+                ):
+                    capped = True
+                    return ""
+                cut, _truncated = enforce_reply_cap(speakable, room)
+                capped = True
+                if not cut:
+                    return ""
+                parts.append(cut)
+                spoken_chars += len(cut)
+                if self.spoken is not None:
+                    self.spoken.remember(cut)
+                return cut
+
             def ingest(chunk: Any) -> list[str]:
                 """Turn one streamed chunk into the sentences that are now complete.
 
@@ -657,13 +792,9 @@ class TurnRunner:
                     # A model without a tool layer writes the call as text (DSML), and the
                     # split for streaming can cut a tag in half - so sanitise each piece
                     # instead of testing for a whole marker that may no longer be there.
-                    speakable = sanitize_spoken(sentence)
-                    if not speakable:
-                        continue
-                    parts.append(speakable)
-                    if self.spoken is not None:
-                        self.spoken.remember(speakable)
-                    out.append(speakable)
+                    piece = take(sanitize_spoken(sentence))
+                    if piece:
+                        out.append(piece)
                 if out and not first_sentence_ms[0]:
                     first_sentence_ms[0] = (time.perf_counter() - round_started) * 1000
                 return out
@@ -680,7 +811,8 @@ class TurnRunner:
                         return
                     if self._abort.is_set():
                         # Barge-in: keep draining so the producer is never blocked, but
-                        # say nothing more.
+                        # say nothing more. This is where pushing audio actually stops.
+                        self._mark_silence()
                         continue
                     await say(item)
 
@@ -690,15 +822,14 @@ class TurnRunner:
                     queue.put_nowait(sentence)
                 async for chunk in stream:
                     if self._abort.is_set():
+                        self._mark_silence()
                         break
                     for sentence in ingest(chunk):
                         queue.put_nowait(sentence)
                 tail = sanitize_spoken(buffer) if buffer.strip() else ""
-                if tail:
-                    parts.append(tail)
-                    if self.spoken is not None:
-                        self.spoken.remember(tail)
-                    queue.put_nowait(tail)
+                piece = take(tail) if tail else ""
+                if piece:
+                    queue.put_nowait(piece)
             finally:
                 queue.put_nowait(None)
                 with contextlib.suppress(Exception):
@@ -728,6 +859,11 @@ class TurnRunner:
                 )
                 text, calls = await answer(allow)
                 spoken_parts.append(text)
+                if capped:
+                    # The budget is spent, so the turn is over: running a tool this
+                    # round asked for would be work behind a sentence already cut. The
+                    # remaining stream was only drained to count what the model wrote.
+                    break
                 # A round without tools is the answer by definition: if the model still
                 # writes a tool call there, there is nothing left to run it with.
                 if not calls or not allow:
@@ -809,9 +945,16 @@ class TurnRunner:
                     # Checked after the tools ran: the action was the answer.
                     log.info("song is the answer: no spoken confirmation")
                     break
+                if info_used:
+                    # A looked-up answer gets its own budget. Both settings are the
+                    # console's; the prompt hint alone was measured not to hold, so the
+                    # ceiling moves with it for the next round.
+                    cap_chars, cap_source = reply_cap_for(
+                        self.assistant, transcript, info_used=True
+                    )
                 if info_used and messages and messages[0].get("role") == "system":
-                    # A looked-up answer gets its own budget. Rewriting the system message
-                    # keeps it one system prompt; a second one mid-conversation is not.
+                    # Rewriting the system message keeps it one system prompt; a second
+                    # one mid-conversation is not.
                     messages[0] = {
                         "role": "system",
                         "content": messages[0]["content"]
@@ -836,7 +979,17 @@ class TurnRunner:
             return result
         # The reply is what was actually spoken, not the raw deltas: markup that never
         # reached the speaker must not reach the API response or the next turn's history.
-        result.reply = clean_reply("".join(spoken_parts))
+        raw_reply = clean_reply("".join(spoken_parts))
+        # Safety net (and the one place the cap shows up in the API/history): the
+        # streaming path above already stopped the speech itself. `enforce_reply_cap`
+        # keeps this exact even across rounds, and the clean step above can only shorten.
+        result.reply, post_cut = enforce_reply_cap(raw_reply, cap_chars)
+        if capped or post_cut:
+            log.info(
+                "reply capped: %d -> %d chars (cap %d from %s)",
+                max(generated_chars, len(raw_reply)), len(result.reply),
+                cap_chars, cap_source,
+            )
         if self.keep_context:
             self.history.append({"role": "user", "content": transcript})
             if result.reply:

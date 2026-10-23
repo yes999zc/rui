@@ -118,11 +118,15 @@ def test_session_rules_keep_noise_and_stop_words_out_of_the_model() -> None:
     assert not rules.is_noise("停")
 
     # stop: session actions, including the ASR slip measured on the device
-    for text in ("停止", "停一下", "退下吧", "对一下吧", "关闭", "不听了", "关机"):
+    for text in ("停止", "停一下", "退下吧", "对一下吧", "不听了", "别说了"):
         assert rules.stop_intent(text), text
     # a sentence that merely contains a stop word is a question, not a dismissal
     assert not rules.stop_intent("把灯关掉以后告诉我天气怎么样")
     assert not rules.stop_intent("现在几点了")
+    # P0 (audit 2026-10-23): HA commands start with the old stop words. They are
+    # device requests, not dismissals - and the three verbs are no longer defaults.
+    for command in ("关掉客厅灯", "关闭窗帘", "关空调", "关闭", "关掉", "关机", "记下吧"):
+        assert not rules.stop_intent(command), command
     assert rules.stop_reply(0) != rules.stop_reply(1)
 
     # while music plays, 停止/别放 stops the sound; 退下吧 only dismisses the talk

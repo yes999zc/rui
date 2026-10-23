@@ -20,18 +20,22 @@ import time
 from . import pinyin
 
 # From the old build's `conversation.stop_words`, plus the two it added later.
+# 关掉 / 关闭 / 关机 are deliberately absent: they are the verbs of home-automation
+# commands (「关掉客厅灯」「关闭窗帘」) and the old build deleted 关机 after exactly that
+# accident. The match rule below would keep those commands out anyway, but a word that
+# must never mean "go away" does not belong in the default list.
 STOP_WORDS = (
-    "停止", "停下来", "停下", "停一下", "停掉", "别说了", "别放", "关掉", "关闭", "暂停",
-    "别唱", "不听了", "退下吧", "退下", "关机", "不聊了", "够了",
+    "停止", "停下来", "停下", "停一下", "停掉", "别说了", "别放", "暂停",
+    "别唱", "不听了", "退下吧", "退下", "不聊了", "够了",
 )
 
 # Short replies to a stop: one word, spoken immediately. Rotated so the same word five
 # times in a row does not sound like a machine.
 STOP_REPLIES = ("好。", "行，我退了。", "好，有需要再叫我。")
 
-# Measured ASR slips, written down instead of guessed at with an edit distance. The old
-# build used pinyin comparison for this (「退下吧」 heard as 「对一下吧」, 2026-10-20);
-# without pulling in pypinyin, the slips we have actually seen are listed here.
+# Measured ASR slips, written down instead of guessed at with an edit distance. This is
+# now the *only* tolerance: matching is exact-after-alias (see `stop_intent`), because a
+# fuzzy match also fired on commands that merely started with a stop word.
 ALIASES = {
     "对一下吧": "退下吧",
     "退一下吧": "退下吧",
@@ -45,9 +49,10 @@ ALIASES = {
 _FILLER = re.compile(r"^[嗯啊呃哦噢唉诶哎哟呀吧呢哈嘿]?[。，、！？\.\!\?\s]*$")
 _PUNCT = re.compile(r"[\s。，、！？；：,.!?;:…—\-]")
 
-# Words that carry a session action only when they are the whole request: 「关掉」 alone
-# ends the session, 「关掉客厅灯」 is a device command (S5e's problem, not this one).
-_STOP_MAX_CHARS = 6
+# A stop word may gather this many extra characters and still be the whole request:
+# 「停止播放」 and 「别说了吧」 are the same action, 「关掉客厅灯」 is not (it is five
+# characters around a verb that is not a stop word any more).
+_STOP_TAIL_CHARS = 2
 
 # A stop word said while music plays means two different things: 「停止」「别放」 ends
 # the sound, 「退下吧」 dismisses the conversation. D1 split the old single stop path;
@@ -244,25 +249,29 @@ def is_noise(transcript: str) -> bool:
 def stop_intent(transcript: str, words: tuple[str, ...] | list[str] | None = None) -> bool:
     """True when the request is "stop / dismiss" rather than a question.
 
-    Only short utterances and only when the stop word covers the whole request: 「停止播放」
-    counts (nothing is playing in v1, so it means dismiss), 「把音乐停了以后告诉我天气」
-    does not. A 3-4 character stop word tolerates one ASR slip, because 「退下吧」 was
-    measured arriving as 「对一下吧」.
+    Whole-request matching only: the normalised transcript either equals a stop word, or
+    contains it with at most two extra characters (「停止播放」, 「别说了吧」). Substring
+    matching was measured destroying home automation: 「关掉客厅灯」 and 「关闭窗帘」 are
+    five characters around a verb, so a "contains 关掉/关闭" rule dismissed the session
+    before HA ever saw the command (audit 2026-10-23; the 13:22 5/5 only passed because
+    「儿童房的灯」 was long enough to escape the old length cap).
+
+    ASR slips are handled by `ALIASES` before matching - exact-after-alias, no fuzzy
+    fallback: pinyin/difflib tolerance was how a device command could drift into a
+    dismissal. Trailing tolerance stays small on purpose; len(t) <= len(word) + 2.
     """
     t = normalize(transcript)
-    if not t or len(t) > _STOP_MAX_CHARS:
+    if not t:
         return False
     t = ALIASES.get(t, t)
-    for word in sorted(words or STOP_WORDS, key=len, reverse=True):
-        if word in t:
+    for raw in sorted(words or STOP_WORDS, key=len, reverse=True):
+        word = normalize(raw)
+        if not word:
+            continue
+        if t == word:
             return True
-        if 3 <= len(word) <= 4 and len(t) <= len(word) + 1:
-            if difflib.SequenceMatcher(None, t, word).ratio() >= 0.75:
-                return True
-            # The old build's rhyme test: 「对一下吧」 for 「退下吧」, while
-            # 「记下吧」 (two edits of whole pinyin) stays a different word.
-            if pinyin.same_rhyme(t, word):
-                return True
+        if word in t and len(t) <= len(word) + _STOP_TAIL_CHARS:
+            return True
     return False
 
 

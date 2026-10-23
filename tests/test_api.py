@@ -21,7 +21,10 @@ def test_mock_device_is_probed() -> None:
     cfg = Config(devices=[DeviceConfig(id="living", adapter="mock", host="127.0.0.1", room="客厅")])
     devices = client(cfg).get("/api/v1/devices").json()
     assert devices[0]["room"] == "客厅"
-    assert devices[0]["status"] == "ready"
+    # No audio plane runs in this test, so the control plane cannot see the outbound
+    # link either: "unknown", not the old hard-coded "ready" (audit round 1 #12).
+    assert devices[0]["status"] == "unknown"
+    assert devices[0]["connected"] is None
     assert devices[0]["missing_for_barge_in"] == []
 
 
@@ -30,7 +33,10 @@ def test_xiaoai_device_is_reported_as_an_inbound_speaker() -> None:
     c = client(cfg)
     assert c.get("/health").json()["device_errors"] == 0
     device = c.get("/api/v1/devices").json()[0]
-    assert device["status"] == "ready"
+    # The inbound socket lives in the audio-plane process; with no plane in this test the
+    # honest answer is "unknown" (the link cannot be observed from here).
+    assert device["status"] == "unknown"
+    assert device["connected"] is None
     assert device["transport"] == "inbound"
     assert "reference" in device["capabilities"]
     assert device["missing_for_barge_in"] == []

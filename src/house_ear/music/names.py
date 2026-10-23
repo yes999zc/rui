@@ -104,7 +104,9 @@ class NameResolver:
         return out
 
     async def _ask(self, name: str) -> list[str]:
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        from .. import secrets  # a console-written key must work here too
+
+        api_key = secrets.get("DEEPSEEK_API_KEY")
         if not api_key:
             return []           # no key: the literal search already failed, move on
         base = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")

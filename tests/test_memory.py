@@ -39,11 +39,12 @@ def test_forget_by_text_and_no_duplicates(tmp_path: Path) -> None:
     store.add("我不吃香菜", confirmed=True)
     assert store.forget_text("香菜") == 1
     assert store.confirmed_texts() == []
-    store.add("我喜欢安静的歌", confirmed=True)
-    store.add("我喜欢安静的歌", confirmed=True)
-    # duplicates are the caller's business; the store keeps both, so the console
-    # is where a duplicate gets deleted - the extractor prunes them, add() does not
-    assert len(store.confirmed_texts()) == 2
+    first = store.add("我喜欢安静的歌", confirmed=True)
+    again = store.add("我喜欢安静的歌", confirmed=True)
+    # audit round 1 #7: add() deduplicates now. 「记住…」 used to write a candidate and
+    # then a confirmed row for one sentence; the store is the place that stops it.
+    assert again.id == first.id
+    assert len(store.confirmed_texts()) == 1
 
 
 def test_the_store_survives_a_restart(tmp_path: Path) -> None:

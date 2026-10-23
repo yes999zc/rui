@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""Container health probe: the HTTP API is up, and every configured speaker has a plane.
+"""Container health probe: the HTTP API is up and the enabled speakers can be heard.
 
 Why this is a script and not an inline `urllib.urlopen("/health")`:
 
 * the port lives in config, not in the image, so a deployment that changes
   `web.port` must not be reported unhealthy forever (the old probe hard-coded 8080);
-* `audio_plane` is the part that actually goes silent. The control plane can answer
-  `/health` for hours while the audio plane is dead - the console still loads, the
-  speaker still dials in, and nothing is listening to it. When at least one device is
-  configured, that is an unhealthy container.
+* `audio_plane` alone is not enough. The control plane can answer `/health` for hours
+  while the audio plane is dead - or while the plane is up but no speaker ever dialled
+  in. Both look like "green" to a process check and like a deaf room to the people in it.
+* a *disabled* device is configured on purpose and must not require a plane (audit #13:
+  the old probe counted every configured device, so disabling the only speaker made the
+  container permanently unhealthy, and the message told the operator to restart - which
+  cannot help).
+
+Fail-closed rule: if the config cannot be read, this probe reports unhealthy with the
+reason. Falling back to "port 8080, zero devices" turned a broken mount into a green
+container.
 
 Exit 0 = healthy, 1 = unhealthy (reason on stderr, which lands in `docker inspect`).
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -22,23 +30,47 @@ import urllib.request
 from pathlib import Path
 
 CONFIG = Path("/config/config.yaml")
-DEFAULT_PORT = 8080
 ATTEMPTS = 3
 TIMEOUT_S = 5.0
 
 
-def _config() -> tuple[int, int]:
-    """(http port, configured device count); schema defaults when the file is absent."""
-    import os
-
+def _config() -> tuple[int | None, int, str]:
+    """(http port, enabled device count, error). A read failure is fatal, not a default."""
     path = Path(os.environ.get("HOUSE_EAR_CONFIG", str(CONFIG)))
     try:
         from house_ear.config import load_config
 
         cfg = load_config(path)
-        return cfg.web.port, len(cfg.devices)
-    except Exception:  # noqa: BLE001 - a probe must never be the thing that crashes
-        return DEFAULT_PORT, 0
+    except Exception as exc:  # noqa: BLE001 - a probe must never be the thing that crashes
+        return None, 0, f"cannot read config {path}: {type(exc).__name__}: {exc}"
+    # Only enabled devices are supposed to open a plane; a disabled one is a deliberate
+    # "not in service", not a fault.
+    enabled = sum(1 for device in cfg.devices if device.enabled)
+    return int(cfg.web.port), enabled, ""
+
+
+def evaluate(body: dict, configured_enabled: int = 0) -> tuple[bool, str]:
+    """The verdict for one `/health` body. Pure so the rules are testable offline.
+
+    `/health` carries `enabled_devices` and `speaker_connected` itself, so the probe and
+    the console read the same source; `configured_enabled` is only a fallback for a
+    server built before those fields existed.
+    """
+    if body.get("status") != "ok":
+        return False, f"status={body.get('status')!r}"
+    enabled = int(body.get("enabled_devices", configured_enabled) or 0)
+    if enabled and not body.get("audio_plane"):
+        return False, (
+            f"audio plane not running ({enabled} enabled device(s)); "
+            "`docker compose restart house-ear` brings it back"
+        )
+    if enabled and not body.get("speaker_connected"):
+        return False, (
+            f"speaker not connected ({enabled} enabled device(s)); the audio plane is "
+            "up but no client is dialled in - check the speaker is powered and its "
+            "client points at this server"
+        )
+    return True, ""
 
 
 def _fail(reason: str) -> int:
@@ -47,10 +79,14 @@ def _fail(reason: str) -> int:
 
 
 def main() -> int:
-    port, devices = _config()
+    port, configured, config_error = _config()
+    if config_error:
+        return _fail(config_error)
+    if port is None:  # defensive: _config returns a port whenever error is empty
+        return _fail("no HTTP port in config")
     url = f"http://127.0.0.1:{port}/health"
     last = ""
-    for attempt in range(ATTEMPTS):
+    for _attempt in range(ATTEMPTS):
         try:
             with urllib.request.urlopen(url, timeout=TIMEOUT_S) as resp:
                 body = json.loads(resp.read())
@@ -58,17 +94,14 @@ def main() -> int:
             last = f"{url}: {type(exc).__name__}: {exc}"
             time.sleep(1.0)
             continue
-        if body.get("status") != "ok":
-            return _fail(f"{url} status={body.get('status')!r}")
-        # No device configured means no plane is expected (the first-boot wizard adds one).
-        if devices and not body.get("audio_plane"):
-            return _fail(
-                f"audio plane not running ({devices} device(s) configured); "
-                "`docker compose restart house-ear` brings it back"
-            )
+        ok, reason = evaluate(body, configured)
+        if not ok:
+            return _fail(reason)
         print(
             f"ok: uptime={body.get('uptime_s')}s devices={body.get('devices')} "
-            f"audio_plane={body.get('audio_plane')}"
+            f"enabled={body.get('enabled_devices', configured)} "
+            f"audio_plane={body.get('audio_plane')} "
+            f"speaker_connected={body.get('speaker_connected')}"
         )
         return 0
     return _fail(last or "no /health response")

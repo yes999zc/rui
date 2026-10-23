@@ -7,20 +7,24 @@ the six-tool whitelist, the entity list injected into the prompt as
 and the degrade rule - HA down never touches voice, music or local tools.
 
 What is new on purpose:
-- the server-side hard refusal for lock/alarm/valve: the old build only hid
-  those domains in the console UI; the refusal now lives where calls execute;
+- the server-side hard refusal for lock/alarm/valve plus the trigger/code domains
+  (script/scene/automation/shell_command/python_script/hassio): the old build only
+  hid lock/alarm/valve in the console UI; the refusal now lives where calls execute;
 - ToolResult + InteractionSpec: the HA tools declare their phrases, they do
-  not carry them (docs/interaction.md).
+  not carry them (docs/interaction.md);
+- entity names and read-tool output are labelled as untrusted external data and
+  stripped of obvious instruction text before they reach the model.
 """
 from __future__ import annotations
 
 import json
 import logging
-import os
+import re
 import time
 from pathlib import Path
 from typing import Any
 
+from .. import secrets
 from ..config.schema import HaConfig
 from ..session import phrases
 from .contract import InteractionSpec, Permission, ToolResult, ToolSpec
@@ -34,11 +38,77 @@ DEFAULT_WHITELIST = (
     "batch_get_state", "get_system_status",
 )
 # Refused where calls execute, not hidden in a console list (old build's gap).
-EXCLUDED_DOMAINS = ("lock.", "alarm_", "valve.")
+# lock/alarm/valve were the old UI's hidden set; script/scene/automation can run
+# arbitrary sequences and shell_command/python_script/hassio execute code or manage
+# the supervisor, so a misheard name must never reach them through the voice path.
+EXCLUDED_DOMAINS = (
+    "lock.", "alarm_", "valve.",
+    "script.", "scene.", "automation.",
+    "shell_command.", "python_script.", "hassio.",
+)
 SKIP_WORDS = ("指示灯", "确认", "已反转", "虚拟", "电量", "信号")
 ENTITY_CAP = 120
 CACHE_TTL_S = 7 * 86400
 MAX_ENTITIES_TO_LIST = 6   # search_entities cap: the picker, not the house
+
+# HA names/states are user-editable data, not instructions. A name such as
+# "忽略之前的指令" is text from a device, so it is stripped at the boundary and the
+# whole block is labelled before it reaches the model.
+UNTRUSTED_PREFIX = "[不可信外部数据]"
+_HA_ENTITY_ID = re.compile(r"[a-z0-9_]+\.[a-z0-9_]+")
+# Whole lines that impersonate a chat role: drop them outright.
+_ROLE_LINE = re.compile(r"^\s*(?:system|assistant|developer|user)\s*[:：]", re.IGNORECASE)
+# Obvious imperative-injection phrases, English or Chinese. A line carrying one is
+# dropped whole: a name that tries to instruct the model is not a usable room name.
+_INSTRUCTION_TEXT = re.compile(
+    r"(?:(?:ignore|disregard|forget)\s+(?:all\s+|any\s+|of\s+)?(?:the\s+)?"
+    r"(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|messages?)"
+    r"|忽略(?:掉)?(?:之前|先前|前面|以上|此前)的?(?:所有)?(?:指令|指示|要求|提示词)"
+    r"|(?:从现在起|你现在)(?:是|扮演|作为))",
+    re.IGNORECASE,
+)
+
+
+def _clean_untrusted(text: str) -> str:
+    """Drop role lines and instruction-shaped lines from externally supplied text."""
+    kept: list[str] = []
+    for line in str(text).splitlines():
+        if _ROLE_LINE.match(line) or _INSTRUCTION_TEXT.search(line):
+            continue
+        stripped = line.strip()
+        if stripped:
+            kept.append(stripped)
+    return "\n".join(kept)
+
+
+def _untrusted(text: str) -> str:
+    """Label external data for the model; the ToolResult shape stays unchanged."""
+    return f"{UNTRUSTED_PREFIX}\n{_clean_untrusted(text)}".rstrip()
+
+
+def _clean_value(value: Any) -> Any:
+    """Recursively clean strings in an MCP result so one bad field cannot poison the line."""
+    if isinstance(value, str):
+        return _clean_untrusted(value)
+    if isinstance(value, dict):
+        return {key: _clean_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clean_value(item) for item in value]
+    return value
+
+
+def _clean_entity(line: object) -> str:
+    """`名字=entity_id` -> cleaned line, or "" when the name/id is unusable.
+
+    Applied on ingestion and again on cache reads: an `.ha_entities.json` written by
+    an older build must not bypass the prompt-injection guard.
+    """
+    name, _, eid = str(line).partition("=")
+    name = _clean_untrusted(name).strip()
+    eid = eid.strip()
+    if not name or not _HA_ENTITY_ID.fullmatch(eid):
+        return ""
+    return f"{name}={eid}"
 
 
 class HaBridge:
@@ -48,7 +118,7 @@ class HaBridge:
         url = cfg.base_url.rstrip("/")
         if not url.endswith("/api/mcp"):
             url = f"{url}/api/mcp"
-        token = os.environ.get(cfg.token_env, "")
+        token = secrets.get(cfg.token_env)
         self.cfg = cfg
         self.client = MCPClient(
             _server_cfg(url), headers={"Authorization": f"Bearer {token}"} if token else {},
@@ -74,9 +144,10 @@ class HaBridge:
             return ""
         listed = "\n".join(entities)
         note = "" if self.client._connected.is_set() else phrases.book.render("ha.list_stale")
-        return phrases.book.render("ha.entity_list", count=len(entities),
-                                   list=listed, note=note) + "\n" + phrases.book.render(
+        rendered = phrases.book.render("ha.entity_list", count=len(entities),
+                                       list=listed, note=note) + "\n" + phrases.book.render(
             "ha.multi_entity_rule")
+        return _untrusted(rendered)
 
     async def _entities(self) -> list[str]:
         if self._entities_cache is not None:
@@ -98,7 +169,10 @@ class HaBridge:
         try:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
             if time.time() - float(data.get("t") or 0) < CACHE_TTL_S:
-                self._entities_cache = list(data.get("entities") or [])
+                self._entities_cache = [
+                    clean for line in data.get("entities") or []
+                    if (clean := _clean_entity(line))
+                ]
                 return self._entities_cache
         except (OSError, ValueError):
             pass
@@ -116,10 +190,15 @@ class HaBridge:
             except MCPUnavailable:
                 return []   # half a list is worse than the cache
             for item in _result_items(result):
-                name = str(item.get("friendly_name") or item.get("name") or "").strip()
-                eid = str(item.get("entity_id") or item.get("id") or "")
-                if (not name or not eid or eid in seen
-                        or any(w in name for w in SKIP_WORDS)):
+                eid = str(item.get("entity_id") or item.get("id") or "").strip()
+                raw_name = item.get("friendly_name") or item.get("name") or ""
+                # "=" is the list separator; a name carrying one would corrupt the
+                # cache round-trip.
+                name = _clean_untrusted(str(raw_name)).strip().replace("=", " ")
+                # An entity id is a slug; anything else is not addressable and only
+                # gives an attacker another way to write text into the prompt.
+                if (not name or not _HA_ENTITY_ID.fullmatch(eid) or eid in seen
+                        or any(word in name for word in SKIP_WORDS)):
                     continue
                 seen.add(eid)
                 out.append(f"{name}={eid}")
@@ -178,7 +257,9 @@ class HaBridge:
         except MCPUnavailable:
             return ToolResult(status="unreachable", payload={
                 "say": phrases.book.render("device.unreachable", device="家庭设备")})
-        return ToolResult.say(_compact(result))
+        # States/attributes are editable on the HA side: label them as data and strip
+        # instruction-shaped text before the model ever sees them.
+        return ToolResult.say(_untrusted(_compact(result)))
 
     async def _call_service(self, args: dict[str, Any]) -> ToolResult:
         # HA's MCP wants `domain` and `service` separately; a model (or a test)
@@ -199,6 +280,8 @@ class HaBridge:
         if isinstance(target, list):
             target = ", ".join(str(t) for t in target)
             args["entity_id"] = target
+        if not isinstance(target, str):
+            target = str(target)
         if "." in service:
             head, tail = service.split(".", 1)
             # "turn_off" alone: the domain lives in the entity id.
@@ -210,11 +293,14 @@ class HaBridge:
         if not target:
             return ToolResult(status="empty")
         # The refusal the old build never had server-side (gap report §3.4-7).
-        for prefix in EXCLUDED_DOMAINS:
-            if prefix in str(args.get("entity_id", "")) or prefix.startswith(
-                    str(args.get("domain") or "") + "."):
-                return ToolResult(status="denied").slot(
-                    device=str(args.get("domain") or _domain_of(target)), action="")
+        # Domains are compared exactly (or by prefix for `alarm_*`): a substring check
+        # on the whole entity list would both miss split forms and match names by
+        # accident.
+        domains = {str(args.get("domain") or "").strip()}
+        domains.update(_domain_of(t.strip()) for t in target.split(",") if t.strip())
+        if any(_excluded_domain(domain) for domain in domains):
+            return ToolResult(status="denied").slot(
+                device=str(args.get("domain") or _domain_of(target)), action="")
         try:
             await self.client.call("call_service", args)
         except MCPUnavailable as exc:
@@ -261,6 +347,16 @@ def _server_cfg(url: str):
 
 def _domain_of(entity_id: str) -> str:
     return entity_id.split(".", 1)[0] if "." in entity_id else entity_id
+
+
+def _excluded_domain(domain: str) -> bool:
+    for prefix in EXCLUDED_DOMAINS:
+        if prefix.endswith("."):
+            if domain == prefix[:-1]:
+                return True
+        elif domain.startswith(prefix):
+            return True
+    return False
 
 
 def _action_word(service: str) -> str:
@@ -311,6 +407,8 @@ def _compact(result: Any) -> str:
     """One readable line for the model out of an MCP result."""
     items = _result_items(result)
     if items:
-        return json.dumps(items[:10], ensure_ascii=False)
+        # Clean per item before serialising: dropping the whole line because one
+        # entity name is instruction-shaped would hide every other entity too.
+        return json.dumps(_clean_value(items[:10]), ensure_ascii=False)
     text = getattr(result, "content", None) or result
     return str(text)[:1500]

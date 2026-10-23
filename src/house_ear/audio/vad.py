@@ -39,9 +39,6 @@ class GateConfig:
     max_utterance_ms: int = 45000     # old build: 45 s, one 43.28 s segment measured
     max_wait_ms: int = 5000           # wake with nothing said: give up
     threshold: float = 0.5
-    # How much of the acknowledgement window is kept for the moment it lifts: enough for
-    # the start of a request spoken over the cue, not the cue itself.
-    hold_keep_ms: int = 600
 
 
 class UtteranceGate:
@@ -84,7 +81,6 @@ class UtteranceGate:
         self._skipping = 0
         self._hold_ms = 0.0
         self._hold_buf: deque[np.ndarray] = deque()
-        self._hold_samples = 0
         self._preroll: deque[np.ndarray] = deque()
         self._preroll_samples = 0
         self._buf: list[np.ndarray] = []
@@ -136,9 +132,13 @@ class UtteranceGate:
         blocks are the person's own words, captured while the microphone was still open.
 
         Blocks that arrive *during* the hold are buffered, not dropped. A deaf window is
-        how the start of the request gets eaten: the old build hit exactly that and fixed
-        it with an echo-tail buffer, so the cue's echo cannot open a turn while the words
-        spoken over it still reach the transcriber once the hold lifts.
+        how the start of the request gets eaten, and so is keeping only the tail of it:
+        measured 2026-10-23, a person answering right after the cue had their first ~1.1 s
+        thrown away (hold = cue + 1200 ms echo window, but only the last 600 ms was kept).
+        The whole hold is kept now (bounded by its own length, ~1.7 s: the cue plus the
+        configured echo window). The cue's echo cannot open a turn because AEC has already
+        removed it from this stream, and the buffered audio is fed to the VAD only when
+        the hold lifts.
         """
         self._hold_ms = max(0.0, ms)
 
@@ -150,13 +150,9 @@ class UtteranceGate:
         block = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
         if self._hold_ms > 0:
             self._hold_buf.append(block)
-            self._hold_samples += block.size
-            # Only the last `hold_keep_ms` of the hold is kept. The cue's own echo sits at
-            # the *start* of the hold and a person answers at its end, so keeping the newest
-            # audio recovers the request without feeding our own tone to the VAD.
-            limit = int(self.rate * self.cfg.hold_keep_ms / 1000)
-            while self._hold_samples > limit and len(self._hold_buf) > 1:
-                self._hold_samples -= self._hold_buf.popleft().size
+            # Everything that arrives while the cue sounds is kept: the request can start
+            # at the wake, not only at the end of the hold. The buffer is bounded by the
+            # hold's own duration (plus one block), so there is nothing unbounded to trim.
             self._hold_ms -= block.size * 1000.0 / self.rate
             if self._hold_ms > 0:
                 return None
@@ -164,7 +160,6 @@ class UtteranceGate:
             # and stop as soon as one of them closes a turn.
             pending = list(self._hold_buf)
             self._hold_buf.clear()
-            self._hold_samples = 0
             out = None
             for buffered in pending:
                 out = self._consume(buffered, ts_ms)

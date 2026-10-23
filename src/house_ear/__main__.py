@@ -44,12 +44,31 @@ def _production_template(config_path: Path) -> str:
     return text.replace("{config_dir}", str(config_path.resolve().parent))
 
 
+def _keyword_gate(target: Path) -> tuple[float, float]:
+    """(threshold, boost) already configured in the file, or the measured defaults.
+
+    Rewriting the keywords file because the wake *words* changed must not silently
+    reset a hand-tuned 0.20 gate back to 0.15 (audit #8): the gate is a separate
+    setting and the file is its only home.
+    """
+    from .audio.kws import keyword_meta
+
+    meta = keyword_meta(target)
+    threshold = meta.get("threshold")
+    boost = meta.get("boost")
+    return (
+        float(threshold) if threshold is not None else 0.15,
+        float(boost) if boost is not None else 2.0,
+    )
+
+
 def _write_wake_words(config_path: Path, words: list[str]) -> Path:
     """Write the keywords file next to the config; returns its path."""
     from .audio.kws import write_keywords_file
 
     target = config_path.resolve().parent / "keywords.txt"
-    count = write_keywords_file(target, words)
+    threshold, boost = _keyword_gate(target)
+    count = write_keywords_file(target, words, threshold=threshold, boost=boost)
     print(f"keywords: {count} wake word(s) -> {target}")
     return target
 
@@ -66,6 +85,14 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # wake word the install expects (the wizard regenerates it when the speaker
     # is added).
     _write_wake_words(path, list(args.wake_word or DEFAULT_WAKE_WORDS))
+    from .config import load_config, save_config
+
+    cfg = load_config(path)
+    if not cfg.web.auth_token and not cfg.web.allow_anonymous:
+        cfg.web.auth_token = _new_web_token()
+        save_config(path, cfg)
+        print("console token: " + cfg.web.auth_token)
+        print("  (the console asks for it as X-Auth-Token; `house-ear token` prints it later)")
     print(f"wrote {path}")
     print("next: put your speaker under devices[], fill .env, run `house-ear fetch-models`")
     return 0
@@ -84,6 +111,33 @@ KWS_REPO = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 KWS_URL = (f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/"
            f"{KWS_REPO}.tar.bz2")
 DEFAULT_WAKE_WORDS = ("你好小瑞",)
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_loopback_host(host: str) -> bool:
+    h = (host or "").strip().strip("[]")
+    return h in _LOOPBACK_HOSTS or h.startswith("127.")
+
+
+def insecure_bind(host: str, auth_token: str, allow_anonymous: bool) -> str:
+    """Why this bind would expose the console, or "" when it is safe.
+
+    Security audit 2026-10-23: the console bound 0.0.0.0 with an empty token and
+    every acting endpoint answered the LAN. An empty token now refuses a
+    non-loopback bind unless the config opts in explicitly (dev machines).
+    """
+    if _is_loopback_host(host) or auth_token or allow_anonymous:
+        return ""
+    return (f"serving on {host} without web.auth_token would expose the console to the "
+            "LAN. Run `house-ear setup` (it generates a token), set web.auth_token, "
+            "or set web.allow_anonymous: true on a trusted development machine.")
+
+
+def _new_web_token() -> str:
+    import secrets as _secrets
+
+    return _secrets.token_urlsafe(24)
 
 
 def _download_to(url: str, target: Path, *, force: bool = False) -> int:
@@ -186,8 +240,32 @@ def cmd_keywords(args: argparse.Namespace) -> int:
         words = [word for device in cfg.devices for word in device.wake_words]
         words = words or list(DEFAULT_WAKE_WORDS)
     target = Path(args.dest) if args.dest else path.resolve().parent / "keywords.txt"
-    count = write_keywords_file(target, words)
+    threshold, boost = _keyword_gate(target)
+    count = write_keywords_file(target, words, threshold=threshold, boost=boost)
     print(f"keywords: {count} wake word(s) -> {target}")
+    return 0
+
+
+def cmd_token(args: argparse.Namespace) -> int:
+    """Print (or rotate) the console's X-Auth-Token for the headless operator."""
+    from .config import load_config, save_config
+
+    path = _config_path(args)
+    if not path.exists():
+        print(f"no config at {path}; run `house-ear setup` first")
+        return 1
+    cfg = load_config(path)
+    if getattr(args, "rotate", False):
+        cfg.web.auth_token = _new_web_token()
+        cfg.web.allow_anonymous = False
+        save_config(path, cfg)
+        print("rotated web.auth_token: " + cfg.web.auth_token)
+        return 0
+    if not cfg.web.auth_token:
+        print("web.auth_token is empty" +
+              ("; web.allow_anonymous is on (dev only)" if cfg.web.allow_anonymous else ""))
+        return 1
+    print(cfg.web.auth_token)
     return 0
 
 
@@ -200,6 +278,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     cfg = load_config(path) if path.exists() else Config()
     host = args.host or cfg.web.host
     port = args.port or cfg.web.port
+    reason = insecure_bind(host, cfg.web.auth_token, cfg.web.allow_anonymous)
+    if reason:
+        print(f"config error: {reason}")
+        return 2
     setup_logging(cfg.system.log_level,
                   Path(cfg.system.data_dir) / LOG_FILE_NAME)
     app = create_app(cfg, config_path=path if path.exists() else None,
@@ -346,6 +428,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_setup.add_argument("--wake-word", action="append",
                          help="wake word for the keywords file (default 你好小瑞)")
     p_setup.set_defaults(func=cmd_setup)
+
+    p_tok = _leaf("token", "print (or --rotate) the console X-Auth-Token")
+    p_tok.add_argument("--rotate", action="store_true")
+    p_tok.set_defaults(func=cmd_token)
 
     p_kw = _leaf("keywords", "rewrite keywords.txt from the config's wake words")
     p_kw.add_argument("--dest", default="", help="target file (default: next to the config)")

@@ -184,6 +184,41 @@ def test_preroll_replayed_into_the_gate_survives_the_hold() -> None:
     assert gate.turns == 1 and len(replayed) > 0
 
 
+@needs_vad
+def test_a_request_starting_inside_the_cue_is_kept_from_its_first_syllable() -> None:
+    """P0 (audit 2026-10-23): only the last 600 ms of the hold used to be kept.
+
+    hold = cue_ms + echo_ignore_ms (~1.69 s), so a person answering right after the cue
+    lost the first ~1.1 s: 13:47 「放一首告白气球」 reached ASR as 「告白气球」 and 13:23
+    「怎样？」 became a turn of its own. The whole hold is retained now; this constructs
+    exactly that shape - speech from the first block after the wake, then silence for the
+    rest of the hold - and requires the utterance to contain the speech, not just the
+    tail of the window. Under the old tail-only buffer this yields no turn at all.
+    """
+    from house_ear.audio.vad import GateConfig, UtteranceGate
+
+    gate = UtteranceGate(GateConfig(), MODEL)
+    gate.arm()
+    gate.hold(1690)  # measured hold: 490 ms cue + 1200 ms echo window
+
+    # ~1.0 s of the request, starting immediately (the pre-wake skip is still owed).
+    speech = _speech(1.0)
+    for block in _blocks(speech):
+        assert gate.feed(block) is None, "nothing may open a turn while the cue sounds"
+    # Finish the hold with silence, then let the end-point close the turn.
+    for block in _blocks(b"\x00\x00" * 11000 + b"\x00\x00" * 64000):
+        result = gate.feed(block)
+        if result is not None:
+            break
+    else:
+        result = None
+
+    assert result is not None, "the request spoken at the start of the hold was thrown away"
+    captured_s = len(result[0]) / 2 / 16000
+    assert captured_s > 0.5, f"only {captured_s:.2f} s captured; the hold's start was lost"
+    assert gate.turns == 1
+
+
 # ----------------------------------------------------------------- the plane side
 class FakeGate:
     """Records the *order* of arm / feed / hold: replay-before-hold is the invariant."""

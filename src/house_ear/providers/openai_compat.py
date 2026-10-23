@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import wave
 from collections.abc import AsyncIterator
 
 import httpx
 
+from .. import secrets
 from ..config.schema import ProviderConfig
 from .base import ChatChunk, Transcript
 
@@ -30,9 +30,12 @@ class ProviderError(RuntimeError):
 def _key(cfg: ProviderConfig) -> str:
     if not cfg.api_key_env:
         raise MissingKey("no api_key_env configured")
-    value = os.environ.get(cfg.api_key_env, "")
+    # Environment first, then the console-written secrets.yaml: a key typed into the
+    # console used to be read by search/news only, so the providers kept answering
+    # "missing key" until someone wrote the same value into the container.
+    value = secrets.get(cfg.api_key_env)
     if not value:
-        raise MissingKey(f"environment variable {cfg.api_key_env} is empty")
+        raise MissingKey(f"no value for {cfg.api_key_env} (environment or secrets.yaml)")
     return value
 
 

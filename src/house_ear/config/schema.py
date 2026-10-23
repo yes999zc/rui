@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -27,12 +28,37 @@ class ConfigError(ValueError):
 class SystemConfig(BaseModel):
     data_dir: str = "/var/lib/house-ear"
     log_level: Literal["debug", "info", "warning", "error"] = "info"
+    # The zone the injected clock line ("现在是...") is rendered in. Empty means the
+    # process's local zone, which used to be the only behaviour. That breaks silently in
+    # a container: Docker inherits no TZ by default, so a NAS answers "现在几点" eight
+    # hours off while the reminders (fixed to Asia/Shanghai) disagree. A config field is
+    # the one fix that does not need a new image or a mounted /etc/localtime.
+    timezone: str = ""
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            return v
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(
+                f"unknown IANA timezone {v!r}; use one like Asia/Shanghai"
+            ) from exc
+        return v
 
 
 class WebConfig(BaseModel):
     host: str = "0.0.0.0"
     port: int = Field(default=8080, ge=1, le=65535)
-    auth_token: str = ""  # empty = trusted LAN, no auth
+    # Empty token used to mean "trusted LAN, no auth". Security audit 2026-10-23:
+    # that made every acting endpoint one LAN packet away. An empty token on a
+    # non-loopback bind now refuses to start unless `allow_anonymous` is set
+    # explicitly (development machines only).
+    auth_token: str = ""
+    allow_anonymous: bool = False
 
 
 LED_STATES = (
@@ -492,12 +518,16 @@ class SessionConfig(BaseModel):
     farewell: Literal["off", "short", "full"] = "short"
     farewell_text: str = "没事的话，我先下啦。"
     farewell_text_full: str = "我先下啦，有事喊我。"
-    # "Dismiss" words: a short request that contains one of these ends the session.
-    # The old build kept 11 (`conversation.end_words`); ours adds the stop-playing
-    # family because v1 has no music, so "停止" can only mean "stop listening".
+    # "Dismiss" words: the *whole* short request must be (or end in a two-character
+    # tail of) one of these to end the session - see `rules.stop_intent`. 关掉/关闭/关机
+    # are deliberately absent: they are the verbs of home-automation commands, and
+    # 「关掉客厅灯」/「关闭窗帘」 were being dismissed before HA ran (audit 2026-10-23,
+    # same accident the old build had). The old build kept 11 (`conversation.end_words`);
+    # ours adds the stop-playing family because v1 has no music, so "停止" can only mean
+    # "stop listening".
     end_words: list[str] = Field(default_factory=lambda: [
-        "停止", "停下来", "停下", "停一下", "停掉", "别说了", "别放", "关掉", "关闭",
-        "暂停", "别唱", "不听了", "退下吧", "退下", "关机", "不聊了", "够了",
+        "停止", "停下来", "停下", "停一下", "停掉", "别说了", "别放",
+        "暂停", "别唱", "不听了", "退下吧", "退下", "不聊了", "够了",
         "退出", "结束", "再见", "拜拜", "睡了", "睡吧", "晚安",
     ])
     # Whether a turn may see the earlier turns of this conversation. Off = every

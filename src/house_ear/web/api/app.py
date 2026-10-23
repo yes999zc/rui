@@ -4,15 +4,20 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import hmac
+import json
 import logging
 import os
+import re
+import shutil
+import tempfile
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -23,6 +28,20 @@ from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneSupervisor
 from ...audio.kws import KwsUnavailable, keyword_meta, model_files, write_keywords_file
 from ...audio.protocol import PlayFile, StopAudio
+from ...config.catalog import (
+    coerce,
+    field_specs,
+    get_path,
+    has_music_credentials,
+    keyword_file,
+    keyword_settings,
+    music_credentials,
+    music_credentials_path,
+    set_path,
+)
+from ...config.catalog import (
+    document as config_catalog,
+)
 from ...config.schema import CONFIG_VERSION, LED_STATES, Config, DeviceConfig
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
@@ -233,12 +252,66 @@ async def _never_sender(_msg: object) -> None:
     raise _NotWired("music sender used before the app was built")
 
 
+def _new_music_service(cfg: Config, sender: object) -> MusicService | None:
+    """Assemble the music service for the configured source.
+
+    One place for both the startup path and a console `music.enabled` toggle: the
+    service owns the source, history, aliases and name resolver, and registering the
+    nine tools is what makes the model able to play anything.
+    """
+    if cfg.music.source != "navidrome":
+        log.warning("music: source %r has no runtime builder; leaving music off",
+                    cfg.music.source)
+        return None
+    source = NavidromeSource(
+        Path(cfg.music.secrets_path).expanduser(),
+        Path(cfg.music.cache_dir), cfg.music.cache_tracks,
+    )
+    history = PlayHistory(
+        Path(cfg.system.data_dir) / "music_history.json", keep=cfg.music.history_max)
+    aliases = AliasStore(Path(cfg.system.data_dir) / "music_aliases.json")
+    names = NameResolver(aliases, timeout_s=6.0)
+    return MusicService(source, history, sender, cfg.music, names=names)  # type: ignore[arg-type]
+
+
+def _flat_errors(exc: ValidationError, supplied: list[str] | None = None) -> list[dict]:
+    """Pydantic errors as `[{loc: ["dotted.path"], msg}]` - the console's field red boxes.
+
+    A dotted path is what the catalog talks in, so a 422 can mark the exact input that
+    caused it even when the failure came from a whole-config validator. `supplied` holds
+    the paths the request actually wrote: a model validator reports `devices.0.led`, but
+    the person edited `devices.0.led.colors.off`, and that is the box to redden.
+    """
+    out: list[dict] = []
+    candidates = list(supplied or [])
+    for error in exc.errors(include_url=False):
+        loc = [str(part) for part in error.get("loc", ())]
+        message = str(error.get("msg", ""))
+        if message.startswith("Value error, "):
+            message = message[len("Value error, "):]
+        loc_path = ".".join(loc)
+        # Most specific supplied path that covers (or is covered by) the failing location.
+        match = ""
+        for candidate in candidates:
+            if (loc_path == candidate or loc_path.startswith(candidate + ".")
+                    or candidate.startswith(loc_path + ".")) and len(candidate) > len(match):
+                match = candidate
+        out.append({"loc": [match or loc_path or "config"], "msg": message})
+    return out
+
+
 def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
-    """The PanelSpec table (docs/console.md). Expressions are deliberately tiny:
-    `$.path` lookups, `map` for enum wording, `enabled_when: "$.x=v"` equality."""
+    """The PanelSpec table (docs/console.md, docs/config-catalog-contract.md §2).
+
+    Expressions are deliberately tiny: `$.path` lookups, `map` for enum wording,
+    `enabled_when: "$.x=v"` equality. The configuration pages are not blocks - they all
+    use the `config-center` escape hatch with `component_args.groups`, so the same
+    catalog drives five panels and a new field needs no frontend change.
+    """
     return [
         {
-            "id": "overview", "title": "概览", "icon": "◎", "group": "status", "order": 10,
+            "id": "overview", "title": "概览", "title_en": "Overview",
+            "icon": "◎", "group": "status", "order": 10,
             "enabled": True, "enabled_reason": "",
             "source": "/health", "extra_sources": {"audio": "/api/v1/audio"},
             "refresh_s": 5,
@@ -269,7 +342,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
-            "id": "devices", "title": "设备", "icon": "⌸", "group": "status", "order": 20,
+            "id": "devices", "title": "设备", "title_en": "Devices",
+            "icon": "⌸", "group": "status", "order": 20,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/devices", "refresh_s": 10,
             "blocks": [
@@ -283,7 +357,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
-            "id": "turns", "title": "对话", "icon": "☰", "group": "status", "order": 25,
+            "id": "turns", "title": "对话", "title_en": "Conversation",
+            "icon": "☰", "group": "status", "order": 25,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/turns?limit=20", "refresh_s": 5,
             "blocks": [
@@ -297,29 +372,109 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                  ]},
             ],
         },
+        # ---------------------------------------------------------- config center
         {
-            "id": "devices-admin", "title": "设备管理", "icon": "⚙", "group": "config",
-            "order": 42, "enabled": True, "enabled_reason": "",
-            "source": "/api/v1/devices", "refresh_s": 0, "blocks": [],
-            "component": "device-manager",
+            "id": "assistant-session", "title": "助手与会话", "title_en": "Assistant & session",
+            "icon": "☺", "group": "config", "order": 40,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
+            "component": "config-center",
+            "component_args": {"groups": ["assistant", "session"], "tier": 1},
         },
         {
-            "id": "phrases", "title": "话术", "icon": "Aa", "group": "config", "order": 45,
+            "id": "speaker", "title": "音箱参数", "title_en": "Speaker",
+            "icon": "⌸", "group": "config", "order": 41,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
+            "component": "config-center",
+            "component_args": {
+                # Everything that follows the speaker hardware: the device list, the
+                # DSP/segmentation/playback numbers and the wake acknowledgement. These
+                # are tier 2 in the catalog, so the panel and the directory agree.
+                "groups": ["devices", "audio.capture", "audio.voice",
+                           "audio.playback", "audio.aec", "ack"],
+                "tier": 2,
+                "links": [{"label": {"zh": "设备管理", "en": "Device manager"},
+                           "href": "/panel/devices-admin"}],
+                "note": {
+                    "zh": "这些参数跟随音箱硬件：换另一款音箱要重新量。改完重启音频面。",
+                    "en": "These follow the speaker hardware; re-measure for another "
+                          "model. Restart the audio plane after saving.",
+                },
+            },
+        },
+        {
+            "id": "devices-admin", "title": "设备管理", "title_en": "Device manager",
+            "icon": "⚙", "group": "config", "order": 42, "enabled": True,
+            "enabled_reason": "",
+            "source": "/api/v1/devices", "refresh_s": 0, "blocks": [],
+            "component": "device-manager", "component_args": {},
+        },
+        {
+            "id": "providers", "title": "外部资源", "title_en": "Providers",
+            "icon": "⇄", "group": "config", "order": 43,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
+            "component": "config-center",
+            "component_args": {
+                "groups": ["providers.catalog", "providers.asr", "providers.tts",
+                           "providers.llm"],
+                "tier": 3,
+            },
+        },
+        {
+            "id": "tools", "title": "工具", "title_en": "Tools",
+            "icon": "⚒", "group": "config", "order": 44,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
+            "component": "config-center",
+            "component_args": {
+                "groups": ["tools.weather", "tools.news", "tools.search", "tools.ha",
+                           "tools.mcp", "tools.exposure", "music"],
+                "tier": 4,
+            },
+        },
+        {
+            "id": "phrases", "title": "话术", "title_en": "Phrasing",
+            "icon": "Aa", "group": "config", "order": 45,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/phrases", "refresh_s": 0,
             "blocks": [],
             # The escape hatch (docs/console.md §2.5): editing 49 templates with slot
             # chips, dirty tracking and per-key reset is a sequence, not a block set.
-            "component": "phrasebook-editor",
+            "component": "phrasebook-editor", "component_args": {},
         },
         {
-            "id": "mcp", "title": "MCP / HA", "icon": "⌗", "group": "config", "order": 46,
+            "id": "mcp", "title": "MCP / HA", "title_en": "MCP / HA",
+            "icon": "⌗", "group": "config", "order": 46,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/mcp", "refresh_s": 5, "blocks": [],
-            "component": "mcp-manager",
+            "component": "mcp-manager", "component_args": {},
         },
         {
-            "id": "logs", "title": "日志", "icon": "≡", "group": "system", "order": 60,
+            "id": "foundation", "title": "底子·高级", "title_en": "Foundation (advanced)",
+            "icon": "⚙", "group": "config", "order": 47,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
+            "component": "config-center",
+            "component_args": {
+                # Tier 1 foundation only: the data directory, the log level, the clock
+                # zone and the console's own bind address. Audio/speaker parameters moved
+                # to the speaker panel so a warning here is about the process, not DSP.
+                "groups": ["system", "web"],
+                "tier": 1,
+                "warning": {
+                    "zh": "底子参数平时不要动：数据目录决定日志/记忆/密钥放哪，控制台端口"
+                          "改错会打不开页面。改完要重启服务（docker compose restart）。",
+                    "en": "Do not touch these unless you must: the data directory decides "
+                          "where logs/memory/secrets live, and a wrong console port hides "
+                          "the UI. Restart the service afterwards (`docker compose restart`).",
+                },
+            },
+        },
+        {
+            "id": "logs", "title": "日志", "title_en": "Logs",
+            "icon": "≡", "group": "system", "order": 60,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/logs?lines=300", "refresh_s": 2,
             "blocks": [
@@ -330,7 +485,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
-            "id": "memory", "title": "记忆", "icon": "◇", "group": "living", "order": 35,
+            "id": "memory", "title": "记忆", "title_en": "Memory",
+            "icon": "◇", "group": "living", "order": 35,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/memory", "refresh_s": 0,
             "blocks": [
@@ -339,42 +495,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
-            "id": "settings", "title": "设置", "icon": "⚙", "group": "config", "order": 40,
-            "enabled": True, "enabled_reason": "",
-            "source": "/api/v1/config", "refresh_s": 0,
-            "blocks": [
-                {"type": "form", "section": "assistant", "title": "助手",
-                 "apply": "下一轮生效", "fields": [
-                    {"key": "name", "label": "名字", "kind": "text", "hint": "1–12 字"},
-                    {"key": "persona", "label": "人设", "kind": "textarea",
-                     "hint": "追加在内置提示词后面。只写身份，别写「说话要简短」这类规则。"},
-                    {"key": "system_prompt", "label": "系统提示词", "kind": "textarea",
-                     "hint": "整段替换内置提示词。留空 = 用内置的（推荐留空）。"},
-                    {"key": "reply_max_chars", "label": "日常回答上限", "kind": "number",
-                     "min": 10, "max": 300, "unit": "字"},
-                    {"key": "reply_max_chars_search", "label": "查资料时上限", "kind": "number",
-                     "min": 40, "max": 600, "unit": "字"},
-                    {"key": "reply_max_chars_long", "label": "要求展开时上限", "kind": "number",
-                     "min": 100, "max": 2000, "unit": "字"},
-                ]},
-                {"type": "form", "section": "session", "title": "会话",
-                 "apply": "下一轮生效", "fields": [
-                    {"key": "timeout_s", "label": "空闲多久告别", "kind": "number",
-                     "min": 0, "max": 300, "unit": "秒"},
-                    {"key": "farewell", "label": "告别语", "kind": "select",
-                     "options": ["off", "short", "full"]},
-                    {"key": "farewell_text", "label": "短告别语", "kind": "text"},
-                    {"key": "keep_context", "label": "保留多轮上下文", "kind": "bool",
-                     "hint": "关掉 = 每句都当新的一句，不带上文"},
-                    {"key": "history_rounds", "label": "上下文轮数", "kind": "number",
-                     "min": 0, "max": 12, "unit": "轮"},
-                    {"key": "vendor_quiet_s", "label": "让位静默窗口", "kind": "number",
-                     "min": 0, "max": 60, "unit": "秒"},
-                ]},
-            ],
-        },
-        {
-            "id": "music", "title": "音乐", "icon": "♪", "group": "living", "order": 30,
+            "id": "music", "title": "音乐", "title_en": "Music",
+            "icon": "♪", "group": "living", "order": 30,
             "enabled": music_enabled,
             "enabled_reason": "" if music_enabled
             else f"music.enabled 未开启（配置的源：{music_source}）",
@@ -606,15 +728,145 @@ async def _context_command(app: FastAPI, clean: str, runner, client, trace,
     return line
 
 
+# The old build capped the injected memory at 800 characters; without a budget a long
+# list quietly eats the room the prompt needs for the actual turn. The cap is on the
+# text handed to the model, not on what the store keeps.
+MAX_MEMORY_CHARS = 800
+
+
 def _memory_context(app: FastAPI) -> str:
-    """Confirmed memory only - candidates wait for the console (old build's rule)."""
+    """Confirmed memory only - candidates wait for the console (old build's rule).
+
+    Newest first, and the block is capped at `MAX_MEMORY_CHARS`: the model should see
+    what was just confirmed rather than a truncated pile of old facts.
+    """
     store = getattr(app.state, "memory", None)
     if store is None:
         return ""
     texts = store.confirmed_texts(limit=20)
     if not texts:
         return ""
-    return "（你记得这些事，用户说过：\n" + "\n".join(f"- {t}" for t in texts) + "）"
+    lines: list[str] = []
+    used = 0
+    for text in reversed(texts):
+        line = f"- {text}"
+        if lines and used + len(line) + 1 > MAX_MEMORY_CHARS:
+            break
+        lines.append(line)
+        used += len(line) + 1
+    lines.reverse()
+    return "（你记得这些事，用户说过：\n" + "\n".join(lines) + "）"
+
+
+def _plane_snapshot(app: FastAPI) -> dict:
+    """What the audio plane says right now: the only source of "the room is connected".
+
+    The control plane builds its own adapter objects for `probe()`, but the inbound
+    socket lives in the audio-plane process; its metrics are the honest answer.
+    """
+    supervisor = getattr(app.state, "audio", None)
+    status: dict = {}
+    if supervisor is not None:
+        with contextlib.suppress(Exception):
+            status = supervisor.status()
+    metrics = status.get("metrics") or {}
+    connected = bool(metrics.get("speaker_connected"))
+    if connected:
+        app.state.speaker_last_seen = time.time()
+    return {
+        "running": bool(status.get("running")),
+        "speaker_connected": connected,
+        "speaker_device": str(status.get("device_id") or ""),
+        "last_seen": getattr(app.state, "speaker_last_seen", 0.0) or None,
+        "error": str(status.get("error") or ""),
+    }
+
+
+def _adapter_health(adapter: object) -> dict:
+    """An adapter's link report, if it has one (xiaoai does; mock has no link)."""
+    fn = getattr(adapter, "health", None)
+    if not callable(fn):
+        return {}
+    try:
+        return dict(fn() or {})
+    except Exception:  # noqa: BLE001 - status display must not 500 the page
+        return {}
+
+
+def _device_link(info: object, adapter: object, plane: dict) -> dict:
+    """`status/connected/last_seen/latency_ms` for one device, never an optimistic guess.
+
+    Three sources, in order: the adapter's own health() (works when the adapter runs in
+    this process), the audio plane's metrics (the real inbound link), and finally "the
+    control plane cannot see a link because no plane is running" -> unknown.
+    """
+    health = _adapter_health(adapter)
+    device_id = str(getattr(info, "id", ""))
+    if health.get("connected") is True:
+        connected: bool | None = True
+    elif plane["speaker_connected"] and plane["speaker_device"] in ("", device_id):
+        connected = True
+    elif not plane["running"]:
+        connected = None
+    else:
+        connected = False
+    latency = health.get("latency_ms")
+    last_seen = health.get("connected_at") or plane["last_seen"]
+    return {
+        "status": "ready" if connected else ("unknown" if connected is None else "disconnected"),
+        "connected": connected,
+        "last_seen": float(last_seen) if last_seen else None,
+        "latency_ms": round(float(latency), 1) if latency else None,
+    }
+
+
+_SECRET_QUERY_RE = re.compile(
+    r"([?&](?:p|t|password|token|api_key|key|u)=)[^&\s]+", re.IGNORECASE)
+
+
+def _redact_error(exc: BaseException) -> str:
+    """An exception sentence with credentials in query strings masked.
+
+    Navidrome puts the SUBsonic password in the URL query (`&p=`), and httpx errors
+    quote the URL; echoing that to the browser would leak the secret through the very
+    endpoint that tests it.
+    """
+    text = f"{type(exc).__name__}: {exc}"
+    return _SECRET_QUERY_RE.sub(r"\1***", text)
+
+
+def _write_credentials_file(path: Path, data: dict[str, str]) -> None:
+    """Atomic 0600 write of the music credentials JSON (never into config.yaml)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def _write_keywords_preserving(cfg_now: Config, *, threshold: float | None = None,
+                               boost: float | None = None) -> bool:
+    """Rewrite keywords.txt from the wake words, keeping the configured gate.
+
+    A device save used to reset a hand-tuned 0.20 to the default 0.15 silently (audit
+    #8). The gate is read from the existing file first (or taken from an explicit
+    override) and written back, so editing a speaker never changes wake sensitivity.
+    """
+    path = keyword_file(cfg_now)
+    words = [word for device in cfg_now.devices for word in device.wake_words]
+    if path is None or not words:
+        return False
+    settings = keyword_settings(cfg_now)
+    try:
+        write_keywords_file(
+            path, words,
+            threshold=float(threshold if threshold is not None else settings["threshold"]),
+            boost=float(boost if boost is not None else settings["boost"]),
+        )
+    except (OSError, ValueError) as exc:  # noqa: BLE001 - the state reports what is missing
+        log.warning("keywords: rewrite failed: %s", exc)
+        return False
+    return True
 
 
 def _turn_hold(result: object) -> float | None:
@@ -688,6 +940,9 @@ def create_app(
     start_audio: bool = False,
 ) -> FastAPI:
     secrets.configure(cfg.system.data_dir)
+    # The injected clock line ("现在几点") follows `system.timezone`: a container inherits
+    # no TZ from the NAS, so without this the assistant answers in UTC.
+    prompts.set_timezone(cfg.system.timezone)
     # The console's phrase overrides live in data_dir/phrases.yaml; a broken file keeps
     # the defaults and only warns (an unreadable file must not stop the assistant).
     try:
@@ -713,21 +968,12 @@ def create_app(
     # object exists; `app.state.music` is set right after FastAPI() is built.
     music_service: MusicService | None = None
     if cfg.music.enabled:
-        source = NavidromeSource(
-            Path(cfg.music.secrets_path).expanduser(),
-            Path(cfg.music.cache_dir), cfg.music.cache_tracks,
-        )
-        history = PlayHistory(
-            Path(cfg.system.data_dir) / "music_history.json", keep=cfg.music.history_max)
-        aliases = AliasStore(Path(cfg.system.data_dir) / "music_aliases.json")
-        # Beats the literal search for every nickname the library does not hold.
-        names = NameResolver(aliases, timeout_s=6.0)
-        music_service = MusicService(source, history, _never_sender, cfg.music,
-                                     names=names)
-        for spec, handler in build_music_tools(cfg, music_service):
-            registry.register(spec)
-            local_tools.append((spec, handler))
-        log.info("music: source=%s tools=%d", cfg.music.source, len(local_tools))
+        music_service = _new_music_service(cfg, _never_sender)
+        if music_service is not None:
+            for spec, handler in build_music_tools(cfg, music_service):
+                registry.register(spec)
+                local_tools.append((spec, handler))
+            log.info("music: source=%s tools=%d", cfg.music.source, len(local_tools))
     adapters = build_adapters(cfg)
     traces = TraceLog()
     for dev_id, err in adapters.errors.items():
@@ -1237,15 +1483,34 @@ def create_app(
     app.state.panels = _build_panels(cfg.music.enabled, cfg.music.source)
     app.state.panels_revision = f"{__version__}-{int(time.time())}"
 
-    def auth(x_auth_token: str | None = Header(default=None)) -> None:
-        if not cfg.web.auth_token:
+    _auth_failures: dict[str, list[float]] = {}
+
+    def auth(request: Request,
+             x_auth_token: str | None = Header(default=None)) -> None:
+        """Constant-time token check with a small per-IP failure budget.
+
+        Security audit 2026-10-23: the old plaintext `!=` was a LAN-open console;
+        with a token set the console is the only control surface, so a brute-force
+        loop needs a cost too.
+        """
+        token = getattr(app.state, "cfg", cfg).web.auth_token
+        if not token:
             return
-        if x_auth_token != cfg.web.auth_token:
-            raise HTTPException(status_code=401, detail="bad or missing X-Auth-Token")
+        if x_auth_token and hmac.compare_digest(str(x_auth_token), str(token)):
+            return
+        ip = getattr(getattr(request, "client", None), "host", "?") or "?"
+        now = time.time()
+        recent = [seen for seen in _auth_failures.get(ip, []) if now - seen < 60.0]
+        recent.append(now)
+        _auth_failures[ip] = recent[-20:]
+        if len(recent) >= 10:
+            raise HTTPException(status_code=429, detail="too many bad tokens; wait a minute")
+        raise HTTPException(status_code=401, detail="bad or missing X-Auth-Token")
 
     @app.get("/health")
     async def health() -> dict:
-        supervisor = getattr(app.state, "audio", None)
+        plane = _plane_snapshot(app)
+        cfg_now = getattr(app.state, "cfg", cfg)
         return {
             "status": "ok",
             "version": __version__,
@@ -1253,8 +1518,15 @@ def create_app(
             "config_version_supported": CONFIG_VERSION,
             "uptime_s": round(time.time() - START, 1),
             "devices": len(getattr(app.state, "adapters", adapters).adapters),
+            # The probe's two counts must come from the same place the console reads:
+            # a disabled device is configured but is not supposed to open a plane.
+            "enabled_devices": sum(1 for device in cfg_now.devices if device.enabled),
             "device_errors": len(getattr(app.state, "adapters", adapters).errors),
-            "audio_plane": bool(supervisor is not None and supervisor.running),
+            "audio_plane": plane["running"],
+            # "Up" is not "the room can hear": this is the plane's own link report.
+            "speaker_connected": plane["speaker_connected"],
+            "speaker_device": plane["speaker_device"],
+            "speaker_last_seen": plane["last_seen"],
             "vendor": {
                 "quiet_s": cfg.session.vendor_quiet_s,
                 "muted_for": round(getattr(app.state, "vendor", None).remaining(), 1)
@@ -1342,6 +1614,239 @@ def create_app(
             runner.apply_session(updated.session)
         return redacted(updated)
 
+    # ---------------------------------------------------------------- config center
+    @app.get("/api/v1/config/catalog", dependencies=[Depends(auth)])
+    async def get_config_catalog() -> dict:
+        """The configuration directory the console renders (docs/config-catalog-contract.md).
+
+        Every editable field with its tier, a hint that says what changing it achieves,
+        and save-vs-restart. Secret *values* never appear: only `{name: {has_value}}`.
+        """
+        return config_catalog(cfg)
+
+    def _read_config_or_409() -> Config:
+        """Re-read the file before writing: a page that never saw `providers` must not
+        write a stale copy back over the real one."""
+        if config_path is None or not Path(config_path).exists():
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        try:
+            return load_config(config_path)
+        except ConfigError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"config on disk is not readable: {exc}"
+            ) from exc
+
+    def _refresh_panels() -> None:
+        """The music panel follows `music.enabled`; everything else is static."""
+        app.state.panels = _build_panels(cfg.music.enabled, cfg.music.source)
+
+    async def _apply_music(updated: Config) -> bool:
+        """Assemble or tear down the music layer at runtime (a `music.enabled` save).
+
+        Returns False when the source has no runtime builder, so the endpoint can report
+        "restart required" instead of claiming a live change that did not happen.
+        """
+        service = getattr(app.state, "music", None)
+        if updated.music.enabled and service is None:
+            service = _new_music_service(updated, _music_sender(app))
+            if service is None:
+                return False
+            app.state.music = service
+            for spec, handler in build_music_tools(updated, service):
+                registry.register(spec, handler)
+                local_tools.append((spec, handler))
+            runner = getattr(app.state, "runner", None)
+            if runner is not None:
+                runner.set_tools(list(local_tools))
+            log.info("music: enabled at runtime (source=%s)", updated.music.source)
+        elif not updated.music.enabled and service is not None:
+            with contextlib.suppress(Exception):
+                await service.stop()
+            names = [name for name in registry.names() if name.startswith("local.music_")]
+            registry.unregister(names)
+            local_tools[:] = [(spec, handler) for spec, handler in local_tools
+                              if not spec.name.startswith("local.music_")]
+            app.state.music = None
+            runner = getattr(app.state, "runner", None)
+            if runner is not None:
+                runner.set_tools(list(local_tools))
+            supervisor = getattr(app.state, "audio", None)
+            client = supervisor.client if supervisor is not None else None
+            if client is not None:
+                # The old service's callback must not advance a queue that no longer exists.
+                client.on_playback_finished = None
+            log.info("music: disabled at runtime")
+        return True
+
+    async def _apply_live(updated: Config, changed: list[str]) -> tuple[list[str], list[str]]:
+        """Apply what can be applied without a restart; report the rest.
+
+        Each effect in the directory is a promise: `save` means "after this call the
+        running process behaves differently". Fields marked `restart` are written to
+        disk, and the response says so - claiming otherwise is the "假旋钮" failure this
+        project already hit once (`audio.voice.kws_threshold`).
+        """
+        specs = {field["path"]: field for field in field_specs(updated)}
+        applied: list[str] = []
+        restart_fields: list[str] = []
+        for path in changed:
+            spec = specs.get(path)
+            (restart_fields if spec is not None and spec["effect"] == "restart"
+             else applied).append(path)
+
+        runner = getattr(app.state, "runner", None)
+        if runner is not None and any(
+                path.startswith(("assistant.", "session.")) for path in applied):
+            runner.assistant = updated.assistant
+            runner.history_turns = updated.session.history_rounds
+            runner.apply_session(updated.session)
+        if "system.timezone" in applied:
+            prompts.set_timezone(updated.system.timezone)
+        if any(path.startswith("ack.") for path in changed):
+            # A new acknowledgement text (and its cap) must exist as audio before the
+            # next wake; the plane re-reads ack.wav by mtime/size, so no restart.
+            previous = getattr(app.state, "ack_task", None)
+            if previous is not None and not previous.done():
+                previous.cancel()
+            app.state.ack_task = asyncio.create_task(render_ack_wav(updated), name="ack-render")
+        if any(path.startswith("tools.ha.") for path in applied):
+            await _apply_ha(updated)
+        if "music.enabled" in applied and not await _apply_music(updated):
+            applied.remove("music.enabled")
+            restart_fields.append("music.enabled")
+        return sorted(applied), sorted(restart_fields)
+
+    @app.put("/api/v1/config/values", dependencies=[Depends(auth)])
+    async def put_config_values(payload: Annotated[dict, Body()]) -> dict:
+        """Write dotted-path values: the config-center's only write path.
+
+        Validated against the catalog (unknown path / type / range -> 422 per field),
+        then against the whole `Config`, then written with the same atomic backup the
+        other write paths use. `applied` lists what took effect now; `restart_fields`
+        what needs `docker compose restart` (audio fields can use the plane restart).
+        """
+        values = payload.get("values")
+        if not isinstance(values, dict) or not values:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"loc": ["values"], "msg": "values must be a non-empty object"}],
+            )
+        current = _read_config_or_409()
+        specs = {field["path"]: field for field in field_specs(current)}
+        before_keywords = keyword_settings(current)
+        errors: list[dict] = []
+        checked: dict[str, Any] = {}
+        for raw_path, value in values.items():
+            path = str(raw_path)
+            spec = specs.get(path)
+            if spec is None:
+                errors.append({"loc": [path],
+                               "msg": "unknown path (not in /api/v1/config/catalog)"})
+                continue
+            if not spec["writable"]:
+                errors.append({"loc": [path],
+                               "msg": "read-only field; edit it on its own page"})
+                continue
+            try:
+                checked[path] = coerce(spec, value)
+            except ValueError as exc:
+                errors.append({"loc": [path], "msg": str(exc)})
+        if errors:
+            raise HTTPException(status_code=422, detail=errors)
+
+        before = current.model_dump(mode="json")
+        merged = current.model_dump(mode="json")
+        warnings: list[str] = []
+        # Virtual fields do not live in Config: the wake gate rewrites keywords.txt.
+        keyword_values = {
+            path.rsplit(".", 1)[-1]: float(value)
+            for path, value in checked.items() if specs[path].get("virtual")
+        }
+        keyword_changed = {
+            key: value for key, value in keyword_values.items()
+            if float(before_keywords.get(key) or 0) != float(value)
+        }
+        for path, value in checked.items():
+            if not specs[path].get("virtual"):
+                set_path(merged, path, value)
+        if keyword_values:
+            words = [word for device in merged.get("devices") or []
+                     for word in (device.get("wake_words") or [])]
+            if not words:
+                raise HTTPException(status_code=422, detail=[
+                    {"loc": [f"audio.voice.keywords.{key}"],
+                     "msg": "no wake words configured; add a speaker first"}
+                    for key in keyword_values
+                ])
+        # 9哥: 音源定了以后路径要自动更新. The source decides where its credentials and
+        # PCM cache live; keeping a path from the previous source is how a speaker ends
+        # up "enabled but silent".
+        music = merged.setdefault("music", {})
+        if "music.source" in checked:
+            source = str(music.get("source") or "")
+            if source == "navidrome":
+                data_dir = Path(str(merged["system"]["data_dir"])).expanduser()
+                music["secrets_path"] = str(data_dir / "lan_media.json")
+                music["cache_dir"] = str(data_dir / "music_cache")
+                warnings.append("music.source=navidrome：secrets_path / cache_dir 已按音源自动更新")
+            else:
+                warnings.append(
+                    f"未知音源 {source!r}：secrets_path / cache_dir 保持手动值，请自行确认")
+        elif music.get("enabled") and not music.get("secrets_path") \
+                and str(music.get("source") or "") == "navidrome":
+            data_dir = Path(str(merged["system"]["data_dir"])).expanduser()
+            music["secrets_path"] = str(data_dir / "lan_media.json")
+            music["cache_dir"] = str(data_dir / "music_cache")
+            warnings.append("启用音乐：已自动补上 navidrome 的 secrets_path / cache_dir")
+        if any(path.startswith("devices.") for path in checked):
+            # A device edit through the catalog must leave a keywords file behind even
+            # when the config came from schema defaults (no path). Same rule as the wizard.
+            voice = merged.setdefault("audio", {}).setdefault("voice", {})
+            if not voice.get("kws_keywords_file") and config_path is not None:
+                voice["kws_keywords_file"] = str(
+                    Path(config_path).resolve().parent / "keywords.txt")
+
+        try:
+            updated = Config.model_validate(merged)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422, detail=_flat_errors(exc, list(checked))) from exc
+        save_config(Path(config_path), updated)  # type: ignore[arg-type]
+        _apply_config(updated)
+        if any(path.startswith("devices.") for path in checked):
+            # Adapters, wake words and keywords.txt are refreshed now; the plane itself
+            # still has to restart, which `restart_fields` reports (the response offers
+            # the audio-plane restart button for exactly this).
+            _sync_devices(updated)
+        if keyword_changed:
+            if not _write_keywords_preserving(
+                    updated,
+                    threshold=keyword_changed.get("threshold"),
+                    boost=keyword_changed.get("boost")):
+                warnings.append("门限已记录，但 keywords.txt 重写失败：检查目录权限与唤醒词路径")
+        after = updated.model_dump(mode="json")
+        changed: list[str] = []
+        config_paths = {path for path, spec in specs.items() if not spec.get("virtual")}
+        for path in sorted((set(checked) & config_paths)
+                           | {"music.secrets_path", "music.cache_dir"}):
+            try:
+                if get_path(before, path) != get_path(after, path):
+                    changed.append(path)
+            except (KeyError, IndexError):
+                changed.append(path)
+        changed.extend(f"audio.voice.keywords.{key}" for key in sorted(keyword_changed))
+        applied, restart_fields = await _apply_live(updated, changed)
+        _refresh_panels()
+        log.info("config values written from the console: applied=%s restart=%s",
+                 applied, restart_fields)
+        return {
+            "config": redacted(updated),
+            "applied": applied,
+            "restart_required": bool(restart_fields),
+            "restart_fields": restart_fields,
+            "warnings": warnings,
+        }
+
     @app.get("/api/v1/device/volume", dependencies=[Depends(auth)])
     async def device_volume() -> dict:
         """The speaker's own mixer value (mysoftvol, 0-255).
@@ -1394,8 +1899,17 @@ def create_app(
             await client.send(StopAudio())
             return {"playing": None}
         path = str(patch.get("file") or "")
-        if not Path(path).is_file():
-            raise HTTPException(status_code=404, detail=f"no such file: {path}")
+        resolved = Path(path).resolve()
+        # Audit 2026-10-23: this endpoint is a file-existence oracle for the whole
+        # host. Only media the assistant itself owns may be played back.
+        cfg_now = getattr(app.state, "cfg", cfg)
+        roots = [Path(cfg_now.system.data_dir).resolve()]
+        cache = str(getattr(cfg_now.music, "cache_dir", "") or "")
+        if cache:
+            roots.append(Path(cache).resolve())
+        if (not resolved.is_file()
+                or not any(resolved == root or root in resolved.parents for root in roots)):
+            raise HTTPException(status_code=404, detail="no such file")
         await client.send(PlayFile(path=path, loop=bool(patch.get("loop", False)),
                                    gain=float(patch.get("gain", 1.0))))
         return {"playing": path}
@@ -1553,6 +2067,98 @@ def create_app(
             {"id": t.id, "title": t.title, "artist": t.artist, "duration": t.duration}
             for t in tracks[:20]]}
 
+    # ------------------------------------------------------------ music credentials
+    @app.put("/api/v1/music/credentials", dependencies=[Depends(auth)])
+    async def music_credentials_update(payload: Annotated[dict, Body()]) -> dict:
+        """Write the source credentials (url/user/password) to data_dir/lan_media.json.
+
+        Write-only: the response lists which fields exist and never their content. An
+        empty string deletes that field; when nothing remains the file is removed. The
+        file is 0600 and atomic, and it is never part of config.yaml or the log.
+        """
+        if not any(key in payload for key in ("url", "user", "password")):
+            raise HTTPException(
+                status_code=422,
+                detail=[{"loc": ["values"], "msg": "provide url, user and/or password"}],
+            )
+        path = music_credentials_path(cfg)
+        data = dict(music_credentials(cfg))
+        errors: list[dict] = []
+        for key in ("url", "user", "password"):
+            if key not in payload:
+                continue
+            raw = payload.get(key)
+            if raw is None:
+                raw = ""
+            if not isinstance(raw, str):
+                errors.append({"loc": [key], "msg": "must be a string"})
+                continue
+            value = raw.strip()
+            if key == "url" and value and not value.startswith(("http://", "https://")):
+                errors.append({"loc": [key],
+                               "msg": "url must start with http:// or https://"})
+                continue
+            if value:
+                data[key] = value
+            else:
+                data.pop(key, None)
+        if errors:
+            raise HTTPException(status_code=422, detail=errors)
+        if data:
+            _write_credentials_file(path, data)
+        else:
+            path.unlink(missing_ok=True)
+        log.info("music credentials updated (fields=%s)", sorted(data))
+        return {
+            "has_credentials": has_music_credentials(cfg),
+            "has_url": bool(data.get("url")),
+            "has_user": bool(data.get("user")),
+            "has_password": bool(data.get("password")),
+        }
+
+    @app.post("/api/v1/music/test", dependencies=[Depends(auth)])
+    async def music_test(patch: Annotated[dict | None, Body()] = None) -> dict:
+        """Ping the Navidrome/Subsonic library and report latency, never the secret.
+
+        Body fields are optional: with `url`/`user`/`password` present the probe tests
+        those unsaved values (a temp 0600 file, deleted afterwards); otherwise it tests
+        the stored credentials. `random(1)` is a real `getRandomSongs` round trip - the
+        same client and auth path a song request uses, without downloading anything.
+        """
+        body = patch or {}
+        data = dict(music_credentials(cfg))
+        overrides = {key: str(body[key]).strip() for key in ("url", "user", "password")
+                     if isinstance(body.get(key), str) and str(body[key]).strip()}
+        data.update(overrides)
+        timed_out = {"ok": False, "latency_ms": None,
+                     "error": "缺少 url/user/password：先在配置中心保存音乐凭据"}
+        if not all(data.get(key) for key in ("url", "user", "password")):
+            return timed_out
+        temp_dir: Path | None = None
+        source: NavidromeSource | None = None
+        use = music_credentials_path(cfg)
+        if overrides:
+            temp_dir = Path(tempfile.mkdtemp(prefix="house-ear-music-test-"))
+            use = temp_dir / "lan_media.json"
+            _write_credentials_file(use, data)
+        started = time.perf_counter()
+        try:
+            source = NavidromeSource(
+                use, Path(cfg.music.cache_dir or tempfile.gettempdir()), 1)
+            await asyncio.wait_for(source.random(1), timeout=8.0)
+            error = ""
+        except Exception as exc:  # noqa: BLE001 - the point of the endpoint is to report it
+            error = _redact_error(exc)
+        finally:
+            if source is not None:
+                with contextlib.suppress(Exception):
+                    await source.close()
+            if temp_dir is not None:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        log.info("music test: ok=%s latency=%sms", not error, latency_ms)
+        return {"ok": not error, "latency_ms": latency_ms, "error": error}
+
     @app.get("/api/v1/debug/prompt", dependencies=[Depends(auth)])
     async def debug_prompt() -> dict:
         """The system prompt as the next turn will receive it (console preview)."""
@@ -1667,13 +2273,21 @@ def create_app(
 
     @app.get("/api/v1/devices", dependencies=[Depends(auth)])
     async def devices() -> list[dict]:
-        """Every configured device, including the ones this build cannot drive yet."""
+        """Every configured device, with the link state it actually has.
+
+        `status` used to be the literal "ready" whether or not the speaker was on the
+        network (audit #12). It now comes from the adapter's health report and the audio
+        plane's `speaker_connected` metric; `connected` is null when no plane is running,
+        because the control plane genuinely cannot see the inbound socket then.
+        """
         out: list[dict] = []
         seen: set[str] = set()
         adapters = app.state.adapters
+        plane = _plane_snapshot(app)
         for adapter in adapters.adapters.values():
             info = await adapter.probe()
             seen.add(info.id)
+            link = _device_link(info, adapter, plane)
             out.append(
                 {
                     "id": info.id,
@@ -1682,12 +2296,13 @@ def create_app(
                     "room": info.room,
                     "host": info.host,
                     "transport": info.transport.value,
-                    "status": "ready",
+                    **link,
                     "capabilities": sorted(info.capabilities),
                     "missing_for_barge_in": [c.value for c in info.missing_for_barge_in()],
                 }
             )
-        for dev in cfg.devices:
+        cfg_now = getattr(app.state, "cfg", cfg)
+        for dev in cfg_now.devices:
             if not dev.enabled or dev.id in seen:
                 continue
             out.append(
@@ -1699,6 +2314,9 @@ def create_app(
                     "host": dev.host,
                     "transport": "unknown",
                     "status": "unavailable",
+                    "connected": False,
+                    "last_seen": None,
+                    "latency_ms": None,
                     "error": adapters.errors.get(dev.id, "adapter not available"),
                     "capabilities": [],
                     "missing_for_barge_in": [],
@@ -1714,7 +2332,6 @@ def create_app(
     # wake model reads the keywords file once at process start.
     def _wizard_state() -> dict:
         cfg_now = getattr(app.state, "cfg", cfg)
-        supervisor = getattr(app.state, "audio", None)
 
         def sherpa_model() -> Path | None:
             """The local ASR dir, found through the chain - provider names differ per config."""
@@ -1801,17 +2418,25 @@ def create_app(
         }
         device = cfg_now.devices[0] if cfg_now.devices else None
         verified = bool((getattr(app.state, "last_turn", None) or {}).get("audio_bytes"))
+        plane = _plane_snapshot(app)
+        enabled_devices = sum(1 for item in cfg_now.devices if item.enabled)
         steps = [
             {"id": "keys", "title": "填 key", "done": all(stage_ok.values()), "detail": keys},
             {"id": "models", "title": "本地模型", "done": all(models.values()), "detail": models},
             {"id": "device", "title": "添加音箱", "done": device is not None,
-             "detail": ({"id": device.id, "host": device.host, "room": device.room}
+             "detail": ({"id": device.id, "host": device.host, "room": device.room,
+                         "enabled": device.enabled,
+                         "connected": plane["speaker_connected"]}
                         if device else {})},
             {"id": "wake", "title": "唤醒词",
              "done": bool(device and device.wake_words and keywords and keywords.is_file()),
              "detail": {"words": list(device.wake_words) if device else [],
                         "path": str(keywords) if keywords else ""}},
-            {"id": "verify", "title": "试一句", "done": verified},
+            # "Try a sentence" can succeed through the text path while the microphone
+            # side is dead; the detail keeps the two apart (audit #16).
+            {"id": "verify", "title": "试一句", "done": verified,
+             "detail": {"text_tested": verified,
+                        "speaker_connected": plane["speaker_connected"]}},
         ]
         return {
             "next_step": next((step["id"] for step in steps if not step["done"]), "done"),
@@ -1821,9 +2446,14 @@ def create_app(
             "steps": steps,
             "config_path": str(config_path) if config_path else "",
             "config_exists": bool(config_path and Path(config_path).exists()),
-            "audio_plane": bool(supervisor is not None and supervisor.running),
+            "audio_plane": plane["running"],
+            # Process-up is not room-hearing: the wizard shows both numbers.
+            "speaker_connected": plane["speaker_connected"],
+            "enabled_devices": enabled_devices,
             "device": ({"id": device.id, "host": device.host, "room": device.room,
-                        "wake_words": list(device.wake_words)} if device else None),
+                        "wake_words": list(device.wake_words),
+                        "enabled": device.enabled,
+                        "connected": plane["speaker_connected"]} if device else None),
             "keywords_file": str(keywords) if keywords else "",
             "keywords_exists": bool(keywords and keywords.is_file()),
             "models_command": "house-ear fetch-models --dest /data/models/sensevoice "
@@ -1836,6 +2466,58 @@ def create_app(
             setattr(cfg, name, getattr(updated, name))
         app.state.cfg = cfg
 
+    async def _restart_audio(supervisor: AudioPlaneSupervisor, updated: Config) -> str:
+        """Restart the audio plane with `updated`; returns an error string (`""` = ok).
+
+        Three callers share it: adding/removing a device, the wizard's wake-word step and
+        the console's "restart only the audio plane" button for audio-tier saves.
+        """
+        supervisor.cfg = updated
+        error = ""
+        try:
+            await supervisor.stop()
+            await supervisor.start()
+        except Exception as exc:  # noqa: BLE001 - a device problem must not kill the console
+            error = f"{type(exc).__name__}: {exc}"
+            supervisor.error = error
+            log.warning("audio plane restart failed: %s", exc)
+        finally:
+            supervisor.watch()
+        return error
+
+    @app.post("/api/v1/system/audio/restart", dependencies=[Depends(auth)])
+    async def system_audio_restart() -> dict:
+        """Restart only the audio plane, not the whole service.
+
+        Audio-tier fields (tier 2) are read by the plane process at startup, so the
+        console offers this instead of a `docker compose restart` that would also drop
+        the HTTP session.
+        """
+        supervisor = getattr(app.state, "audio", None)
+        if supervisor is None:
+            return {"restarted": False, "error": "audio plane not started"}
+        error = await _restart_audio(supervisor, cfg)
+        log.info("audio plane restart from the console: %s", error or "ok")
+        return {"restarted": not error, "error": error}
+
+    def _sync_devices(updated: Config) -> None:
+        """Refresh everything a device edit changes *without* restarting a process.
+
+        The adapters are rebuilt (so `/api/v1/devices` reads the new config), the runner
+        gets the new wake words, and keywords.txt is regenerated - otherwise a plane
+        restart after a wake-word edit would load the old file and the new word would
+        never fire.
+        """
+        app.state.adapters = build_adapters(updated)
+        words = [word for device in updated.devices for word in device.wake_words]
+        runner = getattr(app.state, "runner", None)
+        if runner is not None:
+            runner.wake_words = tuple(words)
+        # Rewrite the words but keep the threshold/boost already in the file: a device
+        # save must not silently reset a hand-tuned gate (audit #8).
+        if not _write_keywords_preserving(updated) and words:
+            log.warning("devices: could not write keywords file for %d wake word(s)", len(words))
+
     async def _write_devices(updated: Config) -> None:
         """Persist devices[], regenerate the wake words, restart the plane."""
         if config_path is None:
@@ -1847,29 +2529,12 @@ def create_app(
                 Path(config_path).resolve().parent / "keywords.txt")
         save_config(Path(config_path), updated)
         _apply_config(updated)
-        words = [word for device in updated.devices for word in device.wake_words]
-        keywords = updated.audio.voice.kws_keywords_file
-        if keywords and words:
-            try:
-                write_keywords_file(Path(keywords).expanduser(), words)
-            except OSError as exc:  # noqa: BLE001 - the state reports what is missing
-                log.warning("setup: could not write keywords file: %s", exc)
-        app.state.adapters = build_adapters(updated)
-        runner = getattr(app.state, "runner", None)
-        if runner is not None:
-            runner.wake_words = tuple(words)
+        _sync_devices(updated)
         supervisor = getattr(app.state, "audio", None)
         if supervisor is not None:
             # The plane holds the device list, the wake model and the keywords file
             # from its own startup: a new speaker or a new wake word needs a restart.
-            supervisor.cfg = updated
-            try:
-                await supervisor.stop()
-                await supervisor.start()
-            except Exception as exc:  # noqa: BLE001 - the wizard shows this sentence
-                supervisor.error = f"{type(exc).__name__}: {exc}"
-                log.warning("audio plane restart after setup failed: %s", exc)
-            supervisor.watch()
+            await _restart_audio(supervisor, updated)
 
     @app.get("/api/v1/setup", dependencies=[Depends(auth)])
     async def setup_state() -> dict:
@@ -2011,13 +2676,16 @@ def create_app(
 
     async def _device_detail(device_id: str) -> dict:
         device = _device_or_404(device_id, app.state.cfg)
-        live: dict = {}
+        live: dict = {"status": "unavailable", "connected": False,
+                      "last_seen": None, "latency_ms": None}
         adapters_now = getattr(app.state, "adapters", None)
         adapter = adapters_now.adapters.get(device_id) if adapters_now is not None else None
         if adapter is not None:
             info = await adapter.probe()
+            plane = _plane_snapshot(app)
             live = {"model": info.model, "transport": info.transport.value,
-                    "status": "ready", "capabilities": sorted(info.capabilities)}
+                    **_device_link(info, adapter, plane),
+                    "capabilities": sorted(info.capabilities)}
         return {"device": device.model_dump(mode="json"), "live": live}
 
     @app.get("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
@@ -2221,7 +2889,13 @@ def create_app(
     @app.get("/api/v1/secrets", dependencies=[Depends(auth)])
     async def list_secrets() -> dict:
         """Which keys are configured. Names only - there is no endpoint that returns a value."""
-        return {"names": secrets.stored_names()}
+        names = secrets.stored_names()
+        # The console's own auth token lives in config.yaml (it is read before any request
+        # can be authenticated), but the catalog advertises it as a write-only secret so
+        # the same page can set it. Report its presence here too.
+        if cfg.web.auth_token:
+            names = sorted({*names, "web.auth_token"})
+        return {"names": names}
 
     @app.post("/api/v1/secrets", dependencies=[Depends(auth)])
     async def put_secret(payload: Annotated[dict, Body()]) -> dict:
@@ -2230,9 +2904,22 @@ def create_app(
         The value is never echoed, never logged, and never written into config.yaml: it
         goes to `secrets.yaml` (0600) next to the runtime state, which the providers and the
         search tool read through `secrets.get()`.
+
+        `web.auth_token` is the one exception: it must be in config.yaml because it is
+        read before a request can authenticate, but it is write-only from the API all the
+        same (GET /api/v1/config returns `auth_required`, never the value).
         """
         name = str(payload.get("name") or "").strip()
         value = str(payload.get("value") or "").strip()
+        if name == "web.auth_token":
+            current = _read_config_or_409()
+            updated = current.model_copy(update={
+                "web": current.web.model_copy(update={"auth_token": value})})
+            save_config(Path(config_path), updated)  # type: ignore[arg-type]
+            _apply_config(updated)
+            log.info("secrets: web.auth_token %s from the console",
+                     "set" if value else "cleared")
+            return {"name": name, "has_key": bool(value)}
         try:
             secrets.put(name, value)
         except ValueError as exc:

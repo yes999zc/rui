@@ -17,7 +17,10 @@ system:
 web:
   host: 0.0.0.0
   port: 8080
+  # `house-ear setup` fills this with a random token; the console asks for it.
+  # An empty token on 0.0.0.0 refuses to start unless allow_anonymous is true.
   auth_token: ""
+  allow_anonymous: false
 devices: []
 audio:
   # Measured on LX06 1.94.13. Do not copy these numbers to another speaker; measure it.

@@ -17,6 +17,7 @@ The store sits in `data_dir`, not a temp cache: the old build's aliases lived in
 """
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import re
@@ -28,6 +29,26 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 MAX_ITEMS = 200
+# The old build's DUP_RATIO: a new sentence this close to a remembered one is the same
+# fact said twice, and "记住…" arriving both as a candidate and as a confirmed tool call
+# used to leave two entries for one sentence.
+DUP_RATIO = 0.8
+_NORMALISE_RE = re.compile(r"[\s，。！？；：、,.!?;:~～…（）()\[\]\"\'“”‘’]+")
+
+
+def _normalise(text: str) -> str:
+    return _NORMALISE_RE.sub("", (text or "").strip()).lower()
+
+
+def _similar(left: str, right: str) -> bool:
+    """Same fact said a little differently? Exact after normalisation, or ratio >= 0.8."""
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if min(len(left), len(right)) < 2:
+        return False
+    return difflib.SequenceMatcher(None, left, right).ratio() >= DUP_RATIO
 # Utterances that ask the assistant to remember something. Deliberately explicit:
 # the old build extracted candidates in the background with a model call; here the
 # phrase itself is the signal, and the console confirms.
@@ -95,10 +116,32 @@ class MemoryStore:
             return list(self._items)
         return [i for i in self._items if i.confirmed is confirmed]
 
+    def _find(self, text: str) -> MemoryItem | None:
+        """The existing entry this text says again, if any (normalised, ~80% similar)."""
+        key = _normalise(text)
+        for item in reversed(self._items):
+            if _similar(key, _normalise(item.text)):
+                return item
+        return None
+
     def add(self, text: str, *, source: str = "voice", confirmed: bool = True) -> MemoryItem:
+        """Add one fact, or return the existing entry that already carries it.
+
+        Deduplication matters for two real paths: the same sentence extracted as a
+        candidate and then written again by the `remember` tool, and a person repeating
+        「记住…」 the next day. A `confirmed=True` add *promotes* an existing candidate
+        instead of writing a second row - that is how the duplicate pair is fixed.
+        """
         clean = (text or "").strip()[:200]
         if not clean:
             raise ValueError("memory text is empty")
+        found = self._find(clean)
+        if found is not None:
+            if confirmed and not found.confirmed:
+                found.confirmed = True
+                found.source = source
+                self._save()
+            return found
         item = MemoryItem(id=uuid.uuid4().hex[:8], text=clean, created=int(time.time()),
                           source=source, confirmed=confirmed)
         self._items.append(item)
@@ -148,6 +191,8 @@ class MemoryStore:
                 break
         if not text or len(text) < 2:
             return None
-        if any(text in item.text or item.text in text for item in self._items):
+        # A candidate that is already a candidate/confirmed memory is not new; the
+        # `remember` tool may also promote it in the same turn (see `add`).
+        if self._find(text) is not None:
             return None
         return self.add(text, source="turn", confirmed=False)

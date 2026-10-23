@@ -21,7 +21,6 @@ import asyncio
 import hmac
 import json
 import logging
-import os
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -31,6 +30,7 @@ import numpy as np
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
+from ... import secrets
 from ...config.schema import CaptureConfig, DeviceConfig, VoiceConfig
 from ...trace import now_ms
 from ..contract import AudioFrame, Capability, DeviceAdapter, DeviceInfo, Transport
@@ -68,7 +68,10 @@ class XiaoaiAdapter(DeviceAdapter):
         self.capture = capture
         self.voice = voice
         self.listen_port = dev.listen_port or DEFAULT_LISTEN_PORT
-        self.token = os.environ.get(dev.token_env, "")
+        # Console-written secrets.yaml is the fallback when the container has no env
+        # var: before this, a token saved in the console left the listener tokenless
+        # and `open()` refused to start.
+        self.token = secrets.get(dev.token_env)
         self._server: Server | None = None
         self._conn: ServerConnection | None = None
         self._frames: asyncio.Queue[AudioFrame] = asyncio.Queue(maxsize=64)

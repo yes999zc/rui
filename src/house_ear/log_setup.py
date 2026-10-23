@@ -8,7 +8,9 @@ diagnostics.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -18,6 +20,37 @@ FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 # not the process's stdout: under Docker that belongs to the runtime, and the
 # endpoint must work the same in both deployments.
 LOG_FILE_NAME = "service.log"
+
+
+class _PrivateRotatingFileHandler(RotatingFileHandler):
+    """Rotating handler whose file is 0600 now and after every rollover.
+
+    The log carries transcripts and device details; the default `open()` would
+    create it 0644 under the usual umask. `_open` is the one place every writer
+    (first open, rotation) passes through.
+    """
+
+    def _open(self):  # type: ignore[no-untyped-def]
+        stream = super()._open()
+        try:
+            os.chmod(self.baseFilename, 0o600)
+        except OSError:
+            pass
+        return stream
+
+
+def _private(path: Path) -> None:
+    """Create/repair the log file at 0600 before the handler can write to it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        # A file we may append to but not chown (a bind mount owned by another uid)
+        # must still let the service start; the 0600 create mode already applies to
+        # files this process owns.
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o600)
+    finally:
+        os.close(fd)
 
 
 def setup_logging(level: str = "info", log_file: Path | None = None) -> None:
@@ -33,9 +66,9 @@ def setup_logging(level: str = "info", log_file: Path | None = None) -> None:
         return
     logging.basicConfig(level=level_no, format=FORMAT, stream=sys.stderr)
     if log_file is not None:
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        handler = RotatingFileHandler(log_file, maxBytes=2_000_000, backupCount=3,
-                                      encoding="utf-8")
+        _private(log_file)
+        handler = _PrivateRotatingFileHandler(
+            log_file, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
         handler.setFormatter(logging.Formatter(FORMAT))
         root.addHandler(handler)
 

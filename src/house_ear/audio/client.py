@@ -86,6 +86,16 @@ class AudioPlaneClient:
         self._shell_waiters: dict[str, asyncio.Future[str]] = {}
         self._volume_waiters: list[asyncio.Future[DeviceVolumeResult]] = []
         self.last_vendor: VendorSignalMsg | None = None
+        # Wall clock (monotonic ms) of the last barge wake. The control plane uses this
+        # to mark `barge_in` on the turn trace; the plane side measures the stop itself.
+        self.last_barge_ms: float | None = None
+        # Set when the reader task ends without being asked to: the socket may be gone
+        # while the child process still runs. The supervisor watches this flag; without
+        # it `running` stayed true and /health kept showing a deaf plane as green
+        # (audit 2026-10-23).
+        self.pump_dead = False
+        self.on_dead: Callable[[str], None] | None = None
+        self._closing = False
         self._turns: set[asyncio.Task] = set()
         self._metrics_event = asyncio.Event()
         self._read_task: asyncio.Task | None = None
@@ -104,6 +114,10 @@ class AudioPlaneClient:
         dies and every symptom afterwards looks like the plane went quiet - no wake
         counter, no utterance, no reply - while the plane keeps running happily. That is
         exactly what "only the first turn lands" looked like (2026-10-22).
+
+        A dead reader must also be visible to the supervisor: a half-closed socket (read
+        end gone, child still alive) used to leave `running` true and `/health` green
+        forever. `pump_dead` + `on_dead` turn that into a rebuild instead of a quiet room.
         """
         while True:
             try:
@@ -112,6 +126,10 @@ class AudioPlaneClient:
                 raise
             except Exception as exc:  # noqa: BLE001 - the socket is gone; say so
                 log.warning("audio plane reader stopped: %s: %s", type(exc).__name__, exc)
+                if not self._closing:
+                    self.pump_dead = True
+                    if self.on_dead is not None:
+                        self.on_dead(f"{type(exc).__name__}: {exc}")
                 return
             try:
                 self._dispatch(kind, payload)
@@ -147,6 +165,10 @@ class AudioPlaneClient:
         elif isinstance(msg, Wake):
             self.wakes += 1
             self.last_wake = msg
+            # Rounded by the control plane into the turn trace: `barge_in` is this
+            # instant; `silence` is when the turn actually stops pushing audio. Cleared
+            # on a wake in silence so a later turn cannot inherit a stale barge mark.
+            self.last_barge_ms = now_ms() if getattr(msg, "barge", False) else None
             if self.on_wake is not None:
                 self.on_wake(msg)
         elif isinstance(msg, VendorSignalMsg):
@@ -179,6 +201,7 @@ class AudioPlaneClient:
             self.ready = msg
 
     def start_pump(self) -> None:
+        self.pump_dead = False
         self._read_task = asyncio.create_task(self.pump(), name="audio-plane-read")
 
     async def speak(
@@ -269,6 +292,7 @@ class AudioPlaneClient:
         return self.metrics
 
     async def close(self) -> None:
+        self._closing = True
         with contextlib.suppress(Exception):
             await self.send(Shutdown())
         if self._read_task is not None:
@@ -518,10 +542,30 @@ class AudioPlaneSupervisor:
                         detail = msg.message if isinstance(msg, Error) else msg.model_dump()
                         raise AudioPlaneError(f"audio plane refused: {detail}")
                     self.client.ready = msg
+                    # The reader is the only thing that hears the plane. If it ends while
+                    # the child is still alive, `running` must go false and the watchdog
+                    # must rebuild - not keep answering /health with green (audit P1).
+                    self.client.on_dead = self._client_died
                     self.client.start_pump()
                     self.error = ""
                     return
         raise AudioPlaneError(f"audio plane did not accept a connection in {timeout_s:.0f}s")
+
+    def _client_died(self, reason: str) -> None:
+        """The plane's reader stopped: mark the plane down and make sure it is rebuilt.
+
+        Measured failure (audit 2026-10-23): only the socket's read end dies while the
+        child keeps running. `running` was still true (ready + live child), so /health
+        stayed green and `_watch` never restarted anything: the room was deaf and the
+        console said all was well.
+        """
+        if self._stopping:
+            return
+        self.error = f"audio plane reader stopped: {reason}"
+        log.warning("%s; the watchdog will rebuild the plane", self.error)
+        # Idempotent: the app arms this at startup, so normally it is already running.
+        # If it is not (early boot, tests), the plane still gets rebuilt.
+        self.watch()
 
     async def stop(self) -> None:
         self._stopping = True
@@ -537,6 +581,7 @@ class AudioPlaneSupervisor:
         return (
             self.client is not None
             and self.client.ready is not None
+            and not self.client.pump_dead
             and self.proc is not None
             and self.proc.returncode is None
         )

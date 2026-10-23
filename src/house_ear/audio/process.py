@@ -31,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import secrets
 from ..config import Config, load_config
 from ..device import build_adapters
 from ..device.contract import AudioFrame, DeviceAdapter
@@ -74,6 +75,10 @@ from .vad import GateConfig, UtteranceGate, VadUnavailable
 from .wav import read_wav_mono
 
 METRICS_EVERY_S = 2.0
+# The [level] line used to be logged on every metrics tick, i.e. every 2 s - the audit
+# called it log noise (P2). Keep the measurement (it is how a threshold change is judged)
+# but one line per 30 s: the console's log filter still keys on "voice peak".
+LEVEL_LOG_EVERY = 15
 PLAY_CHUNK_MS = 100
 # Reply pacing. Pushing a block and then waiting exactly its own duration leaves the
 # device's buffer empty the whole time: any scheduler hiccup (1-3 ms per send, GC, a
@@ -278,6 +283,11 @@ class AudioPlane:
         self.device_volume: int | None = None
         self.barges = 0
         self.last_barge_s = 0.0
+        # Server-side barge latency: wake handled -> the device was told to stop and the
+        # queued reply was flushed. The trace's `silence_after_ms` had no production
+        # number (audit P1); this is that number, logged on every barge. The device's own
+        # ~300 ms ALSA buffer is not in it - the server cannot see inside the box.
+        self.last_barge_stop_ms: float | None = None
         self.playback_path = ""
         self.last_playback_error = ""
         self._playback_task: asyncio.Task | None = None
@@ -540,6 +550,10 @@ class AudioPlane:
             self.barges += 1
             self.last_barge_s = barged_s
             log.info("barge: %d wake during playback, dropped %.1f s queued", self.barges, barged_s)
+            # Time the server's own stop: flush the queue, pause the song, tell the
+            # device to drop what it holds. The acceptance number (<=300 ms) had only
+            # ever been measured in tests; this makes every production barge report it.
+            stop_started = time.monotonic()
             self._flush_speech()
             # A wake word interrupts speech, not the song: pause it where it is and let
             # the turn's end bring it back (old build: paused_by_barge + auto-resume).
@@ -551,6 +565,12 @@ class AudioPlane:
                     await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
                 except Exception as exc:  # noqa: BLE001 - the speaker may be gone
                     log.info("barge: stop failed: %s", exc)
+            self.last_barge_stop_ms = (time.monotonic() - stop_started) * 1000.0
+            log.info(
+                "barge: silence_after_ms=%.0f (server-side: queue flushed, stop_play sent; "
+                "device ALSA buffer ~300 ms not included)",
+                self.last_barge_stop_ms,
+            )
 
         # Takeover: our wake outranks a running vendor dialog. The old build stayed
         # deaf while the vendor player ran (mic gated, assistant_v3.py:3115), so its
@@ -1318,6 +1338,7 @@ class AudioPlane:
 
     async def _metrics_loop(self, writer: asyncio.StreamWriter, connected: asyncio.Event) -> None:
         ticks = 0
+        level_peak = 0.0
         while not self._stop.is_set():
             await asyncio.sleep(METRICS_EVERY_S)
             ticks += 1
@@ -1328,11 +1349,17 @@ class AudioPlane:
             try:
                 snapshot = self.metrics()
                 # A number nobody can read is not a measurement: every threshold argument
-                # so far compared hit levels with nothing. Log the window's peak whenever
-                # there was speech in it, so "normal voice" has a value in the log.
-                if snapshot.voice_peak_db is not None and snapshot.voice_peak_db > -55.0:
-                    log.info("[level] voice peak %.1f dBFS over %.0f s",
-                             snapshot.voice_peak_db, METRICS_EVERY_S)
+                # so far compared hit levels with nothing. The window's peak is reported
+                # once per LEVEL_LOG_EVERY ticks (30 s), not every 2 s - the old cadence
+                # was audit P2 log noise. Aggregate in between so the line still describes
+                # a full 30 s of speech, not one 2 s window.
+                if snapshot.voice_peak_db is not None:
+                    level_peak = max(level_peak, snapshot.voice_peak_db)
+                if ticks % LEVEL_LOG_EVERY == 0:
+                    if level_peak > -55.0:
+                        log.info("[level] voice peak %.1f dBFS over %.0f s",
+                                 level_peak, METRICS_EVERY_S * LEVEL_LOG_EVERY)
+                    level_peak = 0.0
                 writer.write(encode_json(snapshot))
                 await writer.drain()
             except (ConnectionResetError, BrokenPipeError):
@@ -1555,6 +1582,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
+    # The plane builds the device adapter itself (a second process from the control
+    # plane); without this the adapter reads keys from the environment only and a key
+    # entered in the console never reaches the device token check (security audit).
+    secrets.configure(cfg.system.data_dir)
     _configure_logging(cfg.system.log_level)
     plane = build_plane(cfg, args.device, Path(args.socket) if args.socket else None)
     try:

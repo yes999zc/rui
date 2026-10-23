@@ -45,7 +45,7 @@ def test_stop_scope_is_media_stop_only_while_a_song_plays() -> None:
     assert rules.stop_scope("停止播放", music_playing=False) == rules.BARE_STOP
     assert rules.stop_scope("停止播放", music_playing=True) == rules.MEDIA_STOP
     # The whole stop family follows the same split.
-    for word in ("停止", "停下来", "停下", "别放", "关闭", "不听了", "停一下"):
+    for word in ("停止", "停下来", "停下", "别放", "不听了", "停一下"):
         assert rules.stop_scope(word, music_playing=True) == rules.MEDIA_STOP, word
         assert rules.stop_scope(word, music_playing=False) == rules.BARE_STOP, word
 
@@ -54,11 +54,33 @@ def test_stop_scope_keeps_dismissals_ending_the_conversation() -> None:
     """「退下吧」 names the conversation, not the speaker - even mid-song."""
     from house_ear.session import rules
 
-    for word in ("退下吧", "退下", "关机", "不聊了", "对一下吧"):
+    for word in ("退下吧", "退下", "不聊了", "对一下吧"):
         assert rules.stop_scope(word, music_playing=True) == rules.BARE_STOP, word
         assert rules.stop_scope(word, music_playing=False) == rules.BARE_STOP, word
     # An ASR slip of a dismissal is still a dismissal (measured 「对一下吧」).
     assert rules.is_dismiss("对一下吧")
+    # 关机 is no longer a default (P0: it was one of the HA verbs), but a config that
+    # explicitly keeps it still dismisses: removing a default is not hard-coding a ban.
+    assert rules.stop_scope("关机", music_playing=False) == ""
+    assert rules.stop_scope("关机", music_playing=False, words=["关机"]) == rules.BARE_STOP
+
+
+def test_stop_intent_is_whole_request_only() -> None:
+    """P0: substring matching dismissed the session before HA ran (audit 2026-10-23).
+
+    「关掉客厅灯」「关闭窗帘」 were True with the old default list; the two-char tail rule
+    keeps 「停止播放」 and 「别说了吧」 but not a five-character device command.
+    """
+    from house_ear.session import rules
+
+    for command in ("关掉客厅灯", "关闭窗帘", "关空调", "打开客厅灯"):
+        assert rules.stop_intent(command) is False, command
+    for request in ("停止", "停止播放", "别说了", "别说了吧", "退下吧", "对一下吧"):
+        assert rules.stop_intent(request) is True, request
+    # A configured word still works, and only the two-character tail is tolerated.
+    assert rules.stop_intent("下课", ["下课"]) is True
+    assert rules.stop_intent("今天下课", ["下课"]) is True     # len <= word + 2
+    assert rules.stop_intent("今天下课以后去食堂", ["下课"]) is False
 
 
 def test_stop_scope_returns_empty_for_non_stop_requests() -> None:

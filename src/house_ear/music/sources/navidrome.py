@@ -14,6 +14,8 @@ Changed, each for a measured reason:
   and opened a fresh urllib connection per call and never retried.
 * **A PCM LRU cache.** The old build deleted the transcoded file as soon as the
   player read it, so replaying one song meant downloading its flac again.
+* **Hashed cache names.** The song id comes from the server, so it is hashed
+  before it becomes a file name; `../` in an id can no longer leave cache_dir.
 """
 from __future__ import annotations
 
@@ -43,6 +45,14 @@ TRANSCODE_TIMEOUT_S = 180
 # filter would empty the list, keep everything rather than answer nothing.
 MIN_DURATION_S = 45
 RETRIES = 2
+# A song id is server-supplied data and was concatenated straight into a cache file
+# name; an id like "../../x" escaped cache_dir. Hash it first (96 bits is far beyond
+# collision range for a cache) so the name is always a flat slug in this directory.
+CACHE_STEM_LEN = 24
+
+
+def _cache_stem(sid: str) -> str:
+    return hashlib.sha256(sid.encode("utf-8")).hexdigest()[:CACHE_STEM_LEN]
 
 
 def _token_auth(user: str, password: str) -> dict[str, str]:
@@ -185,12 +195,13 @@ class NavidromeSource:
     # ------------------------------------------------------------------ resolve
     async def resolve(self, track: Track) -> Path:
         sid = track.id.split(":", 1)[-1]
-        dst = self._cache_dir / f"{sid}.pcm"
+        stem = _cache_stem(sid)
+        dst = self._cache_dir / f"{stem}.pcm"
         if dst.is_file() and dst.stat().st_size > 0:
             self._touch(sid)
             return dst
         self._cache_dir.mkdir(parents=True, exist_ok=True)
-        src = self._cache_dir / f"{sid}.audio"
+        src = self._cache_dir / f"{stem}.audio"
         auth = self._load_auth()
         query = {"v": API_VERSION, "c": CLIENT_NAME, **auth, "id": sid}
         url = f"{self._base}/rest/stream.view?{urlencode(query)}"
@@ -241,4 +252,4 @@ class NavidromeSource:
     def _evict(self) -> None:
         while len(self._lru) > self._cache_max:
             old, _ = self._lru.popitem(last=False)
-            (self._cache_dir / f"{old}.pcm").unlink(missing_ok=True)
+            (self._cache_dir / f"{_cache_stem(old)}.pcm").unlink(missing_ok=True)

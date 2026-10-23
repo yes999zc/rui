@@ -7,9 +7,9 @@ breaking the same three things, so they are pinned here:
    to answer a JSON 404 - the SPA had no history fallback);
 2. every declared source and action points at a real endpoint, so a renamed API
    cannot leave a dead button behind;
-3. the settings panel owns every field the deleted hand-written pages used to
-   edit (assistant.* / session.*), otherwise deleting those pages silently
-   removes a setting from the console.
+3. the config-center panels own every field the deleted hand-written pages
+   used to edit (assistant.* / session.*), otherwise deleting those pages
+   silently removes a setting from the console.
 
 The API paths must stay JSON: a mistyped /api/v1/* must not fall into the SPA
 shell, or a client gets HTML instead of a 404.
@@ -129,15 +129,57 @@ def test_every_action_points_at_a_real_endpoint() -> None:
                 assert (method, href) in routes, (panel["id"], method, href)
 
 
-def test_the_settings_panel_owns_the_deleted_pages_fields() -> None:
-    """AssistantView used to edit these; deleting it must not delete the setting."""
-    found = panels(client())["settings"]
-    written = {
-        field["key"]
-        for block in found["blocks"] if block["type"] == "form"
-        for field in block["fields"]
+CONFIG_CENTER_PANELS = {
+    "assistant-session": {"assistant", "session"},
+    # tier 2: everything that follows the speaker hardware (devices + DSP + ack).
+    "speaker": {"devices", "audio.capture", "audio.voice", "audio.playback",
+                "audio.aec", "ack"},
+    "providers": {"providers.catalog", "providers.asr", "providers.tts", "providers.llm"},
+    "tools": {"tools.weather", "tools.news", "tools.search", "tools.ha",
+              "tools.mcp", "tools.exposure", "music"},
+    # tier 1 process foundations only; assistant/session is its own panel.
+    "foundation": {"system", "web"},
+}
+
+
+def test_the_config_center_panels_render_from_the_catalog() -> None:
+    """The old hand-written `settings` panel is gone; five catalog-driven panels replace it.
+
+    AssistantView used to edit these fields, so the directory has to keep every one of
+    them - a page deletion that silently deletes a setting is the failure this pins.
+    """
+    c = client()
+    found = panels(c)
+    assert "settings" not in found
+    catalog = c.get("/api/v1/config/catalog").json()
+    declared_groups = {group["id"] for group in catalog["groups"]}
+    paths = {field["path"] for field in catalog["fields"]}
+    covered: set[str] = set()
+    for panel_id, groups in CONFIG_CENTER_PANELS.items():
+        panel = found[panel_id]
+        assert panel["component"] == "config-center", panel_id
+        assert panel["blocks"] == [], panel_id
+        assert panel["source"] == "/api/v1/config/catalog", panel_id
+        assert set(panel["component_args"]["groups"]) == groups, panel_id
+        assert groups <= declared_groups, (panel_id, groups - declared_groups)
+        covered |= groups
+    settings_paths = {
+        f"assistant.{key}" for key in SETTINGS_FIELDS if key not in
+        {"timeout_s", "farewell", "farewell_text", "keep_context", "history_rounds",
+         "vendor_quiet_s"}
+    } | {
+        f"session.{key}" for key in SETTINGS_FIELDS if key in
+        {"timeout_s", "farewell", "farewell_text", "keep_context", "history_rounds",
+         "vendor_quiet_s"}
     }
-    assert written == SETTINGS_FIELDS
+    assert settings_paths <= paths
+    assert {"assistant", "session"} <= covered
+
+
+def test_every_panel_has_an_english_title() -> None:
+    """The console is bilingual; the backend supplies both titles (task-6 renders them)."""
+    for panel in panels(client()).values():
+        assert panel.get("title_en"), panel["id"]
 
 
 def test_the_console_declares_the_tools_the_review_found_missing() -> None:

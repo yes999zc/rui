@@ -15,9 +15,36 @@ situation: say you cannot check, never invent a number.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections.abc import Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..config.schema import AssistantConfig
+
+log = logging.getLogger(__name__)
+
+# The zone the injected clock line uses. Empty = the process's local zone (the old
+# behaviour). Set from `system.timezone` by the app, because a container inherits no TZ
+# by default: without this a NAS answers "现在几点" in UTC. Deliberately module state:
+# the prompt is assembled per turn from a running app, and threading a timezone through
+# every call site would put a config detail inside the turn loop.
+_TIMEZONE: str = ""
+
+
+def set_timezone(name: str) -> None:
+    """Use an IANA zone for the injected clock; empty means process local time."""
+    global _TIMEZONE
+    _TIMEZONE = (name or "").strip()
+
+
+def _zone() -> dt.tzinfo | None:
+    if not _TIMEZONE:
+        return None
+    try:
+        return ZoneInfo(_TIMEZONE)
+    except (ZoneInfoNotFoundError, ValueError):
+        log.warning("prompts: unknown timezone %r; using the process local zone", _TIMEZONE)
+        return None
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是家里的语音助手，叫{name}。"
@@ -92,7 +119,9 @@ def now_str(when: dt.datetime | None = None) -> str:
     It is injected rather than exposed as a tool: answering 「现在几点」 should not cost a
     round trip. Timers are the other half of this and need a tool that *writes* time.
     """
-    when = when or dt.datetime.now().astimezone()
+    if when is None:
+        zone = _zone()
+        when = dt.datetime.now(zone) if zone is not None else dt.datetime.now().astimezone()
     weekdays = "一二三四五六日"
     return (
         f"现在是{when.year}年{when.month}月{when.day}日 星期{weekdays[when.weekday()]} "

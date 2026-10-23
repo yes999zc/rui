@@ -8,7 +8,8 @@ system:
 web:
   host: 0.0.0.0
   port: 8080
-  auth_token: ""          # set this if the console is reachable beyond your LAN
+  auth_token: ""        # setup generates one; fill it before exposing the console
+  allow_anonymous: false  # true = no token on a non-loopback bind (dev only)          # set this if the console is reachable beyond your LAN
 devices:
   - id: living
     adapter: xiaoai
