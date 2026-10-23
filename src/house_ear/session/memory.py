@@ -31,10 +31,12 @@ MAX_ITEMS = 200
 # Utterances that ask the assistant to remember something. Deliberately explicit:
 # the old build extracted candidates in the background with a model call; here the
 # phrase itself is the signal, and the console confirms.
+# (pattern, keep_whole_match). 「记住…」 keeps only the fact; 「以后…」 and
+# 「我喜欢…」 are self-contained and read better with their trigger word.
 REMEMBER_PATTERNS = (
-    re.compile(r"(?:记住|记一下|记着)[，,:：\s]*(.{2,60})"),
-    re.compile(r"(?:以后|今后)(.{2,60})"),
-    re.compile(r"我(?:喜欢|爱听|爱喝|爱吃|不吃|不喜欢)(.{2,40})"),
+    (re.compile(r"(?:记住|记一下|记着)[，,:：\s]*(.{2,60})"), False),
+    (re.compile(r"(?:以后|今后).{2,60}"), True),
+    (re.compile(r"我(?:喜欢|爱听|爱喝|爱吃|不吃|不喜欢).{2,40}"), True),
 )
 
 
@@ -139,10 +141,10 @@ class MemoryStore:
     def extract(self, transcript: str) -> MemoryItem | None:
         """A candidate from an utterance that asked to be remembered."""
         text = ""
-        for pattern in REMEMBER_PATTERNS:
+        for pattern, whole in REMEMBER_PATTERNS:
             m = pattern.search(transcript or "")
             if m:
-                text = m.group(1).strip(" 。，,.!！？?")
+                text = (m.group(0) if whole else m.group(1)).strip(" 。，,.!！？?")
                 break
         if not text or len(text) < 2:
             return None
