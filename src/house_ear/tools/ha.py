@@ -219,9 +219,30 @@ class HaBridge:
             await self.client.call("call_service", args)
         except MCPUnavailable as exc:
             log.info("ha call_service %s failed: %s", args.get("service"), exc)
-            return ToolResult(status="unreachable").slot(device=_domain_of(target))
-        return ToolResult(status="ok").slot(device=target,
-                                            action=_action_word(str(args.get("service") or "")))
+            return ToolResult(status="unreachable").slot(device=self._spoken_name(target))
+        return ToolResult(status="ok").slot(
+            device=self._spoken_name(target),
+            action=_action_word(str(args.get("service") or "")))
+
+    def _spoken_name(self, target: str) -> str:
+        """Entity ids -> the names a person uses, from the cached list.
+
+        Measured 11:17:50: the reply read 「好，switch.unknown_switch_11, … 了」 -
+        an id list spoken aloud. The list is already in memory (名字=id); use it,
+        and keep the answer to two names plus 等 when several changed.
+        """
+        names = {}
+        for line in self._entities_cache or []:
+            name, _, eid = line.partition("=")
+            if eid:
+                names[eid] = name
+        ids = [t.strip() for t in str(target).split(",") if t.strip()]
+        spoken = [names.get(i, "") for i in ids]
+        if not any(spoken):
+            # No name known: say what kind of thing it is, never the id.
+            return _domain_of(ids[0]) if ids else "设备"
+        uniq = [n for n in dict.fromkeys(spoken) if n]
+        return "、".join(uniq[:2]) + ("等" if len(uniq) > 2 else "")
 
     @property
     def status(self) -> dict:

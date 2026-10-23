@@ -52,8 +52,9 @@ def test_call_service_accepts_combined_and_split_forms(tmp_path: Path) -> None:
         assert out.payload["action"] == "开了"
         sent = bridge.client.calls[-1]
         assert sent[1]["domain"] == "light" and sent[1]["service"] == "turn_on"
+        # no cached names in this fixture: the domain is the fallback, never the id
         assert phrases.book.render("device.done", **out.payload) == \
-            "好，light.kids开了。"
+            "好，light开了。"
 
     asyncio.run(run())
 
