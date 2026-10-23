@@ -97,8 +97,8 @@ house-ear 控制面
 
 ### M5 — 微信语音/媒体（2–3 天）
 
-- [ ] 入站 VOICE：**不用**腾讯 `voice_item.text`；按 Hermes 的做法下载原始 `.silk` → CDN AES-128-ECB 解密 → `pilk.silk_to_wav` 转 WAV → `/api/v1/asr` 重新转写。
-- [ ] `pilk` 作为 optional extra（懒安装）；解码失败时退回 `voice_item.text`，并在回复/日志标记“腾讯转写回退”。
+- [ ] 入站 VOICE：**不用**腾讯 `voice_item.text`；按 Hermes 的做法下载原始 `.silk` → CDN AES-128-ECB 解密 → `pilk.silk_to_wav` 转 WAV → `/api/v1/asr` 重新转写。解码失败不 fallback 腾讯转写。
+- [ ] `pilk` 作为 optional extra（懒安装）；解码失败时明确报错/让用户重发，**不把腾讯 `voice_item.text` 当作用户输入**（仅日志留作诊断）。
 - [ ] 出站语音：**作为文件附件发送（media_type=FILE）**，不是语音气泡；Hermes 的 `send_voice(force_file_attachment=True)` 已证明这条路径可用。
 - [ ] 产物格式优先 `.mp3`（ffmpeg 从 TTS PCM 转），兼容性比 `.silk` 好；附一句“语音回复已作为文件发送”。
 - [ ] 图片/文件：后续版本，不在第一版。
