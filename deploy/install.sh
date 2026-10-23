@@ -13,6 +13,20 @@ RUN_AS="$(id -u):$(id -g)"
 
 mkdir -p "$DIR/config" "$DIR/data/models"
 
+# A private GHCR package (or an offline registry) must not make the one-command install
+# fail forever. If the image cannot be pulled, build the same tag from the public source;
+# a later re-run reuses the image, and once the package is public the fast path returns.
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  if ! docker pull "$IMAGE" >/dev/null 2>&1; then
+    echo "[0/5] image not pullable; building it from the public source (first run only)"
+    SRC="$DIR/src"
+    if [ ! -d "$SRC/.git" ]; then
+      git clone --depth 1 "https://github.com/$REPO.git" "$SRC"
+    fi
+    docker build -t "$IMAGE" "$SRC"
+  fi
+fi
+
 echo "[1/5] compose file"
 # The deploy directory is never a git checkout: fetch the one file compose needs,
 # otherwise `docker compose up` fails with "no configuration file provided". The example
