@@ -34,7 +34,7 @@ from ...session.text import strip_wake
 from ...session.turn import TurnRunner
 from ...session.vendor import VendorWindow
 from ...tools import build_local_tools, build_scheduler
-from ...tools.contract import ToolResult
+from ...tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from ...tools.ha import HaBridge
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
@@ -654,6 +654,63 @@ def create_app(
                     # The queue advances only on a file's natural end (the plane's
                     # PlayFinished); a pause or a barge must not look like a finish.
                     client.on_playback_finished = music.on_finished
+
+                # Volume: the speaker's own mixer, never a claim without a call.
+                # Measured 08:53: 「音量80%」 was answered 「音量调到80%了。」 with
+                # zero tool calls - the old build's false-claim failure mode.
+                async def volume_tool(args: dict) -> ToolResult:
+                    level = str(args.get("level") or "").strip().lower()
+                    try:
+                        now = await client.device_volume()
+                    except Exception:  # noqa: BLE001 - a dead mixer is a sentence
+                        return ToolResult(status="unreachable")
+                    if now is None:
+                        return ToolResult(status="unreachable")
+                    pct = round(now * 100 / 255)
+                    if level in ("", "read", "how", "now"):
+                        return ToolResult(status="ok_read").slot(pct=pct)
+                    if level in ("up", "down"):
+                        pct = max(0, min(100, pct + (10 if level == "up" else -10)))
+                    elif level in ("mute", "静音"):
+                        pct = 0
+                    else:
+                        digits = "".join(ch for ch in level if ch.isdigit())
+                        if not digits:
+                            return ToolResult(status="unknown").slot(pct=pct)
+                        pct = max(0, min(100, int(digits)))
+                    target = round(pct * 255 / 100)
+                    try:
+                        got = await client.set_device_volume(target)
+                    except Exception:  # noqa: BLE001
+                        return ToolResult(status="unreachable")
+                    applied = round((got if got is not None else target) * 100 / 255)
+                    # Learn it as the target: the reconciler would otherwise put the
+                    # configured value back within 16 s (old build: adopt_device_volume).
+                    dev = next((d for d in cfg.devices if d.id == (ready.id if ready else "")),
+                               cfg.devices[0] if cfg.devices else None)
+                    if dev is not None and config_path is not None:
+                        dev.volume = applied
+                        with contextlib.suppress(Exception):
+                            save_config(config_path, cfg)
+                    return ToolResult(status="ok").slot(pct=applied)
+
+                volume_spec = ToolSpec(
+                    name="local.volume", permission=Permission.WRITE,
+                    description="调音量（「音量大一点/小一点/调到80%/静音/现在音量多少」）",
+                    input_schema={"type": "object", "properties": {
+                        "level": {"type": "string",
+                                  "description": "up | down | mute | 0-100 | 空=查询"}}},
+                    interaction=InteractionSpec(exec={
+                        "ok": "volume.set", "ok_read": "volume.read",
+                        "unknown": "volume.unknown",
+                        "unreachable": "volume.failed"}),
+                )
+                # Lifespan can run twice (TestClient, restarts): register once.
+                if "local.volume" not in registry.names():
+                    registry.register(volume_spec)
+                    local_tools.append((volume_spec, volume_tool))
+                runner._handlers["volume"] = volume_tool
+                runner._interactions["volume"] = volume_spec.interaction
         # Session end. Polled rather than timed: one loop, 1 s resolution, and the
         # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
         async def idle_watch() -> None:

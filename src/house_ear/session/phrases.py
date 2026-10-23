@@ -46,6 +46,11 @@ DEFAULTS: dict[str, str] = {
     # --- turn-level degrade (the system layer's own fallbacks) ---------------
     "turn.failed": "我没弄成，你再说一遍？",
     "turn.stuck": "我这卡了一下，你再说一遍。",
+    # --- volume (the speaker's own mixer) -----------------------------------
+    "volume.set": "音量调到 {pct}%了。",
+    "volume.read": "现在音量 {pct}%。",
+    "volume.failed": "音量没调成，音箱没回应。",
+    "volume.unknown": "没听清要调到多少，现在是 {pct}%。",
     # --- devices over HA (V2's first application) ----------------------------
     "device.done": "好，{device}{action}。",
     "device.unreachable": "{device}这会儿连不上，没能执行，别当我成功了。",
