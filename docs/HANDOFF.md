@@ -683,3 +683,32 @@ origin/main 同步。**
 
 **未决（9哥 拍板）**：搜索类长回答要不要服务端按句硬截断（300 字）；打断「≤300 ms 停声」的设备侧口径仍只能用耳朵。
 
+### 12.16 2026-10-23 下午（9哥 回来后）：控制台重构 + 多角色审计启动
+
+**先确认**：13:54:01 「放一首告白气球」→ `music_play` 播放周杰伦《告白气球》（`ok_one`），
+13:54:16 「退下吧」散场——上一轮修的点歌排序与谎报检测真机通过。日志在
+`~/.hermes/cache/scratch/he-serve-b3t.log`（已轮转多次，当前为新文件）。
+
+**9哥 新要求（本轮）**：
+1. **控制台重构**：国际化（zh-Hans/en）+ 现代风格；所有可从前台改的参数都要有输入口，
+   标注「改这个能达到什么效果」和「保存生效 / 重启生效」；参数按四类：① 底子（不轻易动）
+   ② 跟随音箱变化 ③ 外部资源（LLM/ASR/TTS）④ 工具类（MCP/新闻/音乐音源（**音源定后路径
+   自动更新**）/搜索/天气/其他默认工具，包含时间/时区是否随 NAS 品牌不同）。
+2. **多角色审计**：老项目多开发者、手持一台音箱的新人（体验+后台管理）、运维/NAS、安全隐私。
+3. 审计后自行修复；需要 9哥 配合的（NAS/耳朵/仓库公开）留到他回来。
+
+**长回答决策（已执行）**：三个上限（`reply_max_chars*`）后台可改但只进 prompt，模型 13:24
+实测无视（478 字/90 秒）。改为**服务端按句截断**：展开请求走 long、用过信息工具走 search、
+其余走默认（turn-core，task-7）；截断记日志、history 记实际说出的文本。
+
+**本轮分工（Agent Teams）**：
+| 成员 | 任务 | 写作用域 |
+|---|---|---|
+| `console-api` | task-5 配置目录（catalog）+ `GET /api/v1/config/catalog` + `PUT /api/v1/config/values`（dotted path、effect=save/restart）+ `POST /api/v1/system/audio/restart` + 音乐源路径自动更新 + 面板重组（title_en/component_args） | src/house_ear/config/**, web/api/app.py, tests/** |
+| `console-ui` | task-6 i18n（zh/en）+ 现代设计系统（light/dark、token、手机）+ 配置中心 + 导航重组 + deep-design-qa 循环 | web/**, docs/console-redesign.md |
+| `turn-core` | task-7 长回答服务端截断 + 测试 | session/turn.py, tests/** |
+| 审计 workflow | 4 角色并行审计（老项目/新人/运维/安全），只读 + 截图 + 只调 GET | 只读 |
+
+契约文档：**`docs/config-catalog-contract.md`**（Lead 定，两端对齐）。Lead 负责集成、重启 dev、
+逐页截图验收、真实语音回归、文档与 push。
+
