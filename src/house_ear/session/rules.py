@@ -106,7 +106,7 @@ def volume_level(transcript: str) -> str | None:
     t = normalize(transcript)
     if not t or len(t) > 10:
         return None
-    if not any(w in t for w in ("音量", "声音", "喇叭")):
+    if not any(w in t for w in ("音量", "声音", "喇叭", "静音")):
         return None
     if "静音" in t:
         return "mute"
