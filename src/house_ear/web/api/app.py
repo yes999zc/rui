@@ -722,9 +722,11 @@ def create_app(
                 def on_wake(msg: object) -> None:
                     vendor.ours_spoke()
                     _light(app, "wake")
-                    # A wake opens a conversation window; the countdown to the farewell
-                    # starts again from here (and from the end of every turn).
-                    runner.idle.start()
+                    # No idle clock here: a wake that hears nothing must not become a
+                    # goodbye 15 s later (measured 10:22:17 - the user woke the box,
+                    # said nothing, and got 「我先下啦」). The session opens with the
+                    # first turn; its end starts the countdown.
+
                     if getattr(msg, "barge", False):
                         # The plane already stopped the speaker and dropped its queue;
                         # this stops the answer that is still being synthesised from

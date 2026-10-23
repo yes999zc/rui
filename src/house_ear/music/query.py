@@ -25,6 +25,8 @@ _WRAP = re.compile(
     r")"
 )
 _TAIL = re.compile(r"[的吧啊呗嘞呀哦了]$")
+# Sentence punctuation on either edge; 《》 deliberately excluded (a quoted title).
+_SENT_PUNCT = re.compile(r"^[，。！？；：、,.!?;:…\s]+|[，。！？；：、,.!?;:…\s]+$")
 _PUNCT = re.compile(r"[\s，。、！？；：,.!?;:…—《》「」‘’’\"（）()]")
 # 「描述式」words: qualitative, never part of a name (old build DESCRIPTIVE).
 _DESCRIPTIVE = re.compile(
@@ -43,7 +45,11 @@ def normalize(text: str) -> str:
 
 def clean_query(q: str) -> str:
     """Strip the wrappers a spoken request arrives in: 「帮我放首X吧」 -> 「X」."""
-    t = _MUSIC_WORD.sub("的歌", q.strip())
+    # ASR often keeps a full stop: 「播放战车乐队的歌。」 split into artist 战车乐队
+    # and title 「歌。」, which searched for a song called 歌。 (measured 10:19:33).
+    # Only sentence punctuation is stripped - 《》 still mark a title.
+    t = _SENT_PUNCT.sub("", q.strip())
+    t = _MUSIC_WORD.sub("的歌", t)
     changed = True
     while changed and t:
         changed = False

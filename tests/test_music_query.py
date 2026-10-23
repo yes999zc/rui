@@ -44,3 +44,12 @@ def test_the_song_word_survives_asr_slips() -> None:
     """Measured 09:50:27: 〈周杰伦的歌〉 arrived as 〈…的节〉."""
     assert q.plan("播放林俊杰的节").artist == "林俊杰"
     assert q.plan("播放周杰伦的结").artist == "周杰伦"
+
+
+def test_a_spoken_full_stop_does_not_become_a_title() -> None:
+    """Measured 10:19:33: 「播放战车乐队的歌。」 planned title 「歌。」 and searched
+    for that song. Sentence punctuation is stripped; 《》 still mark a title."""
+    assert q.plan("播放战车乐队的歌。").artist == "战车乐队"
+    assert q.plan("播放战车乐队的歌。").title == ""
+    assert q.plan("播放周杰伦的歌！").artist == "周杰伦"
+    assert q.plan("放点安静的《晴天》").title == "晴天"
