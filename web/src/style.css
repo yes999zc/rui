@@ -61,3 +61,22 @@ input:disabled { background: #f7f8fa; color: var(--muted); }
 .empty { color: var(--muted); font-size: 13px; }
 .note { font-size: 12px; color: var(--muted); margin-top: 10px; }
 code { background: #f4f5f7; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+/* The console is opened from a phone during acceptance; the fixed sidebar used to
+   crop every page (C-UI P4 review). Stack it and let the content use the width. */
+@media (max-width: 720px) {
+  .layout { flex-direction: column; }
+  .sidebar {
+    width: auto; border-right: 0; border-bottom: 1px solid var(--line);
+    display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 12px 16px;
+  }
+  .sidebar .brand { width: 100%; padding: 0 0 8px; }
+  .sidebar .nav { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+  .sidebar .nav-group { width: 100%; margin: 8px 0 0; }
+  .sidebar .token-box { width: 100%; margin-top: 8px; }
+  .main { padding: 20px 16px; max-width: none; }
+  .field { flex-direction: column; align-items: stretch; gap: 4px; }
+  .field label { width: auto; }
+  .field input { max-width: none; }
+  .row .k { width: auto; }
+}

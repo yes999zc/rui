@@ -21,7 +21,7 @@ from ... import __version__, secrets
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneSupervisor
-from ...audio.kws import keyword_meta, write_keywords_file
+from ...audio.kws import KwsUnavailable, keyword_meta, model_files, write_keywords_file
 from ...audio.protocol import PlayFile, StopAudio
 from ...config.schema import CONFIG_VERSION, LED_STATES, Config, DeviceConfig
 from ...config.store import ConfigError, load_config, redacted, save_config
@@ -1657,11 +1657,37 @@ def create_app(
                         getattr(provider, "api_key_env", ""),
                         getattr(provider, "app_id_env", ""),
                         getattr(provider, "api_secret_env", "")) if n and not secrets.has(n))
-        keys = {"stages": stage_ok, "missing": sorted(missing_keys)}
+        keys = {
+            "stages": stage_ok,
+            "missing": sorted(missing_keys),
+            "missing_by_stage": {
+                stage: sorted({str(name) for provider_name in
+                               getattr(cfg_now.providers, stage).chain
+                               for name in (
+                                   getattr(cfg_now.providers.catalog.get(provider_name),
+                                           "api_key_env", ""),
+                                   getattr(cfg_now.providers.catalog.get(provider_name),
+                                           "app_id_env", ""),
+                                   getattr(cfg_now.providers.catalog.get(provider_name),
+                                           "api_secret_env", ""))
+                               if name and not secrets.has(str(name))})
+                for stage in ("asr", "tts", "llm")
+                if not stage_ok[stage]
+            },
+        }
+        def kws_ok(directory: Path | None) -> bool:
+            if directory is None:
+                return False
+            try:
+                model_files(directory)
+            except KwsUnavailable:
+                return False
+            return True
+
         models = {
             "asr": asr_ok,
             "vad": bool(vad and vad.is_file()),
-            "kws": dir_has(kws, "tokens.txt"),
+            "kws": kws_ok(kws),
         }
         device = cfg_now.devices[0] if cfg_now.devices else None
         verified = bool((getattr(app.state, "last_turn", None) or {}).get("audio_bytes"))
@@ -1753,13 +1779,49 @@ def create_app(
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _wizard_state()
 
+    def _wake_words(payload: dict) -> list[str]:
+        """Validated wake words: the file is parsed by sherpa, so a newline breaks it."""
+        raw = payload.get("wake_words")
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            raise HTTPException(status_code=422, detail="wake_words must be a list of strings")
+        words: list[str] = []
+        for item in raw:
+            if not isinstance(item, str):
+                raise HTTPException(status_code=422, detail="every wake word must be a string")
+            word = item.strip()
+            if not word:
+                continue
+            if len(word) > 12:
+                raise HTTPException(status_code=422, detail="唤醒词最多 12 个字")
+            if any(char.isspace() or ord(char) < 32 for char in word):
+                raise HTTPException(status_code=422, detail="唤醒词不能包含空格或换行")
+            words.append(word)
+        if len(words) > 3:
+            raise HTTPException(status_code=422, detail="最多 3 个唤醒词")
+        return words
+
+    def _host(value: object) -> str:
+        host = str(value or "").strip()
+        if not host:
+            raise HTTPException(status_code=422, detail="host is required")
+        if len(host) > 64 or any(char.isspace() for char in host):
+            raise HTTPException(status_code=422, detail="host 不能含空格，最长 64 字符")
+        return host
+
+    def _room(value: object) -> str:
+        room = str(value or "").strip()
+        if len(room) > 32 or any(ord(char) < 32 for char in room):
+            raise HTTPException(status_code=422, detail="房间名最长 32 字，不能含控制字符")
+        return room
+
     @app.post("/api/v1/setup/device", dependencies=[Depends(auth)])
     async def setup_device(payload: Annotated[dict, Body()]) -> dict:
         """Add (or replace) the speaker, write the wake words, restart the plane."""
-        host = str(payload.get("host") or "").strip()
-        if not host:
-            raise HTTPException(status_code=422, detail="host is required")
-        words = [str(word).strip() for word in payload.get("wake_words") or [] if str(word).strip()]
+        host = _host(payload.get("host"))
+        room = _room(payload.get("room"))
+        words = _wake_words(payload)
         if config_path is None or not Path(config_path).exists():
             raise HTTPException(status_code=409, detail="there is no config file on disk to write")
         try:
@@ -1776,11 +1838,19 @@ def create_app(
             "adapter": str(payload.get("adapter") or base.get("adapter") or "xiaoai").strip()
             or "xiaoai",
             "host": host,
-            "room": str(payload.get("room") or "").strip(),
+            "room": room,
             "wake_words": words or ["你好小瑞"],
             "enabled": True,
         })
-        device = DeviceConfig.model_validate(base)
+        try:
+            device = DeviceConfig.model_validate(base)
+        except ValidationError as exc:
+            # pydantic's raw errors carry exception objects in `ctx`; only the readable
+            # parts travel over HTTP.
+            raise HTTPException(status_code=422, detail=[
+                {"loc": list(error.get("loc", ())), "msg": str(error.get("msg", ""))}
+                for error in exc.errors(include_url=False)
+            ]) from exc
         others = [dev for dev in current.devices if dev.id != device.id]
         merged = current.model_copy(update={"devices": [device, *others]})
         try:
@@ -1795,7 +1865,7 @@ def create_app(
     @app.post("/api/v1/setup/wake", dependencies=[Depends(auth)])
     async def setup_wake(payload: Annotated[dict, Body()]) -> dict:
         """Change the wake words of the configured speaker and regenerate the file."""
-        words = [str(word).strip() for word in payload.get("wake_words") or [] if str(word).strip()]
+        words = _wake_words(payload)
         if not words:
             raise HTTPException(status_code=422, detail="wake_words is required")
         if config_path is None or not Path(config_path).exists():
@@ -1811,26 +1881,38 @@ def create_app(
     @app.post("/api/v1/setup/probe", dependencies=[Depends(auth)])
     async def setup_probe(payload: Annotated[dict, Body()]) -> dict:
         """Is the host reachable? One TCP connect to SSH - no login, no device commands."""
-        host = str(payload.get("host") or "").strip()
-        if not host:
-            raise HTTPException(status_code=422, detail="host is required")
+        host = _host(payload.get("host"))
 
-        async def port(port_number: int) -> dict:
+        async def probe_ssh() -> dict:
+            """TCP connect + SSH banner: a VPN/TUN answers the connect for any address."""
             started = time.perf_counter()
             try:
-                _reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, port_number), timeout=2.0)
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, 22), timeout=2.0)
             except (TimeoutError, OSError) as exc:
-                return {"open": False, "error": type(exc).__name__}
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
-            return {"open": True, "ms": round((time.perf_counter() - started) * 1000)}
+                return {"port_open": False, "banner": False, "error": type(exc).__name__}
+            banner = False
+            try:
+                line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+                banner = line.startswith(b"SSH-")
+            except (TimeoutError, OSError):
+                banner = False
+            finally:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+            return {"port_open": True, "banner": banner,
+                    "ms": round((time.perf_counter() - started) * 1000)}
 
-        ssh = await port(22)
-        return {"host": host, "ssh": ssh,
-                "usable": ssh["open"],
-                "hint": "" if ssh["open"] else "SSH 端口不通：确认音箱在同一网段、已开 SSH"}
+        ssh = await probe_ssh()
+        usable = bool(ssh["port_open"] and ssh["banner"])
+        if usable:
+            hint = ""
+        elif not ssh["port_open"]:
+            hint = "SSH 端口不通：确认音箱在同一网段、已开 SSH"
+        else:
+            hint = "端口通了但没有 SSH banner（VPN/代理可能假阳性），换一个地址登记吧"
+        return {"host": host, "ssh": ssh, "usable": usable, "hint": hint}
 
     # ---------------------------------------------------------------- secrets
     @app.get("/api/v1/secrets", dependencies=[Depends(auth)])

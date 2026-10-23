@@ -8,7 +8,7 @@
  * "welcome". It is a hand-written view on purpose: the panels render data, this
  * renders a sequence, which is exactly what the PanelSpec escape hatch is for.
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, ApiError, type SetupState } from '../api'
 
 const state = ref<SetupState | null>(null)
@@ -22,7 +22,7 @@ const showOptional = ref(false)
 const host = ref('')
 const room = ref('客厅')
 const wakeWord = ref('你好小瑞')
-const probe = ref<{ usable: boolean; hint: string; ssh: { open: boolean; ms?: number; error?: string } } | null>(null)
+const probe = ref<{ usable: boolean; hint: string; ssh: { port_open: boolean; banner: boolean; ms?: number; error?: string } } | null>(null)
 
 const sayText = ref('现在几点？')
 const said = ref('')
@@ -100,7 +100,11 @@ async function tryOne() {
     if (result.error) sayError.value = result.error
     await load()
   } catch (exc) {
-    sayError.value = exc instanceof ApiError ? exc.message : String(exc)
+    const message = exc instanceof ApiError ? exc.message : String(exc)
+    // The backend's own sentence is right; say what to do about it in Chinese.
+    sayError.value = message.includes('no audio plane')
+      ? '音频面没连上：先确认音箱已在「添加音箱」里保存、服务是 healthy，再看日志。'
+      : message
   } finally {
     busy.value = ''
   }
@@ -109,6 +113,21 @@ async function tryOne() {
 function done(id: string): boolean {
   return state.value?.steps.find((step) => step.id === id)?.done ?? false
 }
+
+function stepTitle(id: string): string {
+  return state.value?.steps.find((step) => step.id === id)?.title ?? id
+}
+
+/** The keys step's per-stage detail: what is missing, in the room's language. */
+const missingByStage = computed<Record<string, string[]>>(() => {
+  const step = state.value?.steps.find((item) => item.id === 'keys')
+  const detail = step?.detail as { missing_by_stage?: Record<string, string[]> } | undefined
+  return detail?.missing_by_stage ?? {}
+})
+
+const anyKeyInput = computed(() =>
+  [...Object.values(keys.value), ...Object.values(optionalKeys.value)].some((value) => value.trim()),
+)
 
 onMounted(load)
 </script>
@@ -121,7 +140,7 @@ onMounted(load)
   <div v-if="error" class="card"><p class="fail">{{ error }}</p></div>
 
   <div v-if="state" class="card">
-    <h2>进度 <span class="sub" style="margin: 0">{{ state.next_step === 'done' ? '全部完成' : '下一步：' + state.next_step }}</span></h2>
+    <h2>进度 <span class="sub" style="margin: 0">{{ state.next_step === 'done' ? '全部完成' : '下一步：' + stepTitle(state.next_step) }}</span></h2>
     <div v-for="step in state.steps" :key="step.id" class="row">
       <span :class="step.done ? 'ok' : 'warn'" style="width: 24px">{{ step.done ? '✓' : '○' }}</span>
       <span class="v">{{ step.title }}</span>
@@ -129,6 +148,9 @@ onMounted(load)
         <template v-if="step.id === 'device' && state.device">{{ state.device.host }} · {{ state.device.room }}</template>
         <template v-else-if="step.id === 'wake' && state.keywords_exists">{{ state.device?.wake_words.join(' / ') }}</template>
         <template v-else-if="step.id === 'models' && !step.done">缺：{{ Object.entries(step.detail).filter(([, v]) => !v).map(([k]) => k).join(', ') }}</template>
+        <template v-else-if="step.id === 'keys' && !step.done">
+          缺：{{ Object.entries(missingByStage).map(([stage, names]) => stage + ' → ' + names.join(' / ')).join('；') }}
+        </template>
       </span>
     </div>
   </div>
@@ -149,8 +171,18 @@ onMounted(load)
       <div class="field"><label>XFYUN_API_KEY</label><input v-model="optionalKeys.XFYUN_API_KEY" type="password" autocomplete="off" /></div>
       <div class="field"><label>XFYUN_API_SECRET</label><input v-model="optionalKeys.XFYUN_API_SECRET" type="password" autocomplete="off" /></div>
     </template>
-    <button :disabled="busy !== ''" @click="saveKeys">{{ busy === 'keys' ? '…' : '保存 key' }}</button>
-    <p class="note">值写进 data 卷的 secrets.yaml（0600），config.yaml 里只有变量名；任何页面都读不回来。</p>
+    <div v-if="Object.keys(missingByStage).length" class="keys-missing">
+      <div v-for="(names, stage) in missingByStage" :key="stage" class="row">
+        <span class="k" style="width: 80px">{{ stage }}</span>
+        <span class="v fail">{{ names.join(' / ') }}</span>
+      </div>
+      <p class="note">每一行只要填一个就够（同一 stage 的 provider 是互备关系）。</p>
+    </div>
+    <button :disabled="busy !== '' || !anyKeyInput" @click="saveKeys">{{ busy === 'keys' ? '…' : '保存 key' }}</button>
+    <p class="note">
+      值写进 data 卷的 secrets.yaml（0600），config.yaml 里只有变量名；任何页面都读不回来。
+      这里只判断「key 存在」，真正能不能用看第 4 步「试一句」。
+    </p>
   </div>
 
   <div class="card">
@@ -168,14 +200,17 @@ onMounted(load)
     <div class="field"><label>音箱地址</label>
       <input v-model="host" placeholder="<LAN-IP> 或 speaker.local" /></div>
     <div class="field"><label>房间</label><input v-model="room" placeholder="客厅" /></div>
-    <div class="field"><label>唤醒词</label><input v-model="wakeWord" placeholder="你好小瑞" /></div>
+    <div class="field"><label>唤醒词</label>
+      <input v-model="wakeWord" maxlength="12" placeholder="你好小瑞" /></div>
     <div class="actions">
       <button :disabled="busy !== '' || !host.trim()" @click="probeHost">{{ busy === 'probe' ? '探测中…' : '探测' }}</button>
       <button class="primary" :disabled="busy !== '' || !host.trim()" @click="saveDevice">{{ busy === 'device' ? '保存中…' : '保存音箱' }}</button>
       <button :disabled="busy !== '' || !state?.device" @click="saveWake">{{ busy === 'wake' ? '…' : '只改唤醒词' }}</button>
     </div>
     <p v-if="probe" :class="probe.usable ? 'ok' : 'fail'">
-      {{ probe.usable ? `可达（SSH ${probe.ssh.ms ?? '?'} ms）` : probe.hint }}
+      {{ probe.usable
+        ? `可达：SSH banner 正常（${probe.ssh.ms ?? '?'} ms）`
+        : probe.hint }}
     </p>
     <p class="note">
       保存后服务会重启音频面并重新生成 keywords.txt（{{ state?.keywords_file || 'config 同目录' }}），

@@ -107,8 +107,89 @@ def test_probe_reports_an_unreachable_host_instead_of_raising(wizard) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["usable"] is False
-    assert body["ssh"]["open"] is False
+    assert body["ssh"]["port_open"] is False
     assert body["hint"]
+
+
+def test_invalid_device_fields_answer_422_not_500(wizard) -> None:
+    client, _path = wizard
+    for payload in (
+        {"host": "127.0.0.1", "id": "a/b"},                    # id must be alnum
+        {"host": "127.0.0.1", "id": "x" * 40},                 # id max length
+        {"host": "127.0.0.1", "wake_words": "你好小瑞"},        # must be a list
+        {"host": "127.0.0.1", "wake_words": ["你好\n小瑞"]},   # newline breaks the keywords file
+        {"host": "127.0.0.1", "wake_words": ["你好" * 8]},      # too long for the spotter
+        {"host": "127.0.0.1", "wake_words": ["a", "b", "c", "d"]},  # at most 3
+        {"host": "127.0.0.1", "room": "x" * 40},
+        {"host": "has space"},
+    ):
+        response = client.post("/api/v1/setup/device", json=payload)
+        assert response.status_code == 422, (payload, response.text)
+        assert response.json()["detail"]
+
+
+def test_wake_endpoint_rejects_a_broken_word(wizard) -> None:
+    client, _path = wizard
+    client.post("/api/v1/setup/device", json={"host": "speaker.local"})
+    assert client.post("/api/v1/setup/wake", json={"wake_words": ["你好\n小瑞"]}).status_code == 422
+    assert client.post("/api/v1/setup/wake", json={"wake_words": "你好"}).status_code == 422
+
+
+def test_probe_requires_an_ssh_banner(monkeypatch, wizard) -> None:
+    """A TCP connect is not a speaker: a VPN answers it for any address."""
+    client, _path = wizard
+
+    class FakeWriter:
+        def close(self) -> None: ...
+        async def wait_closed(self) -> None: ...
+
+    class FakeReader:
+        def __init__(self, line: bytes) -> None:
+            self.line = line
+        async def readline(self) -> bytes:
+            return self.line
+
+    async def fake_open(host: str, port: int):
+        return FakeReader(b"SSH-2.0-dropbear_2020.81\r\n"), FakeWriter()
+
+    monkeypatch.setattr("asyncio.open_connection", fake_open)
+    body = client.post("/api/v1/setup/probe", json={"host": "speaker.local"}).json()
+    assert body["usable"] is True
+    assert body["ssh"]["banner"] is True
+
+    async def fake_open_no_banner(host: str, port: int):
+        return FakeReader(b""), FakeWriter()
+
+    monkeypatch.setattr("asyncio.open_connection", fake_open_no_banner)
+    body = client.post("/api/v1/setup/probe", json={"host": "speaker.local"}).json()
+    assert body["usable"] is False
+    assert body["ssh"]["port_open"] is True
+    assert "banner" in body["hint"]
+
+
+def test_the_wake_model_check_needs_all_four_files(tmp_path, monkeypatch) -> None:
+    """tokens.txt alone is not a wake model: the spotter loads encoder/decoder/joiner too."""
+    from house_ear import secrets
+    from house_ear.config import Config
+    from house_ear.web.api.app import create_app
+
+    for name in ("HOUSE_EAR_LLM_KEY", "HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    model = tmp_path / "kws"
+    model.mkdir()
+    (model / "tokens.txt").write_text("x", encoding="utf-8")
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.audio.voice.kws_model_dir = str(model)
+    cfg.audio.voice.kws_keywords_file = str(tmp_path / "keywords.txt")
+    client = TestClient(create_app(cfg))
+    state = client.get("/api/v1/setup").json()
+    assert state["steps"][1]["detail"]["kws"] is False
+    for name in ("encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx",
+                 "decoder-epoch-13-avg-2-chunk-8-left-64.onnx",
+                 "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx"):
+        (model / name).write_bytes(b"fake")
+    assert TestClient(create_app(cfg)).get("/api/v1/setup").json()["steps"][1]["detail"]["kws"] is True
 
 
 def test_device_needs_a_config_file_on_disk(tmp_path) -> None:

@@ -366,8 +366,12 @@ export const api = {
   setupWake: (wake_words: string[]) =>
     request<SetupState>('/api/v1/setup/wake', { method: 'POST', body: JSON.stringify({ wake_words }) }),
   setupProbe: (host: string) =>
-    request<{ host: string; usable: boolean; hint: string; ssh: { open: boolean; ms?: number; error?: string } }>(
-      '/api/v1/setup/probe', { method: 'POST', body: JSON.stringify({ host }) }),
+    request<{
+      host: string
+      usable: boolean
+      hint: string
+      ssh: { port_open: boolean; banner: boolean; ms?: number; error?: string }
+    }>('/api/v1/setup/probe', { method: 'POST', body: JSON.stringify({ host }) }),
   setDeviceVolume: (value: number) =>
     request<{ volume: number }>('/api/v1/device/volume', { method: 'PUT', body: JSON.stringify({ value }) }),
 }
