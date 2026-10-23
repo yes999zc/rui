@@ -116,7 +116,9 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 | **P2** ✅ | form block + useConfigForm；5 个 form 面板（设置/密钥/体检/系统/会话）；401 时 token 输入 UI；生效时机标签 | 配置改动全走注册表 |
 | **P3** ✅ | `GET /api/v1/logs` + log block（轮询/过滤/跟随）；table block + 对话面板；memory block + 记忆面板 | 日志页不再是占位 |
 | **P3.5** ✅ 2026-10-23 | **逐页复核**：SPA 深链 fallback、`/diagnostics`、`say`/`volume` 两种 block、列表串插值、日志隐藏噪声、删掉 4 个死页面与 2 个重复入口、9 条注册表契约测试 | `docs/console-audit.md` |
-| P4 | 首次安装向导（欢迎 → key → 加音箱 → 唤醒词 → 试一句验收）；P5 设备添加/探测 + MCP/HA 管理页；P6 PhraseBook 编辑区 + 剧本测试 | 功能定稿后做，排在部署测试之前 |
+| **P4 ✅ 2026-10-23** | 首次安装向导（`/setup` + `GET /api/v1/setup` + keys/device/wake/probe）：状态由服务器上的 key/模型文件/config 计算，不做「欢迎页cookie」；加设备会写 config、重生成 keywords、重启音频面；首装自动落在向导页 | 隔离 :18090 实例实测：`/` → `/setup`；key/设备/唤醒词三步勾选、keywords.txt 生成、探测返回不可达原因；`tests/test_setup.py` 6 条 |
+| P5 | 设备添加/编辑（多设备）+ MCP/HA 管理页 | 待做 |
+| P6 | PhraseBook 编辑区 + 剧本测试 | 待做 |
 | P4（旧，可选） | websocket 替换轮询（仅日志/进度需要亚秒级） | — |
 
 **风险与对策**：协议过度设计 → 10 种 block + 单等值 + 逃生舱；面板与 API 漂移 →

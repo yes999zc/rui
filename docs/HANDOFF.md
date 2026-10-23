@@ -2,7 +2,7 @@
 
 > ## 动手之前（强制顺序，别跳）
 >
-> 1. **`~/AI_Workspace/01_Code/projects/xiaoai-voice-entry/docs/design-and-measurements.md`**
+> 1. **老项目 `xiaoai-voice-entry` 的 `docs/design-and-measurements.md`**
 >    —— 老项目作者写的核心设计说明 + 全部实测参数（一页纸，10 分钟读完）。**先读这份。**
 >    里面每个数字都有日期和出处：思考模式、唤醒门限演变、AEC 参数、ack 演变、三道回声闸、
 >    打断实测、TTS/ASR 时延、反模式清单、现役配置快照。
@@ -40,7 +40,7 @@
 ## 1. 这是什么
 
 **任何能 SSH 的音箱都能接的个人贾维斯，NAS 一键部署。** v1 只支持小米小爱音箱 Pro（LX06）。
-MIT，私有仓 `yes999zc/house-ear`（main），本地 `~/AI_Workspace/01_Code/projects/house-ear`。
+MIT，公开仓 `yes999zc/house-ear`（main）。
 
 技术栈：Python 3.12+ / FastAPI / Pydantic v2 控制面；音频面（AEC/KWS/VAD/播放）独立进程；
 前端 Vue 3 + TS + Vite。旧项目 `xiaoai-voice-entry` **只读参考**：不 import、不改配置、
@@ -231,22 +231,22 @@ A1 提醒接线是最大的一块「写了没接」：`tools/reminders.py` 与�
 ## 8. 操作手册
 
 ```bash
-cd ~/AI_Workspace/01_Code/projects/house-ear
+cd ~/house-ear
 uv run pytest && uv run ruff check src tests scripts
 cd web && npm run typecheck && npm run build && cd ..
 
 # 一整回合（假音箱，真 KWS/VAD/ASR/LLM/TTS；TTS 不发声）
 uv run python scripts/measure_turn_pipeline.py \
-    --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml \
-    --command ~/.hermes/cache/scratch/house-ear-s4/commands/01-weather.wav --rounds 20
+    --config /tmp/house-ear-scratch/house-ear-s5b/tools.yaml \
+    --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav --rounds 20
 
 # 纯文本质量（真 ASR + 真 DeepSeek，20 轮同句）
 uv run python scripts/measure_reply_quality.py --question "今天天气怎么样" --rounds 20
 
 # 起服务（真机；:4412）
-set -a; . ~/.hermes/.env; set +a
-export HOUSE_EAR_DEVICE_TOKEN="$(cat ~/.hermes/cache/scratch/house-ear-s4/device-token.txt)"
-uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml   # 控制台 :8091
+set -a; . $HOUSE_EAR_ENV_FILE; set +a
+export HOUSE_EAR_DEVICE_TOKEN="$(cat /tmp/house-ear-scratch/house-ear-s4/device-token.txt)"
+uv run house-ear serve --config /tmp/house-ear-scratch/house-ear-s5b/tools.yaml   # 控制台 :8091
 ```
 
 **真机切换**（LX06，`root@$SPEAKER_IP`，密码从 `$SPEAKER_PASSWORD` 读，必须
@@ -262,7 +262,7 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 **注意**：SSH 命令里不要出现 `pkill -f "/data/open-xiaoai/client"` 这种字面量——它会匹配到
 自己的 ssh 命令行，把会话打断。用 `pkill -f 'open-xiaoai/clien[t]'`。
 
-凭据在 `~/.hermes/.env`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
+凭据在 `$HOUSE_EAR_ENV_FILE`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
 ## 9. 现场状态（2026-10-22 22:55 自测收线）
@@ -289,11 +289,11 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
 - **观察项（不阻塞）**：① 20:38 首轮 ASR 把「现在几点」听成 `'南方3。'`（疑提示音叠话头，后续
   多轮转写全对，单样本）；② **天气工具今晚 1/3**（20:39 ✗、20:42 ✓、20:50 ✗，报「没查到」，
   答句降级正常）——上游问题为主，B2 后值得单查。
-- **起服务（正确方式）**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh
-  > ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `~/.hermes/.env` 取 6 个
+- **起服务（正确方式）**：`nohup /tmp/house-ear-scratch/house-ear-s5b/serve-dev.sh
+  > /tmp/house-ear-scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `$HOUSE_EAR_ENV_FILE` 取 6 个
   provider key，**`set -a` 是关键行**（20:09–20:12 丢 key 事故根因）；`HOUSE_EAR_DEVICE_TOKEN`
   故意不设（dev 配置走 `allow_no_token`）。重启先按端口杀 4399/8091；带证据的旧日志先轮转。
-- **设备**：`$SPEAKER_IP`，SSH 用老项目 `server/devshell.py`（凭证 `~/.hermes/.secrets/lan_media.json`
+- **设备**：`$SPEAKER_IP`，SSH 用老项目 `server/devshell.py`（凭证 `music.secrets_path 指向的凭据 JSON`
   的 `voice.device_host/device_ssh`，自带 ControlMaster 防 dropbear 限流）；客户端日志 `/tmp/client.log`。
 - **B2 第一阶段（19:52–19:54，真机）**：① 端点 600 ms 整句保留（1 样本）✅；② 连续追问+灯效 ✅；
   ③ 厂家让位 ❌→修复 `3b4648e`→**复验 ✅（见上）**。
@@ -393,7 +393,7 @@ C1 冷装。
 `network_mode: host`、配置在 `~/house-ear/config`）；Mac 只是开发机（`:8091`、dev 版 serve-dev.sh）。
 C1 冷装验收在 NAS 上做。
 
-**运行（开发机）**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh >> ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`
+**运行（开发机）**：`nohup /tmp/house-ear-scratch/house-ear-s5b/serve-dev.sh >> /tmp/house-ear-scratch/he-serve-b3t.log 2>&1 &`
 （注意 `>>` 追加；重启前先 `mv` 轮转旧日志，用 `>` 截断会让新旧进程交错写同一文件，时序不可信）。
 **acek**：`ack.mode: tts`「在呢。」；`devices[].volume: 86`（≈220 档）。
 
@@ -519,7 +519,7 @@ local_asr/vad/provider endpoint → 「一条命令到第一句」目前不成�
   从 `devices[].wake_words` 重生成关键词文件（控制台/向导换唤醒词后不会留旧词）。
 - **playback 默认 48000/2ch 是错的**：LX06 客户端只收 mono，adapter 会拒绝 → 默认改成
   16000/1ch（config.example 同步改）；`music.enabled` 无 `secrets_path` 现在校验报错，
-  生产默认不再带 `~/.hermes` 个人目录。
+  生产默认不再指向个人目录。
 - 测试：`tests/test_install.py` 7 条（模板可加载/关键词逐字/换唤醒词/fetch 解包布局/
   playback 默认可播/music 凭据校验）。**「一条命令到第一句」从「不可能」变成「差 devices 一行」。**
 
@@ -541,4 +541,17 @@ healthy 6 s；三类卷 down→up 全保留；SIGTERM 进程退出自动重启�
 3. **Lead：C-UI P4–P6**（首次安装向导、设备添加/探测、MCP/HA 管理页）——功能已定稿，可以做。
 4. **容器冷装排练**（本机 OrbStack 按 install.sh 全流程走一遍，含真 setup/fetch-models/health），
    然后再谈 NAS 上 C1（需要 9哥 点头动他的生产机）。
+
+### 12.10 2026-10-23 傍晚：C-UI P4 安装向导（已 push）
+
+**`/setup` 首次安装向导 + 5 个后端端点（`6197201` + 重定向修复 `9837191`）**：`GET /api/v1/setup`
+返回进度（keys/models/device/wake/verify，全部由服务器上的 key、模型文件、config、keywords 文件
+**计算**出来）；`POST /setup/keys`（write-only）、`/setup/device`（写 devices[] → 重生成 keywords.txt
+→ 重启音频面；schema 默认配置没有 keywords 路径时落在 config 同目录）、`/setup/wake`、`/setup/probe`
+（只做一次 SSH TCP 连接，不登录不下命令）。设备列表/health 改读 `app.state.adapters`，向导加的音箱
+不重启控制面就能看到。前端是手写 Vue（`SetupView.vue`，正是 console.md 里逃生舱说的「顺序性交互」），
+首装落在向导页（`/` 与 `/panel/overview` 两种拼写都覆盖——App 挂载时 router 可能还在解析重定向）。
+隔离 :18090 实例（生产模板配置、无设备）实测：`/` → `/setup`、三步勾选状态随真调用翻转、
+keywords.txt 内容逐字一致、probe 返回不可达原因、无音频面时「试一句」如实 409。
+**未验**：向导里「模型」步只给命令（272 MB 下载不进 HTTP 回调）；真机端到端由冷装排练覆盖。
 
