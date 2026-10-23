@@ -1289,7 +1289,7 @@ def create_app(
             _light_after_audio(app, spoken, cfg.audio.voice.rate)
             return {"reply": line, "error": "", "tools": ["clarify.verb"],
                     "stages": {}, "audio_bytes": spoken}
-        for fast in (_music_transport, _volume_command):
+        for fast in (_music_transport, _volume_command, _context_command):
             if await fast(app, text, runner, client, trace, traces) is not None:
                 _light_after_audio(app, app.state.last_turn["audio_bytes"] or 0,
                                    cfg.audio.voice.rate)
@@ -1407,6 +1407,12 @@ def create_app(
         return {"query": q, "tracks": [
             {"id": t.id, "title": t.title, "artist": t.artist, "duration": t.duration}
             for t in tracks[:20]]}
+
+    @app.get("/api/v1/debug/prompt", dependencies=[Depends(auth)])
+    async def debug_prompt() -> dict:
+        """The system prompt as the next turn will receive it (console preview)."""
+        runner = app.state.runner
+        return {"prompt": runner.build_prompt()}
 
     @app.get("/api/v1/memory", dependencies=[Depends(auth)])
     async def memory_list() -> dict:
