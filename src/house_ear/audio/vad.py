@@ -80,6 +80,10 @@ class UtteranceGate:
     def _reset_state(self) -> None:
         self._skipping = 0
         self._hold_ms = 0.0
+        # The cue itself (and its echo) is not the person: those first milliseconds are
+        # skipped instead of replayed into the VAD, or ASR transcribes our own 「在呢」
+        # as a request (measured 2026-10-23 15:49/15:53/15:55).
+        self._hold_skip_ms = 0.0
         self._hold_buf: deque[np.ndarray] = deque()
         self._preroll: deque[np.ndarray] = deque()
         self._preroll_samples = 0
@@ -125,22 +129,21 @@ class UtteranceGate:
         self._vad.reset()
         self._reset_state()
 
-    def hold(self, ms: float) -> None:
+    def hold(self, ms: float, skip_ms: float = 0.0) -> None:
         """The speaker is still sounding: listen, but do not open a turn yet.
 
         Separate from `arm()` because the pre-wake replay belongs before the hold: those
         blocks are the person's own words, captured while the microphone was still open.
 
-        Blocks that arrive *during* the hold are buffered, not dropped. A deaf window is
-        how the start of the request gets eaten, and so is keeping only the tail of it:
-        measured 2026-10-23, a person answering right after the cue had their first ~1.1 s
-        thrown away (hold = cue + 1200 ms echo window, but only the last 600 ms was kept).
-        The whole hold is kept now (bounded by its own length, ~1.7 s: the cue plus the
-        configured echo window). The cue's echo cannot open a turn because AEC has already
-        removed it from this stream, and the buffered audio is fed to the VAD only when
-        the hold lifts.
+        `skip_ms` is the cue's own playing time: audio from that window is the box's voice,
+        not the person, and replaying it let ASR transcribe our own 「在呢」 as a request
+        (measured 2026-10-23 15:49/15:53/15:55, three sessions in a row). Everything after
+        the cue is buffered instead of dropped: keeping only a 600 ms tail lost the first
+        ~1.1 s of a request that started right after the cue (13:47 「放一首告白气球」 arrived
+        as 「告白气球」). The buffer is bounded by the echo window (~1.2 s).
         """
         self._hold_ms = max(0.0, ms)
+        self._hold_skip_ms = max(0.0, min(skip_ms, ms))
 
     # ------------------------------------------------------------------ input
     def feed(self, pcm: bytes, ts_ms: float = 0.0) -> tuple[bytes, float] | None:
@@ -149,11 +152,18 @@ class UtteranceGate:
             return None
         block = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
         if self._hold_ms > 0:
+            block_ms = block.size * 1000.0 / self.rate
+            if self._hold_skip_ms > 0:
+                drop_ms = min(self._hold_skip_ms, block_ms)
+                drop = min(block.size, int(round(drop_ms * self.rate / 1000.0)))
+                self._hold_skip_ms = max(0.0, self._hold_skip_ms - drop * 1000.0 / self.rate)
+                block = block[drop:]
+                block_ms = block.size * 1000.0 / self.rate
+                if block.size == 0:
+                    self._hold_ms = max(0.0, self._hold_ms - drop_ms)
+                    return None
             self._hold_buf.append(block)
-            # Everything that arrives while the cue sounds is kept: the request can start
-            # at the wake, not only at the end of the hold. The buffer is bounded by the
-            # hold's own duration (plus one block), so there is nothing unbounded to trim.
-            self._hold_ms -= block.size * 1000.0 / self.rate
+            self._hold_ms = max(0.0, self._hold_ms - block_ms)
             if self._hold_ms > 0:
                 return None
             # Hold lifted: hand every buffered block through the normal path, oldest first,

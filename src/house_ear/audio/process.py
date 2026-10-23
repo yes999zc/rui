@@ -628,8 +628,14 @@ class AudioPlane:
             self._preroll_samples = 0
             self.preroll_replayed_ms = round(replayed * 1000.0 / self.cfg.audio.voice.rate, 1)
             self.preroll_replays += 1
-            # From here on it is live audio, and the cue may still be sounding.
-            self.gate.hold(hold_ms)
+            # From here on it is live audio, and the cue may still be sounding. The cue's
+            # own playing time is skipped rather than replayed: that window is the box's
+            # voice, and keeping it made ASR transcribe 「在呢」 as a user turn.
+            # Skip the cue plus its device-buffer tail (the speaker keeps sounding ~300 ms
+            # after the last frame). What remains is the echo/answer window after the cue:
+            # long enough for a request starting right after 「在呢」, short enough that the
+            # cue itself never reaches ASR.
+            self.gate.hold(hold_ms, skip_ms=min(hold_ms, cue_ms + ACK_TAIL_MS))
 
         if audio.size:
             self.ack_attempts += 1
@@ -795,6 +801,17 @@ class AudioPlane:
         self.playback_lead_s = self._credit.lead
         return True
 
+    @staticmethod
+    def playback_reached_end(position: int, offset: int, size: int, step: int) -> bool:
+        """True only when the file was actually streamed to its end.
+
+        Measured 2026-10-23 15:53:28: the speaker's websocket dropped right after a resumed
+        song started; the stream ended within 0.7 s of a 207 s track, yet the plane emitted
+        PlayFinished and the queue advanced to the next song (and 「继续」 then said nothing
+        was paused). A stream that stops short must not look like a finished song.
+        """
+        return position >= offset + size - max(step, 1)
+
     async def _play_file(self, path: Path, loop: bool, gain: float,
                          offset: int = 0) -> None:
         try:
@@ -838,11 +855,21 @@ class AudioPlane:
             # the claim (the dialogue took it; resume claims it back).
             if not self._speech_paused:
                 self._release("music")
+        if loop:
+            return
+        step = max(1, target * PLAY_CHUNK_MS // 1000)
+        if not self.playback_reached_end(self._file_position, offset, audio.size, step):
+            # The speaker went away mid-song: do not tell the queue the song finished, or
+            # it starts the next one while the device is reconnecting.
+            log.warning(
+                "playback ended early at %.1f s of %.1f s (%s); queue not advanced",
+                max(0, self._file_position - offset) / target,
+                audio.size / target, path.name)
+            return
         log.info("playback finished: %s", path.name)
         # Only a natural end of a non-looping file says so: the queue advances on this,
         # and a pause (which cancels the task above) must not look like a finish.
-        if not loop:
-            self._emit_control(PlayFinished(path=str(path)))
+        self._emit_control(PlayFinished(path=str(path)))
 
     def _emit_control(self, msg: object) -> None:
         """Best-effort plane -> control message; the plane outlives reconnects."""

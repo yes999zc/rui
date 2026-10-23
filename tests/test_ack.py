@@ -185,38 +185,60 @@ def test_preroll_replayed_into_the_gate_survives_the_hold() -> None:
 
 
 @needs_vad
-def test_a_request_starting_inside_the_cue_is_kept_from_its_first_syllable() -> None:
-    """P0 (audit 2026-10-23): only the last 600 ms of the hold used to be kept.
+def test_the_cue_echo_is_skipped_and_the_request_after_it_is_kept() -> None:
+    """P0 (audit 2026-10-23, then regression 15:49): skip the cue, keep what follows.
 
-    hold = cue_ms + echo_ignore_ms (~1.69 s), so a person answering right after the cue
-    lost the first ~1.1 s: 13:47 「放一首告白气球」 reached ASR as 「告白气球」 and 13:23
-    「怎样？」 became a turn of its own. The whole hold is retained now; this constructs
-    exactly that shape - speech from the first block after the wake, then silence for the
-    rest of the hold - and requires the utterance to contain the speech, not just the
-    tail of the window. Under the old tail-only buffer this yields no turn at all.
+    The hold is cue + echo window (~1.69 s). Replaying the whole hold meant ASR heard our
+    own 「在呢」 and opened a turn for it - three sessions in a row (15:49:07 在呢,
+    15:53:17 在的, 15:55:31 在呢). Keeping only the last 600 ms had the opposite bug: a
+    request starting right after the cue lost its first ~1.1 s (13:47 放一首告白气球 ->
+    告白气球). So the cue's own playing time is dropped and the echo window is kept.
     """
     from house_ear.audio.vad import GateConfig, UtteranceGate
 
     gate = UtteranceGate(GateConfig(), MODEL)
     gate.arm()
-    gate.hold(1690)  # measured hold: 490 ms cue + 1200 ms echo window
+    gate.hold(1690, skip_ms=740)  # 490 ms cue + ~250 ms device-buffer tail
 
-    # ~1.0 s of the request, starting immediately (the pre-wake skip is still owed).
-    speech = _speech(1.0)
-    for block in _blocks(speech):
-        assert gate.feed(block) is None, "nothing may open a turn while the cue sounds"
-    # Finish the hold with silence, then let the end-point close the turn.
-    for block in _blocks(b"\x00\x00" * 11000 + b"\x00\x00" * 64000):
+    # The cue and its tail (0.74 s of our own voice) must not be buffered.
+    for block in _blocks(b"\x00\x00" * int(16000 * 0.74)):
+        assert gate.feed(block) is None
+    # The person answers immediately after the cue, inside the echo window.
+    for block in _blocks(_speech(1.0)):
+        assert gate.feed(block) is None, "nothing may open a turn while the hold lasts"
+    # Let the hold lift and the end-point close the turn.
+    for block in _blocks(b"\x00\x00" * 32000):
         result = gate.feed(block)
         if result is not None:
             break
     else:
         result = None
 
-    assert result is not None, "the request spoken at the start of the hold was thrown away"
+    assert result is not None, "the request after the cue was thrown away"
     captured_s = len(result[0]) / 2 / 16000
-    assert captured_s > 0.5, f"only {captured_s:.2f} s captured; the hold's start was lost"
+    assert captured_s > 0.5, f"only {captured_s:.2f} s captured"
     assert gate.turns == 1
+
+
+@needs_vad
+def test_our_own_cue_alone_never_opens_a_turn() -> None:
+    """15:49:07 regression: the ack audio was replayed, transcribed as 「在呢」, and the
+    assistant answered its own greeting. Skipping the cue must leave no utterance at all."""
+    from house_ear.audio.vad import GateConfig, UtteranceGate
+
+    gate = UtteranceGate(GateConfig(), MODEL)
+    gate.arm()
+    gate.hold(1690, skip_ms=740)
+
+    # 0.74 s of cue (loud speech) is skipped; the rest of the hold is silence.
+    cue = _speech(0.74)
+    for block in _blocks(cue):
+        gate.feed(block)
+    for block in _blocks(b"\x00\x00" * 64000):
+        result = gate.feed(block)
+        if result is not None:
+            raise AssertionError("the cue alone opened a turn")
+    assert gate.turns == 0
 
 
 # ----------------------------------------------------------------- the plane side
@@ -237,7 +259,7 @@ class FakeGate:
         self.armed_state = True
         self.events.append("arm")
 
-    def hold(self, ms: float) -> None:
+    def hold(self, ms: float, skip_ms: float = 0.0) -> None:  # noqa: ARG002
         self.holds.append(ms)
         self.events.append("hold")
 

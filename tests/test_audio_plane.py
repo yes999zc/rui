@@ -84,3 +84,16 @@ def test_supervisor_reports_a_missing_device_instead_of_hanging(config_path, tmp
 
     with pytest.raises(AudioPlaneError):
         asyncio.run(run())
+
+
+def test_a_mid_song_stream_stop_is_not_a_finished_song() -> None:
+    """15:53:28: the speaker dropped after a resume; the 207 s track "finished" in 0.7 s
+    and the queue advanced. A short stream must not look like a natural end."""
+    from house_ear.audio.process import AudioPlane
+
+    step = 640
+    assert AudioPlane.playback_reached_end(position=1000 + 204_800, offset=1000,
+                                      size=204_800, step=step)
+    assert not AudioPlane.playback_reached_end(position=1000 + 11_200, offset=1000,
+                                          size=204_800, step=step)
+    assert not AudioPlane.playback_reached_end(position=1000, offset=1000, size=204_800, step=step)
