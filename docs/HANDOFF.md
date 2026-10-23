@@ -600,3 +600,19 @@ Lead 已拍板：49 键全开/占位符硬拒绝/只交 pytest 场景契约；d1
 `[::1]`）→ 拒绝 URL/连字符开头结尾、`[v6]` 自动去括号，向导设备 id 统一小写。
 验证：fresh 实例 390px 三页 overflow 0px、深链不弹回、`/setup` 无 console 异常；全量 pytest 绿、ruff clean。
 
+### 12.12 2026-10-23 晚：C-UI P6 话术编辑（已 push）
+
+**P6 完成（d1c task-4 后端 + Lead 接线）**：`session/phrases.py` 增加覆盖层能力（49 个默认模板
+自动导出槽位契约、`validate_override(s)`、`apply_overrides` 全有或全无、`load_overrides` 坏文件
+不阻止启动、`reset`、`snapshot`；`render()` 缺槽不再静默删槽，改为 warning + `book.last_errors` 兜底）。
+`session/phrasebook.py` 管 `data_dir/phrases.yaml`：只存 overrides、原子写、0600、1 个备份、
+未知键记 `unused` 不阻断。控制台：`GET/PUT /api/v1/phrases` + `POST /api/v1/phrases/reset`；
+`/panel/phrases` 走 **PanelSpec 的 `component` 逃生舱**（`panelComponents.ts` 的第一个真实用户），
+49 键分组/搜索/槽位 chips/示例/逐键恢复/全部恢复，未改动的键保存时不写入（默认文案升级仍会到达）。
+剧本契约：`tests/test_phrasebook.py` 两条 YAML 场景（放歌中停止、日报第三条追问）。
+**522 passed，ruff clean。**
+真机/浏览器验证：dev :8091 `GET /api/v1/phrases` 49 键；`PUT` 一条覆盖 → 立即出现在
+`phrases.book`（`GET` overrides 可见）→ `POST reset {}` → 清空；`/panel/phrases` 桌面截图正常，
+面板分组/槽位/示例渲染正确。**未验**：真机听感（改了话术要耳朵），以及多 worker 写入（单进程假设，
+文档已写）。
+

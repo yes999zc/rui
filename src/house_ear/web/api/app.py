@@ -31,7 +31,7 @@ from ...log_setup import LOG_FILE_NAME, tail_lines
 from ...music import MusicService, NavidromeSource, PlayHistory
 from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
-from ...session import phrases, prompts, rules
+from ...session import phrasebook, phrases, prompts, rules
 from ...session.ack import ensure_ack_wav
 from ...session.briefing import Briefing
 from ...session.memory import MemoryStore
@@ -252,6 +252,15 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                     {"key": "tools", "label": "工具", "width": "120px", "join": True},
                  ]},
             ],
+        },
+        {
+            "id": "phrases", "title": "话术", "icon": "Aa", "group": "config", "order": 45,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/phrases", "refresh_s": 0,
+            "blocks": [],
+            # The escape hatch (docs/console.md §2.5): editing 49 templates with slot
+            # chips, dirty tracking and per-key reset is a sequence, not a block set.
+            "component": "phrasebook-editor",
         },
         {
             "id": "logs", "title": "日志", "icon": "≡", "group": "system", "order": 60,
@@ -623,6 +632,16 @@ def create_app(
     start_audio: bool = False,
 ) -> FastAPI:
     secrets.configure(cfg.system.data_dir)
+    # The console's phrase overrides live in data_dir/phrases.yaml; a broken file keeps
+    # the defaults and only warns (an unreadable file must not stop the assistant).
+    try:
+        loaded = phrasebook.load(Path(cfg.system.data_dir))
+        if loaded.error or loaded.errors:
+            log.warning("phrasebook: overrides not applied (%s)", loaded.error or loaded.errors)
+        elif loaded.overrides:
+            log.info("phrasebook: %d phrase override(s) applied", len(loaded.overrides))
+    except Exception as exc:  # noqa: BLE001 - defaults are a valid answer
+        log.warning("phrasebook: load failed: %s", exc)
     registry = ToolRegistry()
     # One assembly for everything local: information tools and reminders. Reminders used
     # to be reachable only through tools.reminders.build_tools, which nothing imported -
@@ -1512,6 +1531,38 @@ def create_app(
             raise HTTPException(status_code=422, detail="action must be add/confirm/remove")
         return {"items": [i.as_dict() for i in store.items()],
                 "item": item.as_dict() if item else None}
+
+    # ---------------------------------------------------------------- phrasebook
+    @app.get("/api/v1/phrases", dependencies=[Depends(auth)])
+    async def phrases_state() -> dict:
+        """Every phrase template + the override file state (P6)."""
+        return phrasebook.document(Path(cfg.system.data_dir))
+
+    @app.put("/api/v1/phrases", dependencies=[Depends(auth)])
+    async def phrases_save(payload: Annotated[dict, Body()]) -> dict:
+        """Replace the override set. All-or-nothing: an invalid key writes nothing."""
+        overrides = payload.get("overrides")
+        if not isinstance(overrides, dict):
+            raise HTTPException(status_code=422, detail="overrides must be an object")
+        try:
+            phrasebook.save(Path(cfg.system.data_dir), overrides)
+        except phrases.PhraseOverrideError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors) from exc
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"cannot write phrases.yaml: {exc}") from exc
+        log.info("phrasebook: %d override(s) saved from the console", len(overrides))
+        return phrasebook.document(Path(cfg.system.data_dir))
+
+    @app.post("/api/v1/phrases/reset", dependencies=[Depends(auth)])
+    async def phrases_reset(payload: Annotated[dict, Body()]) -> dict:
+        """Reset all overrides, or the named keys."""
+        keys = payload.get("keys")
+        if keys is not None and not isinstance(keys, list):
+            raise HTTPException(status_code=422, detail="keys must be a list of phrase keys")
+        phrasebook.clear(Path(cfg.system.data_dir),
+                         [str(key) for key in keys] if keys is not None else None)
+        log.info("phrasebook: reset %s", "all" if keys is None else len(keys))
+        return phrasebook.document(Path(cfg.system.data_dir))
 
     @app.get("/api/v1/panels", dependencies=[Depends(auth)])
     async def panels() -> dict:

@@ -309,6 +309,31 @@ export interface SetupState {
   models_command: string
 }
 
+export interface PhraseKey {
+  key: string
+  default: string
+  text: string
+  example: string
+  slots: string[]
+  overridden: boolean
+  group: string
+  advanced: boolean
+}
+
+/** The console's view of the phrasebook: live templates + the override file state. */
+export interface PhraseDoc {
+  effect: string
+  overrides: Record<string, string>
+  keys: PhraseKey[]
+  last_errors: { key?: string; missing?: string[] }[]
+  file: string
+  file_exists: boolean
+  file_error: string
+  file_overrides: Record<string, string>
+  errors: Record<string, string[]>
+  unused: string[]
+}
+
 export const api = {
   health: () =>
     request<{
@@ -357,6 +382,14 @@ export const api = {
     ),
   stopAudio: () => request<{ playing: string | null }>('/api/v1/debug/play', { method: 'POST', body: JSON.stringify({ stop: true }) }),
   deviceVolume: () => request<{ volume: number; range: string }>('/api/v1/device/volume'),
+  /** P6: every phrase template, plus what the override file currently holds. */
+  phrases: () => request<PhraseDoc>('/api/v1/phrases'),
+  savePhrases: (overrides: Record<string, string>) =>
+    request<PhraseDoc>('/api/v1/phrases', { method: 'PUT', body: JSON.stringify({ overrides }) }),
+  resetPhrases: (keys: string[] | null) =>
+    request<PhraseDoc>('/api/v1/phrases/reset', {
+      method: 'POST', body: JSON.stringify(keys === null ? {} : { keys }),
+    }),
   /** Install wizard (C-UI P4): what is missing, then one step at a time. */
   setup: () => request<SetupState>('/api/v1/setup'),
   setupKeys: (values: Record<string, string>) =>

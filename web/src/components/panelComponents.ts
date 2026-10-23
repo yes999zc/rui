@@ -12,4 +12,8 @@
  */
 import type { Component } from 'vue'
 
-export const PANEL_COMPONENTS: Record<string, () => Promise<{ default: Component }>> = {}
+export const PANEL_COMPONENTS: Record<string, () => Promise<{ default: Component }>> = {
+  // P6: editing 49 templates with slot chips, dirty tracking and per-key reset is a
+  // sequence, not a block set - the escape hatch's first real user.
+  'phrasebook-editor': () => import('./PhrasebookEditor.vue'),
+}
