@@ -1165,12 +1165,12 @@ def create_app(
                         # The model said it did something without calling a tool:
                         # retry once with an explicit instruction, then be honest.
                         log.info("clarify: claimed success with no tool call: %r", result.reply)
-                        forced = (clean + "\n（上一轮你没有成功调用任何工具，不要用文字回答。"
-                                          "如果是点歌就调用 music_play；做不到就如实说没做成，"
-                                          "不要谎称已经放/已经执行。）")
+                        hint = ("上一轮你没有成功调用任何工具，不要用文字回答。"
+                                "如果是点歌就调用 music_play；做不到就如实说没做成，"
+                                "不要谎称已经放/已经执行。")
                         try:
                             result = await runner.run(pcm, _speaking(app, client), trace,
-                                                      transcript=forced)
+                                                      transcript=clean, hint=hint)
                         except Exception as exc:  # noqa: BLE001
                             log.warning("retry after a false claim failed: %s", exc)
                         if not result.tools:

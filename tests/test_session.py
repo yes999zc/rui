@@ -249,3 +249,9 @@ def test_a_music_claim_without_a_tool_call_is_recognised() -> None:
     assert rules.claims_music_success("放首歌", "正在放《晴天》-周杰伦。")
     assert not rules.claims_music_success("放首歌", "好。")
     assert not rules.claims_music_success("现在几点？", "现在下午一点。")
+    # 16:51: a clarification question was mistaken for a success claim (给你放) and
+    # triggered a retry whose forced text leaked into the transcript and the search.
+    assert not rules.claims_music_success(
+        "周杰伦的。", "想听周杰伦哪首？说个歌名，我就给你放。")
+    assert not rules.claims_music_success(
+        "放首歌", "你想听什么？说一首，我就给你放。")

@@ -989,3 +989,25 @@ listening/LED 不灭。修复：新增 plane→control 事件 `WakeIdle`；控�
 **验证**：真 VAD 全量 **676 passed / 1 skipped**、ruff clean；dev 已重启，`/api/v1/config` 实测
 asr chain = `['volc-asr', 'local-asr']`，provider 列表含 volc-asr。
 
+### 12.26 2026-10-23 16:51：ASR 切换后暴露的两个「假称已播放」bug
+
+**ASR 本身正常**：16:51 第一轮 `asr used=volc-asr`，1.82 s 语音识别 **1113.9 ms**，转写
+「周杰伦的。」；16:52「停止播放。」识别 **899.9 ms**。合成语音抽测 4 句（含「放一首周杰伦的
+歌」「帮我朗读岳阳楼记」）全部逐字正确。延迟比本地 SenseVoice（约 80 ms）多约 0.9–1.1 s。
+
+**BUG 1：澄清问句被当成「已经放了」**。用户只说了「周杰伦的。」（没有点歌动词），
+`music_play` 被 guard 拒绝，模型正确反问「想听周杰伦哪首？说个歌名，我就给你放。」——但
+`claims_music_success` 的 `给你放` 命中了假称检测，触发了强制重试。已收紧：必须出现
+`放《…》/正在放/开始放/放上了` 才算宣称；含问号、哪首、歌名、想听、要不要等澄清语义直接
+不算。回归测试覆盖 16:51 原句。
+
+**BUG 2：重试提示词污染 transcript 和工具参数**。重试时把「上一轮你没有成功调用任何工具…」
+拼进 `transcript` 再 `runner.run`，导致：turn 日志里的用户原话变成整段提示词；`music_play`
+的 query 变成「周杰伦的。\n（上一轮…）」，日志里那条 URL 编码的长 query 就是它（第二次
+搜索才用回「周杰伦」）。已改为 `runner.run(..., transcript=clean, hint=...)`：提示只作为
+system 附加说明进入模型，**不进** transcript、历史、上限判断和工具参数。
+
+**验证**：真 VAD 全量 **676 passed / 1 skipped**、ruff clean；dev 已重启。待复测：完整说
+「放一首周杰伦的歌」应直接播放（不反问）；只在唤醒后说「周杰伦的」应反问要哪首，**不再**
+出现「反问完突然开始放」。
+

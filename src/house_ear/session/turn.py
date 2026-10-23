@@ -311,6 +311,7 @@ class TurnRunner:
         # A turn is not an idle session, however long it takes: a 20 s tool lookup must not
         # get a goodbye at 15 s. `check_idle` is a poller and may run while `run()` is open.
         self._in_turn = False
+        self._hint = ""
         self.sample_rate = sample_rate
         self.history_turns = history_turns
         self.wake_words = tuple(wake_words)
@@ -581,6 +582,7 @@ class TurnRunner:
         trace: TurnTrace,
         *,
         transcript: str | None = None,
+        hint: str = "",
     ) -> TurnResult:
         """One turn, with a hard ceiling.
 
@@ -593,7 +595,7 @@ class TurnRunner:
             self._abort.clear()
             self._in_turn = True
             return await asyncio.wait_for(
-                self._run(pcm, speak, trace, transcript=transcript), self.turn_timeout_s
+                self._run(pcm, speak, trace, transcript=transcript, hint=hint), self.turn_timeout_s
             )
         except TimeoutError:
             log.warning("turn: timed out after %.0f s", self.turn_timeout_s)
@@ -613,9 +615,11 @@ class TurnRunner:
         trace: TurnTrace,
         *,
         transcript: str | None = None,
+        hint: str = "",
     ) -> TurnResult:
         result = TurnResult()
         self._trace = trace
+        self._hint = hint
         if transcript is None:
             spoken_text, asr_report = await self.transcribe(pcm, trace)
             if asr_report is not None:
@@ -644,6 +648,18 @@ class TurnRunner:
             messages.append({"role": "system", "content": system_prompt})
         messages += self.history_messages(transcript)
         messages.append({"role": "user", "content": transcript})
+        if self._hint:
+            # A retry instruction (false-claim guard) is a system note: putting it in the
+            # transcript made it the tool query and the logged request (16:51 music query
+            # contained the whole guard text).
+            note = f"重要：{self._hint}"
+            if messages and messages[0].get("role") == "system":
+                messages[0] = {
+                    "role": "system",
+                    "content": messages[0]["content"] + "\n\n" + note,
+                }
+            else:
+                messages.insert(0, {"role": "system", "content": note})
 
         tts_provider: str | None = None
         spoken_parts: list[str] = []
