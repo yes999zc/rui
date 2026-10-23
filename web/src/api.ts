@@ -64,6 +64,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (t) headers.set('X-Auth-Token', t)
   if (init.body) headers.set('Content-Type', 'application/json')
   const res = await fetch(path, { ...init, headers })
+  if (res.status === 401) {
+    // The console has nowhere else to ask: highlight the token field (App.vue).
+    window.dispatchEvent(new Event('house-ear-401'))
+  }
   if (!res.ok) {
     let detail: unknown = null
     const raw = await res.text()

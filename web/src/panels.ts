@@ -27,6 +27,17 @@ export interface PanelButton {
   enabled_when?: string
 }
 
+export interface PanelField {
+  key: string
+  label: string
+  kind?: 'text' | 'number' | 'textarea' | 'select'
+  min?: number
+  max?: number
+  unit?: string
+  hint?: string
+  options?: string[]
+}
+
 export interface PanelBlock {
   type: string
   title?: string
@@ -39,6 +50,9 @@ export interface PanelBlock {
   items?: string
   item_title?: string
   item_sub?: string
+  section?: string
+  apply?: string
+  fields?: PanelField[]
 }
 
 export interface PanelSpec {

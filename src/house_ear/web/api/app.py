@@ -206,6 +206,36 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
+            "id": "settings", "title": "设置", "icon": "⚙", "group": "config", "order": 40,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config", "refresh_s": 0,
+            "blocks": [
+                {"type": "form", "section": "assistant", "title": "助手",
+                 "apply": "下一轮生效", "fields": [
+                    {"key": "name", "label": "名字", "kind": "text", "hint": "1–12 字"},
+                    {"key": "persona", "label": "人设", "kind": "textarea"},
+                    {"key": "reply_max_chars", "label": "日常回答上限", "kind": "number",
+                     "min": 10, "max": 300, "unit": "字"},
+                    {"key": "reply_max_chars_search", "label": "查资料时上限", "kind": "number",
+                     "min": 40, "max": 600, "unit": "字"},
+                    {"key": "reply_max_chars_long", "label": "要求展开时上限", "kind": "number",
+                     "min": 100, "max": 2000, "unit": "字"},
+                ]},
+                {"type": "form", "section": "session", "title": "会话",
+                 "apply": "下一轮生效", "fields": [
+                    {"key": "timeout_s", "label": "空闲多久告别", "kind": "number",
+                     "min": 0, "max": 300, "unit": "秒"},
+                    {"key": "farewell", "label": "告别语", "kind": "select",
+                     "options": ["off", "short", "full"]},
+                    {"key": "farewell_text", "label": "短告别语", "kind": "text"},
+                    {"key": "history_rounds", "label": "上下文轮数", "kind": "number",
+                     "min": 0, "max": 12, "unit": "轮"},
+                    {"key": "vendor_quiet_s", "label": "让位静默窗口", "kind": "number",
+                     "min": 0, "max": 60, "unit": "秒"},
+                ]},
+            ],
+        },
+        {
             "id": "music", "title": "音乐", "icon": "♪", "group": "living", "order": 30,
             "enabled": music_enabled,
             "enabled_reason": "" if music_enabled

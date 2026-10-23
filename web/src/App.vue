@@ -1,12 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { api } from './api'
+import { api, token } from './api'
 import { usePanels } from './composables/usePanels'
 import { GROUP_TITLES } from './panels'
 
 const version = ref('')
 const online = ref(false)
 const { panels } = usePanels()
+const needToken = ref(false)
+const tokenDraft = ref(token.get())
+function saveToken() {
+  token.set(tokenDraft.value.trim())
+  needToken.value = false
+  window.location.reload()
+}
+onMounted(() => {
+  window.addEventListener('house-ear-401', () => { needToken.value = true })
+  if (token.get() !== tokenDraft.value) tokenDraft.value = token.get()
+})
 
 /** Registry panels grouped for the sidebar; disabled ones stay visible, greyed. */
 const groups = computed(() => {
@@ -60,6 +71,11 @@ onMounted(async () => {
         <div class="nav-group">更多</div>
         <RouterLink v-for="v in legacy" :key="v.path" :to="v.path">{{ v.label }}</RouterLink>
       </nav>
+      <div class="token-box" :class="{ attention: needToken }">
+        <div class="token-label">{{ needToken ? '需要访问令牌（401）' : '访问令牌（可选）' }}</div>
+        <input v-model="tokenDraft" type="password" placeholder="X-Auth-Token" @keyup.enter="saveToken" />
+        <button :disabled="!tokenDraft.trim()" @click="saveToken">保存</button>
+      </div>
     </aside>
     <main class="main">
       <RouterView />
@@ -72,4 +88,13 @@ onMounted(async () => {
   font-size: 11px; color: var(--muted); padding: 14px 10px 4px; letter-spacing: 0.04em;
 }
 .nav a.disabled { opacity: 0.45; }
+.token-box {
+  margin-top: 18px; padding: 10px; border-top: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.token-box.attention { border-top-color: var(--fail); }
+.token-label { width: 100%; font-size: 11px; color: var(--muted); }
+.token-box.attention .token-label { color: var(--fail); }
+.token-box input { flex: 1; min-width: 0; font-size: 12px; padding: 4px 7px; }
+.token-box button { font-size: 12px; padding: 4px 8px; }
 </style>
