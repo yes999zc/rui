@@ -29,7 +29,7 @@ from ..providers.chain import (
 )
 from ..tools.contract import ToolResult
 from ..trace import TurnTrace
-from . import phrases, prompts
+from . import phrases, prompts, rules
 from .filler import filler_phrase, should_speak_filler
 from .idle import IdleWatch, farewell_line
 from .rules import stop_reply
@@ -657,6 +657,7 @@ class TurnRunner:
                 tools_pending.set()
             return "".join(parts), calls
 
+        self._transcript = transcript
         self._silent_answer = False
         try:
             for attempt in range(3):
@@ -689,13 +690,23 @@ class TurnRunner:
                     ],
                 })
                 info_used = False
+                silent_calls = 0
                 for call in calls:
+                    guard = self._interactions.get(call.get("name", ""))
+                    if (guard is not None and getattr(guard, "guard", "") == "music_request"
+                            and not rules.looks_like_music_request(self._transcript)):
+                        # Not a music ask: the model repeated an earlier call.
+                        log.info("tool %s refused: the user did not ask for music",
+                                 call.get("name", ""))
+                        messages.append({"role": "tool",
+                                         "tool_call_id": call.get("id", ""),
+                                         "content": "用户没说要点歌，不要调用音乐工具。"})
+                        continue
                     output = await self._call_tool(call)
                     result.tools.append(call.get("name", ""))
                     spec = self._interactions.get(call.get("name", ""))
                     if spec is not None and getattr(spec, "answer", "text") == "silent":
-                        # The action is the answer (a song started): say nothing.
-                        self._silent_answer = True
+                        silent_calls += 1
                     log.info("tool %s -> %s", call.get("name", ""), output[:160])
                     if call.get("name") in self.info_tool_names:
                         info_used = True
@@ -704,6 +715,11 @@ class TurnRunner:
                         "tool_call_id": call.get("id", ""),
                         "content": output,
                     })
+                # Only when EVERY tool this round is silent is the action the whole
+                # answer: a hallucinated music_play beside a weather call must not
+                # swallow the weather answer (measured 10:00:50).
+                if silent_calls and silent_calls == len(calls):
+                    self._silent_answer = True
                 if self._silent_answer:
                     # Checked after the tools ran: the action was the answer.
                     log.info("song is the answer: no spoken confirmation")

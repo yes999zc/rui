@@ -85,14 +85,14 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
 
     def spec(name: str, description: str, exec_map: dict[str, str], *,
              choose: str = "first", filler: str = "none",
-             answer: str = "text",
+             answer: str = "text", guard: str = "",
              permission: Permission = Permission.WRITE,
              input_schema: dict[str, Any] | None = None) -> ToolSpec:
         return ToolSpec(
             name=name, description=description, permission=permission,
             input_schema=input_schema or {},
             interaction=InteractionSpec(exec=exec_map, choose=choose, filler=filler,
-                                        answer=answer),
+                                        answer=answer, guard=guard),
         )
 
     async def music_play(args: dict[str, Any]) -> ToolResult:
@@ -175,7 +175,7 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         (spec("local.music_play",
               "放歌/听音乐/来点音乐/放某歌手或某首歌（query 传用户原话整句，"
               "不要先拆词也不要先用别的工具试探）。说「收藏的歌」时 action 传 favorites。",
-              PLAY_MAP, answer="silent"),
+              PLAY_MAP, answer="silent", guard="music_request"),
          music_play),
         (spec("local.music_pause",
               "音乐播放中说「暂停/停一下/先停这儿」时**必须调用本工具**真正暂停，"
@@ -211,7 +211,8 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
          music_favorite),
         (spec("local.music_play_favorites", "放收藏的歌（「放我收藏的/来点我喜欢的」）",
               {**PLAY_MAP, "empty": "music.favorites_empty",
-               "unreachable": "music.favorites_read_failed"}, answer="silent"),
+               "unreachable": "music.favorites_read_failed"},
+              answer="silent", guard="music_request"),
          music_play_favorites),
         (spec("local.music_taste", "最近爱听什么/最常听谁（播放统计）",
               {"ok_taste": "music.taste_top", "empty": "music.taste_empty"},

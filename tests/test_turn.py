@@ -574,3 +574,45 @@ def test_a_silent_tool_skips_the_spoken_confirmation(monkeypatch) -> None:
     assert result.reply == ""
     assert tts.texts == [], "the confirmation must not be synthesised at all"
     assert spoken == []
+
+
+def test_a_hallucinated_music_call_beside_weather_keeps_the_answer(monkeypatch) -> None:
+    """Measured 10:00:50: a weather question produced two calls - music_play
+    (repeating the previous turn) and weather - and the silent rule swallowed the
+    weather answer. Two guards: music_play refused when the user did not ask for
+    music, and the silent skip only when every call is silent."""
+    from house_ear.tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
+
+    def spec(name: str, **kw: object) -> ToolSpec:
+        return ToolSpec(name=name, description=name, permission=Permission.READ,
+                        interaction=InteractionSpec(**kw))  # type: ignore[arg-type]
+
+    played: list[str] = []
+
+    async def play(args: dict) -> ToolResult:
+        played.append(str(args))
+        return ToolResult(status="ok")
+
+    async def weather(_args: dict) -> ToolResult:
+        return ToolResult.say("沈阳今天毛雨。")
+
+    llm = ScriptedLlm([
+        [ChatChunk(delta="", finish_reason="tool_calls", tool_calls=[
+            {"id": "t1", "name": "music_play", "arguments": '{"query": "冻结"}'},
+            {"id": "t2", "name": "weather", "arguments": "{}"},
+        ])],
+        [ChatChunk(delta="沈阳今天毛雨。")],
+    ])
+    patch_chains(monkeypatch, asr=FakeAsr("今天天气"), llms=[llm], ttss=[FakeTts()])
+    runner = TurnRunner(Config().providers, tools=[
+        (spec("local.music_play", answer="silent", guard="music_request"), play),
+        (spec("local.weather"), weather),
+    ])
+
+    async def speak(_pcm: bytes, *, segment_start: bool = False) -> None:
+        return None
+
+    result = asyncio.run(runner.run(b"\x00\x00" * 800, speak,
+                                    TurnTrace(device_id="living")))
+    assert played == [], "the repeated music call must be refused"
+    assert result.reply == "沈阳今天毛雨。", "the weather answer must survive"

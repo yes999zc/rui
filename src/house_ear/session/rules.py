@@ -124,6 +124,16 @@ def volume_level(transcript: str) -> str | None:
     return None
 
 
+# Words that make an utterance a music ask at all. The model is allowed to call
+# music_play only when one of these is in what the user actually said.
+_MUSIC_INTENT = ("放", "播", "歌", "音乐", "听", "来点", "来首", "曲", "唱")
+
+
+def looks_like_music_request(transcript: str) -> bool:
+    t = normalize(transcript)
+    return bool(t) and any(word in t for word in _MUSIC_INTENT)
+
+
 def is_music_random(transcript: str) -> bool:
     t = normalize(transcript)
     if not t or len(t) > 8:

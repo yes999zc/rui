@@ -90,6 +90,10 @@ class InteractionSpec:
     # "silent": the action IS the answer, so the turn says nothing (old build:
     # "@@PLAY -> the song is the answer; talking over it would be noise").
     answer: str = "text"        # text | silent
+    # "music_request": refuse the call unless the user's own words were a music
+    # ask. Guards against the model repeating a previous turn's call (measured
+    # 10:00:50: a weather question also called music_play).
+    guard: str = ""             # "" | music_request
 
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[ToolResult | str]]
