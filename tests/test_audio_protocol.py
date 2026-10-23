@@ -52,3 +52,16 @@ def test_metrics_are_wire_safe() -> None:
     parsed = parse_control(msg.model_dump_json().encode())
     assert isinstance(parsed, Metrics)
     assert parsed.frames_in == 250
+
+
+def test_reply_finished_carries_the_music_hold() -> None:
+    """The plane reads hold_music_s off the parsed message; a missing field there
+    crashed the audio plane on the first volume confirmation (measured 09:13)."""
+    import json
+
+    from house_ear.audio.protocol import CONTROL
+
+    msg = CONTROL.validate_json(json.dumps({"type": "reply_finished", "hold_music_s": 0}))
+    assert msg.hold_music_s == 0
+    plain = CONTROL.validate_json(json.dumps({"type": "reply_finished"}))
+    assert plain.hold_music_s is None
