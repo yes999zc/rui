@@ -13,10 +13,12 @@ already running when someone speaks.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from pypinyin import Style, lazy_pinyin
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +31,63 @@ class KwsUnavailable(RuntimeError):
 class WakeHit:
     keyword: str
     ts_ms: float
+
+
+# A keywords line is the word as pinyin tokens plus its own boost/threshold, e.g.
+# `n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞`. This is the format sherpa-onnx parses;
+# the old deployment's production numbers live in `write_keywords_file`'s defaults.
+_TONED_VOWELS = frozenset("aāáǎàeēéěèiīíǐìoōóǒòuūúǔùüǖǘǚǜê")
+
+
+def _syllable_tokens(syllable: str) -> list[str]:
+    """Split one pinyin syllable the way the model's token table expects.
+
+    `nǐ` -> `n` + `ǐ`, `hǎo` -> `h` + `ǎo`, `ài` -> `ài` (no initial). A word with
+    no tone mark (a latin wake word) is a single token, which is also valid.
+    """
+    for index, char in enumerate(syllable.lower()):
+        if char in _TONED_VOWELS:
+            return [syllable] if index == 0 else [syllable[:index], syllable[index:]]
+    return [syllable]
+
+
+def keyword_lines(
+    words: Iterable[str], *, threshold: float = 0.15, boost: float = 2.0
+) -> list[str]:
+    """Wake words -> keywords-file lines (the real gate: the file carries the threshold)."""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for word in words:
+        text = str(word).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        syllables = lazy_pinyin(text, style=Style.TONE, strict=False)
+        tokens = [token for syllable in syllables for token in _syllable_tokens(syllable)]
+        lines.append(f"{' '.join(tokens)} :{boost:.2f} #{threshold:.2f} @{text}")
+    return lines
+
+
+def write_keywords_file(
+    path: Path | str,
+    words: Iterable[str],
+    *,
+    threshold: float = 0.15,
+    boost: float = 2.0,
+) -> int:
+    """Write a keywords file for `words`; returns the number of lines.
+
+    A cold install used to have no keywords file at all, so KWS refused to start:
+    the assistant answered only after someone edited a file by hand. The file is
+    generated now, from the same wake words the config already declares.
+    """
+    lines = keyword_lines(words, threshold=threshold, boost=boost)
+    if not lines:
+        raise ValueError("no wake words to write")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(lines)
 
 
 def model_files(model_dir: Path, chunk: int = 8) -> dict[str, str]:

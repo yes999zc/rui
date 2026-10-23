@@ -24,7 +24,10 @@ def test_defaults_are_sane() -> None:
     assert cfg.audio.capture.ref_shift == 16
     assert cfg.audio.capture.rate == 48000
     assert cfg.audio.voice.rate == 16000
-    assert cfg.audio.playback.rate == 48000
+    assert cfg.audio.playback.rate == 16000
+    # The LX06 client plays mono frames; the adapter rejects stereo, so a
+    # default of 2 channels would raise on the first reply of a fresh install.
+    assert cfg.audio.playback.channels == 1
     assert cfg.tools.expose == "domain"
 
 

@@ -192,10 +192,16 @@ class VoiceConfig(BaseModel):
 
 
 class PlaybackConfig(BaseModel):
-    """Music and speech both leave at the device's native rate: 48 kHz, 2 ch on LX06."""
+    """Speech and music leave at the rate the pipeline runs at: 16 kHz, mono.
 
-    rate: int = Field(default=48000, ge=8000, le=96000)
-    channels: int = Field(default=2, ge=1, le=8)
+    The capture/ASR/TTS side is 16 kHz, the LX06 client plays mono frames (the
+    adapter rejects anything else), and asking for 48 kHz/2 ch here only produced
+    a config that looked right and raised on the first reply. The device's own
+    ALSA layer resamples; the wire format is what this number describes.
+    """
+
+    rate: int = Field(default=16000, ge=8000, le=96000)
+    channels: int = Field(default=1, ge=1, le=8)
     queue_ms: int = Field(default=200, ge=20, le=1000)
     fade_out_ms: int = Field(default=120, ge=0, le=500)
     # Blocks (100 ms each) the plane may run ahead of the device's own "consumed"
@@ -412,8 +418,9 @@ class MusicConfig(BaseModel):
     enabled: bool = False
     source: str = "navidrome"
     # Credential keys (url/user/password) inside this json; values never enter the
-    # config or the log. Same file the old build read.
-    secrets_path: str = "~/.hermes/.secrets/lan_media.json"
+    # config or the log. Empty = none provisioned: a production default must not
+    # point at one person's home directory.
+    secrets_path: str = ""
     # Resolved PCM (16 kHz mono s16) is cached here. The old build transcoded and
     # deleted, so replaying one song meant downloading its flac again.
     cache_dir: str = "/tmp/house-ear-music"
@@ -425,6 +432,15 @@ class MusicConfig(BaseModel):
     # How many track ids the history remembers for radio dedup. The old build slid a
     # 40-60 window in memory and lost it on restart; ours persists.
     history_max: int = Field(default=60, ge=10, le=500)
+
+    @model_validator(mode="after")
+    def _music_needs_credentials(self) -> MusicConfig:
+        if self.enabled and not self.secrets_path:
+            raise ValueError(
+                "music.enabled needs music.secrets_path: a json with url/user/password "
+                "(values never go in the config file)"
+            )
+        return self
 
 
 class AssistantConfig(BaseModel):

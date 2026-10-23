@@ -1,0 +1,105 @@
+"""Cold install (P14): `setup` must write a config that can answer, not a schema shell.
+
+A schema-default config was never a working install: empty provider catalog, no
+VAD path, no wake model or keywords file, and a playback layout the device adapter
+rejects. The first sentence could not happen, so these tests pin the quartet:
+setup writes the production template, the keywords file matches the measured gate,
+the wake words follow the config, and fetch-models unpacks the wake model.
+"""
+from __future__ import annotations
+
+import argparse
+import io
+import tarfile
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from house_ear.__main__ import KWS_REPO, _fetch_kws_model, main
+from house_ear.audio.kws import keyword_lines, write_keywords_file
+from house_ear.config import Config, load_config, save_config
+from house_ear.config.schema import DeviceConfig, MusicConfig
+
+EXPECTED = "n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞"
+
+
+def test_setup_writes_the_production_template(tmp_path) -> None:
+    path = tmp_path / "config.yaml"
+    assert main(["setup", "--config", str(path)]) == 0
+    cfg = load_config(path)
+    assert cfg.devices == []
+    assert cfg.providers.asr.chain == ["local_asr", "siliconflow_asr"]
+    assert cfg.providers.tts.chain == ["xfyun_tts", "siliconflow_tts"]
+    assert cfg.providers.llm.chain == ["deepseek_llm"]
+    assert cfg.audio.voice.kws_enabled is True
+    assert cfg.audio.voice.vad_model_path == "/data/models/silero_vad.onnx"
+    assert cfg.audio.playback.channels == 1
+    assert cfg.music.enabled is False
+
+
+def test_setup_generates_the_keywords_file_with_the_measured_gate(tmp_path) -> None:
+    path = tmp_path / "config.yaml"
+    main(["setup", "--config", str(path)])
+    keywords = Path(load_config(path).audio.voice.kws_keywords_file)
+    assert keywords == tmp_path / "keywords.txt"
+    assert keywords.read_text(encoding="utf-8").strip() == EXPECTED
+
+
+def test_keyword_lines_split_syllables_like_the_wake_model_expects() -> None:
+    assert keyword_lines(["你好小瑞"], threshold=0.15, boost=2.0) == [EXPECTED]
+    # No initial: the whole syllable is one token; latin words are one token too.
+    assert keyword_lines(["小爱"])[0].startswith("x iǎo ài :")
+    assert keyword_lines(["小瑞", "小瑞"]) == keyword_lines(["小瑞"])  # de-duplicated
+    with pytest.raises(ValueError):
+        write_keywords_file("/tmp/should-not-exist.txt", [])
+
+
+def test_keywords_command_follows_the_config_wake_words(tmp_path) -> None:
+    path = tmp_path / "config.yaml"
+    main(["setup", "--config", str(path)])
+    cfg = load_config(path)
+    cfg = cfg.model_copy(update={"devices": [
+        DeviceConfig(id="living", adapter="xiaoai", host="speaker.local",
+                     room="客厅", wake_words=["嗨小瑞"]),
+    ]})
+    save_config(path, cfg)
+    assert main(["keywords", "--config", str(path)]) == 0
+    content = (tmp_path / "keywords.txt").read_text(encoding="utf-8")
+    assert content.strip().startswith("h āi x iǎo r uì")
+    assert "@嗨小瑞" in content
+
+
+def test_fetch_models_unpacks_the_wake_model(monkeypatch, tmp_path) -> None:
+    """The archive layout is the dependency: fetch it once, then the plane finds it."""
+    tarball = tmp_path / "kws.tar.bz2"
+    with tarfile.open(tarball, "w:bz2") as tar:
+        for name in ("tokens.txt", "encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx",
+                     "decoder-epoch-13-avg-2-chunk-8-left-64.onnx",
+                     "joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx"):
+            data = f"fake {name}".encode()
+            info = tarfile.TarInfo(f"{KWS_REPO}/{name}")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+    def fake_download(url: str, target: Path, *, force: bool = False) -> int:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(tarball.read_bytes())
+        return target.stat().st_size
+
+    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    args = argparse.Namespace(kws_dest=str(tmp_path / "kws"), kws_url="", force=False)
+    assert _fetch_kws_model(args) == 0
+    model = tmp_path / "kws" / KWS_REPO
+    assert (model / "tokens.txt").exists()
+    assert not (tmp_path / "kws" / f"{KWS_REPO}.tar.bz2").exists()  # unpacked, not kept
+
+
+def test_playback_defaults_are_playable_by_the_device_adapter() -> None:
+    cfg = Config()
+    assert (cfg.audio.playback.rate, cfg.audio.playback.channels) == (16000, 1)
+
+
+def test_music_cannot_be_enabled_without_credentials() -> None:
+    with pytest.raises(ValidationError):
+        MusicConfig(enabled=True, secrets_path="")

@@ -1,3 +1,6 @@
+# The annotated production config. A real install gets this file from
+# `house-ear setup` (see src/house_ear/config/template.yaml - same values, written
+# with the host's paths); this copy is for reading and for a manual install.
 version: 2
 system:
   data_dir: /var/lib/house-ear
@@ -52,7 +55,14 @@ audio:
   voice:
     rate: 16000            # AEC / KWS / VAD run here, not at 48 kHz
     frame_ms: 20
-    kws_threshold: 0.20
+    # Wake word. The real threshold is in the keywords file, not in this config
+    # (`house-ear setup` generates it; `house-ear keywords` regenerates it when the
+    # wake words change). Model comes from `house-ear fetch-models`.
+    kws_enabled: true
+    kws_model_dir: /data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
+    kws_keywords_file: /config/keywords.txt
+    kws_probe_file: ""
+    kws_chunk: 8
     vad_min_speech_ms: 200
     vad_end_silence_ms: 600
     # Audio kept from before the KWS hit and replayed into the gate. The streaming KWS
@@ -66,10 +76,13 @@ audio:
     wake_skip_ms: 300       # the wake phrase's own tail, dropped after the KWS fires
     barge_in: true
   playback:
-    rate: 48000            # measured: S16_LE, 2 ch
-    channels: 2
+    # The pipeline is 16 kHz mono end to end and the LX06 client plays mono frames
+    # (48 kHz / 2 ch was an old assumption that raised on the first reply).
+    rate: 16000
+    channels: 1
     queue_ms: 200
     fade_out_ms: 120
+    credit_window: 8       # blocks the plane may run ahead of the device's reports
     target_silence_ms: 300 # acceptance target for an interrupt
   aec:
     enabled: true
@@ -79,8 +92,8 @@ ack:
   # earcon = a 160 ms tone, no microphone loss. tts = a spoken word, but the LX06 mutes
   # its microphone for ~1.2 s while it plays, so the cue is capped and falls back to the
   # tone when the cap is exceeded.
-  mode: earcon           # none | earcon | tts
-  text: 我在。            # only used by mode: tts; rendered once at startup
+  mode: tts              # none | earcon | tts (9哥 picked the spoken cue)
+  text: 在呢。            # only used by mode: tts; rendered once at startup
   chime: soft2           # soft2 | blip | marimba | glass | piano
   chime_ms: 160          # 0 = the preset's natural length (soft2 500, woodblock 120)
   chime_trim: 1.0        # 0..1: the cue is already at the level the path likes
@@ -109,27 +122,43 @@ providers:
       kind: sherpa
       model: /data/models/sensevoice
       threads: 2
-    siliconflow:
+    siliconflow_asr:
       kind: openai_compat
       base_url: https://api.siliconflow.cn/v1
+      model: FunAudioLLM/SenseVoiceSmall
       api_key_env: HOUSE_EAR_ASR_KEY
-    siliconflow_llm:
-      kind: openai_compat
-      base_url: https://api.siliconflow.cn/v1
-      model: deepseek-ai/DeepSeek-V3
-      api_key_env: HOUSE_EAR_LLM_KEY
+      timeout_s: 8.0
+      retries: 1
+    # Spoken TTS: 讯飞 primary (180-600 ms whole sentence) with SiliconFlow behind it.
+    xfyun_tts:
+      kind: xfyun
+      voice: x4_lingxiaowan_boy
+      app_id_env: XFYUN_APPID
+      api_key_env: XFYUN_API_KEY
+      api_secret_env: XFYUN_API_SECRET
     siliconflow_tts:
       kind: openai_compat
       base_url: https://api.siliconflow.cn/v1
       model: FunAudioLLM/CosyVoice2-0.5B
-      voice: alex
+      voice: FunAudioLLM/CosyVoice2-0.5B:charles
       api_key_env: HOUSE_EAR_TTS_KEY
+      timeout_s: 20.0
+      retries: 1
+    deepseek_llm:
+      kind: openai_compat
+      base_url: https://api.deepseek.com
+      model: deepseek-flash
+      api_key_env: HOUSE_EAR_LLM_KEY
+      timeout_s: 30.0
+      max_tokens: 3000
+      temperature: 0.4
+      thinking: disabled   # measured: thinking 2-3x latency, no accuracy gain
   asr:
-    chain: [local_asr, siliconflow]
+    chain: [local_asr, siliconflow_asr]
   tts:
-    chain: [siliconflow_tts]
+    chain: [xfyun_tts, siliconflow_tts]
   llm:
-    chain: [siliconflow_llm]
+    chain: [deepseek_llm]
 tools:
   expose: domain
   whitelist: []
@@ -150,3 +179,14 @@ tools:
   ha:
     base_url: ""
     token_env: HOUSE_EAR_HA_TOKEN
+music:
+  # Off until a Navidrome/Subsonic server is provisioned: point secrets_path at a
+  # json with url/user/password (never in this file), then set enabled: true.
+  enabled: false
+  source: navidrome
+  secrets_path: /var/lib/house-ear/lan_media.json
+  cache_dir: /var/lib/house-ear/music_cache
+  cache_tracks: 8
+  queue_min_tracks: 2
+  queue_batch: 20
+  history_max: 60

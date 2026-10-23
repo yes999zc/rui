@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from . import __version__
-from .config import Config, ConfigError, default_config_path, load_config, save_config
+from .config import Config, ConfigError, default_config_path, load_config
 from .doctor import run_doctor
 from .log_setup import LOG_FILE_NAME, setup_logging
 
@@ -29,14 +29,45 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if report.verdict != "unsupported" else 2
 
 
+def _production_template(config_path: Path) -> str:
+    """The cold-install config, with `{config_dir}` resolved for this host.
+
+    A schema-default config is not a working install: empty provider catalog, no
+    VAD, no KWS paths, and `devices: []`. That is why `setup` writes this template
+    instead - the old build's production values, the model paths `fetch-models`
+    fills, and no secrets (keys come from the environment).
+    """
+    from importlib import resources
+
+    text = resources.files("house_ear.config").joinpath("template.yaml").read_text(
+        encoding="utf-8")
+    return text.replace("{config_dir}", str(config_path.resolve().parent))
+
+
+def _write_wake_words(config_path: Path, words: list[str]) -> Path:
+    """Write the keywords file next to the config; returns its path."""
+    from .audio.kws import write_keywords_file
+
+    target = config_path.resolve().parent / "keywords.txt"
+    count = write_keywords_file(target, words)
+    print(f"keywords: {count} wake word(s) -> {target}")
+    return target
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     path = _config_path(args)
     if path.exists() and not args.force:
         print(f"config already exists: {path} (use --force to overwrite)")
         return 1
-    save_config(path, Config())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_production_template(path), encoding="utf-8")
+    # The plane refuses to start KWS without a keywords file, and that was the
+    # last hand-edit between "installed" and "answers": generate it from the
+    # wake word the install expects (the wizard regenerates it when the speaker
+    # is added).
+    _write_wake_words(path, list(args.wake_word or DEFAULT_WAKE_WORDS))
     print(f"wrote {path}")
-    print("next: add your speaker under devices[], then run `house-ear doctor`")
+    print("next: put your speaker under devices[], fill .env, run `house-ear fetch-models`")
     return 0
 
 
@@ -47,17 +78,73 @@ SENSEVOICE_FILES = ("model.int8.onnx", "tokens.txt")
 # the same "works on the dev Mac, silently dead on the NAS" shape as a missing model.
 VAD_REPO = "csukuangfj/sherpa-onnx-vad"
 VAD_FILE = "silero_vad.onnx"
+# The wake model (32.9 MB archive). GitHub releases is the only place sherpa-onnx
+# publishes these; the tarball holds several chunk variants and we use chunk 8.
+KWS_REPO = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+KWS_URL = (f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/"
+           f"{KWS_REPO}.tar.bz2")
+DEFAULT_WAKE_WORDS = ("你好小瑞",)
+
+
+def _download_to(url: str, target: Path, *, force: bool = False) -> int:
+    """Stream one file to disk atomically; returns its size in bytes."""
+    import httpx
+
+    if target.exists() and not force:
+        print(f"have {target.name} ({target.stat().st_size / 1e6:.1f} MB)")
+        return target.stat().st_size
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_suffix(target.suffix + ".part")
+    print(f"fetching {url}")
+    with httpx.stream("GET", url, follow_redirects=True, timeout=None) as resp:
+        resp.raise_for_status()
+        total = int(resp.headers.get("content-length") or 0)
+        done = 0
+        with part.open("wb") as fh:
+            for block in resp.iter_bytes(1 << 20):
+                fh.write(block)
+                done += len(block)
+                if total and done % (25 << 20) < (1 << 20):
+                    print(f"  {done / 1e6:6.1f} / {total / 1e6:.1f} MB", flush=True)
+    if total and done != total:
+        part.unlink(missing_ok=True)
+        raise RuntimeError(f"incomplete download: {done} of {total} bytes")
+    part.replace(target)
+    print(f"  {target.name}: {done / 1e6:.1f} MB")
+    return done
+
+
+def _fetch_kws_model(args: argparse.Namespace) -> int:
+    """Download + unpack the wake model; the keywords file is written by setup."""
+    import tarfile
+
+    dest = Path(args.kws_dest)
+    model_dir = dest / KWS_REPO
+    tar_path = dest / f"{KWS_REPO}.tar.bz2"
+    if not (model_dir / "tokens.txt").exists() or args.force:
+        dest.mkdir(parents=True, exist_ok=True)
+        _download_to(args.kws_url or KWS_URL, tar_path, force=args.force)
+        print(f"  unpacking {tar_path.name}")
+        with tarfile.open(tar_path, "r:bz2") as tar:
+            tar.extractall(dest, filter="data")
+        tar_path.unlink(missing_ok=True)
+    else:
+        print(f"have {model_dir.name}")
+    if not (model_dir / "tokens.txt").exists():
+        print(f"wake model incomplete in {model_dir}")
+        return 1
+    print(f"wake model ready in {model_dir}")
+    return 0
 
 
 def cmd_fetch_models(args: argparse.Namespace) -> int:
-    """Download the local ASR model to a data volume.
+    """Download the local models to a data volume.
 
-    The image stays small and the model lives with the data: a fresh install fetches 239 MB
-    once, and a reinstall keeps it. Local ASR is the first entry in the ASR chain when this
-    has run; without it the chain falls through to the cloud entry.
+    The image stays small and the models live with the data: a fresh install
+    fetches ~272 MB once, and a reinstall keeps it. That is the whole ASR chain
+    (SenseVoice first, cloud fallback) and the wake model - before this, KWS was
+    a manual download and a cold install could not hear its own wake word.
     """
-    import httpx
-
     from .providers.sherpa_asr import model_paths
 
     dest = Path(args.dest)
@@ -68,48 +155,39 @@ def cmd_fetch_models(args: argparse.Namespace) -> int:
         "tokens.txt": dest / "tokens.txt",
     }
     for name, target in wanted.items():
-        if target.exists() and not args.force:
-            print(f"have {name} ({target.stat().st_size / 1e6:.0f} MB)")
-            continue
-        url = f"{base}/{name}"
-        part = target.with_suffix(target.suffix + ".part")
-        print(f"fetching {url}")
-        with httpx.stream("GET", url, follow_redirects=True, timeout=None) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length") or 0)
-            done = 0
-            with part.open("wb") as fh:
-                for block in resp.iter_bytes(1 << 20):
-                    fh.write(block)
-                    done += len(block)
-                    if total and done % (25 << 20) < (1 << 20):
-                        print(f"  {done / 1e6:6.1f} / {total / 1e6:.1f} MB", flush=True)
-        if total and done != total:
-            part.unlink(missing_ok=True)
-            print(f"incomplete download: {done} of {total} bytes")
-            return 1
-        part.replace(target)
-        print(f"  {name}: {done / 1e6:.1f} MB")
+        _download_to(f"{base}/{name}", target, force=args.force)
     vad_target = Path(args.vad_dest)
-    if vad_target.exists() and not args.force:
-        print(f"have {VAD_FILE} ({vad_target.stat().st_size / 1e6:.1f} MB)")
-    else:
-        vad_target.parent.mkdir(parents=True, exist_ok=True)
-        url = f"{args.vad_base or 'https://hf-mirror.com/' + VAD_REPO + '/resolve/main'}/{VAD_FILE}"
-        print(f"fetching {url}")
-        with httpx.stream("GET", url, follow_redirects=True, timeout=None) as resp:
-            resp.raise_for_status()
-            part = vad_target.with_suffix(vad_target.suffix + ".part")
-            with part.open("wb") as fh:
-                for block in resp.iter_bytes(1 << 20):
-                    fh.write(block)
-            part.replace(vad_target)
-        print(f"  {VAD_FILE}: {vad_target.stat().st_size / 1e6:.1f} MB")
+    _download_to(args.vad_base or f"https://hf-mirror.com/{VAD_REPO}/resolve/main/{VAD_FILE}",
+                 vad_target, force=args.force)
     onnx, tokens = model_paths(dest)  # recompute: the int8 file did not exist before
     if not onnx.exists() or not tokens.exists():
         print(f"model incomplete in {dest}")
         return 1
     print(f"local asr ready in {dest} - keep it as providers.catalog.<name>.model")
+    if not args.no_kws:
+        if _fetch_kws_model(args) != 0:
+            return 1
+    return 0
+
+
+def cmd_keywords(args: argparse.Namespace) -> int:
+    """Rewrite the keywords file from the config's wake words.
+
+    The file the wake model reads carries the real threshold and is not a config
+    field; whoever changes `devices[].wake_words` (console, install wizard) must
+    regenerate this or the box keeps listening for the old phrase.
+    """
+    from .audio.kws import write_keywords_file
+
+    path = _config_path(args)
+    words = list(args.wake_word or [])
+    if not words:
+        cfg = load_config(path) if path.exists() else Config()
+        words = [word for device in cfg.devices for word in device.wake_words]
+        words = words or list(DEFAULT_WAKE_WORDS)
+    target = Path(args.dest) if args.dest else path.resolve().parent / "keywords.txt"
+    count = write_keywords_file(target, words)
+    print(f"keywords: {count} wake word(s) -> {target}")
     return 0
 
 
@@ -246,11 +324,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_audio.add_argument("--socket")
     p_audio.set_defaults(func=cmd_audio)
 
-    p_fetch = _leaf("fetch-models", "download the local ASR and VAD models to a data volume")
+    p_fetch = _leaf("fetch-models",
+                    "download the local ASR, VAD and wake models to a data volume")
     p_fetch.add_argument("--dest", default="/data/models/sensevoice")
     p_fetch.add_argument("--vad-dest", default="/data/models/silero_vad.onnx")
     p_fetch.add_argument("--vad-base", default="", help="override the VAD download base URL")
     p_fetch.add_argument("--base", default="", help="override the download base URL")
+    p_fetch.add_argument("--kws-dest", default="/data/models/kws",
+                         help="directory the wake model is unpacked into")
+    p_fetch.add_argument("--kws-url", default="", help="override the wake model tarball URL")
+    p_fetch.add_argument("--no-kws", action="store_true", help="skip the wake model")
     p_fetch.add_argument("--force", action="store_true")
     p_fetch.set_defaults(func=cmd_fetch_models)
 
@@ -258,9 +341,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_doc.add_argument("--json", action="store_true")
     p_doc.set_defaults(func=cmd_doctor)
 
-    p_setup = _leaf("setup", "write a default config")
+    p_setup = _leaf("setup", "write the production config and its keywords file")
     p_setup.add_argument("--force", action="store_true")
+    p_setup.add_argument("--wake-word", action="append",
+                         help="wake word for the keywords file (default 你好小瑞)")
     p_setup.set_defaults(func=cmd_setup)
+
+    p_kw = _leaf("keywords", "rewrite keywords.txt from the config's wake words")
+    p_kw.add_argument("--dest", default="", help="target file (default: next to the config)")
+    p_kw.add_argument("--wake-word", action="append")
+    p_kw.set_defaults(func=cmd_keywords)
     return parser
 
 
