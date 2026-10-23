@@ -15,6 +15,13 @@
 5. **打断 ≤300 ms 口径**：当前服务端 `silence_after_ms=0`，但设备端剩余 lead 约 420 ms，需按
    300 ms 口径实测并决定是否继续调。
 
+## B0. 交互缺陷（已定位，待修）
+
+- **回复结束后的免唤醒追问首字丢失**：follow-up gate 在 `pacer.due` 后 1.0 s 才 arm，这 1 秒的麦克风
+  帧没有 buffer/replay；「紧着说『明天呢』」会丢首字，等 1 秒后说才正常。旧项目用 `ECHO_TAIL=0.7`
+  + `echo_tail_buf` replay 解决（`assistant_v3.py:2771,3122,3242`）。计划：缓存 due→arm 的帧，arm 后
+  回放给 VAD；加单测 + 真机验证。**9哥 要求先不改，已加入本轮 TODO（task-27）。**
+
 ## B. 真机 / 功能遗留
 
 6. **音箱客户端安装路径**：新用户没有 open-xiaoai client 安装步骤、没有「显示设备 token + 复制
