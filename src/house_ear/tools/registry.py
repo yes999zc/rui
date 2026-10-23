@@ -37,6 +37,12 @@ class ToolRegistry:
             self._specs.pop(name, None)
             self._handlers.pop(name, None)
 
+    def unregister(self, names: Iterable[str]) -> None:
+        """Drop specific tools by name (a source reconfigured at runtime uses this)."""
+        for name in names:
+            self._specs.pop(name, None)
+            self._handlers.pop(name, None)
+
     def get(self, name: str) -> ToolSpec:
         try:
             return self._specs[name]

@@ -153,3 +153,8 @@ def test_the_console_declares_the_tools_the_review_found_missing() -> None:
     # The plane's 2 s level line is noise in a 300-line tail.
     log_block = next(b for b in found["logs"]["blocks"] if b["type"] == "log")
     assert "voice peak" in log_block["hide"]
+    # P5: device administration and the HA/MCP page are hand-written components.
+    assert found["devices-admin"]["component"] == "device-manager"
+    assert found["mcp"]["component"] == "mcp-manager"
+    for panel_id in ("devices-admin", "mcp", "phrases"):
+        assert found[panel_id]["blocks"] == [], panel_id

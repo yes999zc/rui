@@ -616,3 +616,26 @@ Lead 已拍板：49 键全开/占位符硬拒绝/只交 pytest 场景契约；d1
 面板分组/槽位/示例渲染正确。**未验**：真机听感（改了话术要耳朵），以及多 worker 写入（单进程假设，
 文档已写）。
 
+### 12.13 2026-10-23 晚：C-UI P5 设备管理 + MCP/HA 管理页（已 push）
+
+**P5 完成，C-UI P1–P6 全部收线。535 passed，ruff clean，vue-tsc/build clean。**
+
+- **设备管理 `/panel/devices-admin`（component `device-manager`）**：`GET /api/v1/devices/{id}`
+  （配置 + adapter 实时状态）、`PUT`（按 id 合并，保留表单不展示的 listen_port/LED 配色/音量目标；
+  host/room/wake_words/adapter/enabled/volume/listen_port 全字段校验，422 可读）、`DELETE`
+  （删掉后音频面按剩余设备重启，watchdog 在无设备时 idle）、`POST /api/v1/devices/probe`
+  与向导共用 SSH banner 探测。改唤醒词会同步重生成 keywords.txt（实测）。
+  前端：列表点选 → 表单编辑 + 探测 + 保存 + 删除 + 添加音箱；保存提示「音频面已重启」。
+- **MCP / HA 管理页 `/panel/mcp`（component `mcp-manager`）**：`GET /api/v1/mcp`（base_url、
+  token_env、has_token、connected、latency、tools/entities、last_error）、`PUT`（写
+  `tools.ha`，token 走 secrets 只写不读，**运行期重建 HA bridge**：停旧桥 → 摘掉
+  `local.ha_*` 工具 → 连新桥 → 重新注册 → `runner.set_tools`）、`POST /api/v1/mcp/test`
+  （一次性桥测连接，不保存）。通用 `tools.mcp_servers` 只读展示并明写「预留未接线」。
+  dev 实测：HA connected、**86 个 MCP 工具 / 75 个实体 / 3.8 ms**；面板截图正常。
+- **新增 ToolRegistry.unregister(names)** 支撑运行期按名字摘工具（HA 工具是 `local.ha_*`，
+  `unregister_source(prefix)` 只能按 `prefix.` 处理，不适用）。
+- 测试：`tests/test_devices_admin.py` 7 条（读/合并保留字段/唤醒词重生成/422 矩阵/删除 404/
+  无 config 409/探测不可达），`tests/test_mcp_admin.py` 7 条（状态/写 URL+token 且不回显/
+  运行期重连/422/清空即停用/test 不落盘/无 config 409，用 FakeBridge 替身）；面板契约测试
+  增加 P5 两个 component 断言。
+

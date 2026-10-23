@@ -334,6 +334,50 @@ export interface PhraseDoc {
   unused: string[]
 }
 
+/** One device as the console edits it (the fields the form owns, plus the rest). */
+export interface DeviceDoc {
+  id: string
+  adapter: string
+  host: string
+  room: string
+  enabled: boolean
+  wake_words: string[]
+  volume: number
+  listen_port: number | null
+  [key: string]: unknown
+}
+
+export interface DeviceDetail {
+  device: DeviceDoc
+  live: { model?: string; transport?: string; status?: string; capabilities?: string[] }
+}
+
+/** HA over MCP: the endpoint, whether it answers, and how much it lists. */
+export interface McpState {
+  ha: {
+    base_url: string
+    token_env: string
+    has_token: boolean
+    wired: boolean
+    connected: boolean
+    latency_ms: number | null
+    tools: number
+    entities: number
+    error: string
+  }
+  servers: { name: string; transport: string; url: string; enabled: boolean }[]
+  generic_wired: boolean
+}
+
+export interface McpProbe {
+  ok: boolean
+  connected: boolean
+  latency_ms: number | null
+  tools: number
+  entities: number
+  error: string
+}
+
 export const api = {
   health: () =>
     request<{
@@ -382,6 +426,24 @@ export const api = {
     ),
   stopAudio: () => request<{ playing: string | null }>('/api/v1/debug/play', { method: 'POST', body: JSON.stringify({ stop: true }) }),
   deviceVolume: () => request<{ volume: number; range: string }>('/api/v1/device/volume'),
+  /** P5: device admin (edit/delete use the id; probe is the wizard's SSH check). */
+  deviceDetail: (id: string) => request<DeviceDetail>(`/api/v1/devices/${encodeURIComponent(id)}`),
+  updateDevice: (id: string, patch: Record<string, unknown>) =>
+    request<DeviceDetail>(`/api/v1/devices/${encodeURIComponent(id)}`, {
+      method: 'PUT', body: JSON.stringify(patch),
+    }),
+  deleteDevice: (id: string) =>
+    request<{ removed: string; devices: string[] }>(`/api/v1/devices/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }),
+  probeDevice: (host: string) =>
+    request<{ host: string; usable: boolean; hint: string; ssh: { port_open: boolean; banner: boolean; ms?: number; error?: string } }>(
+      '/api/v1/devices/probe', { method: 'POST', body: JSON.stringify({ host }) }),
+  /** P5: HA over MCP (write endpoint/token, test a throwaway connection). */
+  mcp: () => request<McpState>('/api/v1/mcp'),
+  saveMcp: (payload: { ha?: { base_url?: string; token?: string }; servers?: unknown[] }) =>
+    request<McpState>('/api/v1/mcp', { method: 'PUT', body: JSON.stringify(payload) }),
+  testMcp: (base_url: string) =>
+    request<McpProbe>('/api/v1/mcp/test', { method: 'POST', body: JSON.stringify({ base_url }) }),
   /** P6: every phrase template, plus what the override file currently holds. */
   phrases: () => request<PhraseDoc>('/api/v1/phrases'),
   savePhrases: (overrides: Record<string, string>) =>

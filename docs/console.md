@@ -117,7 +117,7 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 | **P3** ✅ | `GET /api/v1/logs` + log block（轮询/过滤/跟随）；table block + 对话面板；memory block + 记忆面板 | 日志页不再是占位 |
 | **P3.5** ✅ 2026-10-23 | **逐页复核**：SPA 深链 fallback、`/diagnostics`、`say`/`volume` 两种 block、列表串插值、日志隐藏噪声、删掉 4 个死页面与 2 个重复入口、9 条注册表契约测试 | `docs/console-audit.md` |
 | **P4 ✅ 2026-10-23** | 首次安装向导（`/setup` + `GET /api/v1/setup` + keys/device/wake/probe）：状态由服务器上的 key/模型文件/config 计算；**key 是否齐全按各 provider 链的 `api_key_env/app_id_env/api_secret_env` 实际判断**（不硬编码 key 名，本地 sherpa 条看模型文件）；加设备会写 config（**按 id 合并，保留 listen_port/LED/volume 等向导不展示的字段**）、重生成 keywords、重启音频面；只有前四步真没完成时首装才落地向导页（`complete` 标志，验证「试一句」只是提示不强制） | 隔离 :18090 实例实测：`/` → `/setup`；三步勾选随真调用翻转、keywords.txt 逐字一致、探测返回不可达原因；dev 配置实测 `complete=true` 时 `/` 不再跳向导；`tests/test_setup.py` 7 条 |
-| P5 | 设备添加/编辑（多设备）+ MCP/HA 管理页 | 待做 |
+| **P5 ✅ 2026-10-23** | 设备管理（`/panel/devices-admin`：编辑/添加/删除/探测，保存即重启音频面并保留表单不展示的字段）+ MCP/HA 管理页（`/panel/mcp`：地址/token 写入、运行期重连、测试连接、通用 MCP 只读说明） | `GET/PUT/DELETE /api/v1/devices/{id}`、`POST /api/v1/devices/probe`、`GET/PUT /api/v1/mcp`、`POST /api/v1/mcp/test`；dev 实测 HA connected、86 工具/75 实体/3.8 ms；`tests/test_devices_admin.py` 7 条 + `tests/test_mcp_admin.py` 7 条 |
 | **P6 ✅ 2026-10-23** | PhraseBook 编辑区（`/panel/phrases`，走 `component` 逃生舱 `phrasebook-editor`）+ 覆盖层 `data_dir/phrases.yaml` + 槽位硬校验 + 剧本契约（`tests/test_phrasebook.py` 两条 YAML 场景） | 49 键全量下发/搜索/分组/槽位 chips/示例/逐键恢复/全部恢复；非法覆盖 422 按 key 回显且不落盘；保存后下一句立即生效；HA 提示片段折叠为高级 |
 | P4（旧，可选） | websocket 替换轮询（仅日志/进度需要亚秒级） | — |
 

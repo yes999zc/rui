@@ -131,6 +131,34 @@ def _direct_speech(name: str, transcript: str, output: object) -> DirectSpeech |
     )
 
 
+async def _probe_host(host: str) -> dict:
+    """TCP connect + SSH banner. A VPN/TUN answers the connect for any address, so the
+    banner is what separates "a speaker is there" from "something answered"."""
+    started = time.perf_counter()
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, 22), timeout=2.0)
+    except (TimeoutError, OSError) as exc:
+        return {"host": host, "usable": False,
+                "ssh": {"port_open": False, "banner": False, "error": type(exc).__name__},
+                "hint": "SSH 端口不通：确认音箱在同一网段、已开 SSH"}
+    banner = False
+    try:
+        line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+        banner = line.startswith(b"SSH-")
+    except (TimeoutError, OSError):
+        banner = False
+    finally:
+        writer.close()
+        with contextlib.suppress(Exception):
+            await writer.wait_closed()
+    ssh = {"port_open": True, "banner": banner,
+           "ms": round((time.perf_counter() - started) * 1000)}
+    if banner:
+        return {"host": host, "usable": True, "ssh": ssh, "hint": ""}
+    return {"host": host, "usable": False, "ssh": ssh,
+            "hint": "端口通了但没有 SSH banner（VPN/代理可能假阳性），换一个地址登记吧"}
+
+
 def _context_provider(app: FastAPI, ha: HaBridge | None):
     """Per-turn prompt extras: the entity list and, over music, the short-answer rule."""
     ha_ctx = _ha_context(ha) if ha is not None else (lambda: "")
@@ -254,6 +282,12 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
+            "id": "devices-admin", "title": "设备管理", "icon": "⚙", "group": "config",
+            "order": 42, "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/devices", "refresh_s": 0, "blocks": [],
+            "component": "device-manager",
+        },
+        {
             "id": "phrases", "title": "话术", "icon": "Aa", "group": "config", "order": 45,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/phrases", "refresh_s": 0,
@@ -261,6 +295,12 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             # The escape hatch (docs/console.md §2.5): editing 49 templates with slot
             # chips, dirty tracking and per-key reset is a sequence, not a block set.
             "component": "phrasebook-editor",
+        },
+        {
+            "id": "mcp", "title": "MCP / HA", "icon": "⌗", "group": "config", "order": 46,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/mcp", "refresh_s": 5, "blocks": [],
+            "component": "mcp-manager",
         },
         {
             "id": "logs", "title": "日志", "icon": "≡", "group": "system", "order": 60,
@@ -1940,39 +1980,223 @@ def create_app(
 
     @app.post("/api/v1/setup/probe", dependencies=[Depends(auth)])
     async def setup_probe(payload: Annotated[dict, Body()]) -> dict:
-        """Is the host reachable? One TCP connect to SSH - no login, no device commands."""
-        host = _host(payload.get("host"))
+        """Is the host a reachable speaker? TCP + SSH banner, no login, no commands."""
+        return await _probe_host(_host(payload.get("host")))
 
-        async def probe_ssh() -> dict:
-            """TCP connect + SSH banner: a VPN/TUN answers the connect for any address."""
-            started = time.perf_counter()
-            try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, 22), timeout=2.0)
-            except (TimeoutError, OSError) as exc:
-                return {"port_open": False, "banner": False, "error": type(exc).__name__}
-            banner = False
-            try:
-                line = await asyncio.wait_for(reader.readline(), timeout=2.0)
-                banner = line.startswith(b"SSH-")
-            except (TimeoutError, OSError):
-                banner = False
-            finally:
-                writer.close()
-                with contextlib.suppress(Exception):
-                    await writer.wait_closed()
-            return {"port_open": True, "banner": banner,
-                    "ms": round((time.perf_counter() - started) * 1000)}
+    # ---------------------------------------------------------------- device admin
+    def _device_or_404(device_id: str, config: Config) -> DeviceConfig:
+        for device in config.devices:
+            if device.id == device_id:
+                return device
+        raise HTTPException(status_code=404, detail=f"no such device: {device_id}")
 
-        ssh = await probe_ssh()
-        usable = bool(ssh["port_open"] and ssh["banner"])
-        if usable:
-            hint = ""
-        elif not ssh["port_open"]:
-            hint = "SSH 端口不通：确认音箱在同一网段、已开 SSH"
-        else:
-            hint = "端口通了但没有 SSH banner（VPN/代理可能假阳性），换一个地址登记吧"
-        return {"host": host, "ssh": ssh, "usable": usable, "hint": hint}
+    async def _device_detail(device_id: str) -> dict:
+        device = _device_or_404(device_id, app.state.cfg)
+        live: dict = {}
+        adapters_now = getattr(app.state, "adapters", None)
+        adapter = adapters_now.adapters.get(device_id) if adapters_now is not None else None
+        if adapter is not None:
+            info = await adapter.probe()
+            live = {"model": info.model, "transport": info.transport.value,
+                    "status": "ready", "capabilities": sorted(info.capabilities)}
+        return {"device": device.model_dump(mode="json"), "live": live}
+
+    @app.get("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
+    async def device_detail(device_id: str) -> dict:
+        """One device's editable config plus what the adapter reports right now."""
+        return await _device_detail(device_id)
+
+    @app.put("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
+    async def device_update(device_id: str, payload: Annotated[dict, Body()]) -> dict:
+        """Edit one device. Fields not sent are preserved (LED colours, volume target...)."""
+        if config_path is None or not Path(config_path).exists():
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        try:
+            current = load_config(Path(config_path))
+        except ConfigError as exc:
+            raise HTTPException(status_code=409, detail=f"config is not readable: {exc}") from exc
+        device = _device_or_404(device_id, current)
+        base = device.model_dump(mode="json")
+        if "host" in payload:
+            base["host"] = _host(payload.get("host"))
+        if "room" in payload:
+            base["room"] = _room(payload.get("room"))
+        if "wake_words" in payload:
+            base["wake_words"] = _wake_words(payload) or list(device.wake_words)
+        if "adapter" in payload:
+            adapter = str(payload.get("adapter") or "").strip()
+            if not adapter:
+                raise HTTPException(status_code=422, detail="adapter cannot be empty")
+            base["adapter"] = adapter
+        if "enabled" in payload:
+            base["enabled"] = bool(payload.get("enabled"))
+        if "volume" in payload:
+            try:
+                volume = int(payload.get("volume"))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail="volume must be an int 0..255") from exc
+            if not 0 <= volume <= 255:
+                raise HTTPException(status_code=422, detail="volume must be an int 0..255")
+            base["volume"] = volume
+        if "listen_port" in payload:
+            port = payload.get("listen_port")
+            if port is None:
+                base["listen_port"] = None
+            elif isinstance(port, int) and 1 <= port <= 65535:
+                base["listen_port"] = port
+            else:
+                raise HTTPException(status_code=422, detail="listen_port must be an int 1..65535")
+        try:
+            updated_device = DeviceConfig.model_validate(base)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=[
+                {"loc": list(error.get("loc", ())), "msg": str(error.get("msg", ""))}
+                for error in exc.errors(include_url=False)
+            ]) from exc
+        others = [item for item in current.devices if item.id != device_id]
+        updated = current.model_copy(update={"devices": [updated_device, *others]})
+        await _write_devices(updated)
+        log.info("device %s updated from the console", device_id)
+        return await _device_detail(device_id)
+
+    @app.delete("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
+    async def device_delete(device_id: str) -> dict:
+        """Remove one device; the plane restarts with whatever remains."""
+        if config_path is None or not Path(config_path).exists():
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        current = load_config(Path(config_path))
+        _device_or_404(device_id, current)
+        updated = current.model_copy(
+            update={"devices": [item for item in current.devices if item.id != device_id]})
+        await _write_devices(updated)
+        log.info("device %s removed from the console", device_id)
+        return {"removed": device_id, "devices": [item.id for item in updated.devices]}
+
+    @app.post("/api/v1/devices/probe", dependencies=[Depends(auth)])
+    async def devices_probe(payload: Annotated[dict, Body()]) -> dict:
+        """Same SSH-banner probe as the wizard, for the edit form."""
+        return await _probe_host(_host(payload.get("host")))
+
+    # ---------------------------------------------------------------- MCP / HA
+    async def _apply_ha(updated: Config) -> None:
+        """Re-apply the HA MCP bridge at runtime: stop, drop its tools, reconnect.
+
+        The HA tools are named local.ha_*; they are removed by name (the registry can
+        only drop a whole source prefix otherwise) and re-registered from the new
+        bridge. A failed connect leaves the bridge object in place so the page can
+        show its last_error, and the model simply has no HA tools until it works.
+        """
+        old = getattr(app.state, "ha", None)
+        if old is not None:
+            with contextlib.suppress(Exception):
+                await old.stop()
+        ha_names = [spec.name for spec, _ in local_tools if spec.name.startswith("local.ha_")]
+        registry.unregister(ha_names)
+        local_tools[:] = [(spec, handler) for spec, handler in local_tools
+                          if not spec.name.startswith("local.ha_")]
+        bridge: HaBridge | None = None
+        if updated.tools.ha.base_url:
+            bridge = HaBridge(updated.tools.ha, Path(updated.system.data_dir))
+            if await bridge.start():
+                for spec, handler in bridge.tool_specs():
+                    registry.register(spec, handler)
+                    local_tools.append((spec, handler))
+                log.info("ha: re-applied, %d tools", len(bridge.tool_specs()))
+            else:
+                log.warning("ha: re-apply failed (%s) - HA tools are gone",
+                            getattr(bridge.client, "last_error", ""))
+        app.state.ha = bridge
+        runner = getattr(app.state, "runner", None)
+        if runner is not None:
+            runner.set_tools(list(local_tools))
+            runner.extra_context = _context_provider(app, bridge)
+
+    def _mcp_state() -> dict:
+        ha = cfg.tools.ha
+        bridge = getattr(app.state, "ha", None)
+        status = bridge.status if bridge is not None else {
+            "connected": False, "latency_ms": None, "tools": 0, "entities": 0}
+        return {
+            "ha": {
+                "base_url": ha.base_url,
+                "token_env": ha.token_env,
+                "has_token": secrets.has(ha.token_env),
+                "wired": bool(ha.base_url),
+                **status,
+                "error": getattr(getattr(bridge, "client", None), "last_error", "") or "",
+            },
+            "servers": [server.model_dump(mode="json") for server in cfg.tools.mcp_servers],
+            # tools.mcp_servers is a reserved shape: the generic MCP client exists, but
+            # only HA is wired end to end. Say so instead of pretending.
+            "generic_wired": False,
+        }
+
+    @app.get("/api/v1/mcp", dependencies=[Depends(auth)])
+    async def mcp_state() -> dict:
+        return _mcp_state()
+
+    @app.put("/api/v1/mcp", dependencies=[Depends(auth)])
+    async def mcp_update(payload: Annotated[dict, Body()]) -> dict:
+        """Write the HA endpoint (and optionally its token), then reconnect live."""
+        if config_path is None or not Path(config_path).exists():
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        try:
+            current = load_config(Path(config_path))
+        except ConfigError as exc:
+            raise HTTPException(status_code=409, detail=f"config is not readable: {exc}") from exc
+        merged = current.model_dump(mode="json")
+        patch = payload.get("ha")
+        if patch is not None:
+            if not isinstance(patch, dict):
+                raise HTTPException(status_code=422, detail="ha must be an object")
+            base_url = str(patch.get("base_url", merged["tools"]["ha"]["base_url"]) or "").strip()
+            if base_url and not base_url.startswith(("http://", "https://")):
+                raise HTTPException(status_code=422,
+                                    detail="base_url must start with http:// or https://")
+            merged["tools"]["ha"]["base_url"] = base_url.rstrip("/")
+            token = patch.get("token")
+            if isinstance(token, str) and token.strip():
+                try:
+                    secrets.put(str(merged["tools"]["ha"]["token_env"]), token.strip())
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if "servers" in payload:
+            if not isinstance(payload["servers"], list):
+                raise HTTPException(status_code=422, detail="servers must be a list")
+            merged["tools"]["mcp_servers"] = payload["servers"]
+        try:
+            updated = Config.model_validate(merged)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=[
+                {"loc": list(error.get("loc", ())), "msg": str(error.get("msg", ""))}
+                for error in exc.errors(include_url=False)
+            ]) from exc
+        save_config(Path(config_path), updated)
+        _apply_config(updated)
+        await _apply_ha(updated)
+        log.info("mcp: config written from the console (ha=%s)", updated.tools.ha.base_url)
+        return _mcp_state()
+
+    @app.post("/api/v1/mcp/test", dependencies=[Depends(auth)])
+    async def mcp_test(payload: Annotated[dict, Body()]) -> dict:
+        """Connect a throwaway HA bridge and report what it lists; nothing is saved."""
+        base_url = str(payload.get("base_url") or cfg.tools.ha.base_url or "").strip()
+        if not base_url or not base_url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=422,
+                                detail="base_url must start with http:// or https://")
+        probe_cfg = cfg.tools.ha.model_copy(update={"base_url": base_url})
+        bridge = HaBridge(probe_cfg, Path(cfg.system.data_dir))
+        try:
+            ok = await asyncio.wait_for(bridge.start(), timeout=10.0)
+            result = {"ok": ok, **bridge.status,
+                      "error": "" if ok else (getattr(bridge.client, "last_error", "") or "")}
+            return result
+        except TimeoutError:
+            return {"ok": False, "connected": False, "tools": 0, "entities": 0,
+                    "error": "timeout after 10 s"}
+        finally:
+            with contextlib.suppress(Exception):
+                await bridge.stop()
 
     # ---------------------------------------------------------------- secrets
     @app.get("/api/v1/secrets", dependencies=[Depends(auth)])
