@@ -1,14 +1,14 @@
 # D1c 调研落地笔记（阶段 1：语言索引 / 描述式点歌 / 点歌多候选）
 
-> 2026-10-23，teammate `d1c`。范围是 `docs/ROADMAP.md` D1c 行的 ① ② ⑤；③（停止词二分）与
-> ④（日报直通）要改 `src/house_ear/web/api/app.py`，按分工等 Lead 交接，见 §7。
+> 2026-10-23，teammate `d1c`。范围是 `docs/ROADMAP.md` D1c 行的 ① ② ⑤ 与 ③ ④：
+> ① ② ⑤ 在阶段 1（music 层），③ ④ 的纯逻辑在阶段 2A（§7）、接线在阶段 2B（§8，Lead 交接后）。
 > 本文只写方案取舍、真实数字和剩余风险；代码注释里有每处细节的出处。
 
 ## 1. 结论（先看数字）
 
 | 项 | 结果 |
 |---|---|
-| 全量测试 | **469 passed**（D1c 新增：阶段 1 共 38 条——`test_music_index.py` 20、`test_music_semantic.py` 11、`test_music_tools.py` +7；阶段 2A 共 11 条——`test_briefing.py` 8、`test_session.py` +3） |
+| 全量测试 | 480 collected：**479 passed + 1 个并行外部失败**（见 §8.4，不是 D1c 改动）。D1c 新增 49 条：阶段 1 共 38——`test_music_index.py` 20、`test_music_semantic.py` 11、`test_music_tools.py` +7；阶段 2A 共 11——`test_briefing.py` 8、`test_session.py` +3；阶段 2B 共 11——`test_session.py` +5、`test_briefing.py` +6 |
 | lint | `uv run ruff check src tests scripts` clean |
 | 真实 Navidrome 建索引 | **5736 首 / search3 12 页 / 0.78 s / 缓存 1189 KiB**（data_dir/library_index.json） |
 | 语言分布（真实库） | ja 20 · ko 3 · zh 5333 · en 377 · other 3 · unknown 0 |
@@ -138,10 +138,9 @@
 5. **索引文件无控制台入口**：目前只能删文件/等 TTL 重建；C-UI 阶段可加“曲库索引状态/重建”面板。
 6. **真机听感未验收**：按分工本阶段不对真机下发声音；D1c 的“语言/描述式点歌各 1 例”目前是
    HTTP + 单元测试证据，等 Lead 调度一次真机点歌做耳朵确认。
-7. **阶段 2 只完成纯逻辑**：`rules.stop_scope` 与 `session/briefing.py` 已就绪且有测试；接线要改
-   `web/api/app.py`（日报直通可能还要 `session/turn.py` 配合拦截 `briefing` 状态），等 Lead 显式交接。
-   本机 PATH 没有 `/opt/homebrew/bin/ffmpeg`，真实音频 resolve 前须补 PATH，否则每首歌都会静默跳过
-   （Lead 实测）。
+7. **阶段 2B 已接线但真机未验**：③④ 的代码级/进程内/HTTP 证据见 §8，真机声音（两个停止分支）
+   仍需和 Lead 约声音流再验。另外本机 PATH 没有 `/opt/homebrew/bin/ffmpeg`，真实音频 resolve 前
+   须补 PATH，否则每首歌都会静默跳过（Lead 实测）。
 
 ## 7. 阶段 2A：停止词二分 / 日报直通的纯逻辑（已完成，未接线）
 
@@ -191,17 +190,61 @@ Lead 把阶段 2 拆成两半：先做不碰 `app.py` 的纯逻辑（本节）�
 接线时（阶段 B）的硬约束：`briefing` 状态必须在 `_render_tool_result` **之前**被 system 层拦下；
 朗读 `speech_text`；把 `history_messages()` 追加进会话；同一轮的 LLM 绝不看到 `speech_text`。
 
-## 8. 阶段 2B 待交接（接线）
+## 8. 阶段 2B：app.py 接线（已完成，代码级/进程内实测）
 
-- ③ 接线：app.py 的停止词分支把当前 `music_active` 传给 `rules.stop_scope(clean, music_active,
-  cfg.session.end_words)`，按 `media_stop`（service.stop，会话继续）与 `bare_stop`
-  （runner.dismiss，会话关闭）分两条路。现有 `_music_transport` 仍先跑，暂停/继续不受影响。
-- ④ 接线：`tools/info.py:news()` 改为产出 `Briefing`（或 app 直接构造）；`briefing` 状态必须在
-  `_render_tool_result` 之前被拦下，朗读 `speech_text`，把 `history_messages()` 写进会话。
-  现有新闻工具是「字符串进模型」，要换掉这条路径。若拦截点必须放在 `session/turn.py`，
-  需要 Lead 把那一小段也一起交接（最小改动优先）。
-- 验收：两种停止语义各一条路径；日报能追问「第三条再说说」且同轮模型 messages 里没有播报原文。
-- 两项都等 Lead 的 `app.py` 交接；本任务不先改。
+### 8.1 ③ 停止词分支（`web/api/app.py::_stop_command`）
+
+把原 stop_intent 块抽成可测的 `_stop_command(app, clean, runner, client, trace, traces) -> bool`，
+on_utterance 只负责调用；判据全部走 2A 的 `rules.stop_scope`：
+
+- **media_stop**（放歌中，非 dismiss 词）：`service.stop()` 清队列 → PhraseBook `music.stopped`
+  「好，不放了。」→ `reply_finished()`、灯灭 → `session_action="media_stop"`，**session 不关**
+  （`runner.idle.touch()`，不调用 dismiss）。
+- **bare_stop**（没放歌，或「退下吧/关机/不聊了」）：先 `service.stop()`（dismiss 词在放歌时也必须
+  停歌，09:17 实测歌 12 s 后回来是 bug），无 service 但 plane 仍占 music 时发 `StopAudio`，
+  再 `runner.dismiss()`（保留告别/灭灯语义），`session_action="bare_stop"`。
+- 停止词回复只从 PhraseBook 取；app.py 没有新增中文字面话术。
+
+实测（进程内、真实 `MusicService`、假 speaker，脚本见 §9）：
+`media_stop` → 队列 3→0、state=idle、session_active=True、回复 `好，不放了。`；
+`bare_stop` → 回复 `好。`、session_active=False；`退下吧` 放歌中 → 先停歌再 `好。`、会话关闭；
+非停止句返回 False、零副作用。
+
+### 8.2 ④ 日报直通（`tools/info.py` + `session/turn.py` + `app.py`）
+
+- `tools/info.py::news()` 成功时返回 `Briefing`（失败仍是普通句子，让模型诚实说没取到）；
+  `from_news` 负责日期/编号/补句号/微语，沿用老 `tools/news.py:126-136` 的形状。
+- `session/turn.py` 新增 **opt-in** `direct_hook` 与 `DirectSpeech(text, notice, history)`：
+  `_call_tool` 在短语层之前把 handler 原始输出交给 hook；hook 返回 `DirectSpeech` 时，
+  这次工具结果只给模型 `notice`，该轮工具跑完后直接按句朗读 `text`（`speech_pieces()`：
+  只按句号切、不按逗号切，避免 350 ms 句间停顿变碎），**不再发起下一轮 LLM**；
+  history 用 hook 给的 `history`（`Briefing.history_messages()`，user 原话 + 原文[:800]）。
+  **不注入 hook 时该路径一行不跑**，旧行为保持不变（有回归测试）。
+- `app.py::_direct_speech` 只认 `Briefing`：转成 `DirectSpeech`，并把 runner 以
+  `direct_hook=_direct_speech` 构造。`Briefing.__str__` 故意返回 `model_notice()`，
+  即使哪天 hook 漏接，模型也只会看到「播报已准备好」，不会把原文灌进 prompt。
+- 真实 60s 日报实测（2026-10-23，5 条）：`Briefing` 260 字；整轮 **1 次 LLM round**、
+  9 个 TTS 片、`result.reply == speech_text`、history = user + 原文 260 字、
+  `item_index("第三条再说说") == 3` 且原文在 history 里；模型工具消息是
+  「播报已准备好（5 条，2026-10-23），直接念给用户听。」，**不含原文**。
+- HTTP 级：`TestClient` + 假 audio plane 走 `POST /api/v1/debug/say`「念一下今天的新闻」，
+  返回 `reply == speech_text`、`tools == ["news"]`、LLM 只跑 1 round（测试已进 `test_briefing.py`）。
+
+### 8.3 改动文件
+
+`src/house_ear/web/api/app.py`（`_direct_speech`、`_stop_command`、runner 构造；未碰 panels 表 /
+console 静态路由 / debug 端点 / audio supervisor）、`src/house_ear/session/turn.py`
+（`DirectSpeech`/`DirectHook`/`speech_pieces`/hook 分支/`_record_direct_history`）、
+`src/house_ear/tools/info.py`（news 返回 Briefing）、`tests/test_session.py` +5、
+`tests/test_briefing.py` +6、本文件。
+
+### 8.4 未验 / 外部问题
+
+- **真机声音未验**：③ 两个分支是进程内真实 service + 假 speaker；④ 是真实日报 + 假 TTS/audioplane
+  与 debug/say HTTP。没有对真机下发声音（按约定需先约声音流）。
+- 并行外部失败：`tests/test_config.py::test_defaults_are_sane` 断言 `playback.rate == 48000`，
+  但 `config/schema.py` 在 12:26 被改成默认 16000/1ch（非本任务改动；已报 Lead）。D1c 自身所有
+  测试通过。
 
 ## 9. 复现/运维片段
 

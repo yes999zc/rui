@@ -6,7 +6,8 @@ Weather and news are keyless; search needs a key, which is read through
 Every handler returns a string that goes back to the model verbatim, so the wording is
 part of the contract: a failure says "查不到，直接说查不到" instead of an English exception.
 The old build returned `工具出错：<urlopen error timed out>`, and a model that reads that
-tends to answer the question anyway.
+tends to answer the question anyway. The exception is `news()`: it returns a
+`Briefing` so the session layer can read the daily digest verbatim (D1c ④).
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import httpx
 
 from .. import secrets
 from ..config.schema import Config
+from ..session import briefing
 from .contract import Permission, ToolSpec
 
 log = logging.getLogger(__name__)
@@ -181,7 +183,13 @@ async def weather(cfg: Config, args: dict) -> str:
     return answer
 
 
-async def news(cfg: Config, args: dict) -> str:
+async def news(cfg: Config, args: dict) -> str | briefing.Briefing:
+    """Today's 60s digest as a `Briefing`, or a sentence when it cannot be fetched.
+
+    Returning the data object (not a spoken string) is what lets the session layer
+    read it verbatim and skip the model round (old build's `@@BRIEF`,
+    docs/d1c-notes.md §7.2). A failure stays a plain sentence for the model.
+    """
     conf = cfg.tools.news
     count = max(1, min(10, int(args.get("count") or 5)))
     today = _today()
@@ -192,13 +200,10 @@ async def news(cfg: Config, args: dict) -> str:
                 data = await _get_json(template.format(date=date), conf.timeout_s)
             except Exception:  # noqa: BLE001 - the next mirror is the fix
                 continue
-            items = [str(x).strip() for x in (data or {}).get("news") or [] if str(x).strip()]
-            if not items:
-                continue
-            picked = items[:count]
-            when = "今天" if offset == 0 else "昨天"
-            head = f"{when}的新闻（{date}）："
-            return head + "；".join(f"{i}. {t}" for i, t in enumerate(picked, 1))[:900]
+            brief = briefing.from_news(data, date=date, limit=count)
+            if brief is not None:
+                log.info("news: %d items for %s", brief.count, date)
+                return brief
     return "今天的新闻没取到，直接说没取到，让用户过一会儿再问。"
 
 

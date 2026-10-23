@@ -106,3 +106,255 @@ def test_date_defaults_to_today_and_can_be_overridden() -> None:
     assert from_news(["新闻"], date="not-a-date").date == today.isoformat()  # type: ignore[union-attr]
     assert from_news(["新闻"], source="aihot").source == "aihot"             # type: ignore[union-attr]
     assert isinstance(brief, Briefing)
+
+
+# ---------------------------------------------------------------------------
+# D1c ④ wiring: the opt-in direct-speech hook in TurnRunner + the news tool
+# ---------------------------------------------------------------------------
+class _DirectAsr:
+    def __init__(self, text: str = "念一下今天的新闻") -> None:
+        self.text = text
+
+    async def transcribe(self, pcm: bytes, sample_rate: int):
+        from house_ear.providers.base import Transcript
+
+        return Transcript(text=self.text)
+
+
+class _DirectLlm:
+    def __init__(self, rounds: list[list[object]]) -> None:
+        self.rounds = rounds
+        self.seen: list[list[dict]] = []
+
+    async def chat(self, messages: list[dict], tools: list[dict]):
+        self.seen.append([dict(m) for m in messages])
+        for chunk in self.rounds.pop(0):
+            yield chunk
+
+
+class _DirectTts:
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    async def synthesize(self, text: str, voice: str = ""):
+        self.texts.append(text)
+        yield b"\x01\x00" * 320
+
+
+def _patch_direct(monkeypatch, llm: _DirectLlm, tts: _DirectTts) -> None:
+    import house_ear.session.turn as turn
+
+    monkeypatch.setattr(turn, "asr_chain", lambda providers: [("a", _DirectAsr())])
+    monkeypatch.setattr(turn, "llm_chain", lambda providers: [("l0", llm)])
+    monkeypatch.setattr(turn, "tts_chain", lambda providers, rate: [("t0", tts)])
+
+
+def _news_spec():
+    from house_ear.tools.contract import Permission, ToolSpec
+
+    return ToolSpec(name="local.news", description="新闻", permission=Permission.READ)
+
+
+def _tool_call(name: str = "news") -> object:
+    from house_ear.providers.base import ChatChunk
+
+    return ChatChunk(delta="", finish_reason="tool_calls",
+                     tool_calls=[{"id": "t1", "name": name, "arguments": "{}"}])
+
+
+def test_a_direct_hook_reads_the_briefing_without_a_second_model_round(monkeypatch) -> None:
+    """Old @@BRIEF behaviour: the script is the answer, the model is not asked again."""
+    import asyncio
+
+    from house_ear.config.schema import Config
+    from house_ear.providers.base import ChatChunk
+    from house_ear.session.turn import TurnRunner, speech_pieces
+    from house_ear.trace import TurnTrace
+    from house_ear.web.api.app import _direct_speech
+
+    brief = from_news(["今天下雨", "明天转晴"], date="2026-10-23")
+    assert brief is not None
+
+    async def handler(_args: dict) -> Briefing:
+        return brief
+
+    llm = _DirectLlm([[_tool_call()], [ChatChunk(delta="不应该出现。")]])
+    tts = _DirectTts()
+    _patch_direct(monkeypatch, llm, tts)
+    runner = TurnRunner(Config().providers, tools=[(_news_spec(), handler)],
+                        direct_hook=_direct_speech)
+
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
+        return None
+
+    result = asyncio.run(runner.run(b"", speak, TurnTrace(device_id="living"),
+                                    transcript="念一下今天的新闻"))
+
+    assert len(llm.seen) == 1, "the briefing must not trigger a second model round"
+    assert result.tools == ["news"]
+    assert result.reply == brief.speech_text
+    assert tts.texts == speech_pieces(brief.speech_text)
+    assert result.audio_bytes > 0
+    # history carries user + the verbatim script (「第三条再说说」 next turn)
+    assert runner.history == [
+        {"role": "user", "content": "念一下今天的新闻"},
+        {"role": "assistant", "content": brief.speech_text},
+    ]
+
+
+def test_the_model_only_sees_the_notice_never_the_script(monkeypatch) -> None:
+    import asyncio
+
+    from house_ear.config.schema import Config
+    from house_ear.session.turn import TurnRunner
+    from house_ear.web.api.app import _direct_speech
+
+    brief = from_news(["今天下雨"], date="2026-10-23")
+    assert brief is not None
+
+    async def handler(_args: dict) -> Briefing:
+        return brief
+
+    _patch_direct(monkeypatch, _DirectLlm([[_tool_call()]]), _DirectTts())
+    runner = TurnRunner(Config().providers, tools=[(_news_spec(), handler)],
+                        direct_hook=_direct_speech)
+    out = asyncio.run(runner._call_tool({"name": "news", "arguments": "{}"}))
+    assert out == brief.model_notice()
+    assert brief.speech_text not in out
+    # and the dataclass fallback (no hook) is the notice, never a repr with the text
+    assert str(brief) == brief.model_notice()
+    assert brief.speech_text not in str(brief)
+
+
+def test_without_the_hook_the_tool_round_behaves_as_before(monkeypatch) -> None:
+    """The hook is opt-in: no hook -> the historical two-round tool path."""
+    import asyncio
+
+    from house_ear.config.schema import Config
+    from house_ear.providers.base import ChatChunk
+    from house_ear.session.turn import TurnRunner
+    from house_ear.trace import TurnTrace
+
+    async def handler(_args: dict) -> str:
+        return "新闻：今天下雨。第二，明天转晴。"
+
+    llm = _DirectLlm([[_tool_call()], [ChatChunk(delta="好，新闻念完了。")]])
+    tts = _DirectTts()
+    _patch_direct(monkeypatch, llm, tts)
+    runner = TurnRunner(Config().providers, tools=[(_news_spec(), handler)])
+
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
+        return None
+
+    result = asyncio.run(runner.run(b"", speak, TurnTrace(device_id="living"),
+                                    transcript="念一下新闻"))
+    assert len(llm.seen) == 2
+    assert result.reply == "好，新闻念完了。"
+    # the second round received the handler's text, as it always has
+    assert llm.seen[1][-1]["content"] == "新闻：今天下雨。第二，明天转晴。"
+
+
+def test_a_non_briefing_result_is_not_direct(monkeypatch) -> None:
+    import asyncio
+
+    from house_ear.config.schema import Config
+    from house_ear.session.turn import TurnRunner
+    from house_ear.tools.contract import ToolResult
+    from house_ear.web.api.app import _direct_speech
+
+    async def handler(_args: dict) -> ToolResult:
+        return ToolResult(status="ok").slot(title="晴天")
+
+    spec = _news_spec()
+    runner = TurnRunner(Config().providers, tools=[(spec, handler)],
+                        direct_hook=_direct_speech)
+    out = asyncio.run(runner._call_tool({"name": "news", "arguments": "{}"}))
+    # rendered by the phrase layer as before, not intercepted by the direct hook
+    assert '"status": "ok"' in out and "晴天" in out
+    assert runner._pending_direct is None
+
+
+def test_the_news_tool_builds_a_briefing_from_the_digest(monkeypatch) -> None:
+    import asyncio
+
+    from house_ear.config.schema import Config
+    from house_ear.tools import info
+
+    async def fake_get(url: str, timeout: float, params: dict | None = None):
+        return {"news": ["今天下雨", "明天转晴"], "tip": "晚安"}
+
+    monkeypatch.setattr(info, "_get_json", fake_get)
+    got = asyncio.run(info.news(Config(), {"count": 2}))
+    assert isinstance(got, briefing.Briefing)
+    assert got.date == dt.date.today().isoformat()
+    assert got.items == ("今天下雨。", "明天转晴。")
+    assert got.tip == "晚安"
+
+
+def test_debug_say_reads_a_briefing_end_to_end(monkeypatch, tmp_path) -> None:
+    """The console's 试一试 path: same runner, same hook, no second model round."""
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    import house_ear.web.api.app as app_mod
+    from house_ear.config.schema import Config
+    from house_ear.tools import info
+
+    brief = from_news(["今天下雨", "明天转晴"], date="2026-10-23")
+    assert brief is not None
+
+    async def fake_news(_cfg, _args):
+        return brief
+
+    monkeypatch.setattr(info, "news", fake_news)
+    llm = _DirectLlm([[_tool_call()]])
+    tts = _DirectTts()
+    _patch_direct(monkeypatch, llm, tts)
+
+    async def no_filler(_cfg, _text):
+        return b""
+
+    monkeypatch.setattr(app_mod, "render_filler_pcm", no_filler)
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    app = app_mod.create_app(cfg)
+
+    class _Client:
+        def __init__(self) -> None:
+            self.sent: list[object] = []
+            self.spoken = 0
+            self.metrics = SimpleNamespace(output_owner="")
+            self.ready = SimpleNamespace(device_id="debug", voice_rate=16000)
+
+        async def send(self, msg: object) -> None:
+            self.sent.append(msg)
+
+        async def speak(self, pcm: bytes, **kwargs: object) -> None:
+            self.spoken += len(pcm)
+
+        async def reply_finished(self, **kwargs: object) -> None:
+            return None
+
+        async def set_led(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    class _Supervisor:
+        def __init__(self) -> None:
+            self.client = _Client()
+
+        async def stop(self) -> None:
+            return None
+
+    with TestClient(app) as http:
+        app.state.audio = _Supervisor()
+        body = http.post("/api/v1/debug/say",
+                         json={"text": "念一下今天的新闻"}).json()
+
+    assert body["reply"] == brief.speech_text
+    assert body["tools"] == ["news"]
+    assert len(llm.seen) == 1, "the briefing must not be re-answered by the model"
+    assert tts.texts

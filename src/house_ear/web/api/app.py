@@ -33,9 +33,10 @@ from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
 from ...session import phrases, prompts, rules
 from ...session.ack import ensure_ack_wav
+from ...session.briefing import Briefing
 from ...session.memory import MemoryStore
 from ...session.text import strip_wake
-from ...session.turn import TurnRunner
+from ...session.turn import DirectSpeech, TurnRunner
 from ...session.vendor import VendorWindow
 from ...tools import build_local_tools, build_scheduler
 from ...tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
@@ -108,6 +109,23 @@ def _speaking(app: FastAPI, live: object):
         await live.speak(pcm, **kwargs)  # type: ignore[attr-defined]
 
     return say
+
+
+def _direct_speech(name: str, transcript: str, output: object) -> DirectSpeech | None:
+    """Tool results that are read out verbatim instead of being re-answered (D1c ④).
+
+    Today that is the daily briefing: `tools/info.py:news()` returns a `Briefing`,
+    the runner speaks `speech_text` and skips the second model round, and history
+    gets the user line plus the script (old build `@@BRIEF`, docs/d1c-notes.md §7.2).
+    The model only ever sees `model_notice()`, never the script.
+    """
+    if not isinstance(output, Briefing):
+        return None
+    return DirectSpeech(
+        text=output.speech_text,
+        notice=output.model_notice(),
+        history=output.history_messages(transcript),
+    )
 
 
 def _context_provider(app: FastAPI, ha: HaBridge | None):
@@ -438,6 +456,66 @@ def _is_music_turn(result: object) -> bool:
     return any(str(n).rsplit(".", 1)[-1].startswith("music") for n in tools)
 
 
+async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
+                        traces) -> bool:
+    """D1c ③: stop words split by whether a song is playing. True when handled.
+
+    * media_stop (a song is playing): stop the queue, say 「好，不放了。」 through the
+      PhraseBook, and KEEP the session - 「停止播放」 over music is not goodbye.
+    * bare_stop (nothing playing): there is nothing to stop, so the stop word means
+      end the conversation (runner.dismiss, the old farewell/LED semantics).
+    * explicit dismissals are bare_stop even mid-song, but must still silence the
+      music: 9哥 heard the song come back 12 s after 「退下吧」 (measured 09:17).
+
+    Returns False for a non-stop transcript so the ordinary turn proceeds.
+    """
+    cfg = app.state.cfg
+    if not rules.stop_intent(clean, cfg.session.end_words):
+        return False
+    service = getattr(app.state, "music", None)
+    music_active = service is not None and service.state in ("playing", "paused")
+    if rules.stop_scope(clean, music_active, cfg.session.end_words) == rules.MEDIA_STOP:
+        try:
+            await service.stop()
+        except Exception as exc:  # noqa: BLE001 - never crash the app
+            log.info("stop music failed: %s", exc)
+        line = phrases.book.render("music.stopped")
+        runner.idle.touch()
+        spoken = await runner.say(line, _speaking(app, client), trace)
+        with contextlib.suppress(Exception):
+            await client.reply_finished()   # the session stays open
+        _light_after_audio(app, spoken, cfg.audio.voice.rate, "off")
+        _record_turn(app, {
+            "transcript": clean, "reply": line, "session_action": "media_stop",
+            "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
+        })
+        traces.add(trace)
+        log.info("stop intent: %r -> media stopped, session open", clean)
+        return True
+    # bare_stop (散场): silence any song first, then dismiss.
+    if music_active:
+        try:
+            await service.stop()
+        except Exception as exc:  # noqa: BLE001 - never crash the app
+            log.info("stop music failed: %s", exc)
+    elif client.metrics is not None and client.metrics.output_owner == "music":
+        with contextlib.suppress(Exception):
+            await client.send(StopAudio())
+    # dismiss() closes the session before the reply: the idle clock used to keep
+    # running behind it and the farewell said goodbye a second time (measured 20:42).
+    spoken = await runner.dismiss(_speaking(app, client), trace)
+    # No reply_finished here: the session is closing, so the plane must not open a
+    # follow-up window after the goodbye.
+    _light_after_audio(app, spoken, cfg.audio.voice.rate, "off")
+    _record_turn(app, {
+        "transcript": clean, "reply": "", "session_action": "bare_stop",
+        "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
+    })
+    traces.add(trace)
+    log.info("stop intent: %r -> session closed", clean)
+    return True
+
+
 async def _context_command(app: FastAPI, clean: str, runner, client, trace,
                            traces) -> str | None:
     """「关闭上下文」/「打开上下文」: a config edit, persisted, no model."""
@@ -598,6 +676,7 @@ def create_app(
             tools=local_tools,
             spoken=spoken,
             session=cfg.session,
+            direct_hook=_direct_speech,
         )
         app.state.spoken = spoken
         # Render the spoken wake cue now, not on the wake: synthesising it inside the wake
@@ -719,45 +798,7 @@ def create_app(
                     if await _context_command(app, clean, runner, client, trace,
                                               traces) is not None:
                         return
-                    if rules.stop_intent(clean, cfg.session.end_words):
-                        # A stop word with a song owning the speaker stops the sound;
-                        # 「退下吧」 only dismisses the conversation and the song keeps
-                        # playing - the old build split these between the conversation
-                        # stop and the music tools. Measured 21:10: 「停止」 answered
-                        # 好。 and the music played on. Through the service so the
-                        # queue state dies with the sound.
-                        # Decide by the music service, not by who owns the speaker:
-                        # the wake's duck has already released the output by the time
-                        # this runs, so `output_owner == "music"` was never true and
-                        # 「停止」 left the song playing (measured 08:35).
-                        # Stop words stop the song, dismissal included: the old build's
-                        # stop_words path did MUSIC.stop + farewell, and 9哥 heard the
-                        # song come back 12 s after 「退下吧」 as a bug (measured 09:17).
-                        service = getattr(app.state, "music", None)
-                        music_active = service is not None and service.state in (
-                            "playing", "paused")
-                        if music_active:
-                            try:
-                                await service.stop()
-                            except Exception as exc:  # noqa: BLE001 - never crash the app
-                                log.info("stop music failed: %s", exc)
-                        elif not music_active and client.metrics is not None \
-                                and client.metrics.output_owner == "music":
-                            with contextlib.suppress(Exception):
-                                await client.send(StopAudio())
-                        # dismiss() closes the session before the reply: the idle clock
-                        # used to keep running behind it and the farewell said goodbye a
-                        # second time 15 s later (measured 20:42:16 -> 20:42:34).
-                        spoken = await runner.dismiss(_speaking(app, client), trace)
-                        # No reply_finished here: the session is closing, so the plane
-                        # must not open a follow-up window after the goodbye.
-                        _light_after_audio(app, spoken, cfg.audio.voice.rate, "off")
-                        _record_turn(app, {
-                            "transcript": clean, "reply": "", "session_action": "stop",
-                            "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
-                        })
-                        traces.add(trace)
-                        log.info("stop intent: %r -> session closed", clean)
+                    if await _stop_command(app, clean, runner, client, trace, traces):
                         return
                     # A bare device name is a question, not a command (old build,
                     # measured 5/5 guessing the direction): ask which way.

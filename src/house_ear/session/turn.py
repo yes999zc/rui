@@ -105,6 +105,30 @@ class TurnResult:
         }
 
 
+@dataclass
+class DirectSpeech:
+    """A tool result that is read out verbatim instead of being re-answered.
+
+    The old build's ``@@BRIEF`` contract (assistant_v3.py:906-913, 1017-1024): a
+    daily briefing is the answer, so it is spoken as written (barge-in still works)
+    and its text goes into history verbatim - but the model never sees the script
+    in the turn that produced it. `notice` is the only thing that enters the tool
+    message; `history` is what a later 「第三条再说说」 can read.
+
+    Opt-in: a runner without `direct_hook` behaves exactly as before.
+    """
+
+    text: str
+    notice: str = ""
+    history: list[dict[str, str]] | None = None
+
+
+# `(tool name, user transcript, raw handler output) -> DirectSpeech | None`.
+DirectHook = Callable[[str, str, Any], DirectSpeech | None]
+
+DIRECT_HISTORY_LIMIT = 800
+
+
 def split_sentences(
     buffer: str, force: bool = False, clauses: bool = True
 ) -> tuple[list[str], str]:
@@ -131,6 +155,17 @@ def split_sentences(
         out.append(rest.strip())
         rest = ""
     return [s for s in out if s], rest
+
+
+def speech_pieces(text: str) -> list[str]:
+    """Sentence-sized chunks for a verbatim read-out (a daily briefing).
+
+    Deliberately no clause splitting: every ``_speak_sentence`` call is followed by
+    the 350 ms sentence gap, and a briefing split at commas would stutter. Long
+    text still gets the 45-character cap, so one vendor request cannot hang.
+    """
+    pieces, _rest = split_sentences(text, force=True, clauses=False)
+    return pieces
 
 
 async def open_stream_stage(
@@ -177,6 +212,7 @@ class TurnRunner:
         tool_timeout_s: float = 20.0,
         turn_timeout_s: float = 30.0,
         idle: IdleWatch | None = None,
+        direct_hook: DirectHook | None = None,
     ) -> None:
         self.providers = providers
         # Built once, not per call. `asr_chain()` constructs the provider, and the local
@@ -234,6 +270,10 @@ class TurnRunner:
         self.info_tool_names = {
             spec.llm_name for spec, _ in self.tools if spec.llm_name in ("news", "web_search")
         }
+        # Opt-in direct-speech channel (daily briefing today). None = the historical
+        # behaviour, byte for byte: a tool result is rendered and the model answers it.
+        self.direct_hook = direct_hook
+        self._pending_direct: DirectSpeech | None = None
 
     @property
     def llm_tools(self) -> list[dict]:
@@ -675,6 +715,8 @@ class TurnRunner:
 
         self._transcript = transcript
         self._silent_answer = False
+        self._pending_direct = None
+        direct: DirectSpeech | None = None
         try:
             for attempt in range(3):
                 # Two rounds with tools, then a forced answer without them: a model that
@@ -747,6 +789,16 @@ class TurnRunner:
                         "tool_call_id": call.get("id", ""),
                         "content": output,
                     })
+                # A direct-speech tool result ends the model's turn: the script is the
+                # answer (old @@BRIEF, assistant_v3.py:3492-3512). The tool message in
+                # `messages` holds only the notice, so a later round could never see it.
+                if self._pending_direct is not None:
+                    direct = self._pending_direct
+                    self._pending_direct = None
+                    log.info("direct speech: %d chars (model round skipped)", len(direct.text))
+                    for piece in speech_pieces(direct.text):
+                        await say(piece)
+                    break
                 # Only when EVERY tool this round is silent is the action the whole
                 # answer: a hallucinated music_play beside a weather call must not
                 # swallow the weather answer (measured 10:00:50).
@@ -774,6 +826,13 @@ class TurnRunner:
                 await filler_task
 
         trace.mark("llm_done")
+        if direct is not None:
+            # The script is the answer, verbatim: no clean_reply (it is already
+            # speech-shaped) and no second model round. History keeps what was read
+            # out, which is what 「第三条再说说」 needs next turn.
+            result.reply = direct.text
+            self._record_direct_history(direct, transcript)
+            return result
         # The reply is what was actually spoken, not the raw deltas: markup that never
         # reached the speaker must not reach the API response or the next turn's history.
         result.reply = clean_reply("".join(spoken_parts))
@@ -784,6 +843,19 @@ class TurnRunner:
         else:
             self.history.clear()   # stateless: nothing carries to the next turn
         return result
+
+    def _record_direct_history(self, direct: DirectSpeech, transcript: str) -> None:
+        """History for a verbatim read-out. Same keep_context rule as a normal turn."""
+        if not self.keep_context:
+            self.history.clear()
+            return
+        if direct.history is not None:
+            self.history.extend(direct.history)
+            return
+        self.history.append({"role": "user", "content": transcript})
+        if direct.text:
+            self.history.append({"role": "assistant",
+                                 "content": direct.text[:DIRECT_HISTORY_LIMIT]})
 
     async def say(self, text: str, speak: SpeakFn,
                   trace: TurnTrace) -> int:
@@ -888,6 +960,19 @@ class TurnRunner:
         except Exception as exc:  # noqa: BLE001 - a broken tool must not kill the turn
             log.warning("tool %s failed: %s", name, exc)
             return f"这个工具出错了（{name}），直接说没查到，不要自己编。"
+        # Opt-in verbatim channel (daily briefing): the hook sees the handler's raw
+        # output before the phrase layer, and returning a DirectSpeech means "this is
+        # the answer". Without a hook, nothing here runs and the path is unchanged.
+        if self.direct_hook is not None:
+            direct: DirectSpeech | None = None
+            try:
+                direct = self.direct_hook(name, getattr(self, "_transcript", ""), output)
+            except Exception as exc:  # noqa: BLE001 - a hook bug must not kill the turn
+                log.warning("direct hook for %s failed: %s", name, exc)
+            if direct is not None:
+                self._pending_direct = direct
+                log.info("tool %s -> direct speech (%d chars)", name, len(direct.text))
+                return direct.notice
         if isinstance(output, ToolResult):
             return self._render_tool_result(name, output)
         return str(output)

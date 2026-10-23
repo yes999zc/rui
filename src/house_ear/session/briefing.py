@@ -81,6 +81,11 @@ class Briefing:
         """What the model may see instead of the script (old dispatcher wording)."""
         return f"播报已准备好（{self.count} 条，{self.date}），直接念给用户听。"
 
+    def __str__(self) -> str:
+        """Safe fallback if a runner has no direct-speech hook: the notice, not the
+        script. A dataclass repr here would put the whole briefing into a prompt."""
+        return self.model_notice()
+
     def history_messages(self, transcript: str,
                          limit: int = HISTORY_LIMIT) -> list[dict[str, str]]:
         """The pair appended after the briefing is spoken (old :1017-1024).
