@@ -959,3 +959,33 @@ listening/LED 不灭。修复：新增 plane→control 事件 `WakeIdle`；控�
 
 **验证**：真 VAD 全量 **671 passed / 1 skipped**、ruff clean；dev 已重启（含朗读上限与 TTS 重试）。
 
+### 12.25 2026-10-23 16:47：接入豆包流式语音识别 2.0（ASR 已切换）
+
+**9哥 订阅后配置完成，可以一起真机测。**
+
+**为什么之前 403**：WS 建连返回 `requested resource not granted`——不是订阅没买，而是该资源
+没有对项目开通。用控制台 OpenAPI（AK/SK 签名）做了两件事：
+- `ActivateService`（speech_saas_prod，Version 2025-05-20）对
+  `volc.seedasr.sauc.duration` / `volc.bigasr.sauc.duration` / `.concurrent` 开通；
+- `ServiceStatus` 复查：`Doubao_Seed_ASR_Streaming_2.0`、`Status=active`、计时不限时长、并发 50。
+开通后**原来那把 API Key 直接可用**（不需要新建 key；临时新建的测试 key 已用 `DeleteAPIKey` 删掉）。
+
+**Provider**：`providers/volc_asr.py`
+- endpoint `wss://openspeech.bytedance.com/api/v3/sauc/bigmodel`（双向流式），头 `X-Api-Key` +
+  `X-Api-Resource-Id=volc.seedasr.sauc.duration` + Request/Connect UUID + Sequence -1；
+- 二进制帧：4B header（类型/flag/序列化/压缩）+ 可选 sequence + 4B payload 长度 + JSON；
+  音频 200 ms/包（6400 B），最后一包 flags=0b0010；响应解析 `result.text`/`audio_info.duration`；
+- 接口与现有 `AsrProvider` 一致：VAD 收句后整段 PCM 发送，拿最终文本（本地链路无感）；
+- 资源 id / `X-Api-Key` 都在 provider 配置里（控制台可改）。
+
+**实测**：3.58 s 语音 → 逐字正确「你好，我是小瑞，今天天气不错，要不要放首歌听？」；
+端到端 **2.08–2.31 s**（含 TLS 建连+上传+识别；本地 SenseVoice 约 80 ms）——所以切换后
+每轮会慢约 2 s，先看你听感，嫌慢可在控制台把 ASR 链改回 `local-asr` 第一。
+
+**配置**：dev `providers.catalog.volc-asr`（kind=volc_asr，model=资源 id，api_key_env=VOLC_API_KEY），
+`providers.asr.chain = [volc-asr, local-asr]`（火山失败自动回退本地）；生产模板新增可选
+`volc_asr`（默认链仍是本地）。控制台「外部资源 → 语音识别链」可直接调顺序。
+
+**验证**：真 VAD 全量 **676 passed / 1 skipped**、ruff clean；dev 已重启，`/api/v1/config` 实测
+asr chain = `['volc-asr', 'local-asr']`，provider 列表含 volc-asr。
+

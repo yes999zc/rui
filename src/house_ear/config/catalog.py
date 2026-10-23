@@ -756,10 +756,11 @@ def _provider_fields(cfg: Config) -> list[dict]:
     ]
     hints = {
         "kind": _t("这一条用哪种客户端：openai_compat 是通用 API，sherpa 是本地模型，"
-                   "xfyun 是讯飞，volc_tts 是火山豆包语音合成。改错这一条链就用不了。",
+                   "xfyun 是讯飞，volc_tts 是火山豆包语音合成，volc_asr 是火山豆包流式语音识别。"
+                   "改错这一条链就用不了。",
                    "Which client this entry is: openai_compat (generic API), sherpa "
-                   "(local model), xfyun, volc_tts (Volcano Doubao TTS). A wrong value "
-                   "breaks this chain entry."),
+                   "(local model), xfyun, volc_tts (Volcano Doubao TTS), volc_asr "
+                   "(Volcano streaming ASR). A wrong value breaks this chain entry."),
         "base_url": _t("API 地址。换自建/中转服务时改这里；改错后这一级会失败，才轮到兜底链。",
                        "API endpoint. Change it for a self-hosted/proxy service; if it is "
                        "wrong this level fails and the fallback is used."),

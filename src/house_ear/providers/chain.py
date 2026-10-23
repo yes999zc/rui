@@ -16,6 +16,7 @@ from ..config.schema import ProvidersConfig
 from .base import AsrProvider, LlmProvider, TtsProvider
 from .openai_compat import OpenAiCompatAsr, OpenAiCompatLlm, OpenAiCompatTts
 from .sherpa_asr import SherpaAsr
+from .volc_asr import VolcAsr
 from .volc_tts import VolcTts
 from .xfyun_tts import XfyunTts
 
@@ -30,6 +31,7 @@ _BUILDERS: dict[str, dict[str, Callable[..., Any]]] = {
     "sherpa": {"asr": SherpaAsr},
     "xfyun": {"tts": XfyunTts},
     "volc_tts": {"tts": VolcTts},
+    "volc_asr": {"asr": VolcAsr},
 }
 
 

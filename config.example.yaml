@@ -123,6 +123,11 @@ providers:
       kind: sherpa
       model: /data/models/sensevoice
       threads: 2
+    volc_asr:
+      kind: volc_asr              # 豆包流式语音识别 2.0（可选；填 VOLC_API_KEY 后把 asr.chain 换上）
+      model: volc.seedasr.sauc.duration
+      api_key_env: VOLC_API_KEY
+      timeout_s: 15.0
     siliconflow_asr:
       kind: openai_compat
       base_url: https://api.siliconflow.cn/v1
