@@ -1140,3 +1140,18 @@ Telegram 可行性测试。
   提示音），把 NAS 的 `ack.max_ms` 调到 800，重启后 ack 530 ms 正常朗读；仓库模板仍保留
   600 ms 的保守默认（如需统一可再改）。
 
+### 12.32 2026-10-23 深夜：Channels（Telegram + 微信 iLink/ClawBot）M0–M6
+
+- 控制面新增 `POST /api/v1/chat`（文本回合，`audio=false` 时跳过 TTS）、`POST /api/v1/asr`、
+  `GET/PUT /api/v1/channels`；通道 session 按 `channel:peer` 隔离，不覆盖客厅 history。
+- 独立 `src/house_ear/channels/` + `house-ear-channels` CLI：
+  - Telegram：getUpdates 长轮询、allowlist（默认拒绝未知 chat）、文字/语音、语音回复、分片/typing。
+  - 微信 iLink：QR 登录、getupdates 游标、context_token、2000 字、typing、`.silk` 入站 `pilk` 重转写、
+    音频文件回复；不信任腾讯 `voice_item.text`。
+  - 未知 peer 默认拒绝；联调可用 `--telegram-allow-all` / `--weixin-allow-all`（不要长期开）。
+- 控制台 `/channels` 页 + `GET/PUT /api/v1/channels`；Channels 页中英双语。
+- 测试 `tests/test_channels.py`、`tests/test_chat_api.py`；全量 743 passed / 1 skipped；UI typecheck+build 绿。
+- NAS 已更新到包含 channels 的镜像；`/api/v1/channels` 实测 200，Telegram token 已在 NAS `.env` 配置（不回显）。
+- **仍需 9 哥**：给 @dellnas1_bot 发消息并提供 chat_id（或临时 allow-all 配对）；微信手机扫码
+  `house-ear-channels --login-weixin`；两个通道各发 2 条文字 + 1 条语音做真机验收。M7 部署/网关常驻服务尚未做。
+

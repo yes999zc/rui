@@ -70,3 +70,8 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
 - NAS 的 ASR chain 已改为 `volc-asr` 单链路；`local-asr` 仍保留在 catalog（插座），不默认加载，
   省约 350 MB 内存。
 
+## H. 远程通道（2026-10-23 已实现 M0–M6）
+
+- Telegram + 微信 iLink/ClawBot 的 backend、gateway、Channels 页已完成；测试 743 passed。
+- 真机验收仍需要：Telegram allowlist chat_id、微信扫码、两通道语音/文字测试。
+- M7（独立 gateway 常驻服务/容器、开机自启、生产日志轮转）尚未做。
