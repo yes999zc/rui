@@ -181,9 +181,11 @@ class WeixinAdapter:
         client: httpx.AsyncClient | None = None,
         base_url: str = ILINK,
         cdn_base: str = CDN,
+        allow_all: bool = False,
     ) -> None:
         self.store = AccountStore(data_dir)
         self.allowed = {str(x) for x in (allowed_user_ids or set())}
+        self.allow_all = allow_all
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0))
         self._owns_client = client is None
         self.base_url = base_url.rstrip("/")
@@ -318,6 +320,9 @@ class WeixinAdapter:
             return
         peer = str(msg.get("from_user_id") or "")
         if not peer:
+            return
+        if not self.allowed and not self.allow_all:
+            log.info("weixin: unpaired user %s (add it to the allowlist)", peer)
             return
         if self.allowed and peer not in self.allowed:
             log.info("weixin: ignored user outside allowlist")

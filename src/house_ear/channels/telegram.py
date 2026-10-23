@@ -92,9 +92,11 @@ class TelegramAdapter:
         state_path: Path | None = None,
         api_base: str = API,
         client: httpx.AsyncClient | None = None,
+        allow_all: bool = False,
     ) -> None:
         self.token = token
         self.allowed = {str(x) for x in (allowed_chat_ids or set())}
+        self.allow_all = allow_all
         self.state_path = state_path
         self.api_base = api_base.rstrip("/")
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(40.0, connect=10.0))
@@ -196,6 +198,9 @@ class TelegramAdapter:
         chat = msg.get("chat") or {}
         chat_id = str(chat.get("id") or "")
         if not chat_id or not self._on_inbound:
+            return
+        if not self.allowed and not self.allow_all:
+            log.info("telegram: unpaired chat %s (add it to the allowlist)", chat_id)
             return
         if self.allowed and chat_id not in self.allowed:
             log.info("telegram: ignored chat outside allowlist")

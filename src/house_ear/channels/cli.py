@@ -70,6 +70,7 @@ async def _run(args: argparse.Namespace) -> int:
             tg_token,
             allowed_chat_ids=_split_ids(allow),
             state_path=Path(args.data_dir) / "telegram.json",
+            allow_all=args.telegram_allow_all,
         )
         gateway.add(tg)
         adapters.append(tg)
@@ -77,7 +78,8 @@ async def _run(args: argparse.Namespace) -> int:
     wx_enabled = bool(wx_cfg.get("enabled", False)) if wx_cfg else bool(args.weixin_data)
     if wx_data and wx_enabled:
         allow = ",".join(str(x) for x in wx_cfg.get("allowed_user_ids", [])) or args.weixin_allow
-        wx = WeixinAdapter(Path(wx_data), allowed_user_ids=_split_ids(allow))
+        wx = WeixinAdapter(Path(wx_data), allowed_user_ids=_split_ids(allow),
+                           allow_all=args.weixin_allow_all)
         gateway.add(wx)
         adapters.append(wx)
     if not adapters:
@@ -108,6 +110,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--weixin-data", default=os.getenv("HOUSE_EAR_WEIXIN_DATA", ""))
     parser.add_argument("--weixin-allow", default=os.getenv("WEIXIN_ALLOWED_USER_IDS", ""))
     parser.add_argument("--channels-config", default=os.getenv("HOUSE_EAR_CHANNELS_CONFIG", ""))
+    parser.add_argument("--telegram-allow-all", action="store_true",
+                        help="temporary pairing shortcut; do not use on a public bot")
+    parser.add_argument("--weixin-allow-all", action="store_true",
+                        help="temporary pairing shortcut; do not use on a public bot")
     parser.add_argument("--reply-mode", choices=("text", "voice", "both"), default="text")
     parser.add_argument("--login-weixin", action="store_true",
                         help="only run the WeChat QR login and save credentials")
