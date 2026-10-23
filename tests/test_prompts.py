@@ -205,3 +205,26 @@ def test_volume_words_are_recognised_without_a_model() -> None:
     assert rules.volume_level("音量多少") == ""
     assert rules.volume_level("今天天气怎么样") is None
     assert rules.volume_level("帮我放一首歌") is None
+
+
+def test_a_bare_device_name_is_a_question_not_a_command() -> None:
+    """The old build measured 5/5 runs turning the light ON for 「餐厅灯。」 - the
+    model guessed the direction when the ASR ate the verb."""
+    from house_ear.session import rules
+
+    assert rules.verbless_device_name("餐厅灯。")
+    assert rules.verbless_device_name("儿童房的灯")
+    assert not rules.verbless_device_name("关闭餐厅灯。")
+    assert not rules.verbless_device_name("餐厅灯开着吗？")
+    assert not rules.verbless_device_name("餐厅灯太暗了")
+    assert not rules.verbless_device_name("现在几点")
+
+
+def test_a_claim_without_a_tool_call_is_caught() -> None:
+    """2 of 3 identical runs answered 「餐厅灯已经关掉了」 with zero tool calls."""
+    from house_ear.session import rules
+
+    assert rules.claims_device_success("关闭餐厅灯。", "餐厅灯已经关掉了。")
+    assert rules.claims_device_success("把窗帘拉上", "好，窗帘关好了。")
+    assert not rules.claims_device_success("今天天气怎么样", "沈阳今天晴。")
+    assert not rules.claims_device_success("关闭餐厅灯。", "好的，我来看看。")

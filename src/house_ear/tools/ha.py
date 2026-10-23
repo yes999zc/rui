@@ -75,7 +75,8 @@ class HaBridge:
         listed = "\n".join(entities)
         note = "" if self.client._connected.is_set() else phrases.book.render("ha.list_stale")
         return phrases.book.render("ha.entity_list", count=len(entities),
-                                   list=listed, note=note)
+                                   list=listed, note=note) + "\n" + phrases.book.render(
+            "ha.multi_entity_rule")
 
     async def _entities(self) -> list[str]:
         if self._entities_cache is not None:
@@ -151,7 +152,9 @@ class HaBridge:
             return ToolSpec(
                 name="local.ha_call_service", permission=Permission.WRITE,
                 description="控制家里设备（开/关/调节）。service 形如 switch.turn_on，"
-                            "entity_id 用实体清单里的 id。没有清单里没有的设备先搜。",
+                            "entity_id 用实体清单里的 id。清单里没有的设备先调 search_entities。"
+                            "同一名字有多个 entity_id（比如儿童房的主灯和筒灯）时全部传入，"
+                            "不要只挑一个，也不要反问用户。",
                 input_schema=raw.get("inputSchema") or {},
                 interaction=InteractionSpec(
                     exec={"ok": "device.done", "empty": "device.missing_target",

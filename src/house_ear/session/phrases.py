@@ -56,8 +56,15 @@ DEFAULTS: dict[str, str] = {
     "device.unreachable": "{device}这会儿连不上，没能执行，别当我成功了。",
     "device.excluded": "{device}这类操作我不做。",
     "device.missing_target": "没听清要操作哪个设备。",
+    "device.ask_verb": "要开还是关？我只听到设备名，没听清你说开还是关。",
+    "device.not_done": "这个我没能执行：刚才没有真正调用设备，不敢说做成了。",
     "ha.entity_list": "家里的设备（名字=实体ID，状态要现查，别用过期状态）：\n{list}\n{note}",
     "ha.list_stale": "（这份清单是上次缓存的，控制可能失败。）",
+    "ha.multi_entity_rule": (
+        "（控制规则：用户说的名字对应多个 entity_id 时——比如「儿童房的灯」既是主灯也是筒灯——"
+        "全部传入 call_service，不要只挑一个，也不要反问用户要哪个。"
+        "开关灯用 domain=switch/light，service=turn_on 或 turn_off；"
+        "没有真的调用工具并拿到成功结果，就绝不能说已经做了。）"),
 }
 
 _MISSING = object()

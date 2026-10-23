@@ -688,6 +688,20 @@ def create_app(
                         traces.add(trace)
                         log.info("stop intent: %r -> session closed", clean)
                         return
+                    # A bare device name is a question, not a command (old build,
+                    # measured 5/5 guessing the direction): ask which way.
+                    if rules.verbless_device_name(clean):
+                        line = phrases.book.render("device.ask_verb")
+                        runner.idle.touch()
+                        spoken = await runner.say(line, _speaking(app, client), trace)
+                        _record_turn(app, {
+                            "transcript": clean, "reply": line, "audio_bytes": spoken,
+                            "error": "", "tools": ["clarify.verb"],
+                            "stages": {},
+                        })
+                        _light_after_audio(app, spoken, cfg.audio.voice.rate)
+                        log.info("clarify: bare device name %r -> asking the verb", clean)
+                        return
                     _light(app, "thinking")
                     try:
                         result = await runner.run(pcm, _speaking(app, client), trace, transcript=clean)
@@ -703,6 +717,23 @@ def create_app(
                         with contextlib.suppress(Exception):
                             await client.reply_finished()
                         return
+                    if (not result.tools
+                            and rules.claims_device_success(clean, result.reply)):
+                        # The model said it did something without calling a tool:
+                        # retry once with an explicit instruction, then be honest.
+                        log.info("clarify: claimed success with no tool call: %r", result.reply)
+                        forced = (clean + "\n（上一轮你没有调用任何工具，这次必须直接调用工具"
+                                        "完成操作，不要用文字回答。）")
+                        try:
+                            result = await runner.run(pcm, _speaking(app, client), trace,
+                                                      transcript=forced)
+                        except Exception as exc:  # noqa: BLE001
+                            log.warning("retry after a false claim failed: %s", exc)
+                        if not result.tools:
+                            line = phrases.book.render("device.not_done")
+                            spoken = await runner.say(line, _speaking(app, client), trace)
+                            result.reply = line
+                            result.audio_bytes = spoken
                     if asr_report is not None:
                         result.stages.setdefault("asr", asr_report)
                     _record_turn(app, result.to_dict())

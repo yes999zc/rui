@@ -124,6 +124,48 @@ def volume_level(transcript: str) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------- device intent
+# Ported from the old build (assistant_v3.py:1908-2151). Two measured failures:
+# a bare device name was read as a command and the model guessed the direction
+# (5/5 runs turned the lights ON for 「餐厅灯。」), and a reply claimed success
+# with zero tool calls behind it (2 of 3 identical runs).
+DEVICE_CMD = re.compile(
+    r"(打开|关闭|关掉|开一下|关一下|帮我开|帮我关|把.{0,8}(打开|关闭|关掉|开|关)"
+    r"|调到|调成|调高|调低|音量|温度|亮度|风速|档位)")
+DEVICE_NOUN = re.compile(
+    r"(灯|空调|窗帘|插座|风扇|加湿|扫地|音量|温度|亮度|风速|暖气|热水器|电视|投影|门锁)")
+CLAIM_DONE = re.compile(
+    r"(已经|已|好了|搞定|完成了|打开了|关上了|关掉了|关闭了|关了|开了"
+    r"|调到了|调到|调成|开好了|关好了|停好了)")
+VERBLESS_SKIP = re.compile(r"(坏|不亮|闪|刺眼|太亮|太暗|暗|修|换|装|打不开|关不上)")
+VERBLESS_ASK = re.compile(r"(什么|几|哪|怎么|是不是|状态|开着|关着|亮着|了吗|没有)")
+
+
+def verbless_device_name(transcript: str) -> bool:
+    """A bare device name: the ASR ate the verb. Ask which way, never guess.
+
+    Questions and complaints are excluded by their own patterns: 「灯开着吗」 is a
+    question, 「灯太暗」 is a complaint, 「把灯关掉」 has its verb.
+    """
+    t = normalize(transcript)
+    if not t or len(t) > 8:
+        return False
+    if DEVICE_CMD.search(t):
+        return False
+    if t.endswith(("吗", "呢", "么")) or VERBLESS_ASK.search(t):
+        return False
+    if VERBLESS_SKIP.search(t):
+        return False
+    return bool(DEVICE_NOUN.search(t))
+
+
+def claims_device_success(transcript: str, reply: str) -> bool:
+    """A device action claimed in words with no tool call behind it."""
+    if not CLAIM_DONE.search(reply or ""):
+        return False
+    return bool(DEVICE_CMD.search(transcript or "") or DEVICE_NOUN.search(transcript or ""))
+
+
 # Words that make an utterance a music ask at all. The model is allowed to call
 # music_play only when one of these is in what the user actually said.
 _MUSIC_INTENT = ("放", "播", "歌", "音乐", "听", "来点", "来首", "曲", "唱")
