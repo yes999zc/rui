@@ -250,7 +250,15 @@ class ReminderStore:
     def path(self) -> Path:
         return self.dir / STORE_FILENAME
 
-    def load(self, at: dt.datetime | None = None) -> list[Reminder]:
+    def load(self, at: dt.datetime | None = None,
+             prune: bool = True) -> list[Reminder]:
+        """Items on disk; `prune=False` keeps fired receipts past their day.
+
+        The retry hook (requeue) must not race the housekeeping: a receipt fired
+        a day ago is pruned by the clock, and a retry that asked later than that
+        would silently find nothing (this exact test failed the morning after
+        its fixed reference date).
+        """
         base = _aware(at) if at is not None else dt.datetime.now(ZONE)
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
@@ -270,7 +278,7 @@ class ReminderStore:
                 continue
             seen.add(item.id)
             items.append(item)
-        return _prune(items, base)
+        return _prune(items, base) if prune else items
 
     def _write(self, items: list[Reminder]) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -352,7 +360,7 @@ class ReminderStore:
         cleared and the item becomes due again on the next tick.
         """
         key = (rid or "").strip().lstrip("#")
-        items = self.load()
+        items = self.load(prune=False)
         for i, item in enumerate(items):
             if item.id == key and item.fired:
                 items[i] = replace(item, fired_at=None)
