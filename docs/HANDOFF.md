@@ -712,3 +712,29 @@ origin/main 同步。**
 契约文档：**`docs/config-catalog-contract.md`**（Lead 定，两端对齐）。Lead 负责集成、重启 dev、
 逐页截图验收、真实语音回归、文档与 push。
 
+### 12.17 2026-10-23 15:0x：四角色审计结果 + 审计修复分工
+
+**审计第 1 轮完成**（老项目开发者 / 手持音箱新人 / NAS 运维 / 安全隐私，只读并行；全文
+`docs/audit-round-1.md`，安全角色另跑并入）。**最重的发现：**
+
+- **P0 停止词误杀 HA**：`end_words` 含 关闭/关掉/关机 + `stop_intent` 子串匹配 → 「关掉客厅灯」
+  「关闭窗帘」被当散场，灯/帘永远不动（13:22 的 5/5 能过是因为「儿童房的灯」7 字超过 6 字上限）。
+- **P0 唤醒后首句被吞**：hold = cue + echo_ignore(1200) ≈ 1.69 s，VAD 只留最后 600 ms →
+  紧接「在呢」说的前 ~1.09 s 丢。这正是 13:47「放一首告白气球」只剩歌名、13:23「怎样？」成轮的根因。
+- **P1 supervisor 盲区**：plane 读端断掉、进程还活着时 `/health` 永远绿、看门狗不重启。
+- P1：设备状态硬编码 ready、healthcheck 用全部设备（禁用唯一设备 → 永久 unhealthy）、
+  密钥页硬编码 dev env 名（生产 HOUSE_EAR_* 填了没用）、门限不是配置字段、记忆与文档不符、
+  AEC 无双讲判据、打断无生产度量、repo 私有导致一键装不可用。
+- **审计修复已分两批**：`task-8`（console-api：状态诚实化/healthcheck/secret 派生/门限可写/
+  面板按 tier/音乐凭据/记忆去重）；`task-9`（turn-core：停止词整句匹配/唤醒后首句/hold 全量保留/
+  supervisor 盲区/打断度量/日志降噪）。Lead 负责文档漂移、集成与真机复测。
+- **需要 9哥**：仓库公开 + GHCR 发布（否则 C1 一键装不可用）；AEC 双讲/≤300 ms 只能他出声。
+
+**控制台 2.0 后端已集成（`console-api` task-5）**：`GET /api/v1/config/catalog` 实测
+**153 fields / 21 groups / tier 1:22·2:63·3:41·4:27 / effect save 38·restart 115**；
+`PUT /api/v1/config/values` dotted-path 校验（422 分字段）、`restart_required/restart_fields`、
+`POST /api/v1/system/audio/restart`（0.4 s 生效、音箱重连）实测通过；音乐源切换自动填
+`<data_dir>/lan_media.json` 与 `music_cache`；新增 `system.timezone`（修容器 UTC 下「现在几点」差 8h）；
+14 个面板全部 `title_en`，旧 settings 面板由配置中心取代。前端 `console-ui` 仍在实现 i18n + 现代设计 +
+配置中心（设计方向 `docs/console-redesign.md`，走 deep-design-qa 截图 critic 循环）。
+
