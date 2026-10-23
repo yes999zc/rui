@@ -309,6 +309,17 @@ Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.m
 
 Audio and local recognition stay on your box; only the providers you configure receive the corresponding requests. Keys are injected via `.env` / `secrets.yaml` (0600) and are write-only through the API. The console uses a generated token and refuses to start on a non-loopback bind without one. Keep `:8080` on a trusted network (or put it behind TLS/VPN); the device token is equivalent to speaker control. See [docs/runbook.md](docs/runbook.md).
 
+### Support
+
+如果小瑞帮到了你，可以请我喝杯咖啡：
+
+<!-- TODO: replace the placeholder with the real Buy Me a Coffee page when ready. -->
+<a href="https://www.buymeacoffee.com/" target="_blank" rel="noopener">
+  <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-d98a3e?style=flat-square" alt="Buy Me a Coffee">
+</a>
+
+If Rui is useful to you, you can buy me a coffee — the link is a placeholder for now.
+
 ### License and brand
 
 Code is currently **MIT**; see [LICENSE](LICENSE). A license change is out of scope for this round and needs a separate discussion. The 小瑞 / Rui name and logo are project brand assets, separate from the code license.

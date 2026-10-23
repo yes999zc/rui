@@ -213,3 +213,14 @@ house-ear-channels --weixin-data /data/channels/weixin \
   - `PUT /api/v1/channels/telegram/token`（写 secrets，永不回显）；
   - `POST/GET /api/v1/channels/weixin/login`（QR 状态）。
 - **注意**：控制台托管模式与 Mac 外部 `house-ear-channels` 只能二选一；同一 bot 不能同时长轮询。
+
+
+## 10. M7：控制面托管的常驻 gateway（2026-10-23）
+
+- `ChannelSupervisor` 在控制面进程里管理 `house-ear-channels` 子进程：
+  - 启动时若 `channels.json` 有已启用通道，自动启动；
+  - 5 秒 watchdog：进程异常退出且不是手动 Stop，会自动拉起；
+  - 控制台 Start/Stop/Restart 直接操作这个 supervisor；
+  - 日志写入 `data/channels-gateway.log`。
+- 当前 NAS 部署策略：**只启用 Telegram**；微信保留 adapter/API/控制台绑定接口，但 `weixin.enabled=false`，不参与长轮询。
+- 同一 bot/账号只能有一个长轮询消费者：切换托管模式前必须停掉外部 `house-ear-channels` 进程。
