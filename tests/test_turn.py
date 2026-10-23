@@ -532,3 +532,45 @@ def test_a_canned_line_is_not_silenced_by_an_earlier_barge(monkeypatch) -> None:
         runner.say("好。", speak, TurnTrace(device_id="test")))
     assert spoken, "the canned line produced no audio at all"
     assert spoken_bytes > 0
+
+
+def test_a_silent_tool_skips_the_spoken_confirmation(monkeypatch) -> None:
+    """A song that started IS the answer (old build: "@@PLAY -> the song is the
+    answer"). A tool declaring answer="silent" ends the turn with no speech, so
+    the music starts ~5 s sooner."""
+    from house_ear.tools.contract import InteractionSpec, ToolResult, ToolSpec
+
+    calls: list[str] = []
+
+    async def play(_args: dict) -> ToolResult:
+        calls.append("play")
+        return ToolResult(status="ok")
+
+    spec = ToolSpec(name="local.music_play", description="demo",
+                     interaction=InteractionSpec(exec={"ok": "music.started"},
+                                                 answer="silent"))
+
+    class SilentLlm(FakeLlm):
+        async def chat(self, messages: list[dict], tools: list[dict]):
+            if not calls:      # first round: ask for the tool
+                yield ChatChunk(delta="", finish_reason="tool_calls",
+                                tool_calls=[{"id": "t1", "name": "music_play",
+                                             "arguments": "{}"}])
+                return
+            yield ChatChunk(delta="好，正在放歌。")   # must never be spoken
+
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("放首歌"), llms=[SilentLlm([""])], ttss=[tts])
+    spoken: list[bytes] = []
+
+    async def speak(pcm: bytes, **_kw: object) -> None:
+        spoken.append(pcm)
+
+    runner = TurnRunner(Config().providers, tools=[(spec, play)])
+    result = asyncio.run(runner.run(b"\x00\x00" * 800, speak,
+                                    TurnTrace(device_id="living")))
+
+    assert calls == ["play"]
+    assert result.reply == ""
+    assert tts.texts == [], "the confirmation must not be synthesised at all"
+    assert spoken == []

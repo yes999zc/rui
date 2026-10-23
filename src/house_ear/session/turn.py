@@ -657,6 +657,7 @@ class TurnRunner:
                 tools_pending.set()
             return "".join(parts), calls
 
+        self._silent_answer = False
         try:
             for attempt in range(3):
                 # Two rounds with tools, then a forced answer without them: a model that
@@ -691,6 +692,10 @@ class TurnRunner:
                 for call in calls:
                     output = await self._call_tool(call)
                     result.tools.append(call.get("name", ""))
+                    spec = self._interactions.get(call.get("name", ""))
+                    if spec is not None and getattr(spec, "answer", "text") == "silent":
+                        # The action is the answer (a song started): say nothing.
+                        self._silent_answer = True
                     log.info("tool %s -> %s", call.get("name", ""), output[:160])
                     if call.get("name") in self.info_tool_names:
                         info_used = True
@@ -699,6 +704,10 @@ class TurnRunner:
                         "tool_call_id": call.get("id", ""),
                         "content": output,
                     })
+                if self._silent_answer:
+                    # Checked after the tools ran: the action was the answer.
+                    log.info("song is the answer: no spoken confirmation")
+                    break
                 if info_used and messages and messages[0].get("role") == "system":
                     # A looked-up answer gets its own budget. Rewriting the system message
                     # keeps it one system prompt; a second one mid-conversation is not.

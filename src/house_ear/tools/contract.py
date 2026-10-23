@@ -87,6 +87,9 @@ class InteractionSpec:
     choose: str = "first"       # first | top3 | ask (V2)
     danger: str = "none"        # none | confirm | excluded (V2)
     filler: str = "auto"        # auto | none
+    # "silent": the action IS the answer, so the turn says nothing (old build:
+    # "@@PLAY -> the song is the answer; talking over it would be noise").
+    answer: str = "text"        # text | silent
 
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[ToolResult | str]]
