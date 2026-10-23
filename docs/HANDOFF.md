@@ -1126,3 +1126,17 @@ Telegram 可行性测试。
 - **文档**：`docs/brand.md`、`docs/remaining-work.md`；本机 NAS 部署文件在 `/vol1/house-ear/`
   （config 0600、secrets 0600），不在仓库。
 
+### 12.31 2026-10-23 21:xx：trace 时间戳修复 + 首轮冷启动预热 + NAS 发布
+
+- **trace bug**：follow-up 回合没有新的 Wake 事件，却沿用了上一次 wake 时间戳，导致
+  `first_response_ms` 出现 20.9 s/34.6 s（实际 2–3 s）。`on_utterance` 消费
+  `client.last_wake` 后清空；免唤醒轮不再标记 wake。
+- **首轮冷启动**：老项目的 `ack_warmer`（预合成唤醒音）在本项目已有等价实现（启动预生成
+  ack.wav + 3 条 filler）；本次补上 **LLM 启动预热**（一次 max_tokens=1 的 HTTP 请求，
+  提前建立 DNS/TLS/连接）；Volc/Xfyun TTS 的 `warm` 原本已有。Volc ASR 仍是每句新建 WS。
+- **发布**：commit `286021e`；GHCR `ghcr.io/yes999zc/rui` 已 public，CI 构建成功；NAS
+  `docker compose pull/up` 更新到该镜像，health OK、speaker connected。
+- **NAS 配置**：启动日志出现 `'在呢。' renders to 710 ms, over the 600 ms cap`（会退化成
+  提示音），把 NAS 的 `ack.max_ms` 调到 800，重启后 ack 530 ms 正常朗读；仓库模板仍保留
+  600 ms 的保守默认（如需统一可再改）。
+
