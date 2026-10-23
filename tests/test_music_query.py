@@ -53,3 +53,11 @@ def test_a_spoken_full_stop_does_not_become_a_title() -> None:
     assert q.plan("播放战车乐队的歌。").title == ""
     assert q.plan("播放周杰伦的歌！").artist == "周杰伦"
     assert q.plan("放点安静的《晴天》").title == "晴天"
+
+
+def test_language_asks_map_to_genre_tags() -> None:
+    """The old build's first answer to 「放几首日文歌」 was a genre (J-Pop), before
+    its per-song language index. Ours starts there too."""
+    assert q.language_genres("放几首日文歌") == ["J-Pop", "JPop", "Japanese"]
+    assert q.language_genres("来点韩语歌")[0] == "K-Pop"
+    assert q.language_genres("播放周杰伦的歌") == []

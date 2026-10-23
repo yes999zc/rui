@@ -138,6 +138,11 @@ class NavidromeSource:
         body = await self._get("getRandomSongs", size=limit)
         return self._tracks(body.get("randomSongs", {}).get("song", []) or [], limit)
 
+    async def by_genre(self, genre: str, limit: int = 40) -> list[Track]:
+        """One genre tag's songs - the fallback for a language ask (J-Pop etc.)."""
+        body = await self._get("getSongsByGenre", genre=genre, count=limit, offset=0)
+        return self._tracks(body.get("songsByGenre", {}).get("song", []) or [], limit)
+
     async def favorites(self) -> list[Track]:
         body = await self._get("getStarred2")
         songs = body.get("starred2", {}).get("song", []) or []

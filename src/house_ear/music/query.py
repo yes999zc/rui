@@ -114,6 +114,26 @@ def accepts(candidate: str, want: str) -> bool:
     return pinyin.contains_sound(c, w)
 
 
+# Language asks have no title or artist to search: the old build's first answer was
+# a genre tag (J-Pop 16 songs on its library), later replaced by a per-song language
+# index. A genre is a rough but honest first step here; the index is the upgrade.
+_LANGUAGE_GENRES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("日文", "日语", "日本歌", "日系"), ("J-Pop", "JPop", "Japanese")),
+    (("韩文", "韩语", "韩国歌", "k-pop", "kpop"), ("K-Pop", "KPop", "Korean")),
+    (("英文歌", "英文", "英语", "欧美"), ("Pop", "Rock")),
+    (("粤语", "国语", "华语", "中文歌", "普通话"), ("Pop", "华语")),
+)
+
+
+def language_genres(term: str) -> list[str]:
+    """Genres to try for a language ask, [] when the term is not about language."""
+    t = normalize(term)
+    for words, genres in _LANGUAGE_GENRES:
+        if any(w in t for w in words):
+            return list(genres)
+    return []
+
+
 def plan(raw: str) -> QueryPlan:
     """Raw utterance -> what to search for. The order is the priority."""
     cleaned = clean_query(raw)
