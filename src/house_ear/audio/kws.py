@@ -174,7 +174,7 @@ class WakeWord:
         model_dir: Path | str,
         keywords_file: Path | str | None = None,
         chunk: int = 8,
-        num_threads: int = 2,
+        num_threads: int = 1,
         rate: int = 16000,
     ) -> None:
         try:

@@ -47,6 +47,7 @@ audio:
     kws_keywords_file: "{config_dir}/keywords.txt"
     kws_probe_file: ""       # a second spotter at a lower threshold that only logs
     kws_chunk: 8
+    kws_num_threads: 1
     vad_model_path: /data/models/silero_vad.onnx
     wake_preroll_ms: 500
   # The LX06 client plays mono frames; 16 kHz is the rate the whole pipeline runs at.

@@ -205,6 +205,9 @@ class VoiceConfig(BaseModel):
     # costs a device session each time.
     kws_probe_file: str = ""
     kws_chunk: int = Field(default=8, ge=4, le=16)
+    # 2 threads on the N100 kept three ONNX workers at 100%; one is enough for KWS
+    # and leaves the other cores to AEC/VAD/control.
+    kws_num_threads: int = Field(default=1, ge=1, le=4)
     # Turn segmentation. Empty path disables it (wake fires, nothing is transcribed).
     vad_model_path: str = ""
     # Audio kept from *before* the KWS hit and replayed into the gate afterwards. The

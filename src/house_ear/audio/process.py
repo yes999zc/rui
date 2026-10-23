@@ -336,6 +336,18 @@ class AudioPlane:
         self._preroll_samples = 0
         self.preroll_replayed_ms = 0.0
         self.preroll_replays = 0
+        # The follow-up gate opens one second after the device finishes the reply; the
+        # old build kept that echo-tail window and replayed it. Without this, an answer
+        # spoken immediately after the reply lost its first syllable ("紧着说明天呢"
+        # heard as nothing).
+        self._followup_tail: deque[tuple[float, bytes]] = deque()
+        self._followup_samples = 0
+        self._followup_capture = False
+        self._followup_start = 0.0
+        self._followup_end = 0.0
+        self._followup_replayed_ms = 0.0
+        self._writer: asyncio.StreamWriter | None = None
+        self._connected: asyncio.Event | None = None
         # Wake acknowledgement (S5a). Fire-and-forget: awaiting it here would block the
         # frame consumer for the cue's whole length and drop microphone audio.
         self._ack_task: asyncio.Task | None = None
@@ -390,6 +402,7 @@ class AudioPlane:
                 model_dir=voice.kws_model_dir,
                 keywords_file=voice.kws_keywords_file or None,
                 chunk=voice.kws_chunk,
+                num_threads=voice.kws_num_threads,
                 rate=voice.rate,
             )
             if voice.kws_probe_file:
@@ -398,6 +411,7 @@ class AudioPlane:
                     model_dir=voice.kws_model_dir,
                     keywords_file=voice.kws_probe_file,
                     chunk=voice.kws_chunk,
+                    num_threads=voice.kws_num_threads,
                     rate=voice.rate,
                 )
                 log.info("kws probe on: %s", voice.kws_probe_file)
@@ -457,6 +471,8 @@ class AudioPlane:
     async def _capture(self, connected: asyncio.Event, writer: asyncio.StreamWriter) -> None:
         assert self.adapter is not None
         info = await self.adapter.probe()
+        self._writer = writer
+        self._connected = connected
         self._build_aec(info.mic_channels, info.ref_channels)
         self._build_kws()
         self._build_vad()
@@ -490,6 +506,8 @@ class AudioPlane:
                 # ring, and feeding it again here would duplicate 20 ms inside the first
                 # word - exactly where the replay exists to protect the onset.
                 self._keep_preroll(pcm, frame.ts_ms)
+            if pcm:
+                self._capture_followup_tail(pcm, frame.ts_ms)
             if self.gate is not None and pcm:
                 await self._feed_gate(pcm, frame.ts_ms, writer, connected)
             for vendor in self._drain_signals():
@@ -620,6 +638,9 @@ class AudioPlane:
                 self.gate.interrupted += 1
                 log.info("wake while a turn was open: %.0f ms discarded", self.gate.speech_ms)
             self.gate.arm()
+            self._followup_capture = False
+            self._followup_tail.clear()
+            self._followup_samples = 0
             replayed = 0
             for ts, block in list(self._preroll):
                 await self._feed_gate(block, ts, writer, connected)
@@ -988,6 +1009,8 @@ class AudioPlane:
                         # With a song waiting the block below arms it with the music
                         # window instead (shorter max_wait, and the song stays down).
                         delay = max(0.0, pacer.due - time.monotonic()) + 1.0
+                        self._start_followup_capture(
+                            max(0.0, pacer.due - time.monotonic()), delay)
                         asyncio.create_task(
                             self._arm_followup_later(delay), name="followup-gate"
                         )
@@ -1013,6 +1036,8 @@ class AudioPlane:
                         self._music_hold_until = (
                             time.monotonic() + delay + hold_ms / 1000.0)
                         if hold_ms > 0:
+                            self._start_followup_capture(
+                                max(0.0, pacer.due - time.monotonic()), delay)
                             asyncio.create_task(
                                 self._arm_followup_later(delay, max_wait_ms=hold_ms),
                                 name="followup-gate")
@@ -1123,6 +1148,48 @@ class AudioPlane:
         while not self._speak_queue.empty():
             self._speak_queue.get_nowait()
 
+    def _start_followup_capture(self, due_in: float, delay: float) -> None:
+        """Remember microphone frames from the end of device playback until the gate arms."""
+        now = time.monotonic()
+        self._followup_tail.clear()
+        self._followup_samples = 0
+        self._followup_start = now + max(0.0, due_in)
+        self._followup_end = self._followup_start + max(0.0, delay)
+        self._followup_capture = True
+
+    def _capture_followup_tail(self, pcm: bytes, ts_ms: float) -> None:
+        if not self._followup_capture or self.gate is None or self.gate.armed:
+            return
+        now = time.monotonic()
+        if now < self._followup_start:
+            return
+        if now > self._followup_end + 0.25:
+            self._followup_capture = False
+            return
+        # At most 2 s; the delay is 1 s, so this only bounds a delayed task.
+        limit = self.cfg.audio.voice.rate * 2
+        if self._followup_samples + len(pcm) // 2 > limit:
+            while self._followup_tail and self._followup_samples + len(pcm) // 2 > limit:
+                _ts, old = self._followup_tail.popleft()
+                self._followup_samples -= len(old) // 2
+        self._followup_tail.append((ts_ms, pcm))
+        self._followup_samples += len(pcm) // 2
+
+    async def _replay_followup_tail(self) -> None:
+        tail = list(self._followup_tail)
+        self._followup_tail.clear()
+        self._followup_samples = 0
+        self._followup_capture = False
+        if not tail or self._writer is None or self._connected is None:
+            return
+        for ts_ms, pcm in tail:
+            await self._feed_gate(pcm, ts_ms, self._writer, self._connected)
+        self._followup_replayed_ms = round(
+            sum(len(pcm) // 2 for _ts, pcm in tail) * 1000.0
+            / self.cfg.audio.voice.rate, 1)
+        log.info("follow-up gate replayed %.0f ms of gated tail",
+                 self._followup_replayed_ms)
+
     async def _arm_followup_later(self, delay: float,
                                   max_wait_ms: int | None = None) -> None:
         """Open the follow-up gate after the speaker has finished, not after sending."""
@@ -1144,6 +1211,7 @@ class AudioPlane:
                 followup=True,
                 max_wait_ms=max_wait_ms or int(self.cfg.session.timeout_s * 1000) or None,
             )
+            await self._replay_followup_tail()
 
     def _disarm_gate_for_our_audio(self) -> None:
         """Our own playback closes an armed follow-up gate.
