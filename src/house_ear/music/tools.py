@@ -39,6 +39,31 @@ PLAY_MAP = {"ok": "music.started", "ok_one": "music.started_one",
             "unresolved": "music.unresolved"}
 
 
+def _rank_hits(tracks: list[Track], want: str) -> list[Track]:
+    """Exact title first, then prefix, then containment, then the shorter title.
+
+    Measured 13:27: a title-only song request started a longer fuzzy title because
+    Subsonic returned it first and the first hit was played. Containment is the
+    acceptance guard, not the ordering; the shortest exact match is what a person
+    means by a title alone.
+    """
+    target = q.normalize(want)
+    if not target or not tracks:
+        return tracks
+
+    def score(track: Track) -> tuple[int, int]:
+        title = q.normalize(track.title)
+        if title == target:
+            return (0, len(title))
+        if title.startswith(target):
+            return (1, len(title))
+        if target in title:
+            return (2, len(title))
+        return (3, len(title))
+
+    return sorted(tracks, key=score)
+
+
 async def _search(source: MusicSource, p: q.QueryPlan,
                   names: NameResolver | None = None) -> list[Track]:
     """Where a second source will plug in: today only the NAS library."""
@@ -67,12 +92,13 @@ async def _search(source: MusicSource, p: q.QueryPlan,
             hits = await source.search(p.title, 25)
             keep = [t for t in hits if q.accepts(t.artist, p.artist)]
             if keep:
-                return keep
+                return _rank_hits(keep, p.title)
             pool = await source.search(p.artist, 25)
             if pool:
-                return pool
-            return [t for t in hits if q.accepts(t.label, p.title)]
-        return [t for t in await source.search(p.term, 25) if q.accepts(t.label, p.title)]
+                return _rank_hits(pool, p.title)
+            return _rank_hits([t for t in hits if q.accepts(t.label, p.title)], p.title)
+        return _rank_hits(
+            [t for t in await source.search(p.term, 25) if q.accepts(t.label, p.title)], p.title)
     except SourceError as exc:
         log.info("music search failed: %s", exc)
         return []

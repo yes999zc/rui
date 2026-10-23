@@ -12,9 +12,12 @@ tends to answer the question anyway. The exception is `news()`: it returns a
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as dt
+import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -23,6 +26,11 @@ from .. import secrets
 from ..config.schema import Config
 from ..session import briefing
 from .contract import Permission, ToolSpec
+
+# Where the last good digest is cached. The 60s mirrors are a hobby CDN: on
+# 2026-10-23 all four were unreachable for a minute and the switchboard answered
+# 「新闻没取到」; a spoken digest from this morning is a better answer than that.
+NEWS_CACHE_FILE = "news_cache.json"
 
 log = logging.getLogger(__name__)
 
@@ -193,18 +201,109 @@ async def news(cfg: Config, args: dict) -> str | briefing.Briefing:
     conf = cfg.tools.news
     count = max(1, min(10, int(args.get("count") or 5)))
     today = _today()
-    for offset in (0, 1):  # today, then yesterday: the mirrors publish on their own clock
-        date = (today - dt.timedelta(days=offset)).isoformat()
-        for template in DIGEST_URLS:
-            try:
-                data = await _get_json(template.format(date=date), conf.timeout_s)
-            except Exception:  # noqa: BLE001 - the next mirror is the fix
-                continue
+    cache_path = Path(cfg.system.data_dir) / NEWS_CACHE_FILE
+    # The four digest mirrors are a hobby CDN on hosts this network reaches only
+    # intermittently (measured 13:25: all timed out for minutes). The search API is
+    # the endpoint the turns already rely on, so it starts in parallel: whichever
+    # source answers first wins, and a voice turn never waits for both.
+    fallback_task = asyncio.create_task(_news_from_search(cfg, count), name="news-search")
+    try:
+        # A turn tool call dies at 20 s; 2 dates x 4 mirrors x 2 attempts x 8 s is
+        # 64 s of worst case. Bound the probe.
+        deadline = time.monotonic() + min(float(conf.timeout_s), 6.0)
+        for offset in (0, 1):  # today, then yesterday: the mirrors publish on their own clock
+            date = (today - dt.timedelta(days=offset)).isoformat()
+            for template in DIGEST_URLS:
+                if time.monotonic() > deadline:
+                    break
+                try:
+                    data = await _get_json(template.format(date=date),
+                                           min(float(conf.timeout_s), 3.0))
+                except Exception:  # noqa: BLE001 - the next mirror is the fix
+                    continue
+                brief = briefing.from_news(data, date=date, limit=count)
+                if brief is not None:
+                    log.info("news: %d items for %s", brief.count, date)
+                    _write_news_cache(cache_path, date, data)
+                    return brief
+        cached = _read_news_cache(cache_path)
+        if cached is not None:
+            date, data = cached
             brief = briefing.from_news(data, date=date, limit=count)
             if brief is not None:
-                log.info("news: %d items for %s", brief.count, date)
+                log.warning("news: mirrors unreachable, serving the %s cached digest", date)
                 return brief
-    return "今天的新闻没取到，直接说没取到，让用户过一会儿再问。"
+        fallback = await fallback_task
+        if fallback is not None:
+            log.warning("news: digest unreachable, briefing built from search results")
+            return fallback
+        return "今天的新闻没取到，直接说没取到，让用户过一会儿再问。"
+    finally:
+        if not fallback_task.done():
+            fallback_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await fallback_task
+
+
+async def _news_from_search(cfg: Config, count: int) -> briefing.Briefing | None:
+    """A headline digest from the search API when the 60s mirrors are down."""
+    conf = cfg.tools.search
+    if not conf.enabled or conf.kind == "none":
+        return None
+    key = secrets.get(conf.api_key_env)
+    if not key:
+        return None
+    payload = {
+        "query": f"{_today().isoformat()} 今日新闻 头条 国内 国际",
+        "count": max(3, min(8, count)),
+        "ori_question": "今天有什么新闻",
+        "need_content": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=min(float(conf.timeout_s), 8.0)) as client:
+            resp = await client.post(
+                conf.base_url.rstrip("/") + "/v1/tools/search",
+                json=payload,
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:  # noqa: BLE001 - a fallback that fails is just no news
+        log.warning("news: search fallback failed: %s", exc)
+        return None
+    items: list[str] = []
+    for item in (data or {}).get("results") or []:
+        title = str(item.get("title") or "").strip()
+        summary = (item.get("summary") or item.get("snippet") or "").replace("\n", " ").strip()
+        if not title:
+            continue
+        items.append(title if not summary else f"{title}：{summary[:90]}")
+        if len(items) >= count:
+            break
+    if not items:
+        return None
+    return briefing.from_news(items, date=_today().isoformat(), limit=count)
+
+
+def _write_news_cache(path: Path, date: str, data: object) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"date": date, "data": data}, ensure_ascii=False),
+                        encoding="utf-8")
+    except OSError as exc:  # noqa: BLE001 - a cache is never worth a failed turn
+        log.info("news: cannot write cache: %s", exc)
+
+
+def _read_news_cache(path: Path) -> tuple[str, object] | None:
+    """The cached digest, only when it is today's or yesterday's."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    date = str(payload.get("date") or "")
+    if date not in {( _today() - dt.timedelta(days=offset)).isoformat() for offset in (0, 1)}:
+        return None
+    return date, payload.get("data")
 
 
 async def web_search(cfg: Config, args: dict) -> str:

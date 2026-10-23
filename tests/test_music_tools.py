@@ -431,3 +431,26 @@ def test_a_play_result_carries_the_candidates_it_queued(tmp_path: Path) -> None:
         assert service.current is not None
 
     asyncio.run(run())
+
+
+def test_an_exact_title_beats_a_longer_fuzzy_title(tmp_path: Path) -> None:
+    """13:27 measurement: 「放一首晴天」 started 许茹芸《一直是晴天_2》.
+
+    Subsonic returned the longer title first; containment let it through and the
+    first hit was played. The exact title must win regardless of source order.
+    """
+
+    class WrongOrder(FlakySource):
+        async def search(self, term: str, limit: int) -> list[Track]:
+            if "晴天" not in term:
+                return []
+            return [
+                Track(id="subsonic:fuzzy", title="一直是晴天_2", artist="许茹芸", duration=240),
+                Track(id="subsonic:exact", title="晴天", artist="周杰伦", duration=269),
+            ]
+
+    _service, _source, tools, _specs = make(tmp_path, source=WrongOrder())
+    out = asyncio.run(tools["music_play"]({"query": "放一首晴天"}))
+    assert out.status in ("ok", "ok_one")
+    assert out.payload["title"] == "晴天"
+    assert out.payload["artist"] == "周杰伦"
