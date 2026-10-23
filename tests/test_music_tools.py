@@ -181,3 +181,38 @@ def test_the_music_module_carries_no_wording_of_its_own() -> None:
                 f"Chinese string literal at line {node.lineno}: {node.value[:30]!r} - "
                 "speech belongs in session/phrases.py"
             )
+
+
+def test_a_non_transport_word_falls_through_without_crashing() -> None:
+    """Measured 08:37: the transport check moved ahead of the dismiss list and lost
+    its early return - every ordinary question (and 「停止」) crashed with KeyError
+    before reaching the turn, so nothing answered at all."""
+    from types import SimpleNamespace
+
+    from house_ear.web.api.app import _music_transport
+
+    async def run() -> None:
+        service, _, _, _ = make(Path("/tmp"))
+        app = SimpleNamespace(state=SimpleNamespace(music=service))
+
+        for word in ("现在几点", "今天天气怎么样", "停止", "退下吧"):
+            out = await _music_transport(app, word, None, None, None, None)
+            assert out is None, f"{word!r} must fall through, got {out!r}"
+
+    asyncio.run(run())
+
+
+def test_transport_words_fall_through_when_nothing_plays() -> None:
+    """「暂停」 with no song is the dismiss list's job ("stop talking"), not a
+    player that does not exist."""
+    from types import SimpleNamespace
+
+    from house_ear.web.api.app import _music_transport
+
+    async def run() -> None:
+        service, _, _, _ = make(Path("/tmp"))
+        assert service.state == "idle"
+        app = SimpleNamespace(state=SimpleNamespace(music=service))
+        assert await _music_transport(app, "暂停", None, None, None, None) is None
+
+    asyncio.run(run())

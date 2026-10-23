@@ -273,7 +273,9 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         log.info("music transport: %r -> random (%s)", clean, key)
         return line
     action = rules.music_transport(clean)
-    if action and service.state == "idle":
+    if not action:
+        return None      # not a transport word: the turn (or the dismiss list) owns it
+    if service.state == "idle":
         # No song at all: 「暂停」/「停一下」 is the dismiss list's job ("stop
         # talking"), not a player that does not exist. Fall through.
         return None
