@@ -116,7 +116,7 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 | **P2** ✅ | form block + useConfigForm；5 个 form 面板（设置/密钥/体检/系统/会话）；401 时 token 输入 UI；生效时机标签 | 配置改动全走注册表 |
 | **P3** ✅ | `GET /api/v1/logs` + log block（轮询/过滤/跟随）；table block + 对话面板；memory block + 记忆面板 | 日志页不再是占位 |
 | **P3.5** ✅ 2026-10-23 | **逐页复核**：SPA 深链 fallback、`/diagnostics`、`say`/`volume` 两种 block、列表串插值、日志隐藏噪声、删掉 4 个死页面与 2 个重复入口、9 条注册表契约测试 | `docs/console-audit.md` |
-| **P4 ✅ 2026-10-23** | 首次安装向导（`/setup` + `GET /api/v1/setup` + keys/device/wake/probe）：状态由服务器上的 key/模型文件/config 计算，不做「欢迎页cookie」；加设备会写 config、重生成 keywords、重启音频面；首装自动落在向导页 | 隔离 :18090 实例实测：`/` → `/setup`；key/设备/唤醒词三步勾选、keywords.txt 生成、探测返回不可达原因；`tests/test_setup.py` 6 条 |
+| **P4 ✅ 2026-10-23** | 首次安装向导（`/setup` + `GET /api/v1/setup` + keys/device/wake/probe）：状态由服务器上的 key/模型文件/config 计算；**key 是否齐全按各 provider 链的 `api_key_env/app_id_env/api_secret_env` 实际判断**（不硬编码 key 名，本地 sherpa 条看模型文件）；加设备会写 config（**按 id 合并，保留 listen_port/LED/volume 等向导不展示的字段**）、重生成 keywords、重启音频面；只有前四步真没完成时首装才落地向导页（`complete` 标志，验证「试一句」只是提示不强制） | 隔离 :18090 实例实测：`/` → `/setup`；三步勾选随真调用翻转、keywords.txt 逐字一致、探测返回不可达原因；dev 配置实测 `complete=true` 时 `/` 不再跳向导；`tests/test_setup.py` 7 条 |
 | P5 | 设备添加/编辑（多设备）+ MCP/HA 管理页 | 待做 |
 | P6 | PhraseBook 编辑区 + 剧本测试 | 待做 |
 | P4（旧，可选） | websocket 替换轮询（仅日志/进度需要亚秒级） | — |

@@ -62,7 +62,7 @@ onMounted(async () => {
   if (route.path === '/' || route.path === '/panel/overview') {
     try {
       const setup = await api.setup()
-      if (setup.next_step !== 'done') await router.replace('/setup')
+      if (!setup.complete) await router.replace('/setup')
     } catch {
       // 401/offline: the wizard would not load either; stay put.
     }

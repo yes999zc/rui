@@ -298,6 +298,7 @@ export interface SetupStep {
 /** The install wizard's state: computed on the server from files and keys. */
 export interface SetupState {
   next_step: string
+  complete: boolean
   steps: SetupStep[]
   config_path: string
   config_exists: boolean

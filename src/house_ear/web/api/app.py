@@ -49,7 +49,7 @@ START = time.time()
 log = logging.getLogger(__name__)
 # Keys the wizard's "fill the keys" step requires. 讯飞 TTS is optional: without
 # XFYUN_* the TTS chain falls back to SiliconFlow, which needs HOUSE_EAR_TTS_KEY only.
-SETUP_KEY_NAMES = ("HOUSE_EAR_LLM_KEY", "HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY")
+
 _DEFAULT_WEB_DIST = Path(__file__).resolve().parents[3].parent / "web" / "dist"
 WEB_DIST = Path(os.environ.get("HOUSE_EAR_WEB_DIR", _DEFAULT_WEB_DIST))
 
@@ -1606,30 +1606,67 @@ def create_app(
         cfg_now = getattr(app.state, "cfg", cfg)
         supervisor = getattr(app.state, "audio", None)
 
-        def catalog_model(name: str) -> Path | None:
-            provider = cfg_now.providers.catalog.get(name)
-            model = str(getattr(provider, "model", "") or "")
-            return Path(model).expanduser() if model else None
+        def sherpa_model() -> Path | None:
+            """The local ASR dir, found through the chain - provider names differ per config."""
+            for name in cfg_now.providers.asr.chain:
+                provider = cfg_now.providers.catalog.get(name)
+                if provider is None or str(getattr(provider, "kind", "")) != "sherpa":
+                    continue
+                model = str(getattr(provider, "model", "") or "")
+                if model:
+                    return Path(model).expanduser()
+            return None
 
         def dir_has(directory: Path | None, *names: str) -> bool:
             return bool(directory is not None and directory.is_dir()
                         and all((directory / name).is_file() for name in names))
 
-        asr = catalog_model("local_asr")
+        asr = sherpa_model()
+        asr_ok = bool(asr is not None and asr.is_dir()
+                      and (asr / "tokens.txt").is_file()
+                      and any((asr / name).is_file() for name in ("model.int8.onnx", "model.onnx")))
         voice = cfg_now.audio.voice
         kws = Path(voice.kws_model_dir).expanduser() if voice.kws_model_dir else None
         vad = Path(voice.vad_model_path).expanduser() if voice.vad_model_path else None
         keywords = Path(voice.kws_keywords_file).expanduser() if voice.kws_keywords_file else None
-        keys = {name: secrets.has(name) for name in SETUP_KEY_NAMES}
+        def provider_usable(provider: object) -> bool:
+            """Can this chain entry actually answer right now?"""
+            kind = str(getattr(provider, "kind", ""))
+            names = [str(n) for n in (getattr(provider, "api_key_env", ""),
+                                      getattr(provider, "app_id_env", ""),
+                                      getattr(provider, "api_secret_env", "")) if n]
+            if not all(secrets.has(name) for name in names):
+                return False
+            if kind == "sherpa":
+                model = str(getattr(provider, "model", "") or "")
+                return bool(model and Path(model).expanduser().exists())
+            return bool(getattr(provider, "base_url", ""))
+        stage_ok: dict[str, bool] = {}
+        missing_keys: set[str] = set()
+        for stage in ("asr", "tts", "llm"):
+            chain = list(getattr(cfg_now.providers, stage).chain)
+            usable = [name for name in chain
+                      if provider_usable(cfg_now.providers.catalog.get(name))]
+            stage_ok[stage] = bool(usable)
+            if not usable:
+                for name in chain:
+                    provider = cfg_now.providers.catalog.get(name)
+                    if provider is None:
+                        continue
+                    missing_keys.update(str(n) for n in (
+                        getattr(provider, "api_key_env", ""),
+                        getattr(provider, "app_id_env", ""),
+                        getattr(provider, "api_secret_env", "")) if n and not secrets.has(n))
+        keys = {"stages": stage_ok, "missing": sorted(missing_keys)}
         models = {
-            "asr": dir_has(asr, "model.int8.onnx", "tokens.txt"),
+            "asr": asr_ok,
             "vad": bool(vad and vad.is_file()),
             "kws": dir_has(kws, "tokens.txt"),
         }
         device = cfg_now.devices[0] if cfg_now.devices else None
         verified = bool((getattr(app.state, "last_turn", None) or {}).get("audio_bytes"))
         steps = [
-            {"id": "keys", "title": "填 key", "done": all(keys.values()), "detail": keys},
+            {"id": "keys", "title": "填 key", "done": all(stage_ok.values()), "detail": keys},
             {"id": "models", "title": "本地模型", "done": all(models.values()), "detail": models},
             {"id": "device", "title": "添加音箱", "done": device is not None,
              "detail": ({"id": device.id, "host": device.host, "room": device.room}
@@ -1642,6 +1679,9 @@ def create_app(
         ]
         return {
             "next_step": next((step["id"] for step in steps if not step["done"]), "done"),
+            # The first four steps are "can it work at all"; the try-a-sentence step is a
+            # nudge, not a blocker (a working speaker should not open the wizard forever).
+            "complete": all(step["done"] for step in steps[:4]),
             "steps": steps,
             "config_path": str(config_path) if config_path else "",
             "config_exists": bool(config_path and Path(config_path).exists()),
@@ -1726,14 +1766,21 @@ def create_app(
             current = load_config(Path(config_path))
         except ConfigError as exc:
             raise HTTPException(status_code=409, detail=f"config is not readable: {exc}") from exc
-        device = DeviceConfig(
-            id=str(payload.get("id") or "living").strip() or "living",
-            adapter=str(payload.get("adapter") or "xiaoai").strip() or "xiaoai",
-            host=host,
-            room=str(payload.get("room") or "").strip(),
-            wake_words=words or ["你好小瑞"],
-            enabled=True,
-        )
+        device_id = str(payload.get("id") or "living").strip() or "living"
+        existing = next((dev for dev in current.devices if dev.id == device_id), None)
+        # Merge onto the device that is already there: a wizard edit must not silently
+        # drop fields it does not show (listen_port, LED colours, volume target).
+        base = existing.model_dump(mode="json") if existing is not None else {}
+        base.update({
+            "id": device_id,
+            "adapter": str(payload.get("adapter") or base.get("adapter") or "xiaoai").strip()
+            or "xiaoai",
+            "host": host,
+            "room": str(payload.get("room") or "").strip(),
+            "wake_words": words or ["你好小瑞"],
+            "enabled": True,
+        })
+        device = DeviceConfig.model_validate(base)
         others = [dev for dev in current.devices if dev.id != device.id]
         merged = current.model_copy(update={"devices": [device, *others]})
         try:

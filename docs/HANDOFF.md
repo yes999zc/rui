@@ -554,4 +554,11 @@ healthy 6 s；三类卷 down→up 全保留；SIGTERM 进程退出自动重启�
 隔离 :18090 实例（生产模板配置、无设备）实测：`/` → `/setup`、三步勾选状态随真调用翻转、
 keywords.txt 内容逐字一致、probe 返回不可达原因、无音频面时「试一句」如实 409。
 **未验**：向导里「模型」步只给命令（272 MB 下载不进 HTTP 回调）；真机端到端由冷装排练覆盖。
+**P4.1 修三处诚实性问题（同日晚些）**：① key 步改为按配置里真实 provider 链的
+`api_key_env/app_id_env/api_secret_env` 判断（dev 配置用 DEEPSEEK_*/SILICONFLOW_*/XFYUN_*，
+原先硬编码 HOUSE_EAR_* 会把配好的 dev 判成「没填 key」）；本地 sherpa 条改看模型文件，
+且接受 `model.onnx` 与 `model.int8.onnx` 两种命名。② 新增 `complete` 标志（前四步都完成）：
+只有真未装好才强制首装落到向导页；「试一句」只是提示，不会让日常打开控制台永远跳向导。
+③ 向导保存设备改为按 id 合并到已有设备上，`listen_port`/`led`/`volume` 等不在表单里的字段
+不会被清空。dev 实测：`complete=true`、`/` 停在概览、`/setup` 四步全绿、音频面在线。
 

@@ -31,6 +31,9 @@ def test_state_asks_for_the_keys_first(wizard) -> None:
     client, _path = wizard
     body = client.get("/api/v1/setup").json()
     assert body["next_step"] == "keys"
+    assert set(body["steps"][0]["detail"]["missing"]) == {
+        "HOUSE_EAR_LLM_KEY", "HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY",}
+    assert body["complete"] is False
     assert [step["id"] for step in body["steps"]] == [
         "keys", "models", "device", "wake", "verify"]
     assert body["config_exists"] is True
@@ -39,11 +42,18 @@ def test_state_asks_for_the_keys_first(wizard) -> None:
 
 def test_keys_are_stored_but_never_echoed(wizard) -> None:
     client, path = wizard
-    response = client.post("/api/v1/setup/keys",
-                           json={"values": {"HOUSE_EAR_LLM_KEY": "sk-test-should-not-echo"}})
+    response = client.post("/api/v1/setup/keys", json={"values": {
+        "HOUSE_EAR_LLM_KEY": "sk-test-should-not-echo",
+        "HOUSE_EAR_ASR_KEY": "sk-test-2",
+        "HOUSE_EAR_TTS_KEY": "sk-test-3",
+    }})
     assert response.status_code == 200
     assert "sk-test-should-not-echo" not in response.text
-    assert response.json()["steps"][0]["detail"]["HOUSE_EAR_LLM_KEY"] is True
+    keys_step = response.json()["steps"][0]
+    assert keys_step["detail"]["missing"] == []
+    # Keys are stored; the stages still need an endpoint (schema defaults have none),
+    # which is exactly the "keys are not the whole story" the wizard must show.
+    assert keys_step["done"] is False
     # The value is on disk for the providers, not in config.yaml.
     assert "sk-test-should-not-echo" not in path.read_text(encoding="utf-8")
     assert (path.parent / "data" / "secrets.yaml").exists()
@@ -65,6 +75,20 @@ def test_device_is_written_and_the_keywords_file_follows(wizard) -> None:
     # The device list endpoint sees it without a control-plane restart.
     devices = client.get("/api/v1/devices").json()
     assert any(device["id"] == "living" for device in devices)
+
+
+def test_saving_the_device_keeps_fields_the_wizard_does_not_show(wizard) -> None:
+    """An edit from the wizard must not drop listen_port / LED / volume."""
+    client, path = wizard
+    client.post("/api/v1/setup/device", json={"host": "speaker.local", "wake_words": ["你好小瑞"]})
+    cfg = load_config(path)
+    device = cfg.devices[0].model_copy(update={"listen_port": 4412, "volume": 70})
+    save_config(path, cfg.model_copy(update={"devices": [device]}))
+    client.post("/api/v1/setup/device", json={"host": "speaker.local", "wake_words": ["嗨小瑞"]})
+    saved = load_config(path).devices[0]
+    assert saved.host == "speaker.local"
+    assert saved.listen_port == 4412
+    assert saved.volume == 70
 
 
 def test_wake_words_can_be_changed_after_the_device_exists(wizard) -> None:
