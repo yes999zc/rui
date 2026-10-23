@@ -1114,6 +1114,10 @@ def create_app(
             raise HTTPException(status_code=409, detail="a turn is already running")
         trace = TurnTrace(device_id="debug")
         _light(app, "thinking")
+        # The console's 试一试 is one fresh utterance, as on the speaker: a wake
+        # clears history, so a typed try must not inherit the previous try either
+        # (measured 10:45:21: a weather answer added "周杰伦的歌没放上").
+        runner.reset_history()
         for fast in (_music_transport, _volume_command):
             if await fast(app, text, runner, client, trace, traces) is not None:
                 _light_after_audio(app, app.state.last_turn["audio_bytes"] or 0,
