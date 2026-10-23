@@ -16,6 +16,12 @@ import { onBeforeRouteLeave } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import { api, ApiError, type CatalogDoc, type CatalogField, type CatalogGroup, type LocalizedText } from '../api'
 import { isEnglish, localizeBackend, localizeIssue, pickLocalized, t } from '../i18n'
+import {
+  readAuditionOutput,
+  requestAudition,
+  writeAuditionOutput,
+  type AuditionOutput,
+} from './providers/audition'
 
 const props = defineProps<{
   /** Catalog group ids to render (supports `providers.*`); omitted = every group. */
@@ -38,9 +44,13 @@ const draft = ref<Record<string, Value>>({})
 const baseline = ref<Record<string, Value>>({})
 const errors = ref<Record<string, string>>({})
 const filter = ref('')
-const auditionState = reactive<Record<string, 'idle' | 'loading' | 'playing'>>({})
+const auditionState = reactive<Record<string, 'idle' | 'loading' | 'playing' | 'speaker'>>({})
 const auditionError = ref('')
+const auditionNotice = ref('')
+const auditionOutput = ref<AuditionOutput>(readAuditionOutput())
 let auditionAudio: HTMLAudioElement | null = null
+let auditionTimer: number | undefined
+const hasAudition = computed(() => fields.value.some((field) => Boolean(field.audition)))
 const showAdvanced = ref(false)
 /** Dotted config paths are a diagnostic detail, hidden behind one toolbar toggle. */
 const showTech = ref(false)
@@ -394,7 +404,16 @@ function revert(): void {
   savedInfo.value = null
 }
 
+function setAuditionOutput(next: AuditionOutput): void {
+  auditionOutput.value = next
+  writeAuditionOutput(next)
+  stopAudition()
+  auditionNotice.value = ''
+}
+
 function stopAudition(): void {
+  if (auditionTimer) window.clearTimeout(auditionTimer)
+  auditionTimer = undefined
   if (auditionAudio) {
     auditionAudio.pause()
     auditionAudio = null
@@ -407,6 +426,7 @@ async function playAudition(field: CatalogField): Promise<void> {
   if (!field.audition) return
   stopAudition()
   auditionError.value = ''
+  auditionNotice.value = ''
   auditionState[field.path] = 'loading'
   try {
     const voice = String(draft.value[field.path] ?? '')
@@ -415,8 +435,26 @@ async function playAudition(field: CatalogField): Promise<void> {
       const path = `providers.catalog.${field.audition.provider}.${key}`
       if (path in draft.value) prosody[key] = draft.value[path]
     }
-    const blob = await api.audition(field.audition.stage, field.audition.provider, voice, undefined, prosody)
-    const url = URL.createObjectURL(blob)
+    const outcome = await requestAudition(
+      {
+        stage: field.audition.stage,
+        provider: field.audition.provider,
+        body: { voice, ...(prosody ?? {}) },
+      },
+      auditionOutput.value,
+    )
+    if (outcome.played === 'speaker') {
+      auditionState[field.path] = 'speaker'
+      auditionNotice.value = outcome.duration_ms
+        ? t('providers.auditionSpeakerDone', { ms: outcome.duration_ms })
+        : t('providers.auditionSpeakerPlaying')
+      auditionTimer = window.setTimeout(() => {
+        if (auditionState[field.path] === 'speaker') auditionState[field.path] = 'idle'
+      }, Math.max(1000, outcome.duration_ms + 600))
+      return
+    }
+    if (outcome.fallback) auditionNotice.value = outcome.fallback
+    const url = URL.createObjectURL(outcome.blob)
     auditionAudio = new Audio(url)
     auditionAudio.onended = () => {
       auditionState[field.path] = 'idle'
@@ -590,6 +628,26 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
             <input v-model="showTech" type="checkbox" />
             <span>{{ t('config.techDetails') }}</span>
           </label>
+          <div v-if="hasAudition" class="cfg-audition-output" role="group" :aria-label="t('providers.auditionOutput')">
+            <button
+              type="button"
+              class="cfg-audition-choice"
+              :class="{ on: auditionOutput === 'speaker' }"
+              :aria-pressed="auditionOutput === 'speaker'"
+              @click="setAuditionOutput('speaker')"
+            >
+              {{ t('providers.auditionSpeaker') }}
+            </button>
+            <button
+              type="button"
+              class="cfg-audition-choice"
+              :class="{ on: auditionOutput === 'browser' }"
+              :aria-pressed="auditionOutput === 'browser'"
+              @click="setAuditionOutput('browser')"
+            >
+              {{ t('providers.auditionLocal') }}
+            </button>
+          </div>
           <span v-if="isDirty" class="badge badge-warn cfg-dirty">{{ t('config.modified', { n: dirtyPaths.length }) }}</span>
           <div v-if="isDirty || saveError || saving" class="cfg-save-inline">
             <span v-if="saveError" class="fail small cfg-inline-error">{{ saveError }}</span>
@@ -798,7 +856,7 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
                 <button
                   type="button"
                   class="btn btn-sm"
-                  :disabled="auditionState[field.path] === 'loading'"
+                  :disabled="auditionState[field.path] === 'loading' || auditionState[field.path] === 'speaker'"
                   @click="auditionState[field.path] === 'playing' ? stopAudition() : playAudition(field)"
                 >
                   <AppIcon :name="auditionState[field.path] === 'playing' ? 'stop' : 'play'" :size="13" />
@@ -807,9 +865,12 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
                       ? t('config.auditionStop')
                       : auditionState[field.path] === 'loading'
                         ? t('config.auditionLoading')
-                        : t('config.audition')
+                        : auditionState[field.path] === 'speaker'
+                          ? t('providers.auditionSpeakerPlaying')
+                          : t('config.audition')
                   }}
                 </button>
+                <span v-if="auditionNotice" class="ok small">{{ auditionNotice }}</span>
                 <span v-if="auditionError" class="fail small">{{ auditionError }}</span>
               </div>
 
@@ -1077,6 +1138,36 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
   margin-top: 3px;
   gap: 6px;
   font-size: 11px;
+}
+
+.cfg-audition-output {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.cfg-audition-choice {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 3px 7px;
+  border-radius: var(--r-xs);
+  font-size: 10.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cfg-audition-choice:hover {
+  color: var(--ink);
+}
+
+.cfg-audition-choice.on {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .cfg-hint {

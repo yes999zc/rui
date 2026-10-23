@@ -1,43 +1,101 @@
 /*
- * house-ear console design system — docs/console-redesign.md
+ * Rui console design system — docs/console-redesign.md
  *
  * One source of truth for colour, type, spacing, shape, depth and motion.
  * Light is the default; [data-theme="dark"] overrides. Components never invent
  * a colour or a margin outside these tokens.
+ *
+ * Palette: Pantone 2026-inspired — Cloud Dancer paper, Alexandrite deep teal,
+ * Muskmelon live signal, Sage Green ok, Caramel warn, Lava Falls fail.
+ * Colours are approximations for screen use, not licensed Pantone values.
+ * Fonts are self-hosted in public/fonts (no runtime third-party request).
  */
 
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/fonts/bricolage-grotesque-latin.woff2") format("woff2");
+  font-weight: 400 800;
+  font-stretch: 100%;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/fonts/bricolage-grotesque-latin-ext.woff2") format("woff2");
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+
+@font-face {
+  font-family: "Manrope";
+  src: url("/fonts/manrope-latin.woff2") format("woff2");
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Manrope";
+  src: url("/fonts/manrope-latin-ext.woff2") format("woff2");
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-latin-ext.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+
 :root {
-  /* colour — warm paper / ink / one rust signal */
-  --bg: #f4f1ea;
-  --surface: #fbf9f3;
-  --surface-2: #ece8de;
-  --ink: #191816;
-  --ink-2: #4b4741;
-  --muted: #6d675d;
-  --line: #ded8cb;
-  --line-strong: #c8c0b0;
-  --accent: #b4441f;
-  --accent-hover: #993716;
-  --accent-ink: #fdf7ef;
-  --live: #d99a2b;
-  --ok: #35694a;
-  --warn: #8f5c0d;
-  --fail: #a52f24;
-  --focus: #b4441f;
-  --accent-soft: rgba(180, 68, 31, 0.09);
-  --ok-soft: rgba(53, 105, 74, 0.12);
-  --warn-soft: rgba(150, 97, 15, 0.13);
-  --fail-soft: rgba(165, 47, 36, 0.11);
-  --live-soft: rgba(217, 154, 43, 0.22);
-  --term-bg: #16161a;
-  --term-ink: #d9d7cf;
+  /* colour — Cloud Dancer paper / Coffee Bean ink / Alexandrite signal */
+  --bg: #f1efe9;
+  --surface: #fcfaf5;
+  --surface-2: #eae4d9;
+  --ink: #2a211c;
+  --ink-2: #574c42;
+  --muted: #726457;
+  --line: #dcd4c6;
+  --line-strong: #c6baa8;
+  --accent: #0e6b63;
+  --accent-hover: #0a574f;
+  --accent-ink: #f2fbf8;
+  --live: #d98a3e;
+  --ok: #3f6b4f;
+  --warn: #8a4f0a;
+  --fail: #a83228;
+  --focus: #0e6b63;
+  --accent-soft: rgba(14, 107, 99, 0.1);
+  --ok-soft: rgba(63, 107, 79, 0.12);
+  --warn-soft: rgba(138, 79, 10, 0.13);
+  --fail-soft: rgba(168, 50, 40, 0.11);
+  --live-soft: rgba(217, 138, 62, 0.24);
+  --term-bg: #0f1b17;
+  --term-ink: #dce6df;
 
   /* type */
-  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC",
-    "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif;
-  --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
-    "Noto Sans CJK SC", "Segoe UI", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo,
+  --font-display: "Bricolage Grotesque", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-ui: "Manrope", -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", "Segoe UI",
+    system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular, Menlo,
     Consolas, "Liberation Mono", monospace;
 
   /* spacing rhythm */
@@ -58,8 +116,8 @@
   --r-lg: 16px;
 
   /* depth — overlays only */
-  --shadow-1: 0 1px 2px rgba(25, 24, 22, 0.06), 0 10px 30px -14px rgba(25, 24, 22, 0.3);
-  --shadow-2: 0 2px 4px rgba(25, 24, 22, 0.08), 0 24px 60px -20px rgba(25, 24, 22, 0.4);
+  --shadow-1: 0 1px 2px rgba(42, 33, 28, 0.06), 0 10px 30px -14px rgba(42, 33, 28, 0.3);
+  --shadow-2: 0 2px 4px rgba(42, 33, 28, 0.08), 0 24px 60px -20px rgba(42, 33, 28, 0.4);
 
   /* motion */
   --dur-fast: 120ms;
@@ -76,29 +134,29 @@
 }
 
 [data-theme="dark"] {
-  --bg: #131312;
-  --surface: #1a1a18;
-  --surface-2: #21211e;
-  --ink: #f1ede4;
-  --ink-2: #c3bdb1;
-  --muted: #8f887c;
-  --line: #2b2a26;
-  --line-strong: #3b3934;
-  --accent: #e07a4f;
-  --accent-hover: #eb8f68;
-  --accent-ink: #1a0f09;
-  --live: #e7b45a;
-  --ok: #6fbf8f;
+  --bg: #121715;
+  --surface: #1a211d;
+  --surface-2: #222b26;
+  --ink: #f0eee7;
+  --ink-2: #c7c2b8;
+  --muted: #948d82;
+  --line: #2c352f;
+  --line-strong: #3c463f;
+  --accent: #63c7b8;
+  --accent-hover: #82d8cb;
+  --accent-ink: #0e1b18;
+  --live: #f0b36b;
+  --ok: #7bc49a;
   --warn: #e0a94f;
-  --fail: #e58074;
-  --focus: #e07a4f;
-  --accent-soft: rgba(224, 122, 79, 0.14);
-  --ok-soft: rgba(111, 191, 143, 0.14);
+  --fail: #e58276;
+  --focus: #63c7b8;
+  --accent-soft: rgba(99, 199, 184, 0.14);
+  --ok-soft: rgba(123, 196, 154, 0.14);
   --warn-soft: rgba(224, 169, 79, 0.15);
-  --fail-soft: rgba(229, 128, 116, 0.14);
-  --live-soft: rgba(231, 180, 90, 0.22);
-  --term-bg: #0d0d0f;
-  --term-ink: #cfccc3;
+  --fail-soft: rgba(229, 130, 118, 0.14);
+  --live-soft: rgba(240, 179, 107, 0.22);
+  --term-bg: #0a100d;
+  --term-ink: #d6e0d9;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 30px -14px rgba(0, 0, 0, 0.7);
   --shadow-2: 0 2px 4px rgba(0, 0, 0, 0.5), 0 24px 60px -20px rgba(0, 0, 0, 0.8);
   color-scheme: dark;

@@ -8,6 +8,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
+import BrandMark from './BrandMark.vue'
 import { usePanels } from '../composables/usePanels'
 import { GROUP_ORDER, panelNavGroup, type PanelSpec } from '../panels'
 import { groupTitle, locale, localizeBackend, panelTitle, setLocale, t } from '../i18n'
@@ -140,8 +141,12 @@ watch(
     :inert="isMobile && !props.open"
     :aria-hidden="isMobile && !props.open ? 'true' : undefined"
   >
-    <RouterLink to="/" class="brand" :aria-label="t('nav.brandSub')">
-      <span class="brand-word">house-ear</span>
+    <RouterLink to="/" class="brand" :aria-label="`${t('brand.name')} · ${t('nav.brandSub')}`">
+      <span class="brand-line">
+        <BrandMark :size="30" class="brand-mark" />
+        <span class="brand-word">{{ t('brand.name') }}</span>
+        <span class="brand-latin">{{ t('brand.latin') }}</span>
+      </span>
       <span class="brand-meta">
         <span class="dot" :class="online ? 'live' : 'fail'" />
         <span>{{ online ? t('signal.online') : t('signal.offline') }}</span>
@@ -245,13 +250,36 @@ watch(
   margin-bottom: 6px;
 }
 
+.brand-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.brand-mark {
+  flex: none;
+}
+
 .brand-word {
-  display: block;
+  display: inline-block;
   font-family: var(--font-display);
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.brand-latin {
+  align-self: flex-end;
+  margin-bottom: 2px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .brand-meta {

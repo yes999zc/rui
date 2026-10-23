@@ -1,13 +1,21 @@
 <script setup lang="ts">
 /**
  * Voice audition (TTS only). Synthesises one short line through the same
- * provider the speaker will use, with the *draft* voice/rate/emotion, and plays
- * it locally. Nothing is written to the config.
+ * provider the speaker will use, with the *draft* voice/rate/emotion.
+ *
+ * Default output is the room speaker (the real timbre). If the backend cannot
+ * play on the speaker yet, the same click falls back to a browser WAV and says so;
+ * the UI also lets the operator force browser playback. Nothing touches config.
  */
 import { onUnmounted, ref } from 'vue'
 import AppIcon from '../AppIcon.vue'
-import { token } from '../../api'
 import { t } from '../../i18n'
+import {
+  readAuditionOutput,
+  requestAudition,
+  writeAuditionOutput,
+  type AuditionOutput,
+} from './audition'
 
 const props = defineProps<{
   stage: 'tts'
@@ -20,14 +28,23 @@ const props = defineProps<{
   ready: boolean
 }>()
 
-type Status = 'idle' | 'loading' | 'playing' | 'error'
+type Status = 'idle' | 'loading' | 'playing' | 'speaker' | 'error'
 
+const output = ref<AuditionOutput>(readAuditionOutput())
 const status = ref<Status>('idle')
 const error = ref('')
+const notice = ref('')
 let audio: HTMLAudioElement | null = null
 let objectUrl = ''
+let speakerTimer: number | undefined
+
+function clearSpeakerTimer(): void {
+  if (speakerTimer) window.clearTimeout(speakerTimer)
+  speakerTimer = undefined
+}
 
 function stop(): void {
+  clearSpeakerTimer()
   if (audio) {
     audio.pause()
     audio.onended = null
@@ -37,7 +54,16 @@ function stop(): void {
     URL.revokeObjectURL(objectUrl)
     objectUrl = ''
   }
-  if (status.value === 'playing') status.value = 'idle'
+  if (status.value === 'playing' || status.value === 'speaker') status.value = 'idle'
+}
+
+function chooseOutput(next: AuditionOutput): void {
+  if (output.value === next) return
+  output.value = next
+  writeAuditionOutput(next)
+  stop()
+  error.value = ''
+  notice.value = ''
 }
 
 function numberOrUndefined(value: unknown): number | undefined {
@@ -47,7 +73,7 @@ function numberOrUndefined(value: unknown): number | undefined {
 }
 
 async function play(): Promise<void> {
-  if (!props.ready || !props.voice || status.value === 'loading') return
+  if (!props.ready || !props.voice || status.value === 'loading' || status.value === 'speaker') return
   if (status.value === 'playing') {
     stop()
     return
@@ -55,6 +81,7 @@ async function play(): Promise<void> {
   stop()
   status.value = 'loading'
   error.value = ''
+  notice.value = ''
   try {
     const body: Record<string, unknown> = {
       text: t('providers.auditionText'),
@@ -68,26 +95,23 @@ async function play(): Promise<void> {
     const scale = numberOrUndefined(props.emotionScale)
     if (scale !== undefined) body.emotion_scale = scale
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    const authToken = token.get()
-    if (authToken) headers['X-Auth-Token'] = authToken
-
-    const response = await fetch(
-      `/api/v1/providers/${props.stage}/${encodeURIComponent(props.provider)}/audition`,
-      { method: 'POST', headers, body: JSON.stringify(body) },
+    const outcome = await requestAudition(
+      { stage: props.stage, provider: props.provider, body },
+      output.value,
     )
-    if (!response.ok) {
-      let detail = response.statusText
-      try {
-        const payload = (await response.json()) as { detail?: unknown }
-        detail = typeof payload.detail === 'string' ? payload.detail : JSON.stringify(payload.detail)
-      } catch {
-        /* not JSON: keep the status text */
-      }
-      throw new Error(detail || `HTTP ${response.status}`)
+    if (outcome.played === 'speaker') {
+      status.value = 'speaker'
+      notice.value = outcome.duration_ms
+        ? t('providers.auditionSpeakerDone', { ms: outcome.duration_ms })
+        : t('providers.auditionSpeakerPlaying')
+      speakerTimer = window.setTimeout(() => {
+        if (status.value === 'speaker') status.value = 'idle'
+      }, Math.max(1000, outcome.duration_ms + 600))
+      return
     }
-    const blob = await response.blob()
-    objectUrl = URL.createObjectURL(blob)
+
+    if (outcome.fallback) notice.value = outcome.fallback
+    objectUrl = URL.createObjectURL(outcome.blob)
     audio = new Audio(objectUrl)
     audio.onended = () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl)
@@ -109,22 +133,54 @@ onUnmounted(stop)
 
 <template>
   <div class="audition">
+    <div class="audition-output" role="group" :aria-label="t('providers.auditionOutput')">
+      <button
+        type="button"
+        class="audition-out"
+        :class="{ on: output === 'speaker' }"
+        :aria-pressed="output === 'speaker'"
+        :disabled="status === 'loading'"
+        @click="chooseOutput('speaker')"
+      >
+        {{ t('providers.auditionSpeaker') }}
+      </button>
+      <button
+        type="button"
+        class="audition-out"
+        :class="{ on: output === 'browser' }"
+        :aria-pressed="output === 'browser'"
+        :disabled="status === 'loading'"
+        @click="chooseOutput('browser')"
+      >
+        {{ t('providers.auditionLocal') }}
+      </button>
+    </div>
     <button
       type="button"
       class="btn btn-sm audition-btn"
       :class="{ 'btn-primary': status === 'playing' }"
-      :disabled="!ready || !voice || status === 'loading'"
+      :disabled="!ready || !voice || status === 'loading' || status === 'speaker'"
       :title="ready ? t('providers.auditionHint') : t('providers.auditionSavedOnly')"
       @click="play"
     >
       <AppIcon :name="status === 'playing' ? 'stop' : 'play'" :size="12" />
-      {{ status === 'loading' ? t('providers.auditioning') : status === 'playing' ? t('providers.auditionStop') : t('providers.audition') }}
+      {{
+        status === 'loading'
+          ? t('providers.auditioning')
+          : status === 'playing'
+            ? t('providers.auditionStop')
+            : status === 'speaker'
+              ? t('providers.auditionSpeakerPlaying')
+              : t('providers.audition')
+      }}
     </button>
     <span class="audition-note" aria-live="polite">
       <template v-if="!ready">{{ t('providers.auditionSavedOnly') }}</template>
+      <template v-else-if="status === 'speaker'">{{ notice || t('providers.auditionSpeakerPlaying') }}</template>
       <template v-else-if="status === 'playing'">{{ t('providers.auditionPlaying') }}</template>
-      <template v-else>{{ t('providers.auditionHint') }}</template>
+      <template v-else>{{ output === 'speaker' ? t('providers.auditionSpeakerNote') : t('providers.auditionLocalNote') }}</template>
     </span>
+    <p v-if="notice && status !== 'speaker'" class="audition-fallback" role="status">{{ notice }}</p>
     <p v-if="error" class="audition-error" role="alert">{{ t('providers.auditionFailed', { message: error }) }}</p>
   </div>
 </template>
@@ -138,6 +194,37 @@ onUnmounted(stop)
   min-width: 0;
 }
 
+.audition-output {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  flex: none;
+}
+
+.audition-out {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 3px 7px;
+  border-radius: var(--r-xs);
+  font-size: 10.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.audition-out:hover {
+  color: var(--ink);
+}
+
+.audition-out.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .audition-btn {
   flex: none;
 }
@@ -146,7 +233,16 @@ onUnmounted(stop)
   color: var(--muted);
   font-size: 10.5px;
   line-height: 1.4;
-  max-width: 42ch;
+  max-width: 46ch;
+}
+
+.audition-fallback {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--warn);
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .audition-error {
@@ -163,9 +259,10 @@ onUnmounted(stop)
     gap: var(--s2);
   }
 
+  .audition-out,
   .audition-btn {
     min-height: 44px;
-    padding: 10px 14px;
+    padding: 10px 12px;
   }
 
   .audition-note {

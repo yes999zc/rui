@@ -12,13 +12,14 @@ import re
 import shutil
 import tempfile
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -964,6 +965,71 @@ def _music_light(action: str, service: object) -> str:
     if action in ("resume", "next", "prev"):
         return "music"
     return "off"
+
+
+# Audition WAVs are written for the audio plane to read, so they cannot be deleted the
+# instant PlayFile is queued: the plane holds one pending file and may start it minutes
+# later, behind a long reply. The cache is bounded instead (TTL + hard count, swept on
+# every audition) and always lives under <data_dir>/cache/auditions.
+AUDITION_PREFIX = "audition-"
+AUDITION_TTL_S = 1800.0      # 30 min: long enough for any queued reply
+AUDITION_MAX_FILES = 20      # one more may exist between sweeps
+
+
+def audition_cache_dir(data_dir: str | Path) -> Path:
+    """Resolve <data_dir>/cache/auditions and prove it stays inside data_dir.
+
+    The audition text/voice come from the browser, but the path never does. Resolving
+    both sides also catches a symlinked `cache/` pointing outside the data volume.
+    """
+    raw = str(data_dir or "").strip()
+    if not raw:
+        raise ValueError("system.data_dir is not configured")
+    root = Path(raw).expanduser().resolve()
+    target = (root / "cache" / "auditions").resolve()
+    if target != root and root not in target.parents:
+        raise ValueError("audition cache would escape system.data_dir")
+    return target
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def sweep_audition_files(directory: Path, *, ttl_s: float = AUDITION_TTL_S,
+                         keep: int = AUDITION_MAX_FILES) -> int:
+    """Delete expired/extra audition files; returns how many were removed.
+
+    Concurrent auditions can race the sweep, so every filesystem step is best-effort:
+    a file that disappears under us must not turn a preview into a 500.
+    """
+    removed = 0
+    now = time.time()
+    survivors: list[Path] = []
+    for path in directory.glob(f"{AUDITION_PREFIX}*.wav"):
+        mtime = _mtime(path)
+        if ttl_s > 0 and now - mtime > ttl_s:
+            with contextlib.suppress(OSError):
+                path.unlink()
+                removed += 1
+        else:
+            survivors.append(path)
+    # A crash between write and replace leaves a .tmp; it is never playable.
+    for path in directory.glob(f"{AUDITION_PREFIX}*.wav.tmp"):
+        if now - _mtime(path) > 60.0:
+            with contextlib.suppress(OSError):
+                path.unlink()
+                removed += 1
+    survivors.sort(key=_mtime)
+    if keep > 0 and len(survivors) > keep:
+        for path in survivors[: len(survivors) - keep]:
+            with contextlib.suppress(OSError):
+                path.unlink()
+                removed += 1
+    return removed
 
 
 def create_app(
@@ -2366,19 +2432,57 @@ def create_app(
                 tts[name] = voices
         return {"tts": tts, "asr": {}}
 
+    def _speaker_client_or_503() -> object:
+        """The live plane client, or the sentence that tells the console to fall back."""
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if (supervisor is None or not bool(getattr(supervisor, "running", False))
+                or client is None):
+            raise HTTPException(
+                status_code=503,
+                detail="audio plane is not running; retry with output=browser",
+            )
+        metrics = getattr(client, "metrics", None)
+        if metrics is not None and not bool(getattr(metrics, "speaker_connected", False)):
+            raise HTTPException(
+                status_code=503,
+                detail="speaker is not connected; retry with output=browser",
+            )
+        return client
+
     @app.post("/api/v1/providers/{stage}/{name}/audition", dependencies=[Depends(auth)])
     async def provider_audition(stage: str, name: str,
-                                patch: Annotated[dict, Body()] | None = None) -> Response:
-        """Synthesise one short line with a provider + voice, as a playable wav.
+                                patch: Annotated[dict, Body()] | None = None,
+                                output: str | None = None) -> Response:
+        """Synthesise one short line with a provider + voice; browser wav or speaker.
 
-        This is the console's 试听: it never touches the saved config, and it uses the
-        same chain object the turn runner uses, so what you hear is what the speaker will
-        say. Bounded to ~15 s of audio so a stuck vendor cannot hold the request forever.
+        `output` comes from the query string or the JSON body (`body.output` wins), and
+        is `browser` (default, returns `audio/wav` exactly as before) or `speaker`:
+
+        - `speaker` synthesises the PCM, writes one bounded WAV under
+          `<data_dir>/cache/auditions/`, and queues it on the running audio plane via
+          `PlayFile`. The plane keeps one pending file behind whatever currently owns the
+          speaker, so an audition never interrupts a reply - it starts when the reply (or
+          cue/song) releases the line. No plane / no connected speaker / a send failure is
+          `503` with a "retry with output=browser" sentence, so the console can fall back.
+          Response: `{"played":"speaker","duration_ms":N,"provider":name,"voice":...}`.
+        - `browser` returns the wav and never touches disk or the audio plane.
+
+        It never uses a caller-supplied path, never saves config, and is bounded to ~15 s
+        of audio so a stuck vendor cannot hold the request forever.
         """
         cfg_now = getattr(app.state, "cfg", cfg)
         if stage != "tts":
             raise HTTPException(status_code=422, detail="only tts can be auditioned")
         body = patch or {}
+        # Body wins over query (the console sends both while the toggle is being wired).
+        selected = str(body.get("output") or output or "browser").strip().lower()
+        if selected not in ("browser", "speaker"):
+            raise HTTPException(status_code=422,
+                                detail="output must be 'browser' or 'speaker'")
+        # Check the speaker before paying for synthesis: if it cannot be heard the
+        # console needs the fallback answer immediately, not after a TTS call.
+        speaker_client = _speaker_client_or_503() if selected == "speaker" else None
         # Preview the draft prosody too: the console may not have saved yet, and these
         # three fields only apply at provider construction (restart) otherwise.
         providers_now = cfg_now.providers.model_copy(deep=True)
@@ -2416,12 +2520,54 @@ def create_app(
                 detail=f"{type(exc).__name__}: {str(exc)[:200]}") from exc
         if not pcm:
             raise HTTPException(status_code=502, detail="provider returned no audio")
-        return Response(
-            content=_wav_bytes(bytes(pcm), cfg_now.audio.voice.rate),
-            media_type="audio/wav",
-            headers={"Content-Disposition": "inline; filename=audition.wav",
-                     "Cache-Control": "no-store"},
-        )
+        rate = int(cfg_now.audio.voice.rate)
+        if selected == "browser":
+            return Response(
+                content=_wav_bytes(bytes(pcm), rate),
+                media_type="audio/wav",
+                headers={"Content-Disposition": "inline; filename=audition.wav",
+                         "Cache-Control": "no-store"},
+            )
+
+        duration_ms = round(len(pcm) / 2 / max(1, rate) * 1000)
+        try:
+            directory = audition_cache_dir(cfg_now.system.data_dir)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            os.chmod(directory, 0o700)
+            sweep_audition_files(directory)
+            target = (directory / f"{AUDITION_PREFIX}{uuid.uuid4().hex}.wav").resolve()
+            if directory not in target.parents:
+                raise ValueError("audition path escaped the cache directory")
+            temporary = target.with_name(target.name + ".tmp")
+            temporary.write_bytes(_wav_bytes(bytes(pcm), rate))
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, target)
+        except (OSError, ValueError) as exc:  # noqa: BLE001 - the UI shows the reason
+            raise HTTPException(
+                status_code=500,
+                detail=f"cannot write the audition file: {type(exc).__name__}: {exc}",
+            ) from exc
+        assert speaker_client is not None  # set above when output == "speaker"
+        try:
+            await asyncio.wait_for(speaker_client.send(PlayFile(path=str(target))),
+                                   timeout=5.0)
+        except Exception as exc:  # noqa: BLE001 - the console falls back to the browser
+            raise HTTPException(
+                status_code=503,
+                detail=f"speaker playback failed ({type(exc).__name__}); "
+                       "retry with output=browser",
+            ) from exc
+        log.info("audition: %s voice=%r %.0f ms queued on the speaker",
+                 name, voice, duration_ms)
+        return JSONResponse({
+            "played": "speaker",
+            "duration_ms": duration_ms,
+            "provider": name,
+            "voice": voice,
+        })
 
     @app.get("/api/v1/billing/quota", dependencies=[Depends(auth)])
     async def billing_quota(force: bool = False) -> dict:

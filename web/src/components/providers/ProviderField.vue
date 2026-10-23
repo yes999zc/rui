@@ -124,6 +124,9 @@ function onChange(event: Event): void {
         @input="onInput"
       />
 
+    </div>
+
+    <div v-if="$slots.extra" class="p-extra">
       <slot name="extra" />
     </div>
 
@@ -180,6 +183,11 @@ function onChange(event: Event): void {
 .p-control-row > select,
 .p-control-row > input {
   flex: 1;
+  min-width: 0;
+}
+
+.p-extra {
+  margin-top: 6px;
   min-width: 0;
 }
 

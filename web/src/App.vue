@@ -8,6 +8,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import SideNav from './components/SideNav.vue'
+import BrandMark from './components/BrandMark.vue'
 import AppIcon from './components/AppIcon.vue'
 import { api, token } from './api'
 import { usePanels } from './composables/usePanels'
@@ -94,8 +95,9 @@ function updateTitle(): void {
   const panelId = typeof route.params.id === 'string' ? route.params.id : ''
   const panel = panels.value.find((item) => item.id === panelId)
   const key = STATIC_TITLES[route.path]
-  const title = panel ? panelTitle(panel) : key ? t(key) : 'house-ear'
-  document.title = title === 'house-ear' ? title : `${title} · house-ear`
+  const brand = t('brand.name')
+  const title = panel ? panelTitle(panel) : key ? t(key) : brand
+  document.title = title === brand ? title : `${title} · ${brand}`
 }
 
 watch([() => route.fullPath, locale, panels], updateTitle, { immediate: true })
@@ -171,7 +173,11 @@ onUnmounted(() => {
         >
           <AppIcon :name="drawerOpen ? 'close' : 'menu'" :size="20" />
         </button>
-        <span class="mobile-word">house-ear</span>
+        <span class="mobile-brand">
+          <BrandMark :size="24" class="mobile-mark" />
+          <span class="mobile-word">{{ t('brand.name') }}</span>
+          <span class="mobile-latin">{{ t('brand.latin') }}</span>
+        </span>
         <span class="mobile-state">
           <span class="dot" :class="stateDot" />
           <span>{{ signalWord }}</span>
@@ -406,11 +412,33 @@ onUnmounted(() => {
     border-bottom: 1px solid var(--line);
   }
 
+  .mobile-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .mobile-mark {
+    flex: none;
+  }
+
   .mobile-word {
     font-family: var(--font-display);
-    font-size: 18px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    white-space: nowrap;
+  }
+
+  .mobile-latin {
+    align-self: flex-end;
+    margin-bottom: 2px;
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
   }
 
   .mobile-state {

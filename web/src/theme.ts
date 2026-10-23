@@ -36,7 +36,7 @@ export function applyTheme(): void {
   resolvedTheme.value = resolve()
   document.documentElement.dataset.theme = resolvedTheme.value
   const meta = document.querySelector('meta[name="theme-color"]')
-  if (meta) meta.setAttribute('content', resolvedTheme.value === 'dark' ? '#131312' : '#f4f1ea')
+  if (meta) meta.setAttribute('content', resolvedTheme.value === 'dark' ? '#121715' : '#f1efe9')
 }
 
 export function setThemePref(next: ThemePref): void {

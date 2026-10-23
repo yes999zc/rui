@@ -1073,3 +1073,27 @@ plane_error=''`。新增测试：`test_music_credentials.py`（块契约/状态�
 setup plane_error 4 条、MCP env 2 条。剩余：真实 Navidrome 凭据保存/测试需 9哥 在 NAS 上点一次；
 仓库公开/GHCR 与 git 历史仍等 9哥。
 
+### 12.29 2026-10-23 18:xx：品牌升级（小瑞 / Rui）+ 本地字体 + Pantone 配色 + 动效 logo + 音箱试听
+
+**9哥 新任务**（原误发到智能体会话，Lead 接手）：试听出口改音箱、换谷歌字体（本地加载）、
+换年轻配色并调研 2026 Pantone、House-ear 换名、设计左上角 logo（H5/像素/数据连接/动效）、
+并盘点 HANDOFF/ROADMAP 剩余项。详细设计见 `docs/brand.md`，剩余清单见 `docs/remaining-work.md`。
+
+- **改名**：显示名 **小瑞 / Rui**（与唤醒词一致）；title/meta、侧栏、移动端、i18n、favicon。
+  repo/包/CLI/路由/localStorage/内部 ID 暂保持 house-ear，避免升级丢配置。
+- **字体**：Bricolage Grotesque / Manrope / JetBrains Mono woff2（latin+latin-ext，204 KB，
+  OFL）放 `web/public/fonts/`，全部本地 @font-face，中文系统栈；实测第三方字体请求 0。
+- **配色**：Cloud Dancer `#f1efe9` 底 + Alexandrite 深青 primary + Muskmelon 暖橙 live；
+  dark 深绿黑 + 青/暖橙；语义色全部 AA（muted 4.97/5.51、accent 5.53/8.97）。
+- **Logo**：`BrandMark.vue` inline SVG 像素 mark（声音柱 + 数据 rail + 节点 + 流动包），
+  主题感知、`prefers-reduced-motion` 关闭动效；favicon 静态版。
+- **试听改音箱**：`POST /api/v1/providers/{stage}/{name}/audition` 新增 `output=speaker`
+  （临时 WAV 写 data_dir/cache/auditions，30 min/20 个上限，0600），经音频面 PlayFile 排队播放，
+  返回 `{"played":"speaker","duration_ms":...}`；`output=browser` 保持旧 WAV。前端默认音箱，
+  失败 503 自动回退浏览器；toggle 记忆。实测 volc-tts 小荷 3180 ms 已下发音频面（日志
+  `playback requested ... cache/auditions/...`）。
+- **验证**：真 VAD 全量 **727 passed / 1 skipped**、ruff clean、typecheck/build 绿；dev 已重启，
+  title 实测「小瑞 Rui · home voice console」，`/health ok`。
+- **剩余**：见 `docs/remaining-work.md`（v1 门槛、NAS 冷装、D3 计数、客户端安装 UX、V2 三原语、
+  安全 P2、对话卡片等）。
+
