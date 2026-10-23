@@ -405,8 +405,16 @@ class AudioPlaneSupervisor:
         touching the microphone died: /health keeps answering, the console keeps
         rendering, and the room goes deaf. This loop is what makes "the plane
         crashed" a few seconds of silence instead of a manual restart on the NAS.
+
+        With no device to drive there is nothing to supervise: restarting would
+        only spin out "no device this build can drive" on every backoff step (seen
+        on a fresh install before the wizard adds the speaker). The device-write
+        path arms the watchdog again.
         """
         if self._watch_task is not None and not self._watch_task.done():
+            return
+        if self._pick_device() is None:
+            log.info("plane watchdog idle: no drivable device in the config")
             return
         self._stopping = False
         self._watch_task = asyncio.create_task(self._watch(), name="plane-watchdog")

@@ -83,6 +83,27 @@ def test_handle_reapplies_callbacks_to_every_connection() -> None:
     assert second.on_wake is not None
 
 
+def test_watchdog_stays_idle_with_no_device(tmp_path) -> None:
+    """A fresh install has no speaker yet; the watchdog must not spin restarting nothing."""
+    path = tmp_path / "empty.yaml"
+    path.write_text("version: 2\nweb:\n  host: 127.0.0.1\ndevices: []\n", encoding="utf-8")
+
+    async def run() -> AudioPlaneSupervisor:
+        supervisor = AudioPlaneSupervisor(
+            load_config(path), config_path=path, socket_path=tmp_path / "audio.sock")
+        supervisor.watch()
+        await asyncio.sleep(0.2)
+        try:
+            assert supervisor._watch_task is None
+            assert supervisor.restarts == 0
+            assert supervisor.proc is None
+        finally:
+            await supervisor.stop()
+        return supervisor
+
+    asyncio.run(run())
+
+
 def test_watchdog_restarts_a_killed_plane(config_path, tmp_path) -> None:
     async def run() -> tuple[AudioPlaneSupervisor, int, int, bool]:
         cfg = load_config(config_path)
