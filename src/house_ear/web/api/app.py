@@ -315,6 +315,18 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
     return line
 
 
+def _turn_light(result: object, default: str = "listening") -> str:
+    """The ring after a turn: a silent music answer leaves it on the song."""
+    if getattr(result, "audio_bytes", 0) == 0 and _is_music_turn(result):
+        return "music"
+    return default
+
+
+def _is_music_turn(result: object) -> bool:
+    tools = getattr(result, "tools", None) or []
+    return any(str(n).rsplit(".", 1)[-1].startswith("music") for n in tools)
+
+
 def _turn_hold(result: object) -> float | None:
     """0 when this turn's tools were about the song itself (music/volume)."""
     tools = getattr(result, "tools", None) or []
@@ -600,7 +612,8 @@ def create_app(
                     # A music/volume turn wants the song back the moment the reply
                     # drains, not after the follow-up window (measured 09:21: ~10 s).
                     await client.reply_finished(hold_music_s=_turn_hold(result))
-                    _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate)
+                    _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
+                                       _turn_light(result))
                     log.info("turn: %s", result.to_dict())
 
                 client.on_utterance = on_utterance
@@ -1073,7 +1086,8 @@ def create_app(
                 }
         result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
         await client.reply_finished(hold_music_s=_turn_hold(result))
-        _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate)
+        _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
+                           _turn_light(result))
         app.state.last_turn = result.to_dict()
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)
