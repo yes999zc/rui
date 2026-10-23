@@ -385,3 +385,54 @@ C1 冷装。
   后 ~0.7 s 就有——用它只做停音乐，不开 12 s 静默窗（避免吞掉我们自己的轮次）。9哥 实测通过。
 - 教训：协议加字段必须同步改 `protocol.py` 的模型并加 CONTROL 往返测试——`hold_music_s` 漏了，
   音频面当场崩溃（已补测试）。
+
+## 12. 2026-10-23 白天：V2 / HA 调试 / 控制台 P2–P3 / D2 完成
+
+**代码**：HEAD 见 git log，**410 passed**，ruff clean，前端 `vue-tsc` + build 通过。
+**运行**：`nohup ~/.hermes/cache/scratch/house-ear-s5b/serve-dev.sh >> ~/.hermes/cache/scratch/he-serve-b3t.log 2>&1 &`
+（注意 `>>` 追加；重启前先 `mv` 轮转旧日志，用 `>` 截断会让新旧进程交错写同一文件，时序不可信）。
+**acek**：`ack.mode: tts`「在呢。」；`devices[].volume: 86`（≈220 档）。
+
+### 12.1 语音交互系统层 V1 ✅（`5821ccd`）
+`PhraseBook`（全局话术表）+ `ToolResult`（status/payload）+ `InteractionSpec`（exec/choose/danger/filler/
+answer/guard）+ `_call_tool` 渲染 + 轮级 degrade。音乐 9 工具全部迁移，AST 测试证明工具代码零中文字面话术。
+
+### 12.2 HA-MCP 核心 ✅（`4e6cce6`）
+`MCPClient`（streamable-HTTP 常驻/队列/指数重连）+ `HaBridge`（六工具白名单、实体清单剥状态、120 上限、
+7 天缓存、lock/alarm/valve 调用路径硬拒、离线降级）+ `POST /api/v1/debug/tool`。儿童房主灯开/关/查状态实测。
+**后续修复**：`b001091` 模型传裸 service（`turn_off`）时从 entity_id 推 domain、JSON 字符串实体列表；
+`9292f96` 回复用实体名而不是 ID。
+
+### 12.3 V2 三原语 ✅（`2859b08`）
+- clarify：动词缺失问回（「儿童房的灯」→「要开还是关？」）、谎报检测（无工具调用却称成功 → 强制重试 → 如实说没执行）
+- choose：同名多实体全部传入（主灯+筒灯一起开），不问用户
+- confirm：lock/alarm/valve 继续硬拒；复述确认待有真实危险操作时再做
+
+### 12.4 控制台 P2/P3 ✅（`c9d9fb6`/`4fbeedb`/`86576bb`）
+PanelSpec 新增 `form`/`table`/`log`/`memory` 四种 block；面板：概览/设备/对话/日志/音乐/记忆/设置；
+form 422 按字段标红、token 输入（401 自动提示）、日志 tail（2MB×3 轮转，带过滤与跟随）、对话 ring（50 轮）。
+
+### 12.5 D2 记忆 + 上下文开关 ✅（`4e78a8a`/`582b0ee`/`8824113`）
+`session/memory.py`（策展式：确认条目注入，候选待控制台确认；`data_dir/memory.json`）+
+`tools/memory.py`（remember/forget/recall）+ `GET/POST /api/v1/memory` + 记忆面板；
+`session.keep_context`：后台「设置→会话」开关 + 语音「关闭/打开上下文」确定性路径（落盘立即生效）；
+`GET /api/v1/debug/prompt` 提示词预览。
+
+### 12.6 今日其它修复（实测驱动）
+- 唤醒不再启动空闲钟（空唤醒不再 15 s 后告别）；**每次唤醒清空 history**（老项目 `begin_session` 规则，
+  修「答完天气又问周杰伦」）
+- 点歌：模型参数不可信 → query 一律用用户原话（见过 `{}` 和上一轮 query 两种）；空/串台都根治
+- 别名解析（`music/names.py`，模型只翻译、曲库做决定、别名持久化）+ 拼音容错（`session/pinyin.py`，
+  简繁/同音/停止词韵母）+ 标点剥离（「…的歌。」不再拆出歌名「歌。」）
+- 简短化：`MUSIC_HINT`（音乐在放时 ≤20 字、不介绍歌曲）+ 禁止复述旧轮次
+- 「歌就是答案」：音乐工具 `answer="silent"`，点歌/换歌不念确认
+- 停止词停音乐（含「退下吧」）；音量工具（真调 mixer + 学习为目标值 + 确定性词路径）
+- 天气：一次自动重试（open-meteo 偶发空消息传输错误）+ 日志带异常类型
+- 语言请求走流派池（J-Pop/K-Pop）优先于字面搜索
+
+### 12.7 下一步（9哥 定）
+1. **D2 完成后逐页复核控制台**（一页一页过，功能债与文案都在这一轮暴露）
+2. 然后：**D1c 调研落地**（library_index 语言索引、semantic 描述式、停止词二分 media/bare、日报直通、
+   点歌多候选）→ **C-UI P4–P6**（安装向导/设备添加/MCP-HA 管理页，功能定稿后才做，排在部署测试前）
+   → **P15 生产化** → **验收日**（D3 20 次唤醒 + 灯环 + 控制台肉眼 + C1 冷装）→ E1
+3. 真机仍需耳朵确认：让位 V4（已通过）、音乐话术、音量、留声/告别边界
