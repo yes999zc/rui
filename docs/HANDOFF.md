@@ -352,3 +352,24 @@ uv run house-ear serve --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml
   音乐态；B2 收尾数字；最后 C1 冷装。
 - **下一步**：HA-MCP（多服务器 MCP 客户端 + HA 经 MCP + V2 三原语 clarify/choose/confirm，
   HA 为首个验证用例；设计 docs/interaction.md §3/§5、老项目方案行号在差距报告）→ C-UI P2。
+
+## 11. 统一验收（2026-10-23 早上，9哥 配合）——进度
+
+**已通过（真机，日志为证）**：
+
+1. **音乐话术 V1**：暂停/继续/下一首/停止 全部走 PhraseBook，出声正常。
+2. **「停止」停音乐**：`stop intent: '停止。'` → 出声「好，不放了。」→ 音乐停（修 fadd0a0：
+   原判断用 output_owner，唤醒压低后 owner 已释放）。
+3. **对话全程音乐压低**：慢工具（天气 9 s）从唤醒到答完 31 s 音乐一声不冒，答完 6 s 后
+   才续播（修 fadd0a0/d5cb8d5：窗口持有截止时间 + 12 s 无答兜底 + 失败轮次补 reply_finished）。
+4. **V4 反向让位**：小爱答天气 15 s，我方音乐压低 16 s，`playing Idle` 后 0.6 s 还歌
+   （修 b1bfe6f：控制面自跟踪 vendor 状态 + Dialog.Finish 作为结束信号 + 看门狗只覆盖"唤醒
+   后从未开播"）。V5 同一路径（键 114 起播也是 playing 事件）。
+5. **音量工具**（修 9195bfd/19ff6dc）：原本没有工具，模型谎报「调到80%了」；现真调用 mixer
+   并学习为 devices[].volume（防 16 s 后对账回退）。
+
+**待测**：远场 20 次唤醒计数（D3）；B2 打断 ≤300 ms 正式数字；灯环音乐态肉眼确认；
+C1 冷装。
+
+**运维注意**：重启服务用 `>>` 追加且先 `mv` 轮转日志；用 `>` 截断会让新旧进程交错写同一
+文件，日志时序不可信（08:47 踩过）。
