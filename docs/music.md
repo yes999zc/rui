@@ -57,7 +57,7 @@ resolve 按 id 前缀路由回所属源。
 - **取流**：沿用「整首先下后播 + 本地 ffmpeg 转 16k mono s16」（music.py:450-469，30s 下载/
   180s 转码超时）；**新增 PCM LRU 缓存**（老项目 NAS 源转完即删、重播要重新下载几十 MB flac，
   是硬伤；在线源反有 72h 缓存先例）。
-- **凭据**：`~/.hermes/.secrets/lan_media.json` 的 `url/user/password`（只写名字不写值，沿用）。
+- **凭据**：`music.secrets_path` 指向的凭据 JSON 的 `url/user/password`（只写名字不写值，沿用）。
 
 ### 2.3 意图管道（拆掉老项目 music_play 的 200 行 if 链）
 
@@ -159,7 +159,7 @@ owner 仲裁（cue/dialogue/reminder/music）、Credit 节奏、`PLAY_LAG 0.55s`
 ## 5. 老项目调研结论索引
 
 - 源与数据层报告 + 播放与控制层报告全文见 2026-10-22 会话记录（两份子 agent 报告）；
-  本文档引用的所有 文件:行号 均指 `~/AI_Workspace/01_Code/projects/xiaoai-voice-entry/server/`（只读参考）。
+  本文档引用的所有 文件:行号 均指 `老项目 xiaoai-voice-entry/server/`（只读参考）。
 - 老项目音乐相关测试清单（迁移验收基线）：test_radio / test_rewind / test_music_sink /
   test_credit / test_vendor_handoff / test_vendor_stop / test_music_random / test_music_mood /
   test_music_search / test_songname / test_online_play / test_stop_intent / test_keys / test_filler。

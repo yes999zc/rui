@@ -2,8 +2,8 @@
 """Measure reply quality: the same question N times, through the real ASR and LLM.
 
     uv run python scripts/measure_reply_quality.py --config real-device.yaml \
-        --command ~/.hermes/cache/scratch/house-ear-s4/commands/01-weather.wav --rounds 20 \
-        --out ~/.hermes/cache/scratch/house-ear-s5b/baseline-weather.jsonl
+        --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav --rounds 20 \
+        --out /tmp/house-ear-scratch/house-ear-s5b/baseline-weather.jsonl
 
 Turn quality is not an audio question: the transcript is the same in every round, so what
 is being measured is the prompt, the history window and the reply shaping. This harness
@@ -49,7 +49,7 @@ DIGIT_EXEMPT = ("一", "两句", "万一")
 
 
 def load_env_file(path: Path) -> None:
-    """Provider keys live in ~/.hermes/.env; a harness must not depend on the caller's shell."""
+    """Provider keys live in $HOUSE_EAR_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
     if not path.exists():
         return
     for line in path.read_text().splitlines():
@@ -179,7 +179,7 @@ def main() -> int:
                    help="run without the information tools (reproduces the S5b baseline)")
     p.add_argument("--tts", action="store_true", help="also synthesise (costs time, no data)")
     p.add_argument("--out", default="/tmp/house-ear-quality.jsonl")
-    p.add_argument("--env", default=str(Path.home() / ".hermes/.env"))
+    p.add_argument("--env", default=os.environ.get("HOUSE_EAR_ENV_FILE", ".env"))
     return asyncio.run(run(p.parse_args()))
 
 

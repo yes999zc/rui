@@ -15,7 +15,7 @@
 ```
 
 设备上跑的是 `yes999zc/open-xiaoai`（fork 分支 `bakey/device-events`），源码在
-`~/AI_Workspace/01_Code/projects/xiaoai-client/packages/client-rust`。关键文件
+`老项目 xiaoai-client/packages/client-rust`。关键文件
 `src/services/audio/play.rs`、`src/bin/client.rs`。
 
 设备端已经有的三样东西（我们服务端只用了一样）：
@@ -132,7 +132,7 @@
 
 ```bash
 # 服务端：唤醒 / 提示音 / 首块 / 轮次 trace
-grep -E "wake: |cue: |reply: first|player: start_play|turn \{" ~/.hermes/cache/scratch/he-serve-*.log | tail -20
+grep -E "wake: |cue: |reply: first|player: start_play|turn \{" /tmp/house-ear-scratch/he-serve-*.log | tail -20
 
 # 设备端：写入是否被阻塞、是否掉块（无时间戳，看行序与 chunk N at X ms）
 sshpass -p "$SPEAKER_PASSWORD" ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa \

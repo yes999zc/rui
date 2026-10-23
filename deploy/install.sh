@@ -16,8 +16,8 @@ mkdir -p "$DIR/config" "$DIR/data/models"
 echo "[1/5] compose file"
 # The deploy directory is never a git checkout: fetch the one file compose needs,
 # otherwise `docker compose up` fails with "no configuration file provided". The example
-# config comes along as the reference for the hand edits in step 2 (the generated config
-# is schema defaults only: no devices, no provider endpoints).
+# config comes along as the reference for the hand edits in step 2 (setup writes the
+# production template; the example is the commented, annotated version of it).
 if [ ! -f "$DIR/docker-compose.yml" ]; then
   curl -fsSL "$RAW/docker-compose.yml" -o "$DIR/docker-compose.yml"
 else
@@ -26,12 +26,15 @@ fi
 curl -fsSL "$RAW/config.example.yaml" -o "$DIR/config.example.yaml" \
   || echo "      WARNING: could not fetch config.example.yaml (optional reference)"
 
-echo "[2/5] config"
+echo "[2/5] config + wake words"
 if [ ! -f "$DIR/config/config.yaml" ]; then
-  # `setup` writes schema defaults: no devices, so a fresh install never shows a
-  # speaker that does not exist. Add your own under devices[] afterwards.
+  # `setup` writes the production template (provider chains, model paths, ack TTS) and
+  # generates keywords.txt from the default wake word, so the only things left by hand
+  # are devices[] and the keys in .env. It still writes no devices: a fresh install must
+  # not show a speaker that does not exist.
   docker run --rm --user "$RUN_AS" -v "$DIR/config:/config" "$IMAGE" setup --config /config/config.yaml
-  echo "      next: edit $DIR/config/config.yaml (devices, providers, wake model)"
+  echo "      next: add devices[] and set audio.voice.kws_keywords_file/wake_words to match"
+  echo "      after changing wake words: docker run --rm -v $DIR/config:/config $IMAGE keywords --config /config/config.yaml"
   echo "      reference: $DIR/config.example.yaml and docs/deploy.md"
 else
   echo "      keeping existing config.yaml"
@@ -45,8 +48,14 @@ if [ ! -f "$DIR/.env" ]; then
 HOUSE_EAR_LLM_KEY=
 HOUSE_EAR_ASR_KEY=
 HOUSE_EAR_TTS_KEY=
+XFYUN_APPID=
+XFYUN_API_KEY=
+XFYUN_API_SECRET=
 HOUSE_EAR_HA_TOKEN=
 HOUSE_EAR_DEVICE_TOKEN=$DEVICE_TOKEN
+# Pin the image compose uses, so a later plain `docker compose up -d` (or a reboot)
+# keeps the version that was installed instead of falling back to :latest.
+HOUSE_EAR_IMAGE=$IMAGE
 ENV
   chmod 600 "$DIR/.env"
   echo "      wrote .env with a generated device token (${#DEVICE_TOKEN} hex chars)"
@@ -54,29 +63,26 @@ else
   echo "      keeping existing .env"
 fi
 
-echo "[4/5] local ASR + VAD models"
-# 239 MB, fetched once into the mounted data volume. Without it the ASR chain silently
-# falls back to the cloud entry, which is slower and has a longer tail, so this step is
-# loud when it fails but never blocks the install.
-if [ -f "$DIR/data/models/sensevoice/model.int8.onnx" ]; then
-  echo "      model already present"
+echo "[4/5] local models: ASR + VAD + wake word"
+# ~272 MB fetched once into the mounted data volume: SenseVoice (239 MB), Silero VAD
+# (0.6 MB) and the KWS wake model (32.9 MB tarball). Without ASR the chain silently
+# falls back to cloud; without VAD the gate never starts; without KWS the box cannot
+# hear its own wake word. Loud when it fails, but never blocks the install.
+KWS_TOKENS="$DIR/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/tokens.txt"
+if [ -f "$DIR/data/models/sensevoice/model.int8.onnx" ] && [ -f "$KWS_TOKENS" ]; then
+  echo "      models already present"
 else
-  # Both models: without the VAD the turn gate never starts, and every S5a feature
-  # (wake cue, pre-wake replay, gate metrics) is silently inert on a fresh install.
   docker run --rm --user "$RUN_AS" -v "$DIR/data:/data" "$IMAGE" \
       fetch-models --dest /data/models/sensevoice \
       --vad-dest /data/models/silero_vad.onnx \
-    || echo "      WARNING: model download failed; ASR uses the cloud provider, the wake path stays off"
+      --kws-dest /data/models/kws \
+    || echo "      WARNING: model download failed; ASR falls back to the cloud, wake word stays off (see docs/deploy.md)"
 fi
-# The generated config does not reference these paths (schema defaults); the example does.
-# Point it out instead of editing YAML from shell: the paths only help if the provider
-# block and the wake model are set up too.
-if ! grep -q "/data/models/sensevoice" "$DIR/config/config.yaml" 2>/dev/null; then
-  echo "      NOTE: config.yaml does not reference /data/models yet - see docs/deploy.md"
+# setup already generated config/keywords.txt from the default wake word; only a change
+# of devices[].wake_words needs a regeneration.
+if [ ! -f "$DIR/config/keywords.txt" ]; then
+  echo "      NOTE: config/keywords.txt missing (old install?): run the keywords command from docs/deploy.md"
 fi
-# The wake word needs its own KWS model, which fetch-models does not download (it is a
-# model directory plus a keywords file). Without it, audio.voice.kws_enabled must stay
-# false and the box only answers turns it did not wake.
 
 echo "[5/5] starting"
 cd "$DIR"
@@ -107,5 +113,5 @@ echo "done. open http://${IP:-127.0.0.1}:${PORT:-8080}/"
 echo "  doctor:  docker compose exec house-ear house-ear doctor"
 echo "  logs:    docker compose logs -f house-ear"
 echo "  keys:    fill in $DIR/.env, then: docker compose up -d"
-echo "  pin:     echo 'HOUSE_EAR_IMAGE=$IMAGE' >> $DIR/.env for a reproducible deploy"
+echo "  pin:     image is pinned in $DIR/.env ($IMAGE); edit that line to change version"
 echo "  rollback: set the previous tag in $DIR/.env and run docker compose up -d"

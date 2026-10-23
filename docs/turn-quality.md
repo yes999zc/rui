@@ -11,9 +11,9 @@ history window and the reply shaping.
 
 ```bash
 uv run python scripts/measure_reply_quality.py \
-    --config ~/.hermes/cache/scratch/house-ear-s4/real-device.yaml \
-    --command ~/.hermes/cache/scratch/house-ear-s4/commands/01-weather.wav \
-    --rounds 20 --out ~/.hermes/cache/scratch/house-ear-s5b/final-01-weather.jsonl
+    --config /tmp/house-ear-scratch/house-ear-s4/real-device.yaml \
+    --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav \
+    --rounds 20 --out /tmp/house-ear-scratch/house-ear-s5b/final-01-weather.jsonl
 ```
 
 The harness keeps **one** `TurnRunner` for all rounds. That is the bug being measured: a

@@ -41,7 +41,7 @@ version: 2
 devices:
   - id: living
     adapter: xiaoai
-    host: <LAN-IP>
+    host: 192.0.2.10
     listen_port: {port}
     token_env: {TOKEN_ENV}
 audio:

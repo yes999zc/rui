@@ -65,7 +65,7 @@ def test_plane_failure_is_reported_with_its_reason(tmp_path, monkeypatch) -> Non
         "devices:\n"
         "  - id: living\n"
         "    adapter: xiaoai\n"
-        "    host: <LAN-IP>\n"
+        "    host: 192.0.2.10\n"
         "    listen_port: 4599\n"
         "    token_env: HOUSE_EAR_MISSING_TOKEN\n",
         encoding="utf-8",

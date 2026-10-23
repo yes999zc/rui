@@ -28,9 +28,9 @@ curl -fsSL https://raw.githubusercontent.com/yes999zc/house-ear/main/deploy/inst
 | 步骤 | 做什么 | 落在哪 |
 |---|---|---|
 | 1 | 拉 `docker-compose.yml` + `config.example.yaml`（参考件） | `~/house-ear/` |
-| 2 | `setup` 写 schema 默认配置（无设备、无 endpoint） | `~/house-ear/config/config.yaml` |
+| 2 | `setup` 写**生产模板**（provider 链、模型路径、playback 16k/1ch）+ 生成 `keywords.txt`（默认唤醒词），无设备/无密钥 | `~/house-ear/config/config.yaml`、`config/keywords.txt` |
 | 3 | 生成 `.env`，含随机 device token | `~/house-ear/.env`（chmod 600） |
-| 4 | 下 SenseVoice + Silero VAD 到数据卷 | `~/house-ear/data/models/` |
+| 4 | 下 SenseVoice + Silero VAD + KWS 唤醒模型（~272 MB）到数据卷 | `~/house-ear/data/models/` |
 | 5 | `docker compose up -d` 并等 `/health` 通过 | 容器 `house-ear` |
 
 安装脚本里可用的环境变量（契约不变，只是补充说明）：
@@ -44,9 +44,10 @@ HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:0.0.1   # 生产建议固定 tag 或 
 
 ## 3. 冷装：到第一句回应
 
-`setup` 写出的是**能启动但不能说话**的最小配置（没设备、没 provider endpoint、没唤醒
-模型）。冷装验收前必须手工补完下面四块，全部改 `~/house-ear/config/config.yaml`；
-`config.example.yaml` 是可直接照抄的完整样例。
+`setup` 写出的是**生产模板**（`src/house_ear/config/template.yaml`）：provider 链、模型
+路径、16 kHz 单声道播放、ack TTS 都已按生产值配好，并自动生成 `config/keywords.txt`。
+冷装只剩三件事：**加 devices[]、填 `.env` 密钥、下模型**（`install.sh` 自动完成模型这一步）。
+`config.example.yaml` 是同一份配置的带注释版本，可对照。
 
 ### 3.1 设备（`devices[]`）
 
@@ -66,96 +67,79 @@ devices:
 
 ### 3.2 provider（`providers.catalog` + 三条链）
 
-`setup` 的默认 catalog 只有 `asr/tts/llm` 三个空 endpoint。可用样例（SiliconFlow 全链路；
-讯飞 TTS 需要 `XFYUN_APPID / XFYUN_API_KEY / XFYUN_API_SECRET` 三个环境变量）：
+`setup` 已经写入生产用的 provider 链，**正常不用改**：
 
 ```yaml
 providers:
-  catalog:
-    local_asr:                          # 本地 ASR，链里排第一
-      kind: sherpa
-      model: /data/models/sensevoice
-      threads: 2
-    siliconflow_asr:
-      kind: openai_compat
-      base_url: https://api.siliconflow.cn/v1
-      model: FunAudioLLM/SenseVoiceSmall
-      api_key_env: HOUSE_EAR_ASR_KEY
-    siliconflow_llm:
-      kind: openai_compat
-      base_url: https://api.siliconflow.cn/v1
-      model: deepseek-ai/DeepSeek-V3   # 或 DeepSeek 官方 deepseek-flash
-      api_key_env: HOUSE_EAR_LLM_KEY
-    siliconflow_tts:
-      kind: openai_compat
-      base_url: https://api.siliconflow.cn/v1
-      model: FunAudioLLM/CosyVoice2-0.5B
-      voice: alex
-      api_key_env: HOUSE_EAR_TTS_KEY
-  asr:
-    chain: [local_asr, siliconflow_asr]  # 云端是兜底，不是默认
-  tts:
-    chain: [siliconflow_tts]
-  llm:
-    chain: [siliconflow_llm]
+  asr: {chain: [local_asr, siliconflow_asr]}   # 本地优先，云端兜底
+  tts: {chain: [xfyun_tts, siliconflow_tts]}   # 讯飞优先，SiliconFlow 兜底
+  llm: {chain: [deepseek_llm]}
 ```
 
-密钥只放 `~/house-ear/.env`（或控制台「设置→密钥」写入 `data/secrets.yaml`，写后不可读回），
-**不要写进 config.yaml**。容器里 `env_file: .env` 注入。
+需要做的只是把密钥填进 `.env`（对照各 provider 的 `api_key_env` / `app_id_env`）：
 
-### 3.3 模型（三个路径，别混）
+| 用途 | `.env` 变量 | 说明 |
+|---|---|---|
+| 本地 ASR | — | `fetch-models` 放模型，不需要 key；缺模型时走 `siliconflow_asr` |
+| 云端 ASR 兜底 | `HOUSE_EAR_ASR_KEY` | SiliconFlow |
+| TTS 主 | `XFYUN_APPID`、`XFYUN_API_KEY`、`XFYUN_API_SECRET` | 讯飞 websocket TTS |
+| TTS 兜底 | `HOUSE_EAR_TTS_KEY` | SiliconFlow |
+| LLM | `HOUSE_EAR_LLM_KEY` | DeepSeek（模板用 `deepseek-flash`） |
+| HA | `HOUSE_EAR_HA_TOKEN` | 见 §5 |
+| 搜索（可选） | `DEEPSEEK_API_KEY` | 模板里 `tools.search.enabled: false`，开了才需要 |
+
+密钥只放 `~/house-ear/.env`（或控制台「设置→密钥」写入 `data/secrets.yaml`，写后不可读回），
+**不要写进 config.yaml**。容器里 `env_file: .env` 注入。要换 provider（例如全用 SiliconFlow）
+就改 `providers.catalog` + 三条链，`config.example.yaml` 有完整写法。
+
+### 3.3 模型（`fetch-models` 一次装齐）
 
 | 模型 | 怎么来 | 容器内路径 | 宿主机路径 |
 |---|---|---|---|
 | SenseVoice ASR（239 MB） | `install.sh` 自动 `fetch-models` | `/data/models/sensevoice` | `~/house-ear/data/models/sensevoice` |
-| Silero VAD（2 MB） | 同上（`--vad-dest`） | `/data/models/silero_vad.onnx` | `~/house-ear/data/models/silero_vad.onnx` |
-| KWS 唤醒模型（~6 MB） | **手动**，见下 | `/data/models/kws/<模型目录>` | `~/house-ear/data/models/kws/` |
+| Silero VAD（~0.6 MB） | 同上（`--vad-dest`） | `/data/models/silero_vad.onnx` | `~/house-ear/data/models/silero_vad.onnx` |
+| KWS 唤醒模型（32.9 MB 包） | 同上（`--kws-dest`，自动解包） | `/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/` | `~/house-ear/data/models/kws/` |
 
 compose 把 `./data:/var/lib/house-ear`，同时把 `./data/models:/data/models` 挂进容器：
-数据卷负责持久化，`/data/models` 是文档和 `config.example.yaml` 一直用的路径。两者指向
-同一个宿主机目录，删容器重建都不丢。
+数据卷负责持久化，`/data/models` 是模板和文档使用的路径。两者指向同一个宿主机目录，
+删容器重建都不丢。手动重跑：
 
-**唤醒模型（KWS）目前不在 `fetch-models` 里**（Lead 正在补，下一版会进自动安装；
-在那之前按下面手动放）。手动步骤：
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v ~/house-ear/data:/data \
+  ghcr.io/yes999zc/house-ear:<tag> fetch-models \
+  --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
+# 网络受限时可只装 ASR+VAD（唤醒词会失效）：加 --no-kws
+```
 
-1. 从 sherpa-onnx 的 KWS 预训练模型页下载 `sherpa-onnx-kws-zipformer-zh-en-3M-*` 目录，
-   国内网络用 `hf-mirror.com`；至少需要：
-   `tokens.txt`、`encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx`、
-   `decoder-epoch-13-avg-2-chunk-8-left-64.onnx`、`joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx`
-   （文件名由 `audio/voice.kws_chunk` 决定，默认 chunk-8）。
-2. 把目录放到 `~/house-ear/data/models/kws/`。
-3. 写关键词文件，每行是模型 token 序列 + 阈值 + 显示文案，例如「你好小瑞」：
+**唤醒词**：`setup` 已按默认「你好小瑞」生成 `~/house-ear/config/keywords.txt`，内容形如
+`n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞`（token、boost、阈值、显示文案）。改
+`devices[].wake_words` 后必须重新生成，否则音箱还在听旧词：
 
-   ```text
-   n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞
-   ```
+```bash
+docker run --rm -v ~/house-ear/config:/config ghcr.io/yes999zc/house-ear:<tag> \
+  keywords --config /config/config.yaml
+```
 
-   行格式跟着模型自带的 `keywords.txt` 写；token 必须在该模型的词表里。把文件命名为
-   `keywords.txt` 放模型目录，或在配置里显式指 `kws_keywords_file`。
-4. 配置：
-
-   ```yaml
-   audio:
-     voice:
-       kws_enabled: true
-       kws_model_dir: /data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
-       kws_keywords_file: /data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/keywords.txt
-       vad_model_path: /data/models/silero_vad.onnx
-   ```
-
-没有 KWS 模型时保持 `kws_enabled: false`；此时服务在线、控制台可用，但不会被唤醒，
-`doctor` 会提示 `wake_path`。
+模板里 `audio.voice.kws_enabled: true`、`kws_model_dir` 指向上面目录、
+`kws_keywords_file: {config_dir}/keywords.txt`。如果确实没装 KWS 模型，把
+`kws_enabled` 设为 false；否则 plane 起不来 KWS，`doctor` 会报 `wake_path`。
 
 ### 3.4 `.env`
 
 ```bash
-HOUSE_EAR_LLM_KEY=...        # 对应 config 里的 api_key_env
-HOUSE_EAR_ASR_KEY=...
-HOUSE_EAR_TTS_KEY=...
+HOUSE_EAR_LLM_KEY=...        # DeepSeek（模板 llm 链）
+HOUSE_EAR_ASR_KEY=...        # SiliconFlow（云端 ASR 兜底）
+HOUSE_EAR_TTS_KEY=...        # SiliconFlow（TTS 兜底）
+XFYUN_APPID=...              # 讯飞 TTS（模板 tts 主）
+XFYUN_API_KEY=...
+XFYUN_API_SECRET=...
 HOUSE_EAR_HA_TOKEN=...       # 接 Home Assistant 时填
 HOUSE_EAR_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
 HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:0.0.1   # 可选：固定版本
 ```
+
+只填模板链里实际用到的即可：没有讯飞 key 就留空（自动落到 SiliconFlow）；没有 SiliconFlow
+ASR key 时本地 ASR 顶上（需已跑 `fetch-models`）。
 
 改完 `.env` / `config.yaml` 后：`docker compose up -d`（配置读盘，无需重建镜像）。
 
@@ -169,8 +153,9 @@ docker compose logs --tail=100 house-ear
 ```
 
 期望：`/health` 的 `status=ok`、`audio_plane=true`（配置了设备时）；`/api/v1/doctor`
-`verdict=ok|degraded`。`degraded` 常见但可接受的原因：没设 `web.auth_token`（只在内网
-问题不大）、音箱 SSH 22 探测不到（inbound 设备本来就不要求 SSH）、`music.enabled` 关闭。
+`verdict=ok|degraded`，`wake_path` PASS 表示模型与 `keywords.txt` 已就位。`degraded` 常见但
+可接受的原因：没设 `web.auth_token`（只在内网问题不大）、音箱 SSH 22 探测不到（inbound
+设备本来就不要求 SSH）、`music.enabled` 关闭。
 
 ## 4. 音乐：Navidrome
 
@@ -274,9 +259,9 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 
 | 宿主机 | 容器内 | 内容 | 丢了会怎样 |
 |---|---|---|---|
-| `~/house-ear/config` | `/config` | `config.yaml`（+ 可选 `lan_media.json`） | 要重配设备/provider |
+| `~/house-ear/config` | `/config` | `config.yaml`、`keywords.txt`（+ 可选 `lan_media.json`） | 要重配设备/provider/唤醒词 |
 | `~/house-ear/data` | `/var/lib/house-ear` | `service.log`、`secrets.yaml`、`memory.json`、提醒/会话历史、音乐缓存 | 记忆/提醒/密钥消失，模型还在（在 `data/models`） |
-| `~/house-ear/data/models` | `/data/models`（同一目录的第二个挂载点） | SenseVoice / VAD / KWS 模型 | 重下 ~250 MB |
+| `~/house-ear/data/models` | `/data/models`（同一目录的第二个挂载点） | SenseVoice / VAD / KWS 模型 | 重下 ~272 MB |
 
 备份只要 `config/` + `data/`（models 可重下）；恢复时把目录放回、`docker compose up -d`。
 `config.yaml` 每次写盘都有时间戳备份（`config.yaml.bak.*`），改坏了用最近的备份覆盖。
@@ -291,15 +276,13 @@ uv run house-ear serve
 
 ## 10. 已知缺口（P15 记录，本版 0.0.1-p15；部分已由 Lead 接）
 
-- **唤醒模型不在自动安装里**：`fetch-models` 只下 SenseVoice + VAD；KWS 模型和
-  `keywords.txt` 要手工放（§3.3）。Lead 已接（下一版进 `fetch-models`/`setup` 默认配置），
-  在那之前 P14 冷装仍需手工一步。
-- **`setup` 默认配置不能直接说话**：本版没有设备/provider endpoint/KWS，必须按 §3 补配置。
-  这是有意的（不替用户猜设备），Lead 正在补 model 路径与 provider endpoint，设备仍需手填。
-- **音频面子进程崩溃不会自愈**：`AudioPlaneSupervisor` 只在启动时拉起一次；plane 死掉后
-  控制面继续应答 `/health`（`audio_plane=false`，健康检查会变 unhealthy），需要
-  `docker compose restart house-ear`。修复要改 `src/`（给 supervisor 加重启循环），
-  归 Lead 决定。详见 `docs/runbook.md` 的自愈矩阵与 P15 实测数字。
+- **`setup` 仍不写 devices**：这是有意的（不替用户猜设备）。模板已带 provider 链、模型路径、
+  `keywords.txt`，冷装只剩「加 devices[] + 填 .env」。
+- **AI 之外的人工项**：真机接线（音箱 client 指向 NAS IP:4412、device token 一致）仍要人做；
+  `docs/runbook.md` 的故障表覆盖了排查路径。
 - **损坏的模型文件会让采集静默停摆**：无效 `silero_vad.onnx` 下 plane 不报错、
   `/api/v1/audio` 的 `frames_in` 一直是 0（实测，见 runbook §11.6）。换回有效模型后恢复；
   排查时先跑 `fetch-models` 重新拉模型。
+- **音频面崩溃后的自愈已补**（`AudioPlaneSupervisor.watch()`，1 s 轮询 + 1→60 s 退避）：
+  实测 kill plane 后 ~3 s 新 pid、`restarts=1`；旧的「必须手动 restart」说法已过时。
+  长稳（反复崩溃的退避封顶）仍看 3 天观察。

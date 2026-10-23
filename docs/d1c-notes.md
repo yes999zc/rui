@@ -8,8 +8,8 @@
 
 | 项 | 结果 |
 |---|---|
-| 全量测试 | 480 collected：**479 passed + 1 个并行外部失败**（见 §8.4，不是 D1c 改动）。D1c 新增 49 条：阶段 1 共 38——`test_music_index.py` 20、`test_music_semantic.py` 11、`test_music_tools.py` +7；阶段 2A 共 11——`test_briefing.py` 8、`test_session.py` +3；阶段 2B 共 11——`test_session.py` +5、`test_briefing.py` +6 |
-| lint | `uv run ruff check src tests scripts` clean |
+| 全量测试 | **493 passed**（2026-10-23 13:0x，含 Lead 修好的 config 测试与并行新增）。D1c 新增 49 条：阶段 1 共 38——`test_music_index.py` 20、`test_music_semantic.py` 11、`test_music_tools.py` +7；阶段 2A 共 11——`test_briefing.py` 8、`test_session.py` +3；阶段 2B 共 11——`test_session.py` +5、`test_briefing.py` +6。`ruff` 对并行修改的 `tests/test_kws.py`/`test_turn_audio.py` 有 2 个外部 I001，本任务涉及文件单独 check clean |
+| lint | 本任务涉及文件 `ruff check` clean；全量 `src tests scripts` 因并行修改的 `tests/test_kws.py`/`test_turn_audio.py` 报 2 个 I001（非本任务） |
 | 真实 Navidrome 建索引 | **5736 首 / search3 12 页 / 0.78 s / 缓存 1189 KiB**（data_dir/library_index.json） |
 | 语言分布（真实库） | ja 20 · ko 3 · zh 5333 · en 377 · other 3 · unknown 0 |
 | 索引查询延迟 | `pick()` 0.5–2.8 ms（本地文件，无网络） |
@@ -17,6 +17,7 @@
 | 描述式点歌（真实库） | 「来点安静的钢琴」4 首 20 ms；「放点摇滚」20 首 7 ms；「九十年代的粤语老歌」20 首 2 ms |
 | 多候选搜索（真实库） | 「晴天」3 个候选（含周杰伦）；「富士山下」5 个版本；11–51 ms |
 | 混合请求 | 「播放日文歌曲《そばにいるね》」→ 只排 1 首《そばにいるね》（标题胜出），17 ms |
+| 2C 真机（dev :8091） | 日报 HTTP 19.64 s / 音频 1,886,182 B（≈58.9 s，playback_s +59.7）/ 1 LLM round；音乐「晴天」真播 8 s 后「停止播放」→ idle；设备音量 178→128→178 |
 
 ## 2. 老项目依据（只读参考）
 
@@ -94,7 +95,7 @@
 
 ## 4. 真实 Navidrome 验证记录
 
-凭据来自 `~/.hermes/.secrets/lan_media.json`（只引用变量/文件，不写值）；验证只走 HTTP 与索引/工具
+凭据来自 `music.secrets_path` 指向的凭据 JSON（只引用变量/文件，不写值）；验证只走 HTTP 与索引/工具
 函数，**没有对真机下发任何 say/music 指令**。
 
 1. 建索引（`LibraryIndex.build()`）：5736 首，`search3` 分页 12 次，0.78 s，缓存 1189 KiB。
@@ -246,7 +247,63 @@ console 静态路由 / debug 端点 / audio supervisor）、`src/house_ear/sessi
   但 `config/schema.py` 在 12:26 被改成默认 16000/1ch（非本任务改动；已报 Lead）。D1c 自身所有
   测试通过。
 
-## 9. 复现/运维片段
+## 9. 2C 真机声音验证（2026-10-23，dev 服务 :8091）
+
+Lead 12:39 用最新代码（e8a821a 等）重启 dev 服务（PID 31458，plane pid 31498，音箱
+connected=True），声音由本任务独占；全程用 `X-Auth-Token` 调 debug HTTP，未重启服务、未改代码。
+结束状态：music=idle、output_owner=""、设备音量恢复 178。
+
+### 9.1 ④ 日报真机（debug/say）
+
+`POST /api/v1/debug/say {"text":"念一下今天的新闻"}`：
+
+| 指标 | 实测 |
+|---|---|
+| HTTP | 200，**19.64 s**（返回时全部 TTS 已入队，不等到播完） |
+| reply | **260 字**，与独立 `info.news(Config(), count=5)` 生成的 `Briefing.speech_text` **逐字相等** |
+| audio_bytes | **1,886,182**（16 kHz mono ≈ **58.9 s**） |
+| 实际播放 | `/api/v1/audio` 的 `playback_s` 5.3 → **65.0 s**（约 59.7 s），播完 owner 回到空 |
+| 工具 | `tools=["news"]` |
+| LLM | 日志 **`llm round:` 只有 1 行**（624 ms，1 tool call）；`tool news -> direct speech (260 chars)`；`direct speech: 260 chars (model round skipped)` |
+| 模型看到的内容 | 日志：`tool news({"count": 5}) -> 播报已准备好（5 条，2026-10-23），直接念给用户听。`（无原文） |
+
+`GET /api/v1/turns?limit=1` 中 reply 与独立 Briefing 完全一致，证明真机路径没有被二次总结。
+**history 真机未验**（原因）：debug/say 每次先 `runner.reset_history()`，`GET /api/v1/debug/prompt`
+只返回系统提示词、不返回 history；不改生产代码就无法观测。该点在单测 + 进程内实测中已证明
+（§8.2：history = user 原话 + 260 字原文，`item_index("第三条再说说")==3`）。
+
+### 9.2 ③ 工具式音乐停止（debug/say，非停止词分支）
+
+- `debug/say "放一首晴天"`：HTTP 1.62 s，reply `""`（歌就是答案，静默），`tools=["music_play"]`；
+  `/api/v1/music` → playing《一直是晴天_2》-许茹芸，queue_left 3；8 s 内 `playback_s` +8.0。
+- `debug/say "停止播放"`：HTTP 1.64 s，`tools=["music_stop"]`，音乐 → **idle**，回复 `"停了。"`
+  （debug/say 不进停止词分支，这是模型在工具结果后自己说的一句，不是 media_stop 的 PhraseBook
+  「好，不放了。」）；`audio_bytes=29866`；随后 owner 从 dialogue 回空。
+- 收尾 `POST /api/v1/debug/play {"stop":true}`，最终 music=idle、owner=""。
+- **`media_stop`/`bare_stop` 真唤醒分支未验**：debug/say 不经过 `_stop_command`，真机验收需真人说
+  「停止播放」；按 Lead 指示留给 9哥 的嗓子。
+
+### 9.3 音量真机
+
+| 步骤 | 实测 |
+|---|---|
+| 初始 | `GET /api/v1/device/volume` → **178**（0–255） |
+| `debug/say "音量调到50%"` | HTTP **0.52 s**，reply「音量调到 50%了。」，`tools=["volume"]`，`audio_bytes=74240` |
+| 读回 | **128** |
+| 恢复 | `PUT /api/v1/device/volume {"value":178}` → 200；读回 **178** |
+| 收尾 | 硬停音频，music=idle、owner="" |
+
+### 9.4 2C 未验项
+
+1. ③ 两个停止分支的真唤醒声音行为（media_stop 会话不关 / bare_stop 散场 + 停歌）——需真人嗓子。
+2. ④ 真机 history 原文（debug/say reset_history，HTTP 无读数口）；单测/进程内已证。
+3. 真机「好不好听/断句」听感（本任务只能用 audio_bytes/playback_s/owner 遥测证明出声，
+   没有耳朵或回环录音）。
+4. 并行外部状态（非本任务）：跑 2C 收尾时 `tests/test_kws.py`、`tests/test_turn_audio.py`
+   在 12:43 被并行修改，`ruff check` 报 2 个 I001（导入顺序）；`pytest` 仍 **493 passed**。
+   本任务改动的文件单独 ruff check 全 clean。
+
+## 10. 复现/运维片段
 
 ```bash
 # 重建索引（等价于首次描述式点歌触发；7 天 TTL，--force 语义用 force=True）
@@ -254,7 +311,7 @@ cd <repo> && uv run python - <<'PY'
 import asyncio, pathlib
 from house_ear.music.sources.navidrome import NavidromeSource
 from house_ear.music.library_index import LibraryIndex
-secrets = pathlib.Path.home() / ".hermes/.secrets/lan_media.json"
+secrets = pathlib.Path(cfg.music.secrets_path)
 idx = LibraryIndex(pathlib.Path("/var/lib/house-ear/library_index.json"),
                    NavidromeSource(secrets, pathlib.Path("/tmp/house-ear-music")))
 print(asyncio.run(idx.build(force=True))["count"], idx.stats()["languages"])

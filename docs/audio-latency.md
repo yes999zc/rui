@@ -93,7 +93,7 @@ filler_after_s = 1.8 s 等待
 
 上午的结论有一半是错的。`Pacer` 补上预缓冲后 9哥 仍说卡。真机日志（12:54–13:22，5 次起停）
 给出三个彼此独立的原因，没有一个是「模型慢」。原始日志：
-`~/.hermes/cache/scratch/he-serve-4399{,b,c,d,e}.log`（只读，时间戳是唯一口径）。
+`/tmp/house-ear-scratch/he-serve-4399{,b,c,d,e}.log`（只读，时间戳是唯一口径）。
 
 ### 3.1 播报卡顿：不是缓冲不足，是回复队列被截断（`f814d6f`）
 
@@ -223,11 +223,11 @@ barge-in: 7.7 s of queued speech dropped                    # 控制面
 ## 4. 复现命令
 
 ```bash
-set -a; . ~/.hermes/.env; set +a
+set -a; . $HOUSE_EAR_ENV_FILE; set +a
 # 20 轮端到端（假音箱，真 KWS/VAD/ASR/LLM/TTS）
 uv run python scripts/measure_turn_pipeline.py \
-    --config ~/.hermes/cache/scratch/house-ear-s5b/tools.yaml \
-    --command ~/.hermes/cache/scratch/house-ear-s4/commands/01-weather.wav --rounds 20
+    --config /tmp/house-ear-scratch/house-ear-s5b/tools.yaml \
+    --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav --rounds 20
 # 只看模型侧（不经过我们的循环）
 uv run python - <<'PY'
 import asyncio, httpx, json, os, time

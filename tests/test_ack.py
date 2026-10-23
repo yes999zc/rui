@@ -8,6 +8,7 @@ The three failure modes this pins down, in the order they cost the most:
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import wave
 from pathlib import Path
@@ -20,8 +21,15 @@ from house_ear.audio.kws import WakeHit
 from house_ear.audio.process import AudioPlane
 from house_ear.config import Config
 
-MODEL = Path.home() / "AI_Workspace/03_Data/Models/sherpa-onnx/silero_vad.onnx"
-needs_vad = pytest.mark.skipif(not MODEL.exists(), reason="silero VAD model not installed")
+# Optional model for the gate tests. Point HOUSE_EAR_TEST_MODELS at a directory that
+# holds silero_vad.onnx (and kws/, sensevoice/ for the other suites); without it these
+# tests skip instead of depending on one developer's home directory.
+_TEST_MODELS = os.environ.get("HOUSE_EAR_TEST_MODELS", "").strip()
+MODEL = Path(_TEST_MODELS) / "silero_vad.onnx" if _TEST_MODELS else Path("/nonexistent/silero_vad.onnx")
+needs_vad = pytest.mark.skipif(
+    not MODEL.exists(),
+    reason="optional model suite: set HOUSE_EAR_TEST_MODELS to a dir with silero_vad.onnx",
+)
 
 
 def tone_wav(path: Path, seconds: float, rate: int = 16000) -> None:

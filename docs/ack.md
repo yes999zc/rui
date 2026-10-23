@@ -63,14 +63,14 @@ measuring it:
 ```bash
 # one configuration: 20 rounds, real KWS/VAD/ASR, fake speaker, no room needed
 uv run python scripts/measure_turn_pipeline.py \
-    --config ~/.hermes/cache/scratch/house-ear-s4/real-device.yaml \
-    --command ~/.hermes/cache/scratch/house-ear-s4/commands/01-weather.wav \
+    --config /tmp/house-ear-scratch/house-ear-s4/real-device.yaml \
+    --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav \
     --rounds 20 --gap-ms 0 --speed 1.0 --tight --asr-only \
     --ack-mode earcon --preroll-ms 500 --gate-preroll-ms 350 \
-    --out ~/.hermes/cache/scratch/house-ear-s5a/earcon-gap0.jsonl
+    --out /tmp/house-ear-scratch/house-ear-s5a/earcon-gap0.jsonl
 
 # then aggregate a whole sweep directory
-uv run python scripts/summarize_ack.py ~/.hermes/cache/scratch/house-ear-s5a
+uv run python scripts/summarize_ack.py /tmp/house-ear-scratch/house-ear-s5a
 ```
 
 `--asr-only` stops the turn after transcription: first-word loss is an ASR question and

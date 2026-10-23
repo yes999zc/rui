@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Summarise an S5a sweep: how often the request survives intact, per configuration.
 
-    uv run python scripts/summarize_ack.py ~/.hermes/cache/scratch/house-ear-s5a
+    uv run python scripts/summarize_ack.py /tmp/house-ear-scratch/house-ear-s5a
 
 Each jsonl is one configuration (preroll / gap / ack mode) written by
 `measure_turn_pipeline.py --asr-only`. The reference transcript is the most common one in

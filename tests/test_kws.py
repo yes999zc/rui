@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import wave
 from pathlib import Path
@@ -12,11 +13,18 @@ import pytest
 
 from house_ear.audio.kws import KwsUnavailable, WakeWord, model_files
 
-MODEL = Path.home() / "AI_Workspace/03_Data/Models/sherpa-onnx/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+# Optional wake model. HOUSE_EAR_TEST_MODELS must point at the parent of kws/, e.g. the
+# directory `fetch-models --kws-dest` fills; otherwise these tests skip.
+_TEST_MODELS = os.environ.get("HOUSE_EAR_TEST_MODELS", "").strip()
+_KWS_REL = Path("kws") / "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+MODEL = Path(_TEST_MODELS) / _KWS_REL if _TEST_MODELS else Path("/nonexistent") / _KWS_REL
 FIXTURE = Path(__file__).parent / "fixtures" / "wake-nihao-xiaorui.wav"
 
 pytestmark = [
-    pytest.mark.skipif(not MODEL.exists(), reason="KWS model not installed on this box"),
+    pytest.mark.skipif(
+        not MODEL.exists(),
+        reason="optional wake model: set HOUSE_EAR_TEST_MODELS to the dir holding kws/",
+    ),
     pytest.mark.skipif(not FIXTURE.exists(), reason="wake fixture missing"),
 ]
 
@@ -67,7 +75,7 @@ version: 2
 devices:
   - id: living
     adapter: xiaoai
-    host: <LAN-IP>
+    host: 192.0.2.10
     listen_port: {port}
     token_env: HOUSE_EAR_KWS_TOKEN
 audio:

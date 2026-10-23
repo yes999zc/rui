@@ -110,7 +110,7 @@ def test_yielded_turns_are_counted_so_a_silent_assistant_is_explainable() -> Non
 
 def make_adapter() -> XiaoaiAdapter:
     dev = DeviceConfig(
-        id="living", adapter="xiaoai", host="<LAN-IP>",
+        id="living", adapter="xiaoai", host="192.0.2.10",
         token_env="HOUSE_EAR_TEST_DEVICE_TOKEN",
     )
     return XiaoaiAdapter(dev, CaptureConfig(), VoiceConfig())

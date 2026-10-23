@@ -449,7 +449,7 @@ def test_volume_reconciles_to_the_configured_target(tmp_path: Path) -> None:
         plane, _ = make_plane(tmp_path)
         from house_ear.config.schema import DeviceConfig
         plane.cfg.devices.append(DeviceConfig(id="living", adapter="xiaoai",
-                                              host="<LAN-IP>", volume=86))
+                                              host="192.0.2.10", volume=86))
         writes: list[int] = []
 
         class Svc:

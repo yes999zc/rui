@@ -169,7 +169,6 @@ def test_probe_requires_an_ssh_banner(monkeypatch, wizard) -> None:
 
 def test_the_wake_model_check_needs_all_four_files(tmp_path, monkeypatch) -> None:
     """tokens.txt alone is not a wake model: the spotter loads encoder/decoder/joiner too."""
-    from house_ear import secrets
     from house_ear.config import Config
     from house_ear.web.api.app import create_app
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 import wave
 from pathlib import Path
@@ -12,13 +13,22 @@ import pytest
 
 from house_ear.audio.vad import GateConfig, UtteranceGate
 
-MODEL = Path.home() / "AI_Workspace/03_Data/Models/sherpa-onnx/silero_vad.onnx"
-KWS_MODEL = Path.home() / "AI_Workspace/03_Data/Models/sherpa-onnx/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+# Optional models: see tests/test_ack.py. Without HOUSE_EAR_TEST_MODELS these skip.
+_TEST_MODELS = os.environ.get("HOUSE_EAR_TEST_MODELS", "").strip()
+_KWS_REL = Path("kws") / "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+MODEL = Path(_TEST_MODELS) / "silero_vad.onnx" if _TEST_MODELS else Path("/nonexistent/silero_vad.onnx")
+KWS_MODEL = Path(_TEST_MODELS) / _KWS_REL if _TEST_MODELS else Path("/nonexistent") / _KWS_REL
 FIXTURE = Path(__file__).parent / "fixtures" / "wake-nihao-xiaorui.wav"
 COMMAND = Path(__file__).parent / "fixtures" / "command-weather.wav"
 
-needs_vad = pytest.mark.skipif(not MODEL.exists(), reason="silero VAD model not installed")
-needs_kws = pytest.mark.skipif(not KWS_MODEL.exists(), reason="KWS model not installed")
+needs_vad = pytest.mark.skipif(
+    not MODEL.exists(),
+    reason="optional model suite: set HOUSE_EAR_TEST_MODELS to a dir with silero_vad.onnx",
+)
+needs_kws = pytest.mark.skipif(
+    not KWS_MODEL.exists(),
+    reason="optional wake model: set HOUSE_EAR_TEST_MODELS to the dir holding kws/",
+)
 
 
 def speech_pcm(path: Path = FIXTURE) -> bytes:
@@ -72,7 +82,7 @@ version: 2
 devices:
   - id: living
     adapter: xiaoai
-    host: <LAN-IP>
+    host: 192.0.2.10
     listen_port: {port}
     token_env: HOUSE_EAR_TURN_TOKEN
 audio:

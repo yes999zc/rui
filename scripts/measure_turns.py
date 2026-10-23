@@ -3,7 +3,7 @@
 
     uv run python scripts/measure_turns.py --url http://127.0.0.1:8091 \
         --wake tests/fixtures/wake-nihao-xiaorui.wav \
-        --command-dir ~/.hermes/cache/scratch/house-ear-s4/commands --rounds 20
+        --command-dir /tmp/house-ear-scratch/house-ear-s4/commands --rounds 20
 
 The wake word and the request are played *from this machine*, not from the speaker: the
 speaker's own playback is the AEC reference, so anything it says about itself is cancelled

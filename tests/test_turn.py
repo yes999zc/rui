@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -296,21 +297,23 @@ def test_a_flaky_provider_is_retried_before_the_next_one(monkeypatch) -> None:
     assert report.attempts[1]["error"] == ""
 
 
-LOCAL_MODEL = Path("/data/models/sensevoice")
-MAC_MODEL = Path.home() / (
-    "AI_Workspace/03_Data/Models/sherpa-onnx/"
-    "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
-)
+LOCAL_MODEL = Path("/data/models/sensevoice")   # where the container / fetch-models puts it
+# Optional local checkout: HOUSE_EAR_TEST_MODELS points at a dir holding sensevoice/.
+_TEST_MODELS = os.environ.get("HOUSE_EAR_TEST_MODELS", "").strip()
+TEST_MODEL = (Path(_TEST_MODELS) / "sensevoice") if _TEST_MODELS else None
 
 
 def sample_model_dir() -> Path | None:
-    for candidate in (LOCAL_MODEL, MAC_MODEL):
+    for candidate in [LOCAL_MODEL] + ([TEST_MODEL] if TEST_MODEL else []):
         if (candidate / "model.int8.onnx").exists() or (candidate / "model.onnx").exists():
             return candidate
     return None
 
 
-@pytest.mark.skipif(sample_model_dir() is None, reason="sensevoice model not installed")
+@pytest.mark.skipif(
+    sample_model_dir() is None,
+    reason="local ASR model not installed: set HOUSE_EAR_TEST_MODELS to the dir holding sensevoice/",
+)
 def test_local_asr_reads_the_command_fixture() -> None:
     from house_ear.providers.sherpa_asr import SherpaAsr
 

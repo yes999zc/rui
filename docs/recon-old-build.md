@@ -26,7 +26,7 @@ if 0 < peak < 0.25:
 
 ## 3. TTS 口径（纠正）
 
-**老项目 0.44–0.60 s 不是首字节，是整句合成完**（`~/.hermes/cache/scratch/xf_lat.py`，3 句各 1 次，13/23/13 字；`docs/tts-model-eval.md:64-73`）。
+**老项目 0.44–0.60 s 不是首字节，是整句合成完**（`/tmp/house-ear-scratch/xf_lat.py`，3 句各 1 次，13/23/13 字；`docs/tts-model-eval.md:64-73`）。
 
 | 口径 | 老项目 | 我们（10 句，2026-10-22） |
 |---|---|---|

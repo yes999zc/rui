@@ -69,8 +69,10 @@ wake word, speech, reasoning, and playback all run on your own box, and tools
   from the console, injected into the prompt; "关闭上下文/打开上下文" works by voice
 - Console — panels for overview, devices, conversations, logs, music, memory and
   settings, with form/table/log blocks declared by the server
-- Docker one-command deploy — one image, three volumes (`config`, `data`, `models`),
-  health check, log rotation and a documented rollback; see
+- Docker one-command deploy — `setup` writes the production template and wake keywords,
+  `fetch-models` brings ASR + VAD + the wake model, and the image ships one `config`/`data`/
+  `models` volume set, a health check, log rotation and a documented rollback; a watchdog
+  restarts the audio plane if it crashes. See
   [docs/deploy.md](docs/deploy.md) and [docs/runbook.md](docs/runbook.md)
 
 ## Measured so far

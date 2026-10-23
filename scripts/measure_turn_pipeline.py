@@ -3,7 +3,7 @@
 
     uv run python scripts/measure_turn_pipeline.py --config real-device.yaml \
         --wake tests/fixtures/wake-nihao-xiaorui.wav \
-        --command ~/.hermes/cache/scratch/house-ear-s4/commands/01-weather.wav --rounds 20
+        --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav --rounds 20
 
 A fake speaker dials the real adapter, streams the wake word and then the request as 8 ch
 frames at device pace, and the reply comes back as PCM frames. Everything between is real:
@@ -39,7 +39,7 @@ from house_ear.web.api.app import create_app  # noqa: E402
 
 
 def load_env_file(path: Path) -> None:
-    """Provider keys live in ~/.hermes/.env; a harness must not depend on the caller's shell."""
+    """Provider keys live in $HOUSE_EAR_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
     if not path.exists():
         return
     for line in path.read_text().splitlines():
@@ -466,7 +466,7 @@ def main() -> int:
     p.add_argument("--wait-s", type=float, default=25.0)
     p.add_argument("--between", type=float, default=1.0)
     p.add_argument("--out", default="/tmp/house-ear-pipeline.jsonl")
-    p.add_argument("--env", default=str(Path.home() / ".hermes/.env"))
+    p.add_argument("--env", default=os.environ.get("HOUSE_EAR_ENV_FILE", ".env"))
     return asyncio.run(run(p.parse_args()))
 
 

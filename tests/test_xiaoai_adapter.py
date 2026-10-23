@@ -25,7 +25,7 @@ def free_port() -> int:
 
 def make_adapter(port: int, *, rate: int = 48000, allow_no_token: bool = False) -> XiaoaiAdapter:
     dev = DeviceConfig(
-        id="living", adapter="xiaoai", host="<LAN-IP>", listen_port=port,
+        id="living", adapter="xiaoai", host="192.0.2.10", listen_port=port,
         token_env=TOKEN_ENV, allow_no_token=allow_no_token,
     )
     capture = CaptureConfig(rate=rate)

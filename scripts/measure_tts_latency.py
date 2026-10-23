@@ -62,7 +62,7 @@ class Sample:
 
 
 def load_env_file(path: Path) -> None:
-    """Provider keys live in ~/.hermes/.env; a harness must not depend on the caller's shell."""
+    """Provider keys live in $HOUSE_EAR_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
     if not path.exists():
         return
     for line in path.read_text().splitlines():
@@ -208,7 +208,7 @@ def main() -> int:
                              "cycles when shorter")
     parser.add_argument("--texts", default="",
                         help="comma-separated sentences (default: 10 built-in Chinese ones)")
-    parser.add_argument("--env", default=str(Path.home() / ".hermes/.env"),
+    parser.add_argument("--env", default=os.environ.get("HOUSE_EAR_ENV_FILE", ".env"),
                         help="KEY=VALUE file with provider keys, loaded without overwriting "
                              "the caller's environment")
     args = parser.parse_args()

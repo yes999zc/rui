@@ -91,7 +91,7 @@ def main() -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--wav", required=True)
     parser.add_argument("--out", default="/tmp/turn-reply.wav")
-    parser.add_argument("--env", default=str(Path.home() / ".hermes/.env"))
+    parser.add_argument("--env", default=os.environ.get("HOUSE_EAR_ENV_FILE", ".env"))
     parser.add_argument("--prompt", default="", help="override the spoken-reply system prompt")
     args = parser.parse_args()
     load_env_file(Path(args.env))
