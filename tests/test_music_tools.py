@@ -216,3 +216,16 @@ def test_transport_words_fall_through_when_nothing_plays() -> None:
         assert await _music_transport(app, "暂停", None, None, None, None) is None
 
     asyncio.run(run())
+
+
+def test_a_music_turn_asks_the_plane_for_an_immediate_resume() -> None:
+    """The turn's tools say whether the song is the answer: music/volume -> 0 s."""
+    from types import SimpleNamespace
+
+    from house_ear.web.api.app import _turn_hold
+
+    assert _turn_hold(SimpleNamespace(tools=["music_play"])) == 0.0
+    assert _turn_hold(SimpleNamespace(tools=["local.music_next"])) == 0.0
+    assert _turn_hold(SimpleNamespace(tools=["volume"])) == 0.0
+    assert _turn_hold(SimpleNamespace(tools=["weather"])) is None
+    assert _turn_hold(SimpleNamespace(tools=[])) is None

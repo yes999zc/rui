@@ -315,6 +315,16 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
     return line
 
 
+def _turn_hold(result: object) -> float | None:
+    """0 when this turn's tools were about the song itself (music/volume)."""
+    tools = getattr(result, "tools", None) or []
+    for name in tools:
+        tool = str(name).rsplit(".", 1)[-1]
+        if tool.startswith("music") or tool == "volume":
+            return 0.0
+    return None
+
+
 def _voice_rate(client: object) -> int:
     ready = getattr(client, "ready", None)
     return int(getattr(ready, "voice_rate", 0) or 16000)
@@ -587,7 +597,9 @@ def create_app(
                         result.stages.setdefault("asr", asr_report)
                     app.state.last_turn = result.to_dict()
                     traces.add(trace)
-                    await client.reply_finished()
+                    # A music/volume turn wants the song back the moment the reply
+                    # drains, not after the follow-up window (measured 09:21: ~10 s).
+                    await client.reply_finished(hold_music_s=_turn_hold(result))
                     _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate)
                     log.info("turn: %s", result.to_dict())
 
@@ -1060,7 +1072,7 @@ def create_app(
                         app.state.last_turn["audio_bytes"],
                 }
         result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
-        await client.reply_finished()
+        await client.reply_finished(hold_music_s=_turn_hold(result))
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate)
         app.state.last_turn = result.to_dict()
         traces.add(trace)
