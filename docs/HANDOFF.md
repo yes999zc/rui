@@ -1155,3 +1155,13 @@ Telegram 可行性测试。
 - **仍需 9 哥**：给 @dellnas1_bot 发消息并提供 chat_id（或临时 allow-all 配对）；微信手机扫码
   `house-ear-channels --login-weixin`；两个通道各发 2 条文字 + 1 条语音做真机验收。M7 部署/网关常驻服务尚未做。
 
+### 12.33 2026-10-24 v1 freeze + 验收日
+
+- 功能冻结；只做 v1 四道门槛。最新 **762 passed / 1 skipped**，ruff/UI build 绿。
+- 已交付：配置恢复（last-good/默认恢复/banner/CLI，`f2abcef` 系列）、设备连接信息 API + Setup 卡、
+  `docs/open-xiaoai-client.md`、安全响应头/鉴权失败日志、用户数据 0600、backup/restore、
+  `scripts/acceptance-v1.py`、`docs/acceptance.md`、`docs/runbook.md` §9。
+- NAS **未部署本轮更新**（9哥 要求验收日统一）；当前 NAS 仍是上一版镜像，Telegram 托管 gateway 正常，
+  微信接口保留但 `enabled=false`。
+- 明天验收：冷装 30 分钟、80% 音乐 20 次唤醒、barge ≤300ms、Telegram 文字/语音、配置恢复/备份 smoke。
+- 通过后再部署最新控制面 + 更新 Release/文档；未过之前不恢复新功能。

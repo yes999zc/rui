@@ -287,7 +287,7 @@ Provider order and fields live in `config.yaml`: `providers.catalog` plus one or
 
 ### Status and known gaps
 
-**v1 is in progress.** Working: full turn, local ASR, music, HA/MCP, memory, console, brand/i18n, multi-arch image and the one-command install (with source fallback). Open items include the v1 acceptance numbers (19/20 wake at 80% volume, interrupt ≤300 ms), far-field/volume reconciliation, the second device (config v3), and some console polish. The authoritative list is [docs/remaining-work.md](docs/remaining-work.md); this README does not claim features that are not implemented.
+**v1 is in progress — feature freeze is active (2026-10-24).** Working: full turn, local ASR, music, HA/MCP, memory, console 2.0, brand/i18n, multi-arch image, one-command install (with source fallback), Telegram channel, config recovery, and speaker onboarding. The remaining release gates are the real-device acceptance numbers (cold install, 19/20 wake at 80% volume, interrupt ≤300 ms); see [docs/ROADMAP.md](docs/ROADMAP.md) and [docs/acceptance.md](docs/acceptance.md). This README does not claim features that are not implemented.
 
 ### Development
 

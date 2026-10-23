@@ -10,11 +10,11 @@
 - [x] open-xiaoai client 分步文档：`docs/open-xiaoai-client.md`。
 - [x] 用户数据文件权限：memory / reminders / music aliases / library index / history / HA entities → 0600。
 - [x] backup/restore 脚本 + acceptance 辅助脚本 + runbook（p15）。
-- [ ] 安全响应头、鉴权失败日志、安装脚本连接信息输出（console-api 完成后 Lead 收口）。
-- [ ] 全量测试/ruff/UI build；提交并 push。
-- [ ] 不部署 NAS（按 9哥 要求）。
+- [x] 安全响应头、鉴权失败日志、安装脚本连接信息提示。
+- [x] 全量测试 **762 passed / 1 skipped**、ruff clean、UI typecheck/build 绿；已提交并 push。
+- [x] 不部署 NAS（按 9哥 要求）；NAS 当前仍是上一版镜像。
 
-## 明天需要 9哥
+## 明天需要 9哥（验收日）
 
 1. **冷装**：全新目录 + 一键安装，记录 30 分钟内到第一句。
 2. **D3 唤醒**：80% 音量放歌，20 次唤醒 N/M；3–4 米远场再一组。

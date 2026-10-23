@@ -7,8 +7,8 @@
 
 1. **仓库公开 + GHCR public ✅**（`ghcr.io/yes999zc/rui:latest` 匿名 pull 200，amd64/arm64）；
    一键装 raw 200；`deploy/install.sh` 仍保留「拉不到镜像就从公开源码 build」回退。
-2. **git 历史凭据**：round-1 记录的旧 commit 含真实凭据/LAN IP/用户名；公开前必须全历史扫描 →
-   轮换所有真实凭据 → filter-repo/BFG 重写（需 9哥 授权，会冻结并行工作）。
+2. **git 历史凭据 ✅**：旧公开历史已通过删库重建 + filter-repo 清除；旧 commit/raw 已不可访问；
+   device/console token 已换新；音箱 root 密码仍受 squashfs 只读限制（见 C12）。
 3. **NAS 部署 ✅ 2026-10-23**：本机 Docker 构建 + NAS 运行 + 音箱切换 + LAN/Tailscale 实测
    （health、KWS/VAD、debug say、speaker audition）；一键脚本可用。
 4. **D3 唤醒门槛**：80% 音量放歌 20 次唤醒 ≥19；含 3–4 米远场正式计数。
@@ -23,8 +23,8 @@
 
 ## B. 真机 / 功能遗留
 
-6. **音箱客户端安装路径**：新用户没有 open-xiaoai client 安装步骤、没有「显示设备 token + 复制
-   ws URL」的界面；冷装会卡在「没有声音」（功能审计 P1-8）。
+6. **音箱客户端安装路径 ✅（2026-10-24）**：`GET /api/v1/devices/{id}/connect` + Setup「音箱连接」卡
+   （ws URL/token/复制/未配置提示）+ `docs/open-xiaoai-client.md`；真实冷装仍待明天演练。
 7. **P12 / E1 第二台设备**：每设备音频配置（config v3）、无播放能力降级；等第二台设备到货。
 8. **B2 剩余**：远场唤醒计数、音量对账三个调用点、音乐收藏/口味 UI、farewell 静音续歌边角、
    gate-over-music 清理；ACK earcon 与老项目差异仍未解释。
@@ -37,8 +37,8 @@
 11. **dev 配置匿名**：当前 :8091 为 `host=0.0.0.0` + `allow_anonymous=true` + 设备
     `allow_no_token=true`，只适合本机开发；**不要复制到 NAS/生产**。
 12. 设备 token/控制台 token 已轮换；**音箱 root 密码因 squashfs 只读未能改**（建议厂商方式/仅可信 LAN）。
-13. 安全审计 P2：安全响应头、鉴权审计日志、SSRF/端口探测 allowlist、用户数据文件 0644 →
-    0600（memory/music_history/reminders/.ha_entities）、容器非 root、依赖 CVE 扫描。
+13. 安全审计 P2：安全响应头、鉴权失败日志、用户数据文件 0600 已完成；剩余 SSRF/端口探测
+    allowlist、容器非 root、依赖 CVE 扫描（不阻塞 v1，排后续）。
 14. P15b 镜像重建（品牌/新功能之后）与 GHCR 发布复验：品牌轮镜像已重建并 public ✅。
 
 ## D. 体验 / 控制台
@@ -70,9 +70,12 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
 - NAS 的 ASR chain 已改为 `volc-asr` 单链路；`local-asr` 仍保留在 catalog（插座），不默认加载，
   省约 350 MB 内存。
 
-## H. 远程通道（2026-10-23 已实现 M0–M6）
+## H. 远程通道（M0–M7 已完成）
 
 - Telegram + 微信 iLink/ClawBot 的 backend、gateway、Channels 页已完成；测试 743 passed。
 - 真机验收仍需要：Telegram allowlist chat_id、微信扫码、两通道语音/文字测试。
 - M7（托管 gateway 自动启动/watchdog、控制台 Start/Stop/Restart、NAS 部署）已完成；
-  NAS 当前只启用 Telegram，微信只保留接口。NAS Telegram 出网走本机 mihomo SOCKS。
+  NAS 当前只启用 Telegram，微信只保留接口。NAS Telegram 出网走本机 mihomo SOCKS；
+  mihomo IPv6 已关闭并选择可用节点，Node 选择为运行时状态（重启后若失效需在面板重选）。
+- **v1 冻结（2026-10-24）**：功能冻结；只做四道发布门槛。最新代码 **762 passed / 1 skipped**；
+  NAS 尚未部署本轮 onboarding/security/recovery UI 更新（等验收日统一）。

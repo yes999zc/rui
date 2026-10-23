@@ -13,6 +13,34 @@
 3. **打断：用户开口后 ≤300 ms 完全静音**（服务端停推 + 设备缓冲耗尽，分开量）。
 4. **公开仓可用**：无私人密钥/路径/内网 IP；README 能让陌生人装起来；MIT。
 
+## 0.1 2026-10-24 v1 freeze snapshot（权威状态，覆盖下方历史段落）
+
+> 功能已冻结。以下四条是唯一的发布门槛；下方 P0–P15 表格是历史记录。
+
+| v1 门槛 | 状态 | 当前证据 / 还缺什么 |
+|---|---|---|
+| 1. NAS 冷装 30 分钟到第一句 | 🟡 | 一键脚本、镜像、setup、模型下载、音箱连接信息面板/`docs/open-xiaoai-client.md` 已就绪；**缺一次真实全新目录冷装计时** |
+| 2. 80% 音量放歌 20 次唤醒 ≥19 | ⬜ | 真机多轮唤醒可用；**缺正式 N/M 记录**（`scripts/acceptance-v1.py wake`） |
+| 3. 打断 ≤300 ms | ⬜ | 服务端停推已实现；设备缓冲 lead 约 420 ms；**缺按口径的正式测量**（`acceptance-v1.py barge`） |
+| 4. 公开仓可用 | ✅ | repo/GHCR public、README 双语+截图、MIT、历史清洗；Buy Me a Coffee 占位 |
+
+**当前工程状态（2026-10-24 01:xx）**：**762 passed / 1 skipped**，ruff clean，web typecheck/build 绿；
+最新提交 `2acabce`（v1 freeze 前）/ `1942439`（onboarding/security/acceptance）。
+已完成：控制面/音频面、真机回合、音乐、HA/MCP、记忆/提醒、控制台 2.0、品牌、Telegram+微信接口、
+M7 托管 gateway、配置恢复（last-good+默认恢复+banner+CLI）、设备连接信息 API/UI、open-xiaoai 文档、
+安全响应头/鉴权日志/用户数据 0600、backup/restore、验收记录器、runbook。
+
+**已知问题**：
+- 冷装/唤醒/打断三条真机门槛未正式过；
+- NAS 尚未部署本轮 onboarding/security/recovery 更新（按 9哥 要求等验收日统一）；
+- NAS Telegram 出网依赖本机 mihomo；节点选择是运行时状态，mihomo 重启后可能需重选可用节点；
+- 音箱 root 密码受 squashfs 只读限制；SSRF allowlist/非 root/CVE 扫描仍在后续；
+- 微信只保留接口（`enabled=false`），未做 NAS 真机验收；
+- 完整 Doctor Fix、Agent 接入、第二台设备不在本轮。
+
+**下一步**：验收日只做四件事——冷装、20 次唤醒、barge、Telegram 文字/语音；全部通过后再部署最新控制面、
+更新文档/Release，然后才恢复功能开发（多设备/Agent/Doctor Fix）。
+
 ## 1. 阶段与门槛
 
 | 阶段 | 内容 | 门槛（实测） | 状态 |
