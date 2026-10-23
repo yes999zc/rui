@@ -25,7 +25,10 @@ dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.5"]
 # (KWS off, everything else runs) when it is absent.
 kws = ["sherpa-onnx>=1.12"]
 # Text/voice channels. Telegram uses httpx only; WeChat media needs AES + SILK.
-channels = ["cryptography>=42", "pilk>=0.2.4"]
+channels = ["cryptography>=42"]
+# WeChat voice notes need the pilk SILK decoder. Kept separate because pilk may build
+# from source and is not needed for Telegram-only or text-only deployments.
+weixin-voice = ["pilk>=0.2.4"]
 
 [project.scripts]
 house-ear = "house_ear.__main__:main"

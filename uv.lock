@@ -289,7 +289,6 @@ dependencies = [
 [package.optional-dependencies]
 channels = [
     { name = "cryptography" },
-    { name = "pilk" },
 ]
 dev = [
     { name = "httpx" },
@@ -298,6 +297,9 @@ dev = [
 ]
 kws = [
     { name = "sherpa-onnx" },
+]
+weixin-voice = [
+    { name = "pilk" },
 ]
 
 [package.metadata]
@@ -308,7 +310,7 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "pilk", marker = "extra == 'channels'", specifier = ">=0.2.4" },
+    { name = "pilk", marker = "extra == 'weixin-voice'", specifier = ">=0.2.4" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pypinyin", specifier = ">=0.55.0" },
@@ -320,7 +322,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.30" },
     { name = "websockets", specifier = ">=13" },
 ]
-provides-extras = ["dev", "kws", "channels"]
+provides-extras = ["dev", "kws", "channels", "weixin-voice"]
 
 [[package]]
 name = "httpcore"
