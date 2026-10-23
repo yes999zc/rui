@@ -15,10 +15,12 @@ class FakeRunner:
         self.busy = False
         self.history: list[dict] = []
         self.runs: list[str] = []
+        self.touch_idle: list[bool] = []
 
     async def run(self, _pcm, speak, _trace: TurnTrace, *, transcript: str = "",
                   **_kwargs):  # noqa: ANN001, ANN003
         self.runs.append(transcript)
+        self.touch_idle.append(bool(_kwargs.get("touch_idle", True)))
         await speak(b"\x00\x00" * 8, segment_start=True)
         self.history.append({"role": "user", "content": transcript})
         self.history.append({"role": "assistant", "content": "你好"})
@@ -45,6 +47,7 @@ def test_chat_runs_a_text_turn_and_returns_audio() -> None:
                         "want_audio": True}).json()
     assert body["reply"] == "你好"
     assert body["session_id"] == "telegram:42"
+    assert c.app.state.runner.touch_idle == [False]  # channel turns never arm the speaker goodbye
     assert body["audio_bytes"] == 16
     assert base64.b64decode(body["audio_b64"]) == b"\x00\x00" * 8
 

@@ -2272,7 +2272,8 @@ def create_app(
             runner.history = history
             trace = TurnTrace(device_id=f"channel:{channel}")
             try:
-                result = await runner.run(b"", collect, trace, transcript=text, audio=want_audio)
+                result = await runner.run(b"", collect, trace, transcript=text,
+                                          audio=want_audio, touch_idle=False)
                 histories[session_id] = runner.history
             finally:
                 runner.history = original

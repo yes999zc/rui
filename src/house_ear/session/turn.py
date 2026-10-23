@@ -591,6 +591,7 @@ class TurnRunner:
         transcript: str | None = None,
         hint: str = "",
         audio: bool = True,
+        touch_idle: bool = True,
     ) -> TurnResult:
         """One turn, with a hard ceiling.
 
@@ -614,8 +615,10 @@ class TurnRunner:
             self._trace = None
             # The end of a turn is activity: the idle countdown must start after the
             # answer, not while it is still playing. A failed or timed-out turn counts
-            # too - the person did speak.
-            self.idle.touch()
+            # too - the person did speak. Channel turns pass touch_idle=False: a
+            # Telegram/WeChat reply must never arm the living-room goodbye.
+            if touch_idle:
+                self.idle.touch()
 
     async def _run(
         self,
