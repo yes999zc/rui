@@ -72,7 +72,7 @@ onMounted(load)
       </div>
       <button type="button" class="btn-icon recovery-chevron" :aria-expanded="showDetails"
               :aria-label="t('recovery.details')" @click="showDetails = !showDetails">
-        <AppIcon :name="showDetails ? 'chevron-up' : 'chevron-down'" :size="16" />
+        <AppIcon :name="'chevronDown'" :size="16" />
       </button>
     </div>
     <div class="recovery-actions">
