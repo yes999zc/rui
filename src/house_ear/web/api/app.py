@@ -686,7 +686,8 @@ def create_app(
                     applied = round((got if got is not None else target) * 100 / 255)
                     # Learn it as the target: the reconciler would otherwise put the
                     # configured value back within 16 s (old build: adopt_device_volume).
-                    dev = next((d for d in cfg.devices if d.id == (ready.id if ready else "")),
+                    dev_id = client.ready.device_id if client.ready else ""
+                    dev = next((d for d in cfg.devices if d.id == dev_id),
                                cfg.devices[0] if cfg.devices else None)
                     if dev is not None and config_path is not None:
                         dev.volume = applied
