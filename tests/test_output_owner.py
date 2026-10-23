@@ -274,7 +274,7 @@ def test_the_song_stays_down_between_the_question_and_the_answer(
             plane._speech_paused = True
             plane._file_cfg = (song, True, 1.0)
             plane._turn_pending = True
-            plane._turn_pending_ts = time.monotonic() - 10.0
+            plane._turn_pending_ts = time.monotonic() - 15.0   # past the 12 s grace
             await asyncio.sleep(0.8)
             assert plane._speech_paused is False, "a dead turn kept the song down forever"
         finally:
