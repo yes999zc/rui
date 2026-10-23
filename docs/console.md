@@ -129,7 +129,7 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 ## 12. 控制台 2.0（2026-10-23，含审计修复）
 
 设计契约全文：**`docs/console-redesign.md`**（方向/信息架构/设计系统/QA 报告）；参数契约：
-**`docs/config-catalog-contract.md`**；审计与修复状态：**`docs/audit-round-1.md`**。
+**`docs/config-catalog-contract.md`**；审计与修复状态：**内部审计（未公开）**。
 
 **一句话**：控制台从「手写设置面板」变成「catalog 驱动的配置中心 + 双语气象仪器界面」。
 

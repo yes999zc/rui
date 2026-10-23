@@ -715,7 +715,7 @@ origin/main 同步。**
 ### 12.17 2026-10-23 15:0x：四角色审计结果 + 审计修复分工
 
 **审计第 1 轮完成**（老项目开发者 / 手持音箱新人 / NAS 运维 / 安全隐私，只读并行；全文
-`docs/audit-round-1.md`，安全角色另跑并入）。**最重的发现：**
+内部审计（未公开），安全角色另跑并入）。**最重的发现：**
 
 - **P0 停止词误杀 HA**：`end_words` 含 关闭/关掉/关机 + `stop_intent` 子串匹配 → 「关掉客厅灯」
   「关闭窗帘」被当散场，灯/帘永远不动（13:22 的 5/5 能过是因为「儿童房的灯」7 字超过 6 字上限）。
@@ -771,7 +771,7 @@ origin/main 同步。**
   （providers/xfyun/ha/adapter/music 走 `secrets.get` + 音频面 `secrets.configure`）；
   HA 危险域扩到 script/scene/automation/shell_command/python_script/hassio；音乐缓存文件名 hash；
   config/backup/secrets/service.log 全部 0600；`.github/workflows/secret-scan.yml` 拦后续泄漏。
-  审计全文 `docs/audit-round-1.md`（含 15 条安全 finding 与修复状态）。
+  审计全文 内部审计（未公开）（含 15 条安全 finding 与修复状态）。
 
 **Lead 独立集成验证（截图存 `docs/console-shots/`）**：17 页全量 headless Chrome，**0 意外 console error、
 0 横向溢出**（1440/390）；zh/en + light/dark 截图；**真实 UI 保存** `assistant.reply_max_chars`
@@ -1028,13 +1028,13 @@ system 附加说明进入模型，**不进** transcript、历史、上限判断�
 4. **控制台 polish**：ConfigCenter 默认隐藏 dotted path（技术详情）、字段行 141→79 px、
    首屏 3→6 行、徽章收敛；导航改名（AI 供应商/语音与音箱/系统与高级）；Logs 默认只看问题
    （httpx INFO 已在后端降 WARNING）；SetupView keys 按链动态渲染（含 VOLC_API_KEY，移除
-   HOUSE_EAR_TTS_KEY）；手机触控 ≥44 px、抽屉 footer sticky。详见 `docs/ux-audit-round-2.md`。
+   HOUSE_EAR_TTS_KEY）；手机触控 ≥44 px、抽屉 footer sticky。详见 内部审计（未公开）。
 5. **通用 MCP 服务**：`tools/mcp_manager.py` 多服务器（http/stdio）并发、独立重连、失败隔离、
    热 apply；工具注册为 `mcp.<server>_<tool>`，结果加不可信数据前缀；`/api/v1/mcp` 返回每
    server 状态；控制台 McpManager 支持增删改/测试。**安全闸** `tools.mcp_allow_stdio`
    默认 false，三处强制（启动/PUT/test），stdio 子进程只拿最小环境（不继承 `.env`）。
-6. **审计**：`docs/audit-round-2.md`（功能，P0×1/P1×8）、`docs/ux-audit-round-2.md`
-   （65 张截图）、`docs/security-audit-round-2.md`（P0×3/P1×6）。已修：`*_env` 字段改只读
+6. **审计**：内部审计（未公开）（功能，P0×1/P1×8）、内部审计（未公开）
+   （65 张截图）、内部审计（未公开）（P0×3/P1×6）。已修：`*_env` 字段改只读
    （防 secret 外带）、`news/search` 工具开关改 restart（诚实）、运行期开音乐补绑
    `on_playback_finished`、httpx 日志降噪、deploy.md 的 SiliconFlow 过时说明、setup 向导
    `provider_usable` 对内置端点（volc/xfyun）不再要求 base_url（此前向导永远缺 key）、

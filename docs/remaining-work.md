@@ -1,7 +1,7 @@
 # 剩余工作清单（2026-10-23 品牌轮之后）
 
-来源：`docs/ROADMAP.md`、`docs/HANDOFF.md`、`docs/audit-round-2.md`、`docs/ux-audit-round-2.md`、
-`docs/security-audit-round-2.md`。按「挡住 v1 验收 → 真机遗留 → 安全/运维 → 体验」排序。
+来源：`docs/ROADMAP.md`、`docs/HANDOFF.md`、内部审计（未公开）、内部审计（未公开）、
+内部审计（未公开）。按「挡住 v1 验收 → 真机遗留 → 安全/运维 → 体验」排序。
 
 ## A. v1 验收门槛（需要 9哥 / 外部条件）
 
