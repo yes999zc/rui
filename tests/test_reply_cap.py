@@ -278,3 +278,14 @@ def test_direct_speech_keeps_its_own_420_char_path(monkeypatch) -> None:
     assert result.reply == script
     assert "".join(tts.texts) == script
     assert runner.history[-1] == {"role": "assistant", "content": script}
+
+
+def test_a_read_aloud_request_gets_the_long_budget() -> None:
+    """16:41: 「帮我朗读岳阳楼记」 missed the expand list and was cut at 120 chars."""
+    from house_ear.config import Config
+    from house_ear.session.turn import reply_cap_for
+
+    for transcript in ("帮我朗读岳阳楼记", "背诵出师表", "念全文", "朗诵一首诗"):
+        cap, source = reply_cap_for(Config().assistant, transcript, [])
+        assert source == "long", transcript
+        assert cap == Config().assistant.reply_max_chars_long

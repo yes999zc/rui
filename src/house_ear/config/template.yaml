@@ -112,6 +112,7 @@ providers:
       api_secret_env: XFYUN_API_SECRET
     volc_tts:
       kind: volc_tts
+      retries: 1                  # one quick retry before falling back to another voice
       model: seed-tts-2.0          # picks the 2.0 voice + billing item
       voice: zh_female_xiaohe_uranus_bigtts   # 小荷 2.0; the console can audition others
       speech_rate: 0               # -50..100: -50 = 0.5x, 0 = normal, 100 = 2x

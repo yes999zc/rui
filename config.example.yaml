@@ -140,6 +140,7 @@ providers:
     # 火山豆包语音合成 2.0（可选；把 tts.chain 里的名字换上来才会用）
     volc_tts:
       kind: volc_tts
+      retries: 1                  # one quick retry before falling back to another voice
       model: seed-tts-2.0
       voice: zh_female_xiaohe_uranus_bigtts
       speech_rate: 0        # -50..100 (-50 = 0.5x, 0 = normal, 100 = 2x)

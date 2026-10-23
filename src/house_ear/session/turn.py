@@ -83,7 +83,10 @@ REPLY_SOFT_ENDINGS = "，,、：:"
 # thing. It also wins over the search budget, because 9哥 asking for a full read-out is
 # a stronger signal than the tool that fetched the material.
 EXPAND_REQUEST = re.compile(
-    r"背|全文|念全文|完整|详细|展开|讲一下|念一遍|读一遍|多说点|系统地"
+    r"背|全文|念全文|完整|详细|展开|讲一下|念一遍|读一遍|多说点|系统地|"
+    # 16:41 measured: 「帮我朗读岳阳楼记」 did not match, so the 466-char text was cut
+    # at the 120-char default and the reading stopped mid-sentence (朝晖夕阴，).
+    r"朗读|朗诵|诵读|背诵|整篇|通篇|从头念|从头读"
 )
 
 # A follow-up whose whole meaning lives in the previous answer. Dropping that answer from
@@ -518,42 +521,52 @@ class TurnRunner:
         attempts: list[dict] = []
         for name, provider in chain:
             spoken = 0
-            try:
-                # aclosing: an early exit mid-sentence must close the HTTP stream, otherwise
-                # the vendor keeps a half-read request open and the next turn queues behind it
-                async with contextlib.aclosing(provider.synthesize(text, "")) as stream:
-                    first = True
-                    async for chunk in stream:
-                        if self._abort.is_set():
-                            self._mark_silence()
-                            return name, spoken, None, ""
-                        if not chunk:
-                            continue
-                        if first:
-                            trace.mark("tts_first")
-                            if not trace.marks.get("play_start"):
-                                trace.mark("play_start")
-                        await speak(chunk, segment_start=first)
-                        first = False
-                        spoken += len(chunk)
-                    # The vendor's chunks are slices of one synthesis, so inside the
-                    # sentence they join seamlessly - no marker, no fade. The sentence end
-                    # is the junction: true silence after it, the old build's shape, so
-                    # the next sentence starts from silence and AEC gets a clean window.
-                    # A clause split is different: the vendor already rendered the comma
-                    # pause, and another 350 ms of silence made mid-sentence speech sound
-                    # stitched together (measured 2026-10-23).
-                    gap_ms = gap_after(text)
-                    if spoken and gap_ms:
-                        await speak(_sentence_gap(self.sample_rate, gap_ms))
-            except Exception as exc:  # noqa: BLE001 - fall through to the next vendor
-                attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
-                log.warning("tts: %s failed: %s", name, exc)
-                if spoken:
-                    return name, spoken, None, ""
-                continue
-            attempts.append({"provider": name, "error": ""})
-            return name, spoken, StageReport("tts", name, attempts, 0.0), ""
+            retries = max(0, int(getattr(provider, "retries", 0) or 0))
+            for attempt in range(retries + 1):
+                spoken = 0
+                try:
+                    # aclosing: an early exit mid-sentence must close the HTTP stream,
+                    # otherwise the vendor keeps a half-read request open and the next
+                    # turn queues behind it
+                    async with contextlib.aclosing(provider.synthesize(text, "")) as stream:
+                        first = True
+                        async for chunk in stream:
+                            if self._abort.is_set():
+                                self._mark_silence()
+                                return name, spoken, None, ""
+                            if not chunk:
+                                continue
+                            if first:
+                                trace.mark("tts_first")
+                                if not trace.marks.get("play_start"):
+                                    trace.mark("play_start")
+                            await speak(chunk, segment_start=first)
+                            first = False
+                            spoken += len(chunk)
+                        # The vendor's chunks are slices of one synthesis, so inside the
+                        # sentence they join seamlessly - no marker, no fade. The sentence
+                        # end is the junction: true silence after it, the old build's shape,
+                        # so the next sentence starts from silence and AEC gets a clean
+                        # window. A clause split is different: the vendor already rendered
+                        # the comma pause, and another 350 ms of silence made mid-sentence
+                        # speech sound stitched together (measured 2026-10-23).
+                        gap_ms = gap_after(text)
+                        if spoken and gap_ms:
+                            await speak(_sentence_gap(self.sample_rate, gap_ms))
+                except Exception as exc:  # noqa: BLE001 - fall through to the next vendor
+                    attempts.append({"provider": name,
+                                     "error": f"{type(exc).__name__}: {exc}"})
+                    # The 16:41 volc failure logged an empty message, which told us
+                    # nothing; always include the type.
+                    log.warning("tts: %s failed (%s): %s",
+                                name, type(exc).__name__, exc)
+                    if spoken:
+                        return name, spoken, None, ""
+                    if attempt < retries:
+                        continue
+                    break
+                attempts.append({"provider": name, "error": ""})
+                return name, spoken, StageReport("tts", name, attempts, 0.0), ""
         return "", 0, None, f"tts failed for every provider: {attempts}"
 
     @property
