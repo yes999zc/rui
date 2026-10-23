@@ -17,6 +17,7 @@ dependencies = [
     "mcp>=2.3.0",
     "pypinyin>=0.55.0",
     "segno>=1.6",
+    "socksio>=1.0",
 ]
 
 [project.optional-dependencies]

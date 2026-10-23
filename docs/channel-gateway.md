@@ -234,8 +234,7 @@ house-ear-channels --weixin-data /data/channels/weixin \
   buttons operate that child.
 - **NAS `.168` currently enables Telegram only** (`telegram.enabled=true`,
   `weixin.enabled=false`). WeChat adapter, APIs and QR UI remain available for later.
-- NAS has no direct Telegram egress; the gateway child inherits `HTTPS_PROXY`/`HTTP_PROXY`
-  pointing at a small LAN CONNECT proxy on the Mac (`192.168.5.27:7899`). If the Mac sleeps,
-  Telegram stops — move the proxy to the NAS/router or give the NAS a VPN before relying
-  on this permanently.
+- NAS has no direct Telegram egress; it has a local `mihomo` proxy. The gateway child uses
+  `ALL_PROXY=socks5://127.0.0.1:7890` (SOCKS; `socksio` is in the image), so Telegram stays
+  independent of the Mac. If mihomo stops, the supervisor logs an error and retries.
 - Gateway status is exposed in `GET /api/v1/channels` and the Channels page.
