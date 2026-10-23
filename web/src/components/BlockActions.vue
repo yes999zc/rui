@@ -3,44 +3,61 @@ import { ref } from 'vue'
 import type { PanelBlock } from '../panels'
 import { enabledWhen } from '../panels'
 import { api, ApiError } from '../api'
+import { localizeBackend } from '../i18n'
+import AppIcon from './AppIcon.vue'
 
 const props = defineProps<{ block: PanelBlock; data: unknown; refresh: () => void }>()
 const busy = ref('')
 const error = ref('')
 
-async function run(button: NonNullable<PanelBlock['buttons']>[number]) {
+const ICONS: Record<string, string> = {
+  prev: 'skipBack',
+  pause: 'pause',
+  resume: 'play',
+  next: 'skipForward',
+  play: 'play',
+  stop: 'stop',
+  stopAudio: 'stop',
+  mute: 'volume',
+}
+
+function run(button: NonNullable<PanelBlock['buttons']>[number]) {
   if (busy.value) return
-  if (button.confirm && !window.confirm(button.confirm)) return
+  if (button.confirm && !window.confirm(localizeBackend(button.confirm))) return
   busy.value = button.id
   error.value = ''
-  try {
-    await api.action(button.method, button.href, button.body ?? {})
-    if (button.refresh) props.refresh()
-  } catch (exc) {
-    // The backend's own words: a 409 says why, a 502 says the library is down.
-    error.value = exc instanceof ApiError ? exc.message : String(exc)
-  } finally {
-    busy.value = ''
-  }
+  void (async () => {
+    try {
+      await api.action(button.method, button.href, button.body ?? {})
+      if (button.refresh) props.refresh()
+    } catch (exc) {
+      // The backend's own words: a 409 says why, a 502 says the library is down.
+      error.value = exc instanceof ApiError ? exc.message : String(exc)
+    } finally {
+      busy.value = ''
+    }
+  })()
 }
 </script>
 
 <template>
-  <div class="card">
-    <h2 v-if="block.title">{{ block.title }}</h2>
+  <section class="block">
+    <div v-if="block.title" class="block-head">
+      <h2>{{ localizeBackend(block.title) }}</h2>
+    </div>
     <div class="actions">
       <button
-        v-for="b in block.buttons" :key="b.id"
-        :class="{ danger: b.danger }"
+        v-for="b in block.buttons"
+        :key="b.id"
+        class="btn"
+        :class="{ 'btn-danger': b.danger }"
         :disabled="busy !== '' || !enabledWhen(b.enabled_when, data)"
         @click="run(b)"
-      >{{ busy === b.id ? '…' : b.label }}</button>
+      >
+        <AppIcon v-if="ICONS[b.id]" :name="ICONS[b.id]" :size="14" />
+        {{ busy === b.id ? '…' : localizeBackend(b.label) }}
+      </button>
     </div>
-    <div v-if="error" class="note fail">{{ error }}</div>
-  </div>
+    <p v-if="error" class="note fail" role="alert">{{ error }}</p>
+  </section>
 </template>
-
-<style scoped>
-.actions { display: flex; flex-wrap: wrap; gap: 8px; }
-button.danger { color: var(--fail); border-color: #f3c6c6; }
-</style>

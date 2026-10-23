@@ -1,73 +1,76 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { api, ApiError, type Config, type SecretPutResult } from '../api'
+import AppIcon from '../components/AppIcon.vue'
+import { api, ApiError, type CatalogDoc, type Config, type SecretPutResult } from '../api'
+import { formatClock, t, type MsgKey } from '../i18n'
 
 /**
- * The key names the console offers.
+ * The secrets page (docs/config-catalog-contract.md §1).
  *
- * Hard-coded on purpose: a secret is only useful to something that reads that exact variable,
- * so this list is the set of names the backend already looks up. Anything else would be a
- * name stored and never read.
+ * Names come from the catalog's `secrets` table (plus anything already on disk),
+ * so a production install shows HOUSE_EAR_* keys and a dev install shows the
+ * provider variables — no hard-coded name list. Values are write-only: the page
+ * can only ever learn `has_value`, and the input is wiped on success.
  */
+interface Kind {
+  labelKey: MsgKey
+  hintKey: MsgKey
+}
+
+const KINDS: { re: RegExp; kind: Kind; order: number }[] = [
+  { re: /XFYUN_APPID|XFYUN_API_SECRET/i, order: 30, kind: { labelKey: 'secrets.kind.tts.label', hintKey: 'secrets.kind.tts.hint' } },
+  { re: /XFYUN|TTS/i, order: 30, kind: { labelKey: 'secrets.kind.tts.label', hintKey: 'secrets.kind.tts.hint' } },
+  { re: /ASR|SILICON/i, order: 20, kind: { labelKey: 'secrets.kind.asr.label', hintKey: 'secrets.kind.asr.hint' } },
+  { re: /LLM|DEEPSEEK|OPENAI|ANTHROPIC|MODEL/i, order: 10, kind: { labelKey: 'secrets.kind.llm.label', hintKey: 'secrets.kind.llm.hint' } },
+  { re: /HASS|HOME|HA_/i, order: 40, kind: { labelKey: 'secrets.kind.ha.label', hintKey: 'secrets.kind.ha.hint' } },
+  { re: /DEVICE|SPEAKER/i, order: 50, kind: { labelKey: 'secrets.kind.device.label', hintKey: 'secrets.kind.device.hint' } },
+  { re: /AUTH|CONSOLE/i, order: 60, kind: { labelKey: 'secrets.kind.auth.label', hintKey: 'secrets.kind.auth.hint' } },
+]
+
+const GENERIC: Kind = { labelKey: 'secrets.kind.generic.label', hintKey: 'secrets.kind.generic.hint' }
+
+function kindOf(name: string): Kind & { order: number } {
+  for (const entry of KINDS) {
+    if (entry.re.test(name)) return { ...entry.kind, order: entry.order }
+  }
+  return { ...GENERIC, order: 90 }
+}
+
 interface Slot {
   name: string
   label: string
-  /** What reads it. */
-  used: string
   hint: string
 }
 
-const slots: Slot[] = [
-  {
-    name: 'DEEPSEEK_API_KEY',
-    label: '搜索 / LLM',
-    used: 'tools.search，以及 DeepSeek 供应商',
-    hint: '联网搜索和 DeepSeek 模型共用。填了它，搜索工具才算真的能跑。',
-  },
-  {
-    name: 'SILICONFLOW_API_KEY',
-    label: '语音合成备用',
-    used: 'TTS 备用链（SiliconFlow）',
-    hint: '主 TTS 挂了的时候顶上去。不用主 TTS 就可以先空着。',
-  },
-  {
-    name: 'XFYUN_API_KEY',
-    label: '讯飞 TTS',
-    used: 'TTS 链里的讯飞',
-    hint: '讯飞语音合成。它的 appid / secret 如果分开配，仍然走环境变量，这里只存这一把。',
-  },
-]
-
 type Phase = 'idle' | 'saving' | 'saved' | 'cleared' | 'error'
 
-/**
- * Per-name input state. `value` is the only place a typed key lives: it is never copied into
- * a store, storage, or a log, and it is wiped the moment the server confirms it.
- */
 interface Row {
   value: string
   phase: Phase
   at: string
-  /** The backend's own words when a write failed. */
   detail: string
   confirmClear: boolean
 }
 
-const rows = reactive<Record<string, Row>>(
-  Object.fromEntries(
-    slots.map((s) => [s.name, { value: '', phase: 'idle' as Phase, at: '', detail: '', confirmClear: false }]),
-  ),
-)
-
-const cfg = ref<Config | null>(null)
-/** name → has_key, straight from `/api/v1/config`. The server decides, not the client. */
+const rows = reactive<Record<string, Row>>({})
+const names = ref<string[]>([])
 const hasKey = reactive<Record<string, boolean>>({})
-/** name → who reads it, derived from the same config. */
 const consumers = reactive<Record<string, string[]>>({})
+const catalogDoc = ref<CatalogDoc | null>(null)
 const loading = ref(true)
 const loadError = ref('')
 
-const configuredCount = computed(() => slots.filter((s) => hasKey[s.name]).length)
+const slots = computed<Slot[]>(() =>
+  [...names.value]
+    .sort((a, b) => kindOf(a).order - kindOf(b).order || a.localeCompare(b))
+    .map((name) => ({ name, label: t(kindOf(name).labelKey), hint: t(kindOf(name).hintKey) })),
+)
+
+const configuredCount = computed(() => names.value.filter((name) => hasKey[name]).length)
+
+function ensureRow(name: string) {
+  if (!rows[name]) rows[name] = { value: '', phase: 'idle', at: '', detail: '', confirmClear: false }
+}
 
 function note(mapping: Record<string, string[]>, env: string | undefined, who: string) {
   if (!env) return
@@ -75,71 +78,82 @@ function note(mapping: Record<string, string[]>, env: string | undefined, who: s
   if (!list.includes(who)) list.push(who)
 }
 
-function absorbConfig(next: Config) {
-  cfg.value = next
-  for (const key of Object.keys(hasKey)) delete hasKey[key]
+function absorbConfig(config: Config) {
   for (const key of Object.keys(consumers)) delete consumers[key]
-
-  const catalog = next.providers?.catalog ?? {}
-  const search = next.tools?.search
-
-  // has_key is authoritative: the server computes it from the environment *and* secrets.yaml.
+  const catalog = config.providers?.catalog ?? {}
   for (const [provider, block] of Object.entries(catalog)) {
-    const env = block?.api_key_env
-    if (!env) continue
-    note(consumers, env, provider)
-    hasKey[env] = hasKey[env] || Boolean(block.has_key)
+    note(consumers, block?.api_key_env, provider)
+    note(consumers, (block as { api_secret_env?: string })?.api_secret_env, provider)
+    note(consumers, (block as { app_id_env?: string })?.app_id_env, provider)
   }
-  const env = search?.api_key_env
-  if (env) {
-    note(consumers, env, 'tools.search')
-    hasKey[env] = hasKey[env] || Boolean(search?.has_key)
+  const search = config.tools?.search
+  note(consumers, search?.api_key_env, 'tools.search')
+  note(consumers, config.tools?.ha?.token_env, 'tools.ha')
+  for (const device of config.devices ?? []) {
+    note(consumers, device.token_env, `device:${device.id}`)
   }
 }
 
-/** Names on disk cover keys no provider block mentions (and env-only keys are already covered). */
-function absorbNames(names: string[]) {
-  for (const name of names) hasKey[name] = true
+function absorbCatalog(catalog: CatalogDoc, diskNames: string[]) {
+  catalogDoc.value = catalog
+  const set = new Set<string>([...Object.keys(catalog.secrets ?? {}), ...diskNames])
+  names.value = [...set]
+  for (const name of names.value) {
+    ensureRow(name)
+    hasKey[name] = Boolean(catalog.secrets?.[name]?.has_value) || diskNames.includes(name)
+  }
 }
 
 async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const [next, secretNames] = await Promise.all([api.config(), api.secrets()])
-    absorbConfig(next)
-    absorbNames(secretNames.names)
-  } catch (e) {
-    loadError.value = e instanceof Error ? e.message : String(e)
+    const [catalog, config, disk] = await Promise.all([api.catalog(), api.config(), api.secrets()])
+    absorbConfig(config)
+    absorbCatalog(catalog, disk.names ?? [])
+  } catch (exc) {
+    loadError.value = exc instanceof Error ? exc.message : String(exc)
   } finally {
     loading.value = false
   }
 }
 
-function clock(): string {
-  return new Date().toLocaleTimeString('zh-CN', { hour12: false })
-}
-
-function detailOf(e: unknown): string {
-  if (e instanceof ApiError) {
-    const raw = e.detail
-    if (typeof raw === 'string' && raw) return raw
-    if (Array.isArray(raw)) return e.message
-    if (raw != null) return JSON.stringify(raw)
-    return `${e.status} ${e.statusText}`
+/** Re-read has_value after a write without disturbing typed input in other rows. */
+async function refreshStatus(name?: string) {
+  try {
+    const catalog = await api.catalog()
+    catalogDoc.value = catalog
+    const table = catalog.secrets ?? {}
+    for (const key of Object.keys(table)) {
+      if (!(key in hasKey)) ensureRow(key)
+      hasKey[key] = Boolean(table[key]?.has_value)
+    }
+    if (name && name in table) hasKey[name] = Boolean(table[name]?.has_value)
+  } catch {
+    /* The write already succeeded; a stale badge is better than a scary error. */
   }
-  return e instanceof Error ? e.message : String(e)
 }
 
-function hintOf(e: unknown): string {
-  if (!(e instanceof ApiError)) return '请求没到服务端：检查控制面是否在跑，或 token 是否过期。'
-  if (e.status === 400) return '服务端拒了这个名字：必须像环境变量（大写字母、数字、下划线）。'
-  if (e.status === 401) return 'token 无效或已过期。'
+function detailOf(exc: unknown): string {
+  if (exc instanceof ApiError) {
+    const raw = exc.detail
+    if (typeof raw === 'string' && raw) return raw
+    if (Array.isArray(raw)) return exc.message
+    if (raw != null) return JSON.stringify(raw)
+    return `${exc.status} ${exc.statusText}`
+  }
+  return exc instanceof Error ? exc.message : String(exc)
+}
+
+function hintOf(exc: unknown): string {
+  if (!(exc instanceof ApiError)) return t('secrets.error.network')
+  if (exc.status === 400) return t('secrets.error.badName')
+  if (exc.status === 401) return t('secrets.error.unauthorized')
   return ''
 }
 
-function applyResult(name: string, res: SecretPutResult) {
-  hasKey[name] = res.has_key
+function applyResult(name: string, result: SecretPutResult) {
+  hasKey[name] = result.has_key
 }
 
 async function save(slot: Slot) {
@@ -151,14 +165,15 @@ async function save(slot: Slot) {
   row.detail = ''
   try {
     applyResult(slot.name, await api.putSecret(slot.name, value))
-    // The key is on the server now; nothing on this page needs to remember what it was.
+    // The key is on the server now; nothing on this page needs to remember it.
     row.value = ''
     row.phase = hasKey[slot.name] ? 'saved' : 'error'
-    row.at = clock()
-    if (row.phase === 'error') row.detail = '服务端没有确认这个值（写入后 has_key 仍为 false）。'
-  } catch (e) {
+    row.at = formatClock()
+    if (row.phase === 'error') row.detail = t('secrets.failed')
+    await refreshStatus(slot.name)
+  } catch (exc) {
     row.phase = 'error'
-    row.detail = [detailOf(e), hintOf(e)].filter(Boolean).join('\n')
+    row.detail = [detailOf(exc), hintOf(exc)].filter(Boolean).join('\n')
     row.at = ''
   }
 }
@@ -173,10 +188,11 @@ async function clearSecret(slot: Slot) {
     applyResult(slot.name, await api.putSecret(slot.name, ''))
     row.value = ''
     row.phase = 'cleared'
-    row.at = clock()
-  } catch (e) {
+    row.at = formatClock()
+    await refreshStatus(slot.name)
+  } catch (exc) {
     row.phase = 'error'
-    row.detail = [detailOf(e), hintOf(e)].filter(Boolean).join('\n')
+    row.detail = [detailOf(exc), hintOf(exc)].filter(Boolean).join('\n')
     row.at = ''
   }
 }
@@ -192,10 +208,10 @@ function onEdit(name: string) {
 }
 
 function pillText(row: Row): string {
-  if (row.phase === 'saving') return '保存中…'
-  if (row.phase === 'saved') return `已保存${row.at ? ' · ' + row.at : ''}`
-  if (row.phase === 'cleared') return `已清除${row.at ? ' · ' + row.at : ''}`
-  if (row.phase === 'error') return '失败'
+  if (row.phase === 'saving') return t('secrets.saving')
+  if (row.phase === 'saved') return t('secrets.savedAt', { time: row.at })
+  if (row.phase === 'cleared') return t('secrets.clearedAt', { time: row.at })
+  if (row.phase === 'error') return t('secrets.failed')
   return ''
 }
 
@@ -203,198 +219,194 @@ onMounted(load)
 </script>
 
 <template>
-  <h1>密钥</h1>
-  <p class="sub">
-    在这里填 key，服务端落到 <code>secrets.yaml</code>（0600）。写入后立即生效，不用重启。
-    <strong>只写不读</strong>：没有任何接口能把值读回来，页面只能知道「已配置 / 未配置」。
-  </p>
+  <header class="page-head">
+    <div>
+      <div class="kicker">{{ t('secrets.kicker') }}</div>
+      <h1>{{ t('secrets.title') }}</h1>
+      <p class="lede">{{ t('secrets.lede') }}</p>
+    </div>
+    <div v-if="!loading && !loadError" class="page-head-side">
+      <span class="badge badge-ok">
+        {{ t('secrets.configuredCount', { configured: configuredCount, total: names.length }) }}
+      </span>
+    </div>
+  </header>
 
-  <p v-if="loading" class="empty">读取配置…</p>
+  <p v-if="loading" class="empty">{{ t('common.loading') }}</p>
 
-  <div v-if="loadError" class="card">
-    <h2 class="fail">读不到配置</h2>
-    <p class="fail">{{ loadError }}</p>
-    <p class="note">控制面没起来，或 <code>X-Auth-Token</code> 不对。读不到状态就不让人写——不然「已配置」会是猜的。</p>
-    <button style="margin-top: 12px" @click="load">重试</button>
+  <div v-if="loadError" class="banner banner-fail" role="alert">
+    <AppIcon name="alert" :size="18" class="banner-icon" />
+    <div>
+      <strong>{{ t('secrets.loadFailTitle') }}</strong>
+      <p class="note">{{ t('secrets.loadFailHint') }}</p>
+      <p class="note mono">{{ loadError }}</p>
+      <button type="button" class="btn btn-sm" style="margin-top: 10px" @click="load">{{ t('secrets.retry') }}</button>
+    </div>
   </div>
 
-  <template v-if="cfg && !loading">
-    <div class="card">
-      <h2>
-        环境变量
-        <span class="tag">{{ configuredCount }} / {{ slots.length }} 已配置</span>
-      </h2>
+  <template v-if="!loading && !loadError">
+    <section class="block">
+      <div class="block-head">
+        <h2>{{ t('secrets.envVars') }}</h2>
+        <span class="meta">{{ t('secrets.writeHint') }}</span>
+      </div>
 
-      <div v-for="s in slots" :key="s.name" class="slot">
-        <div class="head">
-          <div>
-            <code class="name">{{ s.name }}</code>
-            <span class="tag">{{ s.label }}</span>
-            <span class="state" :class="hasKey[s.name] ? 'ok' : 'warn'">
-              {{ hasKey[s.name] ? '已配置' : '未配置' }}
-            </span>
-          </div>
-          <div class="who">
-            读它的是：{{ consumers[s.name]?.join('、') || '——' }}
-          </div>
+      <p v-if="!slots.length" class="empty">{{ t('secrets.empty') }}</p>
+
+      <div v-for="slot in slots" :key="slot.name" class="secret-row">
+        <div class="secret-head">
+          <code class="secret-name mono">{{ slot.name }}</code>
+          <span class="badge">{{ slot.label }}</span>
+          <span class="badge" :class="hasKey[slot.name] ? 'badge-ok' : 'badge-warn'">
+            {{ hasKey[slot.name] ? t('secrets.configured') : t('secrets.missing') }}
+          </span>
+          <span class="secret-consumer">
+            {{ t('secrets.usedBy', { names: consumers[slot.name]?.join(', ') || t('secrets.nobody') }) }}
+          </span>
         </div>
-
-        <p class="note">
-          {{ s.hint }} <span v-if="consumers[s.name]?.length">（{{ s.used }}）</span>
+        <p class="field-hint">
+          {{ slot.hint }}
+          <span v-if="!catalogDoc?.secrets?.[slot.name]"> · {{ t('secrets.kind.generic.hint') }}</span>
         </p>
 
-        <div class="entry">
+        <div class="secret-entry">
+          <label class="sr-only" :for="'key-' + slot.name">{{ slot.name }}</label>
           <input
-            :id="'k-' + s.name"
-            v-model="rows[s.name].value"
-            @input="onEdit(s.name)"
-            @keyup.enter="save(s)"
+            :id="'key-' + slot.name"
+            v-model="rows[slot.name].value"
             type="password"
             autocomplete="new-password"
             spellcheck="false"
-            placeholder="粘贴新 key（不会回显，也不会预填）"
-            :disabled="rows[s.name].phase === 'saving'"
-            :aria-label="s.name"
+            :placeholder="t('secrets.placeholder')"
+            :disabled="rows[slot.name].phase === 'saving'"
+            @input="onEdit(slot.name)"
+            @keyup.enter="save(slot)"
           />
-          <button
-            class="primary"
-            :disabled="rows[s.name].phase === 'saving' || !rows[s.name].value.trim()"
-            @click="save(s)"
-          >
-            {{ rows[s.name].phase === 'saving' ? '保存中…' : '保存' }}
+          <button type="button" class="btn btn-primary" :disabled="rows[slot.name].phase === 'saving' || !rows[slot.name].value.trim()" @click="save(slot)">
+            {{ rows[slot.name].phase === 'saving' ? t('secrets.saving') : t('secrets.save') }}
           </button>
 
-          <template v-if="!rows[s.name].confirmClear">
-            <button
-              :disabled="rows[s.name].phase === 'saving' || !hasKey[s.name]"
-              @click="rows[s.name].confirmClear = true"
-            >
-              清除
+          <template v-if="!rows[slot.name].confirmClear">
+            <button type="button" class="btn" :disabled="rows[slot.name].phase === 'saving' || !hasKey[slot.name]" @click="rows[slot.name].confirmClear = true">
+              {{ t('secrets.clear') }}
             </button>
           </template>
           <template v-else>
-            <span class="confirm">清除这个 key？</span>
-            <button class="danger" :disabled="rows[s.name].phase === 'saving'" @click="clearSecret(s)">
-              确认清除
+            <span class="secret-confirm">{{ t('secrets.confirmClear') }}</span>
+            <button type="button" class="btn btn-danger" :disabled="rows[slot.name].phase === 'saving'" @click="clearSecret(slot)">
+              {{ t('secrets.confirmYes') }}
             </button>
-            <button @click="rows[s.name].confirmClear = false">取消</button>
+            <button type="button" class="btn btn-ghost" @click="rows[slot.name].confirmClear = false">
+              {{ t('common.cancel') }}
+            </button>
           </template>
 
-          <span v-if="pillText(rows[s.name])" class="pill" :class="rows[s.name].phase">
-            {{ pillText(rows[s.name]) }}
+          <span
+            v-if="pillText(rows[slot.name])"
+            class="badge"
+            :class="rows[slot.name].phase === 'error' ? 'badge-fail' : rows[slot.name].phase === 'saved' ? 'badge-ok' : 'badge-warn'"
+          >
+            {{ pillText(rows[slot.name]) }}
           </span>
         </div>
 
-        <p v-if="rows[s.name].phase === 'error'" class="detail fail">{{ rows[s.name].detail }}</p>
-        <p v-if="rows[s.name].phase === 'cleared' && hasKey[s.name]" class="note warn-text">
-          文件里的值已删掉，但环境变量里还有同名的 key（环境优先），所以仍显示「已配置」。
+        <p v-if="rows[slot.name].phase === 'error'" class="note fail" role="alert">{{ rows[slot.name].detail }}</p>
+        <p v-if="rows[slot.name].phase === 'cleared' && hasKey[slot.name]" class="note warn">
+          {{ t('secrets.clearedEnv') }}
         </p>
       </div>
-    </div>
+    </section>
 
-    <div class="card">
-      <h2>几条规矩</h2>
+    <section class="block">
+      <div class="block-head">
+        <h2>{{ t('secrets.rulesTitle') }}</h2>
+      </div>
       <ul class="rules">
-        <li>值只往上传一次，服务端不回读，页面也不留：保存成功后输入框立刻清空，状态里只剩「已配置」。</li>
-        <li>分辨率顺序是<strong>环境变量 → <code>secrets.yaml</code></strong>。容器里注入了同名变量，页面上的清除不会覆盖它。</li>
-        <li>保存后下一回合就生效——provider 和搜索工具每次调用都现读 key，不需要重启音频面。</li>
-        <li>不在这个列表里的名字不接受：存了也没人读，只会让「已配置」变成假话。</li>
+        <li>{{ t('secrets.rule.writeOnly') }}</li>
+        <li>{{ t('secrets.rule.envFirst') }}</li>
+        <li>{{ t('secrets.rule.immediate') }}</li>
+        <li>{{ t('secrets.rule.allowlist') }}</li>
       </ul>
-    </div>
+    </section>
   </template>
 </template>
 
 <style scoped>
-.slot {
-  padding: 16px 0;
-  border-bottom: 1px solid #f2f3f6;
+.secret-row {
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
 }
-.slot:last-child {
-  border-bottom: 0;
-  padding-bottom: 4px;
+
+.secret-row:first-of-type {
+  border-top: 1px solid var(--line-strong);
 }
-.head {
+
+.secret-head {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  gap: var(--s2);
   flex-wrap: wrap;
 }
-.name {
+
+.secret-name {
   font-size: 12.5px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
-.state {
-  font-size: 12px;
-  font-weight: 550;
-}
-.who {
+
+.secret-consumer {
+  margin-left: auto;
   font-size: 11.5px;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
-.entry {
+
+.secret-entry {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--s2);
   flex-wrap: wrap;
-  margin-top: 10px;
+  margin-top: var(--s3);
 }
-.entry input {
-  max-width: 320px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+.secret-entry input {
+  flex: 1;
+  min-width: 220px;
+  max-width: 420px;
+  font-family: var(--font-mono);
   font-size: 12.5px;
 }
-.confirm {
+
+.secret-confirm {
   font-size: 12px;
   color: var(--warn);
 }
-button.danger {
-  color: var(--fail);
-  border-color: #f2cfcf;
-}
-.pill {
-  font-size: 12px;
-  padding: 2px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-}
-.pill.saving {
-  color: var(--muted);
-  background: #f6f7f9;
-}
-.pill.saved {
-  color: var(--ok);
-  border-color: #cde8d6;
-  background: #f2fbf5;
-}
-.pill.cleared {
-  color: var(--warn);
-  border-color: #f0e0c4;
-  background: #fdf9f1;
-}
-.pill.error {
-  color: var(--fail);
-  border-color: #f2cfcf;
-  background: #fdf4f4;
-}
-.detail {
-  font-size: 12px;
-  margin: 8px 0 0;
-  white-space: pre-wrap;
-}
-.warn-text {
-  color: var(--warn);
-}
+
 .rules {
-  margin: 0;
+  margin: var(--s2) 0 0;
   padding-left: 18px;
+  color: var(--ink-2);
   font-size: 13px;
-  color: var(--muted);
 }
+
 .rules li {
   margin-bottom: 6px;
 }
-.rules li:last-child {
-  margin-bottom: 0;
+
+@media (max-width: 720px) {
+  .secret-consumer {
+    margin-left: 0;
+    flex: 1 1 100%;
+  }
+
+  .secret-entry input {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .secret-entry .btn {
+    flex: 1;
+  }
 }
 </style>

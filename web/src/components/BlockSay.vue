@@ -1,14 +1,17 @@
 <script setup lang="ts">
 /**
- * 试一试: type one turn and send it down the same runner, tools, TTS and playback
- * path as speech (POST /api/v1/debug/say). The cheapest way to test a turn
- * without a microphone, a wake word or standing next to the speaker.
+ * Try a sentence: type one turn and send it down the same runner, tools, TTS and playback
+ * path as speech (POST /api/v1/debug/say). The cheapest way to test a turn without
+ * a microphone, a wake word or standing next to the speaker.
  *
- * Declared by a PanelSpec `say` block, so any panel can grow this box.
+ * This is the overview's primary action, so it is the one block that gets a
+ * raised surface and a real focus ring (docs/console-redesign.md §5.1).
  */
 import { ref } from 'vue'
 import type { PanelBlock } from '../panels'
 import { api, ApiError } from '../api'
+import { localizeBackend, t } from '../i18n'
+import AppIcon from './AppIcon.vue'
 
 const props = defineProps<{ block: PanelBlock; data: unknown }>()
 
@@ -25,7 +28,7 @@ async function send() {
   reply.value = ''
   try {
     const result = await api.say(ask)
-    reply.value = result.reply || '(空回复)'
+    reply.value = result.reply || '—'
     if (result.error) error.value = result.error
   } catch (exc) {
     // A 409 here means the speaker is mid-turn; the backend's sentence is the answer.
@@ -37,33 +40,101 @@ async function send() {
 </script>
 
 <template>
-  <div class="card">
-    <h2>{{ block.title || '试一试' }}</h2>
+  <section class="block say-surface">
+    <div class="block-head">
+      <div>
+        <div class="kicker">{{ t('block.tryKicker') }}</div>
+        <h2 class="say-title">{{ localizeBackend(block.title) || t('block.try') }}</h2>
+      </div>
+    </div>
     <div class="say-bar">
+      <label class="sr-only" for="say-input">{{ t('block.send') }}</label>
       <input
+        id="say-input"
         v-model="text"
-        :placeholder="block.placeholder || '现在几点？'"
+        :placeholder="localizeBackend(block.placeholder) || t('block.tryPlaceholder')"
         :disabled="busy"
-        aria-label="试一试的文本"
         @keyup.enter="send"
       />
-      <button :disabled="busy || !text.trim()" @click="send">{{ busy ? '…' : '说一句' }}</button>
+      <button type="button" class="btn btn-primary" :disabled="busy || !text.trim()" @click="send">
+        <AppIcon name="arrowRight" :size="15" />
+        {{ busy ? t('block.sending') : t('block.send') }}
+      </button>
     </div>
-    <div v-if="error" class="note fail">{{ error }}</div>
-    <div v-if="reply" class="say-reply">{{ reply }}</div>
-    <p v-if="block.hint" class="sub">{{ block.hint }}</p>
-  </div>
+    <p v-if="error" class="note fail" role="alert">{{ error }}</p>
+    <blockquote v-if="reply" class="say-reply">
+      <AppIcon name="quote" :size="14" class="say-quote" />
+      <span>{{ reply }}</span>
+    </blockquote>
+    <p v-if="block.hint" class="field-hint say-hint">{{ localizeBackend(block.hint) }}</p>
+  </section>
 </template>
 
 <style scoped>
-.say-bar { display: flex; gap: 8px; }
-.say-bar input {
-  font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line);
-  border-radius: 8px; flex: 1;
+.say-surface {
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  padding: var(--s5);
 }
-.say-bar button { white-space: nowrap; }
+
+.say-title {
+  font-size: 22px;
+  margin-top: 2px;
+}
+
+.say-bar {
+  display: flex;
+  gap: var(--s2);
+}
+
+.say-bar input {
+  flex: 1;
+  min-width: 0;
+  min-height: 42px;
+  font-size: 14px;
+}
+
+.say-bar .btn {
+  min-height: 42px;
+  padding-inline: 16px;
+}
+
 .say-reply {
-  margin-top: 10px; padding: 10px 12px; background: #f7f8fa; border: 1px solid var(--line);
-  border-radius: 8px; font-size: 13px; white-space: pre-wrap;
+  display: flex;
+  gap: var(--s2);
+  margin: var(--s4) 0 0;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.say-quote {
+  flex: none;
+  margin-top: 3px;
+  color: var(--accent);
+}
+
+.say-hint {
+  margin-top: var(--s3);
+}
+
+@media (max-width: 720px) {
+  .say-surface {
+    padding: var(--s4);
+  }
+
+  .say-bar {
+    flex-direction: column;
+  }
+
+  .say-bar .btn {
+    width: 100%;
+  }
 }
 </style>

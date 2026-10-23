@@ -2,12 +2,12 @@
 /**
  * The service log, tailed and filtered (docs/console.md P3).
  *
- * Follows the bottom only while the reader is already there: scrolling up to
- * read an error must not be yanked back by the next poll (the old build's
- * atBottom rule, app.js:400-404).
+ * Follows the bottom only while the reader is already there: scrolling up to read
+ * an error must not be yanked back by the next poll (the old build's atBottom rule).
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import type { PanelBlock } from '../panels'
+import { localizeBackend, t } from '../i18n'
 
 const props = defineProps<{ block: PanelBlock; data: unknown }>()
 
@@ -54,45 +54,67 @@ function onScroll() {
 </script>
 
 <template>
-  <div class="card">
-    <h2>
-      日志
-      <span v-if="!block.follow" class="tag">不跟随</span>
-    </h2>
-    <div class="bar">
+  <section class="block">
+    <div class="block-head">
+      <h2>
+        {{ localizeBackend(block.title) || t('block.log') }}
+        <span v-if="!block.follow" class="badge">{{ t('block.logNoFollow') }}</span>
+      </h2>
+      <span class="meta">{{ t('block.lines', { n: lines.length }) }}</span>
+    </div>
+    <div class="log-bar">
       <input
         v-if="block.filter !== false"
         v-model="filter"
-        class="filter"
-        placeholder="过滤（比如 vendor / turn / error）"
-        aria-label="过滤日志"
+        class="log-filter"
+        type="search"
+        :placeholder="t('block.filterPlaceholder')"
+        :aria-label="t('block.filterAria')"
       />
-      <label class="check">
+      <label class="log-check">
         <input v-model="follow" type="checkbox" />
-        跟随最新
+        {{ t('block.follow') }}
       </label>
-      <label v-if="block.hide" class="check">
+      <label v-if="block.hide" class="log-check">
         <input v-model="hideNoise" type="checkbox" />
-        {{ block.hide_label || '隐藏噪声' }}<template v-if="hiddenCount">（{{ hiddenCount }} 行）</template>
+        {{ localizeBackend(block.hide_label) || t('block.hideNoise') }}<template v-if="hiddenCount">（{{ hiddenCount }}）</template>
       </label>
-      <span class="count">{{ lines.length }} 行</span>
     </div>
-    <pre ref="box" class="log" @scroll="onScroll">{{ lines.join('\n') }}</pre>
-  </div>
+    <pre ref="box" class="terminal" @scroll="onScroll">{{ lines.join('\n') }}</pre>
+  </section>
 </template>
 
 <style scoped>
-.bar { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
-.filter {
-  font: inherit; font-size: 12px; padding: 5px 9px; border: 1px solid var(--line);
-  border-radius: 8px; flex: 1; min-width: 160px; max-width: 320px;
+.log-bar {
+  display: flex;
+  gap: var(--s3);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
 }
-.check { font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
-.count { font-size: 11px; color: var(--muted); margin-left: auto; }
-.log {
-  margin: 0; max-height: 62vh; overflow: auto; background: #f7f8fa;
-  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
-  font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
-  white-space: pre-wrap; word-break: break-all; color: #24262b;
+
+.log-filter {
+  flex: 1;
+  min-width: 160px;
+  max-width: 340px;
+  min-height: 32px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.log-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.log-check input {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  padding: 0;
 }
 </style>

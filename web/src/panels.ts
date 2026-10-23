@@ -80,6 +80,8 @@ export interface PanelColumn {
 export interface PanelSpec {
   id: string
   title: string
+  /** English title (contract, docs/config-catalog-contract.md); falls back to `title`. */
+  title_en?: string
   icon?: string
   group: string
   order: number
@@ -91,6 +93,8 @@ export interface PanelSpec {
   blocks: PanelBlock[]
   /** Escape hatch: a hand-written component id replaces the blocks (panelComponents.ts). */
   component?: string
+  /** Props handed to the escape-hatch component (e.g. `groups` for config-center). */
+  component_args?: Record<string, unknown>
 }
 
 export interface PanelsDoc {
@@ -111,7 +115,7 @@ export function lookup(expr: unknown, data: unknown): unknown {
 }
 
 /**
- * A label that mixes literals and lookups: `"$.room · $.id"` -> `客厅 · living`.
+ * A label that mixes literals and lookups: `"$.room · $.id"` -> `living room · living`.
  * The spec examples in docs/console.md use this form for list subtitles, so the
  * renderer has to evaluate every `$.path` in the string, not just a bare path.
  */
@@ -145,9 +149,24 @@ export function enabledWhen(expr: string | undefined, data: unknown): boolean {
   return String(lookup(eq[0], data) ?? '') === eq[1]
 }
 
-export const GROUP_TITLES: Record<string, string> = {
-  status: '状态',
-  living: '生活',
-  config: '配置',
-  system: '系统',
+/**
+ * The four navigation groups (docs/console-redesign.md §3). Panel groups come
+ * from the backend; legacy names map onto the new ones so an older control plane
+ * still lands in the right place. Unknown groups are appended, never dropped.
+ */
+export const GROUP_ORDER = ['run', 'life', 'config', 'maintain'] as const
+
+const LEGACY_GROUPS: Record<string, string> = {
+  status: 'run',
+  living: 'life',
+  system: 'maintain',
+  config: 'config',
+  run: 'run',
+  life: 'life',
+  maintain: 'maintain',
+}
+
+export function navGroup(group: string | undefined): string {
+  if (!group) return 'run'
+  return LEGACY_GROUPS[group] ?? group
 }

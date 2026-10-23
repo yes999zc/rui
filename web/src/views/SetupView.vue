@@ -3,13 +3,16 @@
  * The install wizard (C-UI P4).
  *
  * This is the page a stranger sees after `install.sh`: keys, models, the speaker,
- * the wake word, one spoken try. Everything here calls a real endpoint - the
+ * the wake word, one spoken try. Everything here calls a real endpoint — the
  * checklist is computed by the server from keys/files, never from a cookie saying
  * "welcome". It is a hand-written view on purpose: the panels render data, this
  * renders a sequence, which is exactly what the PanelSpec escape hatch is for.
  */
 import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
+import AppIcon from '../components/AppIcon.vue'
 import { api, ApiError, type SetupState } from '../api'
+import { localizeBackend, t, type MsgKey } from '../i18n'
 
 const state = ref<SetupState | null>(null)
 const error = ref('')
@@ -20,13 +23,26 @@ const optionalKeys = ref({ XFYUN_APPID: '', XFYUN_API_KEY: '', XFYUN_API_SECRET:
 const showOptional = ref(false)
 
 const host = ref('')
-const room = ref('客厅')
+const room = ref('')
 const wakeWord = ref('你好小瑞')
 const probe = ref<{ usable: boolean; hint: string; ssh: { port_open: boolean; banner: boolean; ms?: number; error?: string } } | null>(null)
 
-const sayText = ref('现在几点？')
+const sayText = ref('')
 const said = ref('')
 const sayError = ref('')
+
+const STEP_TITLES: Record<string, MsgKey> = {
+  keys: 'setup.step.keys',
+  models: 'setup.step.models',
+  device: 'setup.step.device',
+  wake: 'setup.step.wake',
+  verify: 'setup.step.verify',
+}
+
+function stepTitle(id: string): string {
+  const key = STEP_TITLES[id]
+  return key ? t(key) : localizeBackend(id)
+}
 
 async function load() {
   try {
@@ -96,15 +112,13 @@ async function tryOne() {
   sayError.value = ''
   try {
     const result = await api.say(sayText.value.trim())
-    said.value = result.reply || '(空回复)'
+    said.value = result.reply || '—'
     if (result.error) sayError.value = result.error
     await load()
   } catch (exc) {
     const message = exc instanceof ApiError ? exc.message : String(exc)
-    // The backend's own sentence is right; say what to do about it in Chinese.
-    sayError.value = message.includes('no audio plane')
-      ? '音频面没连上：先确认音箱已在「添加音箱」里保存、服务是 healthy，再看日志。'
-      : message
+    // The backend's own sentence is right; say what to do about it in the user's language.
+    sayError.value = message.includes('no audio plane') ? t('setup.error.audioPlane') : message
   } finally {
     busy.value = ''
   }
@@ -112,10 +126,6 @@ async function tryOne() {
 
 function done(id: string): boolean {
   return state.value?.steps.find((step) => step.id === id)?.done ?? false
-}
-
-function stepTitle(id: string): string {
-  return state.value?.steps.find((step) => step.id === id)?.title ?? id
 }
 
 /** The keys step's per-stage detail: what is missing, in the room's language. */
@@ -129,146 +139,350 @@ const anyKeyInput = computed(() =>
   [...Object.values(keys.value), ...Object.values(optionalKeys.value)].some((value) => value.trim()),
 )
 
+const audioState = computed(() =>
+  state.value?.audio_plane ? t('setup.audioOnline') : t('setup.audioOffline'),
+)
+
 onMounted(load)
 </script>
 
 <template>
-  <h1>安装向导</h1>
-  <p class="sub">
-    一次装完就能对话：填 key、下载模型、加音箱、定唤醒词、说一句。每一步都是真调用，面板上的状态来自服务器上的文件。
-  </p>
-  <div v-if="error" class="card"><p class="fail">{{ error }}</p></div>
+  <header class="page-head">
+    <div>
+      <div class="kicker">{{ t('setup.kicker') }}</div>
+      <h1>{{ t('setup.title') }}</h1>
+      <p class="lede">{{ t('setup.lede') }}</p>
+    </div>
+    <div v-if="state" class="page-head-side">
+      <span class="badge" :class="state.complete ? 'badge-ok' : 'badge-warn'">
+        {{ state.complete ? t('setup.allDone') : t('setup.next', { step: stepTitle(state.next_step) }) }}
+      </span>
+    </div>
+  </header>
 
-  <div v-if="state" class="card">
-    <h2>进度 <span class="sub" style="margin: 0">{{ state.next_step === 'done' ? '全部完成' : '下一步：' + stepTitle(state.next_step) }}</span></h2>
-    <template v-for="step in state.steps" :key="step.id">
-      <div class="row">
-        <span :class="step.done ? 'ok' : 'warn'" style="width: 24px">{{ step.done ? '✓' : '○' }}</span>
-        <span class="v">{{ step.title }}</span>
-        <span class="k" style="width: auto">
-          <template v-if="step.id === 'device' && state.device">{{ state.device.host }} · {{ state.device.room }}</template>
-          <template v-else-if="step.id === 'wake' && state.keywords_exists">{{ state.device?.wake_words.join(' / ') }}</template>
-          <template v-else-if="step.id === 'models' && !step.done">缺：{{ Object.entries(step.detail).filter(([, v]) => !v).map(([k]) => k).join(', ') }}</template>
-          <template v-else-if="step.id === 'keys' && !step.done">缺 key</template>
-        </span>
-      </div>
-      <!-- Long env lists must not be a single unwrappable line: on a phone that
-           widened the page and clipped the card (P4 review). -->
-      <div v-if="step.id === 'keys' && !step.done" class="missing">
-        <div v-for="(names, stage) in missingByStage" :key="stage" class="missing-line">
-          <span class="missing-stage">{{ stage }}</span>
-          <span class="fail">{{ names.join(' / ') }}</span>
+  <div v-if="error" class="banner banner-fail" role="alert">
+    <AppIcon name="alert" :size="18" class="banner-icon" />
+    <span>{{ error }}</span>
+  </div>
+
+  <div v-if="!state && !error" class="setup-loading" role="status">
+    <div class="skeleton skeleton-line" style="width: 60%" />
+    <div class="skeleton skeleton-line" style="width: 42%" />
+    <p class="note">{{ t('common.loading') }}</p>
+  </div>
+
+  <template v-if="state">
+    <section class="setup-section">
+      <div class="setup-index">00</div>
+      <div class="setup-body">
+        <h2>{{ t('setup.progress') }}</h2>
+        <div class="progress-list">
+          <div v-for="step in state.steps" :key="step.id" class="progress-row">
+            <span class="progress-mark" :class="step.done ? 'ok' : 'warn'">
+              <AppIcon :name="step.done ? 'check' : 'dot'" :size="14" />
+            </span>
+            <span class="progress-title">{{ stepTitle(step.id) }}</span>
+            <span class="progress-detail mono">
+              <template v-if="step.id === 'device' && state.device">{{ state.device.host }} · {{ state.device.room }}</template>
+              <template v-else-if="step.id === 'wake' && state.keywords_exists">{{ state.device?.wake_words.join(' / ') }}</template>
+              <template v-else-if="step.id === 'models' && !step.done">
+                {{ t('setup.missing', { items: Object.entries(step.detail).filter(([, value]) => !value).map(([key]) => key).join(', ') }) }}
+              </template>
+              <template v-else-if="step.id === 'keys' && !step.done">{{ t('setup.missingKeys') }}</template>
+            </span>
+          </div>
+        </div>
+        <div v-if="Object.keys(missingByStage).length" class="missing-list">
+          <div v-for="(names, stage) in missingByStage" :key="stage" class="missing-line">
+            <span class="missing-stage mono">{{ stage }}</span>
+            <span class="fail">{{ names.join(' / ') }}</span>
+          </div>
         </div>
       </div>
-    </template>
-  </div>
+    </section>
 
-  <div class="card">
-    <h2>1 · 三个 key（只写不读）</h2>
-    <div class="field"><label>LLM（DeepSeek）</label>
-      <input v-model="keys.HOUSE_EAR_LLM_KEY" type="password" placeholder="sk-…" autocomplete="off" /></div>
-    <div class="field"><label>ASR 备用（SiliconFlow）</label>
-      <input v-model="keys.HOUSE_EAR_ASR_KEY" type="password" placeholder="sk-…" autocomplete="off" /></div>
-    <div class="field"><label>TTS 备用（SiliconFlow）</label>
-      <input v-model="keys.HOUSE_EAR_TTS_KEY" type="password" placeholder="sk-…" autocomplete="off" /></div>
-    <button class="link" @click="showOptional = !showOptional">
-      {{ showOptional ? '收起' : '讯飞语音（可选，主用 TTS）' }}
-    </button>
-    <template v-if="showOptional">
-      <div class="field"><label>XFYUN_APPID</label><input v-model="optionalKeys.XFYUN_APPID" autocomplete="off" /></div>
-      <div class="field"><label>XFYUN_API_KEY</label><input v-model="optionalKeys.XFYUN_API_KEY" type="password" autocomplete="off" /></div>
-      <div class="field"><label>XFYUN_API_SECRET</label><input v-model="optionalKeys.XFYUN_API_SECRET" type="password" autocomplete="off" /></div>
-    </template>
-    <div v-if="Object.keys(missingByStage).length" class="keys-missing">
-      <div v-for="(names, stage) in missingByStage" :key="stage" class="row">
-        <span class="k" style="width: 80px">{{ stage }}</span>
-        <span class="v fail">{{ names.join(' / ') }}</span>
+    <section class="setup-section">
+      <div class="setup-index">01</div>
+      <div class="setup-body">
+        <h2>{{ t('setup.keys.title') }}</h2>
+        <p class="field-hint">{{ t('setup.keys.lede') }}</p>
+        <div class="setup-fields">
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-llm">{{ t('setup.keys.llm') }}</label></div>
+            <div class="field-control">
+              <input id="setup-llm" v-model="keys.HOUSE_EAR_LLM_KEY" type="password" placeholder="sk-…" autocomplete="off" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-asr">{{ t('setup.keys.asr') }}</label></div>
+            <div class="field-control">
+              <input id="setup-asr" v-model="keys.HOUSE_EAR_ASR_KEY" type="password" placeholder="sk-…" autocomplete="off" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-tts">{{ t('setup.keys.tts') }}</label></div>
+            <div class="field-control">
+              <input id="setup-tts" v-model="keys.HOUSE_EAR_TTS_KEY" type="password" placeholder="sk-…" autocomplete="off" />
+            </div>
+          </div>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" @click="showOptional = !showOptional">
+          {{ showOptional ? t('common.close') : t('setup.keys.optionalToggle') }}
+        </button>
+        <div v-if="showOptional" class="setup-fields">
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-xf-appid">XFYUN_APPID</label></div>
+            <div class="field-control"><input id="setup-xf-appid" v-model="optionalKeys.XFYUN_APPID" autocomplete="off" /></div>
+          </div>
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-xf-key">XFYUN_API_KEY</label></div>
+            <div class="field-control"><input id="setup-xf-key" v-model="optionalKeys.XFYUN_API_KEY" type="password" autocomplete="off" /></div>
+          </div>
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-xf-secret">XFYUN_API_SECRET</label></div>
+            <div class="field-control"><input id="setup-xf-secret" v-model="optionalKeys.XFYUN_API_SECRET" type="password" autocomplete="off" /></div>
+          </div>
+        </div>
+        <div class="actions" style="margin-top: var(--s3)">
+          <button type="button" class="btn btn-primary" :disabled="busy !== '' || !anyKeyInput" @click="saveKeys">
+            {{ busy === 'keys' ? t('common.saving') : t('setup.keys.save') }}
+          </button>
+        </div>
+        <p class="field-hint" style="margin-top: var(--s3)">{{ t('setup.keys.writeOnly') }}</p>
       </div>
-      <p class="note">每一行只要填一个就够（同一 stage 的 provider 是互备关系）。</p>
+    </section>
+
+    <section class="setup-section">
+      <div class="setup-index">02</div>
+      <div class="setup-body">
+        <h2>{{ t('setup.models.title') }}</h2>
+        <p v-if="done('models')" class="ok">{{ t('setup.models.ready') }}</p>
+        <template v-else>
+          <p class="field-hint">{{ t('setup.models.need') }}</p>
+          <pre class="cmd">{{ state.models_command || 'house-ear fetch-models' }}</pre>
+          <button type="button" class="btn" :disabled="busy !== ''" @click="load">{{ t('setup.models.refresh') }}</button>
+        </template>
+      </div>
+    </section>
+
+    <section class="setup-section">
+      <div class="setup-index">03</div>
+      <div class="setup-body">
+        <h2>{{ t('setup.device.title') }}</h2>
+        <div class="setup-fields">
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-host">{{ t('setup.device.host') }}</label></div>
+            <div class="field-control">
+              <input id="setup-host" v-model="host" :placeholder="t('setup.device.hostPlaceholder')" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-room">{{ t('setup.device.room') }}</label></div>
+            <div class="field-control">
+              <input id="setup-room" v-model="room" :placeholder="t('setup.device.roomPlaceholder')" />
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field-meta"><label class="field-label" for="setup-wake">{{ t('setup.device.wake') }}</label></div>
+            <div class="field-control">
+              <input id="setup-wake" v-model="wakeWord" maxlength="12" :placeholder="t('setup.device.wakePlaceholder')" />
+            </div>
+          </div>
+        </div>
+        <div class="actions" style="margin-top: var(--s3)">
+          <button type="button" class="btn" :disabled="busy !== '' || !host.trim()" @click="probeHost">
+            {{ busy === 'probe' ? t('setup.device.probing') : t('setup.device.probe') }}
+          </button>
+          <button type="button" class="btn btn-primary" :disabled="busy !== '' || !host.trim()" @click="saveDevice">
+            {{ busy === 'device' ? t('setup.device.saving') : t('setup.device.save') }}
+          </button>
+          <button type="button" class="btn" :disabled="busy !== '' || !state.device" @click="saveWake">
+            {{ t('setup.device.wakeOnly') }}
+          </button>
+        </div>
+        <p v-if="probe" :class="probe.usable ? 'ok' : 'fail'" class="field-hint">
+          {{ probe.usable ? t('setup.device.reachable', { ms: probe.ssh.ms ?? '?' }) : probe.hint }}
+        </p>
+        <p class="field-hint" style="margin-top: var(--s3)">
+          {{ t('setup.device.note', { file: state.keywords_file || t('setup.device.keywordsFile'), state: audioState }) }}
+        </p>
+      </div>
+    </section>
+
+    <section class="setup-section">
+      <div class="setup-index">04</div>
+      <div class="setup-body">
+        <h2>{{ t('setup.try.title') }}</h2>
+        <div class="say-bar">
+          <input v-model="sayText" :placeholder="t('setup.try.placeholder')" :disabled="busy !== ''" @keyup.enter="tryOne" />
+          <button type="button" class="btn btn-primary" :disabled="busy !== '' || !sayText.trim()" @click="tryOne">
+            {{ busy === 'say' ? t('block.sending') : t('setup.try.send') }}
+          </button>
+        </div>
+        <blockquote v-if="said" class="say-reply">{{ said }}</blockquote>
+        <p v-if="sayError" class="note fail" role="alert">{{ sayError }}</p>
+        <p class="field-hint" style="margin-top: var(--s3)">{{ t('setup.try.note') }}</p>
+      </div>
+    </section>
+
+    <div v-if="state.complete" class="banner banner-ok setup-done">
+      <AppIcon name="check" :size="18" class="banner-icon" />
+      <div>
+        <strong>{{ t('setup.done.title') }}</strong>
+        <p>
+          {{ t('setup.done.text', { wake: state.device?.wake_words[0] || t('setup.device.wakePlaceholder') }) }}
+          <RouterLink to="/panel/overview" class="setup-done-link">{{ t('setup.done.open') }}</RouterLink>
+        </p>
+      </div>
     </div>
-    <button :disabled="busy !== '' || !anyKeyInput" @click="saveKeys">{{ busy === 'keys' ? '…' : '保存 key' }}</button>
-    <p class="note">
-      值写进 data 卷的 secrets.yaml（0600），config.yaml 里只有变量名；任何页面都读不回来。
-      这里只判断「key 存在」，真正能不能用看第 4 步「试一句」。
-    </p>
-  </div>
-
-  <div class="card">
-    <h2>2 · 本地模型 {{ done('models') ? '（已就绪）' : '' }}</h2>
-    <p v-if="done('models')" class="ok">ASR / VAD / 唤醒模型都在。</p>
-    <template v-else>
-      <p class="sub" style="margin-bottom: 8px">在 NAS 上跑一次（约 272 MB，只下一次）：</p>
-      <pre class="cmd">docker compose exec house-ear {{ state?.models_command || 'house-ear fetch-models' }}</pre>
-      <button :disabled="busy !== ''" @click="load">跑完了，刷新</button>
-    </template>
-  </div>
-
-  <div class="card">
-    <h2>3 · 添加音箱</h2>
-    <div class="field"><label>音箱地址</label>
-      <input v-model="host" placeholder="<LAN-IP> 或 speaker.local" /></div>
-    <div class="field"><label>房间</label><input v-model="room" placeholder="客厅" /></div>
-    <div class="field"><label>唤醒词</label>
-      <input v-model="wakeWord" maxlength="12" placeholder="你好小瑞" /></div>
-    <div class="actions">
-      <button :disabled="busy !== '' || !host.trim()" @click="probeHost">{{ busy === 'probe' ? '探测中…' : '探测' }}</button>
-      <button class="primary" :disabled="busy !== '' || !host.trim()" @click="saveDevice">{{ busy === 'device' ? '保存中…' : '保存音箱' }}</button>
-      <button :disabled="busy !== '' || !state?.device" @click="saveWake">{{ busy === 'wake' ? '…' : '只改唤醒词' }}</button>
-    </div>
-    <p v-if="probe" :class="probe.usable ? 'ok' : 'fail'">
-      {{ probe.usable
-        ? `可达：SSH banner 正常（${probe.ssh.ms ?? '?'} ms）`
-        : probe.hint }}
-    </p>
-    <p class="note">
-      保存后服务会重启音频面并重新生成 keywords.txt（{{ state?.keywords_file || 'config 同目录' }}），
-      音频面状态：<span :class="state?.audio_plane ? 'ok' : 'warn'">{{ state?.audio_plane ? '在线' : '离线（看日志）' }}</span>
-    </p>
-  </div>
-
-  <div class="card">
-    <h2>4 · 试一句</h2>
-    <div class="say-bar">
-      <input v-model="sayText" placeholder="现在几点？" :disabled="busy !== ''" @keyup.enter="tryOne" />
-      <button :disabled="busy !== '' || !sayText.trim()" @click="tryOne">{{ busy === 'say' ? '…' : '说一句' }}</button>
-    </div>
-    <div v-if="said" class="said">{{ said }}</div>
-    <div v-if="sayError" class="note fail">{{ sayError }}</div>
-    <p class="note">这句话走的是真实的 ASR 之后全链路：同一套工具、TTS 和播放。音箱应该真的出声。</p>
-  </div>
-
-  <div v-if="state?.next_step === 'done'" class="card">
-    <h2>装好了</h2>
-    <p>打开 <RouterLink to="/panel/overview">概览</RouterLink>，或者直接对音箱说「{{ state.device?.wake_words[0] || '你好小瑞' }}」。</p>
-  </div>
+  </template>
 </template>
 
 <style scoped>
-.field { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
-.field label { width: 200px; color: var(--muted); font-size: 13px; flex: none; }
-.field input {
-  font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line);
-  border-radius: 8px; flex: 1; max-width: 420px;
+.setup-loading {
+  padding: var(--s5) 0;
 }
-button.link {
-  background: none; border: 0; color: var(--muted); font-size: 12px; padding: 2px 0;
-  text-align: left; cursor: pointer; text-decoration: underline;
+
+.setup-section {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: var(--s3);
+  padding: var(--s6) 0;
+  border-top: 1px solid var(--line);
 }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
-.cmd {
-  background: #f7f8fa; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; margin: 0 0 10px;
+
+.setup-index {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  padding-top: 6px;
 }
-.say-bar { display: flex; gap: 8px; }
+
+.setup-body {
+  min-width: 0;
+}
+
+.setup-body h2 {
+  font-size: 21px;
+}
+
+.setup-fields {
+  margin-top: var(--s3);
+}
+
+.progress-list {
+  margin-top: var(--s3);
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.progress-row:first-child {
+  border-top: 0;
+}
+
+.progress-mark {
+  display: inline-flex;
+  width: 20px;
+  flex: none;
+}
+
+.progress-title {
+  font-size: 13.5px;
+  font-weight: 550;
+  flex: none;
+  min-width: 96px;
+}
+
+.progress-detail {
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: right;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.missing-list {
+  margin-top: var(--s2);
+  padding: var(--s2) var(--s3);
+  background: var(--fail-soft);
+  border-radius: var(--r-sm);
+}
+
+.missing-line {
+  display: flex;
+  gap: var(--s2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  padding: 1px 0;
+}
+
+.missing-stage {
+  color: var(--muted);
+  flex: none;
+  width: 40px;
+  text-transform: uppercase;
+  font-size: 10.5px;
+}
+
+.say-bar {
+  display: flex;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
 .say-bar input {
-  font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line);
-  border-radius: 8px; flex: 1;
+  flex: 1;
+  min-width: 0;
 }
-.missing { padding: 0 0 8px 36px; }
-.missing-line { font-size: 12px; overflow-wrap: anywhere; padding: 1px 0; }
-.missing-stage { color: var(--muted); display: inline-block; width: 40px; }
-.said {
-  margin-top: 10px; padding: 10px 12px; background: #f7f8fa; border: 1px solid var(--line);
-  border-radius: 8px; font-size: 13px; white-space: pre-wrap;
+
+.say-reply {
+  margin: var(--s3) 0 0;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  font-size: 13.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.setup-done {
+  margin-top: var(--s5);
+}
+
+.setup-done-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  margin-left: 4px;
+}
+
+@media (max-width: 720px) {
+  .setup-section {
+    grid-template-columns: 28px minmax(0, 1fr);
+    padding: var(--s5) 0;
+  }
+
+  .progress-row {
+    flex-wrap: wrap;
+  }
+
+  .progress-detail {
+    text-align: left;
+    flex: 1 1 100%;
+    padding-left: 28px;
+  }
+
+  .say-bar {
+    flex-direction: column;
+  }
 }
 </style>

@@ -103,6 +103,7 @@ export interface DoctorReport {
 export interface Device {
   id: string
   adapter: string
+  token_env?: string
   model: string
   room: string
   host: string
@@ -285,6 +286,7 @@ export interface Config {
     whitelist: string[]
     mcp_servers: { name: string; transport: string; url: string }[]
     search?: SearchConfig
+    ha?: { base_url?: string; token_env?: string; has_token?: boolean }
   }
 }
 
@@ -378,6 +380,78 @@ export interface McpProbe {
   error: string
 }
 
+/* — config catalog (docs/config-catalog-contract.md) ————————————————————— */
+
+/** Catalog copy is bilingual on the wire: `{zh, en}` (or a plain string). */
+export interface LocalizedText {
+  zh?: string
+  en?: string
+}
+
+export type CatalogKind = 'text' | 'textarea' | 'number' | 'bool' | 'select' | 'list' | 'secret'
+export type CatalogEffect = 'save' | 'restart'
+
+export interface CatalogTier {
+  id: number | string
+  title: LocalizedText | string
+  hint?: LocalizedText | string
+}
+
+export interface CatalogGroup {
+  id: string
+  title: LocalizedText | string
+  tier: number
+  order: number
+  effect?: CatalogEffect
+  hint?: LocalizedText | string
+}
+
+export interface CatalogOption {
+  value: string | number
+  label?: LocalizedText | string
+}
+
+export interface CatalogField {
+  path: string
+  group: string
+  tier: number
+  kind: CatalogKind
+  label: LocalizedText | string
+  /** What changing this achieves / when to use it — never a restatement of the name. */
+  hint?: LocalizedText | string
+  effect: CatalogEffect
+  unit?: LocalizedText | string | null
+  min?: number | null
+  max?: number | null
+  /** Options may be plain strings, numbers (bit depth) or `{value,label}` objects. */
+  options?: (string | number | CatalogOption)[] | null
+  advanced?: boolean
+  writable?: boolean
+  /** True means an empty value is allowed (sent as null). */
+  nullable?: boolean
+}
+
+export interface CatalogDoc {
+  tiers: CatalogTier[]
+  groups: CatalogGroup[]
+  fields: CatalogField[]
+  /** Dotted path → current value. Secrets never appear here. */
+  values: Record<string, unknown>
+  /** Secret slots the catalog knows about; `has_value` is the only fact exposed. */
+  secrets?: Record<string, { has_value: boolean }>
+  restart_command?: string
+  writable_root?: string[]
+}
+
+export interface SaveValuesResult {
+  config?: unknown
+  applied?: string[]
+  restart_required?: boolean
+  restart_fields?: string[]
+  /** Non-fatal notes from the server (e.g. automatic path updates). */
+  warnings?: string[]
+}
+
 export const api = {
   health: () =>
     request<{
@@ -418,7 +492,7 @@ export const api = {
   traces: () => request<{ limit: number; turns: unknown[] }>('/api/v1/traces'),
   /** The gate the wake model really uses, parsed from the keywords file. */
   threshold: () => request<KeywordMeta>('/api/v1/voice/threshold'),
-  /** Run one text turn as if it had been spoken (the console's 试一试). */
+  /** Run one text turn as if it had been spoken (the console's try-it box). */
   say: (text: string) =>
     request<{ reply: string; error: string; tools: unknown[]; stages: Record<string, unknown>; audio_bytes: number }>(
       '/api/v1/debug/say',
@@ -469,4 +543,19 @@ export const api = {
     }>('/api/v1/setup/probe', { method: 'POST', body: JSON.stringify({ host }) }),
   setDeviceVolume: (value: number) =>
     request<{ volume: number }>('/api/v1/device/volume', { method: 'PUT', body: JSON.stringify({ value }) }),
+
+  /* — config catalog (console-api, docs/config-catalog-contract.md) ————— */
+
+  /** The UI's field directory: tiers, groups, fields, current values, restart rules. */
+  catalog: () => request<CatalogDoc>('/api/v1/config/catalog'),
+  /** Write dotted-path values. 422s carry the offending path in `detail[].loc`. */
+  saveConfigValues: (values: Record<string, unknown>) =>
+    request<SaveValuesResult>('/api/v1/config/values', {
+      method: 'PUT', body: JSON.stringify({ values }),
+    }),
+  /** Restart only the audio plane — for audio.* fields marked `restart`. */
+  restartAudio: () =>
+    request<{ restarted: boolean; error: string }>('/api/v1/system/audio/restart', {
+      method: 'POST', body: JSON.stringify({}),
+    }),
 }

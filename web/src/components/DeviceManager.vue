@@ -3,12 +3,14 @@
  * P5: device administration (the wizard's "add a speaker" plus the day-after edits).
  *
  * Editing or deleting here writes config.yaml and restarts the audio plane (the
- * plane reads the device list once at startup). Fields the form does not show -
- * the LED colours, the volume target - are preserved by the backend, so a room
+ * plane reads the device list once at startup). Fields the form does not show —
+ * the LED colours, the volume target — are preserved by the backend, so a room
  * rename cannot wipe the ring configuration.
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import AppIcon from './AppIcon.vue'
 import { api, ApiError, type DeviceDetail } from '../api'
+import { t } from '../i18n'
 
 const devices = ref<{ id: string; adapter: string; room: string; host: string; status: string }[]>([])
 const selected = ref<DeviceDetail | null>(null)
@@ -21,7 +23,20 @@ const draft = ref({
   host: '', room: '', wake_words: '', volume: 0, listen_port: '', enabled: true,
 })
 const adding = ref(false)
-const newDevice = ref({ id: 'living', host: '', room: '', wake_words: '你好小瑞' })
+const newDevice = ref({ host: '', room: '', wake_words: '你好小瑞' })
+
+const liveText = computed(() => {
+  const live = selected.value?.live
+  if (!live) return t('devices.noAdapter')
+  const parts = [live.status ? statusLabel(live.status) : t('devices.noAdapter'), live.model, live.transport]
+  return parts.filter(Boolean).join(' · ')
+})
+
+function statusLabel(status: string): string {
+  if (status === 'ready') return t('backend.online')
+  if (status === 'unavailable') return t('backend.offline')
+  return status
+}
 
 async function load() {
   try {
@@ -30,7 +45,7 @@ async function load() {
     if (selected.value) {
       await select(selected.value.device.id)
     } else if (devices.value.length) {
-      await select(devices.value[0].id)     // one device is the common case
+      await select(devices.value[0].id) // one device is the common case
     }
     error.value = ''
   } catch (exc) {
@@ -81,7 +96,7 @@ async function save() {
     if (draft.value.listen_port.trim()) patch.listen_port = Number(draft.value.listen_port)
     selected.value = await api.updateDevice(selected.value.device.id, patch)
     await load()
-    notice.value = '已保存；音频面已按新配置重启（看门狗会在失败时继续重试）'
+    notice.value = t('devices.saved')
   } catch (exc) {
     error.value = exc instanceof ApiError ? exc.message : String(exc)
   } finally {
@@ -89,20 +104,22 @@ async function save() {
   }
 }
 
-async function remove() {
+function remove() {
   if (!selected.value) return
-  if (!window.confirm(`删除设备 ${selected.value.device.id}？音频面会停止，直到再加一台音箱。`)) return
+  if (!window.confirm(t('devices.confirmDelete', { id: selected.value.device.id }))) return
   busy.value = 'delete'
-  try {
-    await api.deleteDevice(selected.value.device.id)
-    selected.value = null
-    await load()
-    notice.value = '已删除'
-  } catch (exc) {
-    error.value = exc instanceof ApiError ? exc.message : String(exc)
-  } finally {
-    busy.value = ''
-  }
+  void (async () => {
+    try {
+      await api.deleteDevice(selected.value!.device.id)
+      selected.value = null
+      await load()
+      notice.value = t('devices.deleted')
+    } catch (exc) {
+      error.value = exc instanceof ApiError ? exc.message : String(exc)
+    } finally {
+      busy.value = ''
+    }
+  })()
 }
 
 async function runProbe() {
@@ -127,9 +144,9 @@ async function add() {
       wake_words: words(newDevice.value.wake_words),
     })
     adding.value = false
-    newDevice.value = { id: 'living', host: '', room: '', wake_words: '你好小瑞' }
+    newDevice.value = { host: '', room: '', wake_words: '你好小瑞' }
     await load()
-    notice.value = '设备已添加'
+    notice.value = t('devices.added')
   } catch (exc) {
     error.value = exc instanceof ApiError ? exc.message : String(exc)
   } finally {
@@ -141,75 +158,204 @@ onMounted(load)
 </script>
 
 <template>
-  <p class="sub">
-    这里改的是 config.yaml 里的 devices[]。保存/删除/添加都会重启音频面（它只在启动时读设备表），
-    没在表单里出现的字段（灯环配色、音量目标）会保留。
-  </p>
+  <p class="lede mgr-intro">{{ t('devices.lede') }}</p>
 
-  <div class="card">
-    <h2>设备 <button class="right" :disabled="busy !== ''" @click="adding = !adding">
-      {{ adding ? '收起' : '添加音箱' }}</button></h2>
-    <div v-if="!devices.length" class="empty">还没有音箱。点「添加音箱」开始。</div>
-    <div v-for="device in devices" :key="device.id" class="row clickable"
-         :class="{ active: selected?.device.id === device.id }" @click="select(device.id)">
-      <span class="v">{{ device.id }}</span>
-      <span class="k" style="width: auto">{{ device.room }} · {{ device.host }} · {{ device.status }}</span>
+  <section class="block">
+    <div class="block-head">
+      <h2>{{ t('devices.list') }}</h2>
+      <button type="button" class="btn btn-sm" :disabled="busy !== ''" @click="adding = !adding">
+        <AppIcon :name="adding ? 'close' : 'plus'" :size="13" />
+        {{ adding ? t('devices.addCollapse') : t('devices.add') }}
+      </button>
     </div>
-    <template v-if="adding">
-      <div class="field"><label>地址</label><input v-model="newDevice.host" placeholder="<LAN-IP>" /></div>
-      <div class="field"><label>房间</label><input v-model="newDevice.room" placeholder="客厅" /></div>
-      <div class="field"><label>唤醒词</label><input v-model="newDevice.wake_words" placeholder="你好小瑞" /></div>
-      <div class="actions">
-        <button class="primary" :disabled="busy !== '' || !newDevice.host.trim()" @click="add">
-          {{ busy === 'add' ? '…' : '保存并重启音频面' }}</button>
+
+    <div v-if="!devices.length" class="empty">{{ t('devices.empty') }}</div>
+    <div
+      v-for="device in devices"
+      :key="device.id"
+      class="device-row"
+      :class="{ active: selected?.device.id === device.id }"
+      role="button"
+      tabindex="0"
+      :aria-pressed="selected?.device.id === device.id"
+      @click="select(device.id)"
+      @keydown.enter.prevent="select(device.id)"
+      @keydown.space.prevent="select(device.id)"
+    >
+      <span class="device-id mono">{{ device.id }}</span>
+      <span class="device-room">{{ device.room }}</span>
+      <span class="device-meta mono">{{ device.host }} · {{ device.adapter }} · {{ statusLabel(device.status) }}</span>
+      <AppIcon name="arrowRight" :size="14" class="device-arrow" />
+    </div>
+
+    <div v-if="adding" class="surface add-device">
+      <div class="field-row">
+        <div class="field-meta"><label class="field-label" for="add-host">{{ t('devices.host') }}</label></div>
+        <div class="field-control"><input id="add-host" v-model="newDevice.host" placeholder="<LAN-IP>" /></div>
       </div>
-    </template>
-  </div>
+      <div class="field-row">
+        <div class="field-meta"><label class="field-label" for="add-room">{{ t('devices.room') }}</label></div>
+        <div class="field-control"><input id="add-room" v-model="newDevice.room" :placeholder="t('setup.device.roomPlaceholder')" /></div>
+      </div>
+      <div class="field-row">
+        <div class="field-meta"><label class="field-label" for="add-wake">{{ t('devices.wakeWords') }}</label></div>
+        <div class="field-control"><input id="add-wake" v-model="newDevice.wake_words" :placeholder="t('setup.device.wakePlaceholder')" /></div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn btn-primary" :disabled="busy !== '' || !newDevice.host.trim()" @click="add">
+          {{ busy === 'add' ? t('devices.adding') : t('devices.addSubmit') }}
+        </button>
+      </div>
+    </div>
+  </section>
 
-  <div v-if="selected" class="card">
-    <h2>{{ selected.device.id }} 的设置</h2>
-    <div class="live">
-      实时：{{ selected.live.status || 'adapter 不可用' }}
-      <span v-if="selected.live.model">· {{ selected.live.model }}</span>
-      <span v-if="selected.live.capabilities?.length">· {{ selected.live.capabilities.join(', ') }}</span>
+  <section v-if="selected" class="block">
+    <div class="block-head">
+      <h2>{{ t('devices.settingsTitle', { id: selected.device.id }) }}</h2>
+      <span class="meta">{{ t('devices.live', { status: liveText }) }}</span>
     </div>
-    <div class="field"><label>地址</label><input v-model="draft.host" /></div>
-    <div class="field"><label>房间</label><input v-model="draft.room" /></div>
-    <div class="field"><label>唤醒词（逗号分隔）</label><input v-model="draft.wake_words" maxlength="40" /></div>
-    <div class="field"><label>音量目标（0 = 不接管）</label>
-      <input v-model.number="draft.volume" type="number" min="0" max="255" /></div>
-    <div class="field"><label>监听端口（留空 = adapter 默认）</label>
-      <input v-model="draft.listen_port" type="number" min="1" max="65535" /></div>
-    <div class="field"><label>启用</label>
-      <input v-model="draft.enabled" type="checkbox" class="check" /></div>
-    <div class="actions">
-      <button :disabled="busy !== ''" @click="runProbe">{{ busy === 'probe' ? '探测中…' : '探测 SSH' }}</button>
-      <button class="primary" :disabled="busy !== ''" @click="save">
-        {{ busy === 'save' ? '保存中…' : '保存' }}</button>
-      <button class="danger" :disabled="busy !== ''" @click="remove">
-        {{ busy === 'delete' ? '…' : '删除设备' }}</button>
+
+    <div class="field-row">
+      <div class="field-meta"><label class="field-label" for="dev-host">{{ t('devices.host') }}</label></div>
+      <div class="field-control"><input id="dev-host" v-model="draft.host" /></div>
     </div>
-    <p v-if="probe" :class="probe.usable ? 'ok' : 'fail'">
-      {{ probe.usable ? `可达：SSH banner 正常（${probe.ssh.ms ?? '?'} ms）` : probe.hint }}
+    <div class="field-row">
+      <div class="field-meta"><label class="field-label" for="dev-room">{{ t('devices.room') }}</label></div>
+      <div class="field-control"><input id="dev-room" v-model="draft.room" /></div>
+    </div>
+    <div class="field-row">
+      <div class="field-meta"><label class="field-label" for="dev-wake">{{ t('devices.wakeWords') }}</label></div>
+      <div class="field-control"><input id="dev-wake" v-model="draft.wake_words" maxlength="40" /></div>
+    </div>
+    <div class="field-row">
+      <div class="field-meta">
+        <label class="field-label" for="dev-volume">{{ t('devices.volumeTarget') }}</label>
+        <p class="field-hint">{{ t('devices.volumeHint') }}</p>
+      </div>
+      <div class="field-control"><input id="dev-volume" v-model.number="draft.volume" type="number" min="0" max="255" /></div>
+    </div>
+    <div class="field-row">
+      <div class="field-meta"><label class="field-label" for="dev-port">{{ t('devices.listenPort') }}</label></div>
+      <div class="field-control"><input id="dev-port" v-model="draft.listen_port" type="number" min="1" max="65535" /></div>
+    </div>
+    <div class="field-row">
+      <div class="field-meta"><label class="field-label" for="dev-enabled">{{ t('devices.enabled') }}</label></div>
+      <div class="field-control">
+        <label class="switch">
+          <input id="dev-enabled" v-model="draft.enabled" type="checkbox" />
+          <span class="track" />
+          <span class="switch-text">{{ draft.enabled ? t('common.on') : t('common.off') }}</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="actions" style="margin-top: var(--s4)">
+      <button type="button" class="btn" :disabled="busy !== ''" @click="runProbe">
+        {{ busy === 'probe' ? t('devices.probing') : t('devices.probe') }}
+      </button>
+      <button type="button" class="btn btn-primary" :disabled="busy !== ''" @click="save">
+        {{ busy === 'save' ? t('devices.saving') : t('devices.save') }}
+      </button>
+      <button type="button" class="btn btn-danger" :disabled="busy !== ''" @click="remove">
+        <AppIcon name="trash" :size="13" />
+        {{ busy === 'delete' ? '…' : t('devices.delete') }}
+      </button>
+    </div>
+    <p v-if="probe" :class="probe.usable ? 'ok' : 'fail'" class="field-hint">
+      {{ probe.usable ? t('devices.reachable', { ms: probe.ssh.ms ?? '?' }) : probe.hint }}
     </p>
-  </div>
+  </section>
 
-  <div v-if="notice" class="card"><p class="ok">{{ notice }}</p></div>
-  <div v-if="error" class="card"><p class="fail">{{ error }}</p></div>
+  <div v-if="notice" class="banner banner-ok mgr-result" role="status">
+    <AppIcon name="check" :size="16" class="banner-icon" />
+    <span>{{ notice }}</span>
+  </div>
+  <div v-if="error" class="banner banner-fail mgr-result" role="alert">
+    <AppIcon name="alert" :size="16" class="banner-icon" />
+    <span>{{ error }}</span>
+  </div>
 </template>
 
 <style scoped>
-.field { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
-.field label { width: 200px; color: var(--muted); font-size: 13px; flex: none; }
-.field input {
-  font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line);
-  border-radius: 8px; flex: 1; max-width: 420px;
+.mgr-intro {
+  margin-bottom: var(--s5);
 }
-.field input.check { flex: none; width: 18px; height: 18px; }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
-button.right { float: right; font-size: 12px; padding: 3px 10px; }
-button.danger { color: var(--fail); border-color: #f3c6c6; }
-.clickable { cursor: pointer; }
-.clickable.active { background: #f6f8fc; }
-.live { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+
+.device-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: 11px 10px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+  border-radius: var(--r-xs);
+  transition: background var(--dur-fast) var(--ease);
+  min-width: 0;
+}
+
+.device-row:first-of-type {
+  border-top: 1px solid var(--line-strong);
+}
+
+.device-row:hover {
+  background: var(--surface-2);
+}
+
+.device-row.active {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.device-row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.device-id {
+  font-size: 12px;
+  min-width: 72px;
+  flex: none;
+}
+
+.device-room {
+  font-size: 13.5px;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.device-meta {
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.device-arrow {
+  color: var(--muted);
+  flex: none;
+  align-self: center;
+}
+
+.add-device {
+  margin-top: var(--s3);
+}
+
+.mgr-result {
+  margin-top: var(--s5);
+}
+
+@media (max-width: 720px) {
+  .device-row {
+    flex-wrap: wrap;
+    gap: 1px var(--s2);
+  }
+
+  .device-meta {
+    flex: 1 1 100%;
+  }
+
+  .device-arrow {
+    display: none;
+  }
+}
 </style>

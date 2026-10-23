@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import AppIcon from '../components/AppIcon.vue'
 import { api, type AudioStatus, type DoctorReport } from '../api'
+import { formatCount, t, type MsgKey } from '../i18n'
 
 const report = ref<DoctorReport | null>(null)
 const audio = ref<AudioStatus | null>(null)
@@ -8,14 +10,25 @@ const busy = ref(false)
 const error = ref('')
 
 /**
- * The buffer lead is only meaningful while something is playing: the plane reports 0 when
- * idle, so a bare `0 < 150` test would paint an idle speaker as a fault. Warn only when
- * audio is actually flowing and the lead has collapsed below ~half the 300 ms target.
+ * The buffer lead is only meaningful while something is playing: the plane reports 0
+ * when idle, so a bare `0 < 150` test would paint an idle speaker as a fault. Warn
+ * only when audio is actually flowing and the lead has collapsed below ~half target.
  */
 const leadThin = computed(() => {
-  const m = audio.value?.metrics
-  return !!m && m.playback_lead_ms > 0 && m.playback_lead_ms < 150
+  const metrics = audio.value?.metrics
+  return !!metrics && metrics.playback_lead_ms > 0 && metrics.playback_lead_ms < 150
 })
+
+const VERDICTS: Record<string, MsgKey> = {
+  ok: 'health.verdictOk',
+  degraded: 'health.verdictDegraded',
+  unsupported: 'health.verdictUnsupported',
+}
+
+function verdictText(verdict: string): string {
+  const key = VERDICTS[verdict]
+  return key ? t(key) : verdict
+}
 
 async function run() {
   busy.value = true
@@ -23,8 +36,8 @@ async function run() {
   try {
     report.value = await api.doctor()
     audio.value = await api.audio()
-  } catch (e) {
-    error.value = String(e)
+  } catch (exc) {
+    error.value = exc instanceof Error ? exc.message : String(exc)
   } finally {
     busy.value = false
   }
@@ -34,104 +47,217 @@ onMounted(run)
 </script>
 
 <template>
-  <h1>体检</h1>
-  <p class="sub">硬件、网络与音频负载实测。不是猜的：这里跑的是真实的多通道滤波器算术。</p>
-
-  <button class="primary" :disabled="busy" @click="run">{{ busy ? '测量中…' : '重新体检' }}</button>
-  <p v-if="error" class="fail">{{ error }}</p>
-
-  <div v-if="report" class="card" style="margin-top: 16px">
-    <div class="row">
-      <span class="k">verdict</span>
-      <span class="v" :class="report.verdict === 'ok' ? 'ok' : report.verdict === 'degraded' ? 'warn' : 'fail'">
-        {{ report.verdict }}
-      </span>
+  <header class="page-head">
+    <div>
+      <div class="kicker">{{ t('health.kicker') }}</div>
+      <h1>{{ t('health.title') }}</h1>
+      <p class="lede">{{ t('health.lede') }}</p>
     </div>
-    <div class="row"><span class="k">AEC rtf</span><span class="v">{{ report.aec_rtf }}（单核 {{ report.cpu_share }}%）</span></div>
-    <div class="row">
-      <span class="k">可带设备</span>
-      <span class="v">~{{ report.device_capacity }} 台 <span class="tag">{{ report.capacity_basis }}</span></span>
+    <div class="page-head-side">
+      <button type="button" class="btn btn-primary" :disabled="busy" @click="run">
+        <AppIcon name="refresh" :size="14" />
+        {{ busy ? t('health.running') : t('health.run') }}
+      </button>
     </div>
-    <div class="row"><span class="k">measured_at</span><span class="v">{{ report.measured_at }}</span></div>
+  </header>
+
+  <div v-if="error" class="banner banner-fail" role="alert">
+    <AppIcon name="alert" :size="16" class="banner-icon" />
+    <span>{{ t('health.error', { message: error }) }}</span>
   </div>
 
-  <div v-if="audio" class="card">
-    <h2>音频面</h2>
-    <div class="row">
-      <span class="k">status</span>
-      <span class="v" :class="audio.running ? 'ok' : 'warn'">
-        {{ audio.running ? '运行中 · pid ' + audio.pid : (audio.error || '未启动') }}
+  <section v-if="report" class="health-summary">
+    <div class="health-cell">
+      <span class="health-k">{{ t('health.verdict') }}</span>
+      <span class="health-v verdict" :class="report.verdict === 'ok' ? 'ok' : report.verdict === 'degraded' ? 'warn' : 'fail'">
+        {{ verdictText(report.verdict) }}
       </span>
     </div>
+    <div class="health-cell">
+      <span class="health-k">{{ t('health.aecRtf') }}</span>
+      <span class="health-v mono">{{ report.aec_rtf }} <small class="muted">· {{ report.cpu_share }}%</small></span>
+    </div>
+    <div class="health-cell">
+      <span class="health-k">{{ t('health.capacity') }}</span>
+      <span class="health-v mono">~{{ report.device_capacity }} <small class="muted">{{ t('health.devicesUnit') }}</small></span>
+      <span class="health-basis mono">{{ report.capacity_basis }}</span>
+    </div>
+    <div class="health-cell">
+      <span class="health-k">{{ t('health.measuredAt') }}</span>
+      <span class="health-v mono measured">{{ report.measured_at }}</span>
+    </div>
+  </section>
+
+  <section v-if="audio" class="block">
+    <div class="block-head">
+      <h2>{{ t('health.audioPlane') }}</h2>
+      <span class="badge" :class="audio.running ? 'badge-ok' : 'badge-warn'">
+        {{ audio.running ? t('health.runningPid', { pid: audio.pid ?? '—' }) : audio.error || t('health.notStarted') }}
+      </span>
+    </div>
+
     <template v-if="audio.metrics">
       <div class="row">
-        <span class="k">唤醒引擎</span>
+        <span class="k">{{ t('health.kws') }}</span>
         <span class="v" :class="audio.metrics.kws_enabled ? 'ok' : 'fail'">
-          {{ audio.metrics.kws_enabled ? '已加载' : '未加载' }}
-          <span v-if="!audio.metrics.kws_enabled && audio.metrics.kws_error" class="tag">
-            {{ audio.metrics.kws_error }}
-          </span>
+          {{ audio.metrics.kws_enabled ? t('health.kwsLoaded') : t('health.kwsMissing') }}
+          <span v-if="!audio.metrics.kws_enabled && audio.metrics.kws_error" class="tag">{{ audio.metrics.kws_error }}</span>
         </span>
       </div>
-      <div class="row"><span class="k">已成段</span>
-        <span class="v">{{ audio.metrics.utterances }} 段 <span class="tag">唤醒之后才算</span></span>
-      </div>
-      <div class="row"><span class="k">唤醒后丢弃的段</span>
-        <span class="v">{{ audio.metrics.gate_discarded }} 段 <span class="tag">没人说话 / 说话太短</span></span>
-      </div>
-      <div class="row"><span class="k">应答被跳过</span>
-        <span class="v">{{ audio.metrics.ack_skipped }} 次 <span class="tag">上一次应答没播完又唤醒了</span></span>
+      <div class="row">
+        <span class="k">{{ t('health.utterances') }}</span>
+        <span class="v">{{ formatCount(audio.metrics.utterances) }} <span class="tag">{{ t('health.utterancesTag') }}</span></span>
       </div>
       <div class="row">
-        <span class="k">播放缓冲余量</span>
+        <span class="k">{{ t('health.gateDiscarded') }}</span>
+        <span class="v">{{ formatCount(audio.metrics.gate_discarded) }} <span class="tag">{{ t('health.gateTag') }}</span></span>
+      </div>
+      <div class="row">
+        <span class="k">{{ t('health.ackSkipped') }}</span>
+        <span class="v">{{ formatCount(audio.metrics.ack_skipped) }} <span class="tag">{{ t('health.ackTag') }}</span></span>
+      </div>
+      <div class="row">
+        <span class="k">{{ t('health.lead') }}</span>
         <span class="v" :class="leadThin ? 'warn' : ''">
           {{ audio.metrics.playback_lead_ms }} ms
-          <span v-if="leadThin" class="tag">缓冲见底</span>
-          <span v-else-if="audio.metrics.playback_lead_ms === 0" class="tag">空闲 / 未在播报</span>
+          <span v-if="leadThin" class="tag">{{ t('health.leadLow') }}</span>
+          <span v-else-if="audio.metrics.playback_lead_ms === 0" class="tag">{{ t('health.leadIdle') }}</span>
         </span>
       </div>
-      <div class="row"><span class="k">帧（进 / 出 / 丢）</span>
-        <span class="v">{{ audio.metrics.frames_in }} / {{ audio.metrics.frames_out }} / {{ audio.metrics.frames_dropped }}</span>
-      </div>
-      <div class="row"><span class="k">帧间隔 p50 / p99</span>
-        <span class="v">{{ audio.metrics.jitter_p50_ms }} / {{ audio.metrics.jitter_p99_ms }} ms</span>
-      </div>
-      <div class="row"><span class="k">rtf</span>
-        <span class="v" :class="audio.metrics.rtf <= 0.5 ? 'ok' : 'warn'">{{ audio.metrics.rtf }}</span>
-      </div>
-      <div class="row"><span class="k">已处理音频</span><span class="v">{{ audio.metrics.audio_s }} s</span></div>
       <div class="row">
-        <span class="k">回声消除</span>
+        <span class="k">{{ t('health.frames') }}</span>
+        <span class="v mono">{{ audio.metrics.frames_in }} / {{ audio.metrics.frames_out }} / {{ audio.metrics.frames_dropped }}</span>
+      </div>
+      <div class="row">
+        <span class="k">{{ t('health.jitter') }}</span>
+        <span class="v mono">{{ audio.metrics.jitter_p50_ms }} / {{ audio.metrics.jitter_p99_ms }} ms</span>
+      </div>
+      <div class="row">
+        <span class="k">{{ t('health.rtf') }}</span>
+        <span class="v mono" :class="audio.metrics.rtf <= 0.5 ? 'ok' : 'warn'">{{ audio.metrics.rtf }}</span>
+      </div>
+      <div class="row">
+        <span class="k">{{ t('health.audioProcessed') }}</span>
+        <span class="v mono">{{ audio.metrics.audio_s }} s</span>
+      </div>
+      <div class="row">
+        <span class="k">{{ t('health.aec') }}</span>
         <span class="v" :class="audio.metrics.aec_enabled ? 'ok' : 'warn'">
-          {{ audio.metrics.aec_enabled ? '开启 · ch' + audio.metrics.aec_channel : '关闭' }}
-          <span v-if="audio.metrics.aec_erle_db !== null" class="tag">ERLE {{ audio.metrics.aec_erle_db }} dB</span>
-          <span v-else class="tag">参考静音，ERLE 无意义</span>
+          {{ audio.metrics.aec_enabled ? t('health.aecOn', { channel: audio.metrics.aec_channel }) : t('health.aecOff') }}
+          <span v-if="audio.metrics.aec_erle_db !== null" class="tag">{{ t('health.erle', { db: audio.metrics.aec_erle_db }) }}</span>
+          <span v-else class="tag">{{ t('health.erleNoRef') }}</span>
         </span>
       </div>
-      <div class="row"><span class="k">参考通道</span>
+      <div class="row">
+        <span class="k">{{ t('health.ref') }}</span>
         <span class="v" :class="audio.metrics.ref_active ? 'ok' : 'warn'">
-          {{ audio.metrics.ref_active ? '有信号（正在播放）' : '静音' }}
+          {{ audio.metrics.ref_active ? t('health.refActive') : t('health.refSilent') }}
         </span>
       </div>
-      <div class="row"><span class="k">音箱连接</span>
+      <div class="row">
+        <span class="k">{{ t('health.speaker') }}</span>
         <span class="v" :class="audio.metrics.speaker_connected ? 'ok' : 'warn'">
-          {{ audio.metrics.speaker_connected ? '已连接' : '未连接' }}
+          {{ audio.metrics.speaker_connected ? t('health.speakerConnected') : t('health.speakerMissing') }}
         </span>
       </div>
-      <p class="note">
-        唤醒 → 成段 → 回合是三步，各有自己的计数器：唤醒引擎没加载时「已成段」永远是 0（上面那行会写原因）；
-        「唤醒后丢弃」说明叫醒了但没人说话或话太短。「播放缓冲余量」是说话人缓冲领先实时的时间，
-        播报时应稳定在 300–1000 ms，一直贴着 0 就是卡顿——空闲时报 0 属正常。
-      </p>
+      <p class="field-hint" style="margin-top: var(--s3)">{{ t('health.leadNote') }}</p>
     </template>
-  </div>
+  </section>
 
-  <div v-if="report" class="card">
-    <h2>检查项</h2>
-    <div class="row" v-for="c in report.checks" :key="c.name">
-      <span class="k">{{ c.name }}</span>
-      <span class="v" :class="c.status">{{ c.value }}</span>
-      <span v-if="c.hint" class="tag">{{ c.hint }}</span>
+  <section v-if="report" class="block">
+    <div class="block-head">
+      <h2>{{ t('health.checks') }}</h2>
+      <span class="meta">{{ report.checks.length }}</span>
     </div>
-  </div>
+    <div v-for="check in report.checks" :key="check.name" class="row">
+      <span class="k mono">{{ check.name }}</span>
+      <span class="v" :class="check.status">{{ check.value }}</span>
+      <span v-if="check.hint" class="tag">{{ check.hint }}</span>
+    </div>
+  </section>
 </template>
+
+<style scoped>
+.health-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s6);
+}
+
+.health-cell {
+  padding: 14px 16px;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.health-cell:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.health-k {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.health-v {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.health-v.verdict {
+  font-family: var(--font-display);
+  font-size: 24px;
+  letter-spacing: -0.01em;
+}
+
+.health-v.measured {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.health-basis {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 960px) {
+  .health-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .health-cell:nth-child(3) {
+    border-left: 0;
+    padding-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .health-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .health-cell {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+
+  .health-cell:first-child {
+    border-top: 0;
+  }
+}
+</style>
