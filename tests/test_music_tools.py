@@ -267,10 +267,9 @@ def test_a_successful_transport_is_silent(tmp_path: Path) -> None:
         assert out == "" and runner.said == [], "the resume must not speak"
         assert client.hold == 0
 
-        # the edge (nothing to resume) still says so
-        service.state = "idle"
-        out = await _music_transport(app, "继续", runner, client, None, traces)
-        assert out and "没有" in out and runner.said
+        # the edge (last track) still says so - silence there would be a lie
+        out = await _music_transport(app, "下一首", runner, client, None, traces)
+        assert out and "最后一首" in out and runner.said
 
     async def tools_play(service) -> None:
         await service.play([Track(id="subsonic:1", title="T1", artist="A", duration=100)])
