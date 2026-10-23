@@ -911,20 +911,23 @@ def create_app(
                         with contextlib.suppress(Exception):
                             await client.reply_finished()
                         return
-                    if (not result.tools
-                            and rules.claims_device_success(clean, result.reply)):
+                    claimed_device = rules.claims_device_success(clean, result.reply)
+                    claimed_music = rules.claims_music_success(clean, result.reply)
+                    if not result.tools and (claimed_device or claimed_music):
                         # The model said it did something without calling a tool:
                         # retry once with an explicit instruction, then be honest.
                         log.info("clarify: claimed success with no tool call: %r", result.reply)
-                        forced = (clean + "\n（上一轮你没有调用任何工具，这次必须直接调用工具"
-                                        "完成操作，不要用文字回答。）")
+                        forced = (clean + "\n（上一轮你没有成功调用任何工具，不要用文字回答。"
+                                          "如果是点歌就调用 music_play；做不到就如实说没做成，"
+                                          "不要谎称已经放/已经执行。）")
                         try:
                             result = await runner.run(pcm, _speaking(app, client), trace,
                                                       transcript=forced)
                         except Exception as exc:  # noqa: BLE001
                             log.warning("retry after a false claim failed: %s", exc)
                         if not result.tools:
-                            line = phrases.book.render("device.not_done")
+                            key = "music.ask_play" if claimed_music else "device.not_done"
+                            line = phrases.book.render(key)
                             spoken = await runner.say(line, _speaking(app, client), trace)
                             result.reply = line
                             result.audio_bytes = spoken

@@ -758,7 +758,8 @@ class TurnRunner:
                                  call.get("name", ""))
                         messages.append({"role": "tool",
                                          "tool_call_id": call.get("id", ""),
-                                         "content": "用户没说要点歌，不要调用音乐工具。"})
+                                         "content": "用户这句话里没有点歌动词，不要调用音乐工具，"
+                                                    "也不要说已经放了。问一句「要听哪首？说放一首歌名」。"})
                         continue
                     # The music query is what the USER said, never what the model
                     # typed: measured twice in one hour - it sent {} (10:13:04, a

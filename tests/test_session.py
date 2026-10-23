@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from house_ear.session import rules
 from house_ear.session.state import InvalidTransition, SessionState, SessionStateMachine
 
 
@@ -217,3 +218,12 @@ def test_a_non_stop_request_is_left_to_the_turn(monkeypatch) -> None:
         app, "现在几点了", runner, client, TurnTrace(device_id="living"), traces))
     assert handled is False
     assert runner.said == [] and runner.dismissed == 0
+
+
+def test_a_music_claim_without_a_tool_call_is_recognised() -> None:
+    """13:47:36: the music guard refused the call (the verb was lost by ASR) and the
+    model still answered 「好，放《告白气球》。」 - a false claim the user acts on."""
+    assert rules.claims_music_success("告白气球。", "好，放《告白气球》。")
+    assert rules.claims_music_success("放首歌", "正在放《晴天》-周杰伦。")
+    assert not rules.claims_music_success("放首歌", "好。")
+    assert not rules.claims_music_success("现在几点？", "现在下午一点。")

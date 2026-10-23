@@ -44,6 +44,9 @@ DEFAULTS: dict[str, str] = {
     "music.prev": "好，回到《{title}》。",
     "music.first_track": "已经是第一首了。",
     "music.stopped": "好，不放了。",
+    # After a refused music tool or a claimed-but-not-played answer: ask again
+    # instead of pretending (measured 13:47:36).
+    "music.ask_play": "没听清你要放哪首，再说一次「放一首歌名」好吗？",
     "music.starred": "已收藏《{title}》。",
     "music.unstarred": "取消收藏《{title}》。",
     "music.star_failed": "收藏没成功，服务器没回应。",

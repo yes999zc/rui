@@ -8,7 +8,7 @@
 
 | 问题 | 决定 | 一句话理由 |
 |---|---|---|
-| 可编辑哪些键 | `session/phrases.py` 的 **49 个 DEFAULTS 键全部可编辑**；其中 3 个 `ha.*` 标「高级/模型提示片段」 | 所有用户能听到/模型能读到的系统话术都在这一张表；编辑器不能只覆盖一半 |
+| 可编辑哪些键 | `session/phrases.py` 的 **50 个 DEFAULTS 键全部可编辑**；其中 3 个 `ha.*` 标「高级/模型提示片段」 | 所有用户能听到/模型能读到的系统话术都在这一张表；编辑器不能只覆盖一半 |
 | 覆盖层放哪 | **`data_dir/phrases.yaml`**，不新增 config section | 话术是用户内容，不是部署意图；与 `memory.json`/`music_history.json`/`music_aliases.json` 同层，`setup --force` 不会冲掉 |
 | 生效时机 | **保存后下一句话术立即生效**（替换模块级 `book`），不重启、不等唤醒 | 所有调用点都是 `phrases.book.render(...)`，换对象即可；比老项目「下次唤醒」更快且可解释 |
 | 占位符防呆 | **保存时硬校验**：键必须存在；模板里的 `{slot}` 集合必须与默认模板完全一致（可换顺序，不可增删改名）；只允许 `{name}` 简单字段 | `render()` 对缺槽会静默 `_strip_slots`，用户删了 `{device}` 只会得到「好，开。」且没人报错；必须在写入前挡 |
@@ -23,7 +23,7 @@
 
 ### 1.1 数据与渲染
 
-- `session/phrases.py`：`DEFAULTS: dict[str, str]` 共 **49 键**；`PhraseBook(overrides)` 把
+- `session/phrases.py`：`DEFAULTS: dict[str, str]` 共 **50 键**；`PhraseBook(overrides)` 把
   defaults 与覆盖层合并；模块级单例 `book = PhraseBook()`；`render(key, **slots)` 用
   `str.format`，缺 key 返回 key 本身，槽位错误回退 `_strip_slots`（静默）。
 - 渲染点（全部走同一张表，所以覆盖层一处生效）：
@@ -34,7 +34,7 @@
     `music.taste_top` 的 `{names}`/`{tail}`（**嵌套渲染**，编辑器要能 preview 组合结果）；
   - `tools/ha.py:76-78`：`ha.entity_list`/`ha.list_stale` 是**给模型的提示片段**，不是朗读句；
     `ha.multi_entity_rule` 同理（「多命中全部传入」的工具纪律）。
-- 键的 49 个默认值与槽位清单见 §9 附录；`music.*` 26、`turn.*` 2、`volume.*` 4、
+- 键的 50 个默认值与槽位清单见 §9 附录；`music.*` 27、`turn.*` 2、`volume.*` 4、
   `memory.*` 6、`context.*` 2、`device.*` 6、`ha.*` 3。
 
 ### 1.2 测试现状
@@ -66,7 +66,7 @@
 
 ### 3.1 可编辑（P6 范围）
 
-- `session/phrases.py::DEFAULTS` 的 **全部 49 键**。按 UI 分组：
+- `session/phrases.py::DEFAULTS` 的 **全部 50 键**。按 UI 分组：
   - **音乐**（26）：`music.*` —— 朗读确认/失败/收藏/口味；
   - **轮级兜底**（2）：`turn.failed`、`turn.stuck`；
   - **音量**（4）：`volume.*`；
@@ -86,7 +86,7 @@
 
 | 方案 | 优点 | 缺点 | 结论 |
 |---|---|---|---|
-| A. 新 `config.assistant.phrases: dict[str,str]` | 复用 `PUT /api/v1/config`、已有备份/校验/422 | config.yaml 是部署意图（`setup` 生成、Docker 挂载说明都围绕它），49 条用户话术塞进去很脏；改话术要 bump 配置心智/模板；`config` 版本迁移多一类内容；控制台通用 form 不适合表格编辑 | 否 |
+| A. 新 `config.assistant.phrases: dict[str,str]` | 复用 `PUT /api/v1/config`、已有备份/校验/422 | config.yaml 是部署意图（`setup` 生成、Docker 挂载说明都围绕它），50 条用户话术塞进去很脏；改话术要 bump 配置心智/模板；`config` 版本迁移多一类内容；控制台通用 form 不适合表格编辑 | 否 |
 | B. `data_dir/phrases.yaml`（推荐） | 与 `memory.json`/`music_history.json`/`music_aliases.json` 同层；`setup --force` 不覆盖 data；可 NAS 上手改、可导出；独立 API/面板；不动 config schema | 多一个文件与加载路径；需要单独的校验/备份 | **是** |
 | C. SQLite/DB | 查询强 | 过度设计；现有 data 全是小文件 | 否 |
 
@@ -160,7 +160,7 @@ def snapshot() -> dict:              # 给 GET /api/v1/phrases
      （`\n` 只允许在 `ha.entity_list`/`ha.multi_entity_rule`，它们本来就多行）；
   7. 全部 or 全不写：任一条不合法 → 422，文件保持原样（不能半套覆盖）。
 - 为什么不用老项目式「warning + 二次确认」：老项目只有 2 条关键片段，误删难察觉；
-  P6 有 49 条，逐条硬校验 + 一键恢复默认更简单，也避免用户点「确认」放行后静默丢信息。
+  P6 有 50 条，逐条硬校验 + 一键恢复默认更简单，也避免用户点「确认」放行后静默丢信息。
 - 默认表自身也由测试保护：每个 `DEFAULTS[key]` 解析出的槽位 == `DEFAULT_SLOTS[key]`，
   且每个 `ToolSpec.exec` 指向的 key 都存在（已有测试）。
 

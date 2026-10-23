@@ -175,6 +175,18 @@ def claims_device_success(transcript: str, reply: str) -> bool:
     return bool(DEVICE_CMD.search(transcript or "") or DEVICE_NOUN.search(transcript or ""))
 
 
+# A reply that claims a song started. Measured 13:47:36: the music guard refused
+# music_play (the transcript had lost its verb) and the model still answered
+# 「好，放《告白气球》。」 - a false claim the user acts on.
+_MUSIC_CLAIM = re.compile(
+    r"(好[，,]?\s*放|正在放|开始放|这就放|给你放|为你放|播放《|放《)")
+
+
+def claims_music_success(transcript: str, reply: str) -> bool:
+    """A song claimed as playing with no tool call behind it."""
+    return bool(_MUSIC_CLAIM.search(reply or ""))
+
+
 CONTEXT_OFF_WORDS = ("关闭上下文", "别记着前面", "不记上下文", "忘掉前面", "不要上下文",
                      "别记上下文", "每句独立")
 CONTEXT_ON_WORDS = ("打开上下文", "记住上下文", "接着前面聊", "带上上下文", "记着上下文")
