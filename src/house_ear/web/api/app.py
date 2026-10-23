@@ -258,9 +258,12 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         key = {"ok": "music.started", "ok_one": "music.started_one",
                "unresolved": "music.unresolved",
                "unreachable": "music.unreachable"}[result.status]
-        line = phrases.book.render(key, **result.payload)
+        # The song starting IS the answer (9哥: no talk over it); only a failure
+        # gets words.
+        line = "" if result.status in ("ok", "ok_one") else \
+            phrases.book.render(key, **result.payload)
         runner.idle.touch()
-        spoken = await runner.say(line, _speaking(app, client), trace)
+        spoken = await runner.say(line, _speaking(app, client), trace) if line else 0
         _light_after_audio(app, spoken, _voice_rate(client),
                            "music" if tracks else "off")
         with contextlib.suppress(Exception):
@@ -288,16 +291,22 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         log.info("music transport %s failed: %s", action, exc)
         track_or_ok = False
     if action in ("next", "prev"):
-        line = phrases.book.render(
-            "music.next" if track_or_ok
-            else ("music.last_track" if action == "next" else "music.first_track"),
-            **({"title": track_or_ok.title} if track_or_ok else {}))
+        ok = bool(track_or_ok) and not isinstance(track_or_ok, bool)
+        key = ("music.next" if ok
+               else ("music.last_track" if action == "next" else "music.first_track"))
+        slots = {"title": track_or_ok.title} if ok else {}
     else:
-        line = phrases.book.render(
-            {"pause": "music.paused", "resume": "music.resumed"}[action] if track_or_ok
-            else ("music.not_playing" if action == "pause" else "music.not_paused"))
+        ok = bool(track_or_ok)
+        key = ({"pause": "music.paused", "resume": "music.resumed"}[action] if ok
+               else ("music.not_playing" if action == "pause" else "music.not_paused"))
+        slots = {}
+    # Success is silent: the song changing / resuming / stopping is the answer.
+    # Speaking 「接着放。」 made the music start, stop for the sentence, and start
+    # again (measured 09:38:27-30). Only an edge (last track, nothing playing)
+    # gets words, because silence there would be a lie.
+    line = "" if ok else phrases.book.render(key, **slots)
     runner.idle.touch()
-    spoken = await runner.say(line, _speaking(app, client), trace)
+    spoken = await runner.say(line, _speaking(app, client), trace) if line else 0
     # The ring must answer 「暂停」 with amber and stay there: the reply's own
     # speaking/listening states were overriding the park's LED within 300 ms.
     _light_after_audio(app, spoken, _voice_rate(client), _music_light(action, service))

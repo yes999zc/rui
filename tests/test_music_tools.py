@@ -229,3 +229,50 @@ def test_a_music_turn_asks_the_plane_for_an_immediate_resume() -> None:
     assert _turn_hold(SimpleNamespace(tools=["volume"])) == 0.0
     assert _turn_hold(SimpleNamespace(tools=["weather"])) is None
     assert _turn_hold(SimpleNamespace(tools=[])) is None
+
+
+def test_a_successful_transport_is_silent(tmp_path: Path) -> None:
+    """9哥: 「继续播放」 must not talk - the music resuming is the answer, and a
+    spoken 「接着放。」 made it start, stop for the sentence, start again
+    (measured 09:38:27-30). Edges still speak."""
+    from types import SimpleNamespace
+
+    from house_ear.web.api.app import _music_transport
+
+    class Runner:
+        def __init__(self) -> None:
+            self.said: list[str] = []
+            self.idle = SimpleNamespace(touch=lambda: None)
+
+        async def say(self, text: str, _speak: object, _trace: object) -> int:
+            self.said.append(text)
+            return 1600
+
+    class Client:
+        async def reply_finished(self, hold_music_s: float | None = None) -> None:
+            self.hold = hold_music_s
+
+    async def run() -> None:
+        service, source, _, _ = make(tmp_path)
+        source.no_refill = True
+        await tools_play(service)
+        app = SimpleNamespace(state=SimpleNamespace(music=service))
+        runner, client = Runner(), Client()
+        traces = SimpleNamespace(add=lambda _t: None)
+
+        await _music_transport(app, "暂停", runner, client, None, traces)
+        assert runner.said == [], "the pause must not speak either"
+
+        out = await _music_transport(app, "继续播放", runner, client, None, traces)
+        assert out == "" and runner.said == [], "the resume must not speak"
+        assert client.hold == 0
+
+        # the edge (nothing to resume) still says so
+        service.state = "idle"
+        out = await _music_transport(app, "继续", runner, client, None, traces)
+        assert out and "没有" in out and runner.said
+
+    async def tools_play(service) -> None:
+        await service.play([Track(id="subsonic:1", title="T1", artist="A", duration=100)])
+
+    asyncio.run(run())
