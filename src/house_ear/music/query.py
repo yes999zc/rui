@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from ..session import pinyin
 from .model import QueryPlan
 
 # Wrappers people put around a song ask. Old build clean_query (music.py:267-282).
@@ -94,11 +95,17 @@ def accepts(candidate: str, want: str) -> bool:
     Subsonic ranks by token overlap, so 「Stay With Me」 is a fine answer to
     「留在我身边」 by its own scoring. Containment of the normalized ask is the
     old build's guard (music.py:330-343) and remains the cheapest honest one.
+
+    Sound is the second guard: the library may store 周杰倫 while the ASR writes
+    周杰伦, and 周杰伦 vs 周杰輪 is one homophone - containment of characters
+    alone would drop a correct hit.
     """
     w, c = normalize(want), normalize(candidate)
     if not w:
         return True
-    return w in c
+    if w in c:
+        return True
+    return pinyin.contains_sound(c, w)
 
 
 def plan(raw: str) -> QueryPlan:

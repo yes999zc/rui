@@ -17,6 +17,8 @@ import difflib
 import re
 import time
 
+from . import pinyin
+
 # From the old build's `conversation.stop_words`, plus the two it added later.
 STOP_WORDS = (
     "停止", "停下来", "停下", "停一下", "停掉", "别说了", "别放", "关掉", "关闭", "暂停",
@@ -167,6 +169,10 @@ def stop_intent(transcript: str, words: tuple[str, ...] | list[str] | None = Non
         if 3 <= len(word) <= 4 and len(t) <= len(word) + 1:
             if difflib.SequenceMatcher(None, t, word).ratio() >= 0.75:
                 return True
+            # The old build's rhyme test: 「对一下吧」 for 「退下吧」, while
+            # 「记下吧」 (two edits of whole pinyin) stays a different word.
+            if pinyin.same_rhyme(t, word):
+                return True
     return False
 
 
@@ -229,6 +235,11 @@ class SpokenMemory:
             if len(t) >= 3 and (t in said or said in t):
                 return True
             if len(t) >= 4 and difflib.SequenceMatcher(None, t, said).ratio() >= 0.75:
+                return True
+            # Our own words returning with a homophone slip: the old build's
+            # whole-pinyin distance (「我想想」 heard back as 「我想想」 with one
+            # syllable wrong) and the simplified/traditional pair (周杰伦/周杰倫).
+            if len(t) >= 3 and pinyin.same_sound(t, said, tolerance=1):
                 return True
         return False
 
