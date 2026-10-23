@@ -618,9 +618,10 @@ def test_a_hallucinated_music_call_beside_weather_keeps_the_answer(monkeypatch) 
     assert result.reply == "沈阳今天毛雨。", "the weather answer must survive"
 
 
-def test_a_music_call_with_no_query_uses_what_the_user_said(monkeypatch) -> None:
-    """Measured 10:13:04: one run in three sent music_play({}) and played a random
-    batch instead of the requested band."""
+def test_the_music_query_is_always_the_users_words(monkeypatch) -> None:
+    """Measured twice: music_play({}) played a random batch (10:13:04), and a
+    stale {"query": "播放战车乐队的歌"} played Rammstein when the user asked for
+    周杰伦 (10:15:57)."""
     from house_ear.tools.contract import InteractionSpec, ToolResult, ToolSpec
 
     seen: list[dict] = []
@@ -635,7 +636,7 @@ def test_a_music_call_with_no_query_uses_what_the_user_said(monkeypatch) -> None
                                                 guard="music_request"))
     llm = ScriptedLlm([[ChatChunk(delta="", finish_reason="tool_calls",
                                   tool_calls=[{"id": "t1", "name": "music_play",
-                                               "arguments": "{}"}])]])
+                                               "arguments": '{"query": "上一轮的说法"}'}])]])
     patch_chains(monkeypatch, asr=FakeAsr("战车"), llms=[llm], ttss=[FakeTts()])
     runner = TurnRunner(Config().providers, tools=[(spec, play)])
 
@@ -644,4 +645,4 @@ def test_a_music_call_with_no_query_uses_what_the_user_said(monkeypatch) -> None
 
     asyncio.run(runner.run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living"),
                            transcript="播放战车乐队的歌"))
-    assert seen == [{"query": "播放战车乐队的歌"}]
+    assert seen == [{"query": "播放战车乐队的歌"}], "the model's query must lose"
