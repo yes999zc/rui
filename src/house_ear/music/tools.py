@@ -25,6 +25,7 @@ from ..session import phrases
 from ..tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from . import query as q
 from .model import Track
+from .names import NameResolver
 from .service import MusicService
 from .source import MusicSource, SourceError
 
@@ -35,7 +36,8 @@ PLAY_MAP = {"ok": "music.started", "ok_one": "music.started_one",
             "unresolved": "music.unresolved"}
 
 
-async def _search(source: MusicSource, p: q.QueryPlan) -> list[Track]:
+async def _search(source: MusicSource, p: q.QueryPlan,
+                  names: NameResolver | None = None) -> list[Track]:
     """Where a second source will plug in: today only the NAS library."""
     try:
         if p.artist and not p.title:
@@ -44,8 +46,20 @@ async def _search(source: MusicSource, p: q.QueryPlan) -> list[Track]:
             # (measured 09:45) - playing a different artist is worse than saying
             # nothing was found.
             hits = await source.search(p.artist, 40)
-            return [t for t in hits if q.accepts(t.artist, p.artist)
+            keep = [t for t in hits if q.accepts(t.artist, p.artist)
                     or q.accepts(t.label, p.artist)]
+            if keep or names is None:
+                return keep
+            # Nothing under that name: it may be a nickname (「战车乐队」 is filed
+            # as Rammstein). The model translates, the library still decides.
+            for alt in await names.candidates(p.artist):
+                alt_hits = await source.search(alt, 40)
+                matched = [t for t in alt_hits if q.accepts(t.artist, alt)
+                           or q.accepts(t.label, alt)]
+                if matched:
+                    names.aliases.remember(p.artist, alt)
+                    return matched
+            return []
         if p.artist:
             hits = await source.search(p.title, 25)
             keep = [t for t in hits if q.accepts(t.artist, p.artist)]
@@ -103,7 +117,7 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
             elif p.random:
                 tracks = await source.random(batch)
             else:
-                tracks = await _search(source, p)
+                tracks = await _search(source, p, service.names)
         except SourceError as exc:
             log.info("music_play: %s", exc)
             return ToolResult(status="unreachable")

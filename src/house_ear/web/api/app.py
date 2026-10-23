@@ -27,6 +27,7 @@ from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
 from ...music import MusicService, NavidromeSource, PlayHistory
+from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
 from ...session import phrases, rules
 from ...session.ack import ensure_ack_wav
@@ -421,7 +422,11 @@ def create_app(
         )
         history = PlayHistory(
             Path(cfg.system.data_dir) / "music_history.json", keep=cfg.music.history_max)
-        music_service = MusicService(source, history, _never_sender, cfg.music)
+        aliases = AliasStore(Path(cfg.system.data_dir) / "music_aliases.json")
+        # Beats the literal search for every nickname the library does not hold.
+        names = NameResolver(aliases, timeout_s=6.0)
+        music_service = MusicService(source, history, _never_sender, cfg.music,
+                                     names=names)
         for spec, handler in build_music_tools(cfg, music_service):
             registry.register(spec)
             local_tools.append((spec, handler))

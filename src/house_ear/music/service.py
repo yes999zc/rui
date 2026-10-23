@@ -25,6 +25,7 @@ from ..audio.protocol import LedState, PauseMusic, PlayFile, ResumeMusic, StopAu
 from ..config.schema import MusicConfig
 from .history import PlayHistory
 from .model import Track
+from .names import AliasStore, NameResolver
 from .source import MusicSource, SourceError
 
 log = logging.getLogger(__name__)
@@ -34,11 +35,14 @@ Sender = Callable[[object], Awaitable[None]]
 
 class MusicService:
     def __init__(self, source: MusicSource, history: PlayHistory,
-                 sender: Sender, cfg: MusicConfig) -> None:
+                 sender: Sender, cfg: MusicConfig,
+                 names: NameResolver | None = None) -> None:
         self.source = source
         self.history = history
         self.sender = sender
         self.cfg = cfg
+        # Nickname -> real name (「战车乐队」 -> Rammstein) and the alias table.
+        self.names = names or NameResolver(AliasStore(Path("/tmp/house-ear-aliases.json")))
         self.queue: list[Track] = []
         self.idx = 0
         # "playing" (or waiting for the speaker) | "paused" (the user's hand) | "idle"
