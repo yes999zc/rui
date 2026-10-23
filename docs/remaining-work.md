@@ -17,10 +17,9 @@
 
 ## B0. 交互缺陷（已定位，待修）
 
-- **回复结束后的免唤醒追问首字丢失**：follow-up gate 在 `pacer.due` 后 1.0 s 才 arm，这 1 秒的麦克风
-  帧没有 buffer/replay；「紧着说『明天呢』」会丢首字，等 1 秒后说才正常。旧项目用 `ECHO_TAIL=0.7`
-  + `echo_tail_buf` replay 解决（`assistant_v3.py:2771,3122,3242`）。计划：缓存 due→arm 的帧，arm 后
-  回放给 VAD；加单测 + 真机验证。**9哥 要求先不改，已加入本轮 TODO（task-27）。**
+- **回复结束后的免唤醒追问首字丢失**：已按旧项目方案实现 follow-up echo-tail replay
+  （`7693a4f`）：`pacer.due` 到 gate arm 之间缓存麦克风帧，arm 后回放给 VAD；日志会打印
+  `follow-up gate replayed … ms of gated tail`。**已部署 NAS，待真机复测「紧着说明天呢」。**
 
 ## B. 真机 / 功能遗留
 
@@ -61,3 +60,13 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
 
 - 当前 MIT；讨论见本轮会话。候选：MIT（最简单）、Apache-2.0（专利/商标条款、更企业友好）、AGPL-3.0（防闭源托管）。
 - 注意容器内的静态 ffmpeg 仍是 GPL/LGPL 第三方组件，代码许可证不覆盖它。
+
+## G. CPU / 镜像（2026-10-23 定位）
+
+- 镜像 431 MB 主要来自 base python(119 MB) + 静态 ffmpeg(129 MB) + site-packages(178 MB)，
+  `/app` 只有 1.9 MB；**模型在 `/data/models` 卷里，不在镜像内**。
+- NAS CPU 高不是模型/镜像导致：KWS 用 2 个 ONNX 线程时 3 个 worker 各 100%（约 3 核）；
+  改成 `kws_num_threads: 1` 后容器 CPU 从约 319% 降到约 31%。
+- NAS 的 ASR chain 已改为 `volc-asr` 单链路；`local-asr` 仍保留在 catalog（插座），不默认加载，
+  省约 350 MB 内存。
+
