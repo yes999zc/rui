@@ -32,13 +32,17 @@ _DESCRIPTIVE = re.compile(
 )
 
 
+# Measured ASR slips in music asks: 「周杰伦的歌」 heard as 「…的节」/「…的结」.
+_MUSIC_WORD = re.compile(r"的[节结接]$")
+
+
 def normalize(text: str) -> str:
     return _PUNCT.sub("", text or "")
 
 
 def clean_query(q: str) -> str:
     """Strip the wrappers a spoken request arrives in: 「帮我放首X吧」 -> 「X」."""
-    t = q.strip()
+    t = _MUSIC_WORD.sub("的歌", q.strip())
     changed = True
     while changed and t:
         changed = False

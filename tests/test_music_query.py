@@ -38,3 +38,9 @@ def test_accepts_guards_against_subsonic_fuzz() -> None:
     assert q.accepts("晴天 - 周杰伦", "晴天") is True
     assert q.accepts("Without Me - 谢霆锋", "留在我身边") is False
     assert q.accepts("晴天 live 版", "晴天") is True
+
+
+def test_the_song_word_survives_asr_slips() -> None:
+    """Measured 09:50:27: 〈周杰伦的歌〉 arrived as 〈…的节〉."""
+    assert q.plan("播放林俊杰的节").artist == "林俊杰"
+    assert q.plan("播放周杰伦的结").artist == "周杰伦"
