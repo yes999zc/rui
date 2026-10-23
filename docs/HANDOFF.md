@@ -1097,3 +1097,32 @@ setup plane_error 4 条、MCP env 2 条。剩余：真实 Navidrome 凭据保存
 - **剩余**：见 `docs/remaining-work.md`（v1 门槛、NAS 冷装、D3 计数、客户端安装 UX、V2 三原语、
   安全 P2、对话卡片等）。
 
+### 12.30 2026-10-23 18:xx：仓库公开、历史清洗、NAS 真机部署（Lead 执行）
+
+**9哥 出门前授权**：仓库公开 + GHCR public、旧凭据轮换 + filter-repo、NAS 安装调试、给外网地址、
+Telegram 可行性测试。
+
+- **仓库公开**：`yes999zc/house-ear` 已 public；`raw.githubusercontent.com/.../deploy/install.sh`
+  实测 **200**。
+- **历史清洗**：`git filter-repo` 全历史替换（LAN IP → `<LAN-IP>`、`/Users/<user>/` → `<home>/`、
+  音箱默认 root 密码 → `<redacted>`），并从全部历史移除 `docs/console-shots`（含真实环境截图）；
+  force-push。复查历史已无上述模式。旧 commit hash 因重写全部变化，旧文档里的 hash 引用仅作历史记录。
+- **凭据轮换**：本机/NAS 的设备 token、控制台 token 均为新生成；NAS 新部署独立 secret。
+  ⚠ 音箱 root 密码无法在设备上改（根文件系统 squashfs 只读，`/etc/shadow` 不可写；busybox
+  `passwd` 指向的 `/data/console/passwd` 不用于 SSH 认证）——旧默认密码仍有效，建议后续用
+  厂商恢复/固件方式或仅在可信 LAN 开放 SSH；不要在公网暴露音箱 22 端口。
+- **NAS 部署**：在 NAS（fnOS，x86_64，Docker 28）用公开源码 `docker build` 生产镜像
+  `house-ear:local`（BuildKit 前端被 fnOS 镜像源 401，改用 classic builder）；模型从本机复制
+  SenseVoice/VAD/KWS，HA/Navidrome/provider secrets 独立写入 NAS data 卷；配置 `web.port=8080`、
+  设备入口 `4412`，`allow_anonymous=false` + 新 token。容器 health OK，`/health` 200。
+  音箱 client 已从 Mac 开发机切到 NAS（`client-run.sh`/`server.txt` 备份 `.bak-houseear-mac`），
+  `/api/v1/audio` 显示 `speaker_connected=true, kws_enabled=true, vad_enabled=true, dropped=0`；
+  NAS 上 `debug/say` 与 `audition?output=speaker` 均实测出声，通过局域网与 Tailscale 都能打开。
+- **Telegram**：已用本机 bot 把 Mac 开发机 LAN/Tailscale 地址（可行性测试）和 NAS 后台 LAN/
+  Tailscale 地址 + 访问令牌发给 9哥；Telegram 发送链路已验证（proxy 下 message_id 成功）。
+- **GHCR 仍私有**：GitHub REST 只提供个人 package 的 get/delete（无 visibility PATCH；实测
+  `/user/packages/container/house-ear` PATCH 404）。**需要 9哥 在网页 Settings → Change
+  visibility 点一次**；仓库公开和 raw 安装脚本已可用，镜像公开前一键装仍会 pull 401。
+- **文档**：`docs/brand.md`、`docs/remaining-work.md`；本机 NAS 部署文件在 `/vol1/house-ear/`
+  （config 0600、secrets 0600），不在仓库。
+
