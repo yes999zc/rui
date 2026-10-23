@@ -110,3 +110,13 @@ def test_channels_config_read_write(tmp_path) -> None:  # noqa: ANN001
     path = tmp_path / "channels.json"
     assert path.exists()
     assert oct(path.stat().st_mode & 0o777) == "0o600"
+
+
+def test_gateway_start_refuses_without_enabled_channels(tmp_path) -> None:  # noqa: ANN001
+    c = TestClient(create_app(Config(web={"auth_token": "tok"},
+                                     system={"data_dir": str(tmp_path)})))
+    headers = {"X-Auth-Token": "tok"}
+    body = c.post("/api/v1/channels/gateway/start", headers=headers).json()
+    assert body["running"] is False
+    assert "no channel" in body["last_error"]
+    assert c.get("/api/v1/channels", headers=headers).json()["gateway"]["status"]["managed"] is True

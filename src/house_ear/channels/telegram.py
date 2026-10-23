@@ -108,8 +108,10 @@ class TelegramAdapter:
         api_base: str = API,
         client: httpx.AsyncClient | None = None,
         allow_all: bool = False,
+        reply_mode: str = "text",
     ) -> None:
         self.token = token
+        self.reply_mode = reply_mode
         self.allowed = {str(x) for x in (allowed_chat_ids or set())}
         self.allow_all = allow_all
         self.state_path = state_path

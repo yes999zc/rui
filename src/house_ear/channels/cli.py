@@ -71,6 +71,7 @@ async def _run(args: argparse.Namespace) -> int:
             allowed_chat_ids=_split_ids(allow),
             state_path=Path(args.data_dir) / "telegram.json",
             allow_all=args.telegram_allow_all,
+            reply_mode=str(tg_cfg.get("reply_mode") or args.reply_mode),
         )
         gateway.add(tg)
         adapters.append(tg)
@@ -79,7 +80,8 @@ async def _run(args: argparse.Namespace) -> int:
     if wx_data and wx_enabled:
         allow = ",".join(str(x) for x in wx_cfg.get("allowed_user_ids", [])) or args.weixin_allow
         wx = WeixinAdapter(Path(wx_data), allowed_user_ids=_split_ids(allow),
-                           allow_all=args.weixin_allow_all)
+                           allow_all=args.weixin_allow_all,
+                           reply_mode=str(wx_cfg.get("reply_mode") or args.reply_mode))
         gateway.add(wx)
         adapters.append(wx)
     if not adapters:

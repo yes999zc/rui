@@ -183,8 +183,10 @@ class WeixinAdapter:
         base_url: str = ILINK,
         cdn_base: str = CDN,
         allow_all: bool = False,
+        reply_mode: str = "text",
     ) -> None:
         self.store = AccountStore(data_dir)
+        self.reply_mode = reply_mode
         self.allowed = {str(x) for x in (allowed_user_ids or set())}
         self.allow_all = allow_all
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=10.0))

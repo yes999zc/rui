@@ -211,7 +211,8 @@ class ChannelGateway:
             await adapter.send_typing(message.peer_id)
         except Exception:  # noqa: BLE001 - typing is cosmetic
             pass
-        want_audio = self.reply_mode in {"voice", "both"}
+        mode = getattr(adapter, "reply_mode", self.reply_mode)
+        want_audio = mode in {"voice", "both"}
         try:
             reply = await self.control.chat(
                 text, channel=message.channel, peer_id=message.peer_id,
@@ -227,7 +228,7 @@ class ChannelGateway:
         if reply.audio_pcm and want_audio:
             try:
                 await adapter.send_audio(message.peer_id, reply.audio_pcm, reply.sample_rate)
-                if self.reply_mode == "both" and reply.text:
+                if mode == "both" and reply.text:
                     await adapter.send_text(message.peer_id, reply.text)
                 return
             except Exception as exc:  # noqa: BLE001

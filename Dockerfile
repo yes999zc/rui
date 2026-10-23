@@ -43,7 +43,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 # PIP_INDEX_URL is inherited from the build arg when set; empty means PyPI.
-RUN pip install '.[kws]'
+RUN pip install '.[kws,channels]'
 COPY --from=web /web/dist /app/web/dist
 # Health probe: reads the port and the device list from config, and treats a configured
 # device with a dead audio plane as unhealthy. See deploy/healthcheck.py.

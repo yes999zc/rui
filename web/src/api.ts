@@ -502,10 +502,40 @@ export interface WeixinChannelState {
   user_id: string
 }
 
+export interface ChannelGatewayStatus {
+  running: boolean
+  pid: number | null
+  started_at: number | null
+  uptime_s: number
+  last_error: string
+  log_path: string
+  managed: boolean
+  enabled: boolean
+}
+
 export interface ChannelsGateway {
   command: string
   config_note: string
   config_path?: string
+  status?: ChannelGatewayStatus | null
+}
+
+/** Result of the write-only Telegram token check (getMe); the token never comes back. */
+export interface TelegramTokenResult {
+  ok: boolean
+  username: string
+  token_configured: boolean
+}
+
+export type WeixinLoginStatus = 'idle' | 'starting' | 'waiting' | 'confirmed' | 'error'
+
+/** QR login state; qr_svg is a data: URI and may be empty when segno is unavailable. */
+export interface WeixinLoginState {
+  status: WeixinLoginStatus
+  qr_url: string
+  qr_svg: string
+  error: string
+  account_id: string
 }
 
 export interface ChannelsState {
@@ -693,6 +723,22 @@ export const api = {
   channels: () => request<ChannelsState>('/api/v1/channels'),
   saveChannels: (patch: ChannelsPatch) =>
     request<ChannelsState>('/api/v1/channels', { method: 'PUT', body: JSON.stringify(patch) }),
+  /** Managed channel gateway process (supervisor); each action returns the fresh status. */
+  startChannelGateway: () =>
+    request<ChannelGatewayStatus>('/api/v1/channels/gateway/start', { method: 'POST' }),
+  stopChannelGateway: () =>
+    request<ChannelGatewayStatus>('/api/v1/channels/gateway/stop', { method: 'POST' }),
+  restartChannelGateway: () =>
+    request<ChannelGatewayStatus>('/api/v1/channels/gateway/restart', { method: 'POST' }),
+  /** Validate and store the bot token server-side; empty clears it. */
+  setTelegramToken: (token: string) =>
+    request<TelegramTokenResult>('/api/v1/channels/telegram/token', {
+      method: 'PUT',
+      body: JSON.stringify({ token }),
+    }),
+  startWeixinLogin: () =>
+    request<WeixinLoginState>('/api/v1/channels/weixin/login', { method: 'POST' }),
+  weixinLogin: () => request<WeixinLoginState>('/api/v1/channels/weixin/login'),
 
   /* — config catalog (console-api, docs/config-catalog-contract.md) ————— */
 

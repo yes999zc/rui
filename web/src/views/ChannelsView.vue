@@ -11,7 +11,7 @@
  * Secrets stay out of the UI entirely: the API only exposes `token_configured`,
  * never a token value.
  */
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import {
@@ -19,9 +19,12 @@ import {
   ApiError,
   type ChannelsPatch,
   type ChannelsState,
+  type ChannelGatewayStatus,
   type ChannelReplyMode,
+  type WeixinLoginState,
+  type WeixinLoginStatus,
 } from '../api'
-import { t, type MsgKey } from '../i18n'
+import { formatUptime, t, type MsgKey } from '../i18n'
 
 interface ChannelDraft {
   enabled: boolean
@@ -53,8 +56,23 @@ const loading = ref(true)
 const loadError = ref('')
 const saving = ref<'' | 'telegram' | 'weixin'>('')
 const feedback = ref<Feedback | null>(null)
-const copied = ref<'' | 'gateway' | 'login'>('')
+const copied = ref<'' | 'gateway'>('')
 const copyFailed = ref(false)
+
+// Managed gateway / 0-1 setup state.
+const restartNeeded = ref(false)
+const tokenDraft = ref('')
+const tokenBusy = ref(false)
+const tokenError = ref('')
+const tokenNotice = ref('')
+const telegramUsername = ref('')
+const TG_USERNAME_KEY = 'house-ear-telegram-username'
+const login = ref<WeixinLoginState | null>(null)
+const loginBusy = ref(false)
+const gatewayBusy = ref<'' | 'start' | 'stop' | 'restart'>('')
+const gatewayError = ref('')
+const gatewayNotice = ref('')
+let loginTimer: number | undefined
 
 const telegram = reactive<ChannelDraft>({ enabled: false, ids: '', reply: 'text' })
 const weixin = reactive<ChannelDraft>({ enabled: false, ids: '', reply: 'text' })
@@ -97,6 +115,50 @@ const enabledCount = computed(
 )
 const tgIdCount = computed(() => parseIds(telegram.ids).length)
 const wxIdCount = computed(() => parseIds(weixin.ids).length)
+const gatewayStatus = computed(() => state.value?.gateway.status ?? null)
+const gatewayStatusLabel = computed(() =>
+  gatewayStatus.value
+    ? gatewayStatus.value.running
+      ? t('channels.gateway.statusRunning')
+      : t('channels.gateway.statusStopped')
+    : t('channels.gateway.statusUnknown'),
+)
+const gatewayStatusTone = computed(() =>
+  gatewayStatus.value ? (gatewayStatus.value.running ? 'badge-ok' : 'badge-muted') : 'badge-warn',
+)
+const loginActive = computed(
+  () => login.value?.status === 'starting' || login.value?.status === 'waiting',
+)
+const LOGIN_LABEL: Record<WeixinLoginStatus, MsgKey> = {
+  idle: 'channels.weixin.loginStatusIdle',
+  starting: 'channels.weixin.loginStatusStarting',
+  waiting: 'channels.weixin.loginStatusWaiting',
+  confirmed: 'channels.weixin.loginStatusConfirmed',
+  error: 'channels.weixin.loginStatusError',
+}
+const loginLabel = computed(() =>
+  login.value ? t(LOGIN_LABEL[login.value.status] ?? 'channels.weixin.loginStatusIdle') : t('channels.weixin.loginStatusIdle'),
+)
+const loginTone = computed(() => {
+  switch (login.value?.status) {
+    case 'confirmed':
+      return 'badge-ok'
+    case 'starting':
+    case 'waiting':
+      return 'badge-warn'
+    case 'error':
+      return 'badge-fail'
+    default:
+      return 'badge-muted'
+  }
+})
+/** Only render an inline QR for the data URI the backend actually sends. */
+const qrSrc = computed(() => {
+  const svg = login.value?.qr_svg ?? ''
+  return svg.startsWith('data:image/svg+xml;base64,') ? svg : ''
+})
+const qrUrl = computed(() => login.value?.qr_url ?? '')
+const loginAccount = computed(() => login.value?.account_id || state.value?.weixin.account_id || '')
 
 function replyLabel(mode: ChannelReplyMode): string {
   return t(REPLY_LABEL[mode] ?? 'channels.reply.text')
@@ -128,11 +190,37 @@ function syncWeixin(): void {
   }
 }
 
+/** The GET contract does not carry the bot username, so remember the last verified one. */
+function cachedTelegramUsername(): string {
+  try {
+    return window.localStorage.getItem(TG_USERNAME_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function rememberTelegramUsername(name: string): void {
+  try {
+    if (name) window.localStorage.setItem(TG_USERNAME_KEY, name)
+    else window.localStorage.removeItem(TG_USERNAME_KEY)
+  } catch {
+    /* private mode: the username just won't survive a reload */
+  }
+}
+
 /** After a save, refresh only the saved channel so the other draft is preserved. */
-function applyState(next: ChannelsState, only?: 'telegram' | 'weixin'): void {
+function applyState(next: ChannelsState, only?: 'telegram' | 'weixin' | 'none'): void {
   state.value = next
-  if (only !== 'weixin') syncTelegram()
-  if (only !== 'telegram') syncWeixin()
+  if (only !== 'none') {
+    if (only !== 'weixin') syncTelegram()
+    if (only !== 'telegram') syncWeixin()
+  }
+  if (!next.telegram.token_configured) {
+    telegramUsername.value = ''
+    rememberTelegramUsername('')
+  } else if (!telegramUsername.value) {
+    telegramUsername.value = cachedTelegramUsername()
+  }
 }
 
 function messageOf(exc: unknown): string {
@@ -141,16 +229,22 @@ function messageOf(exc: unknown): string {
   return String(exc)
 }
 
-async function load(): Promise<void> {
-  loading.value = true
-  loadError.value = ''
-  feedback.value = null
+async function load(silent = false, preserveDrafts = false): Promise<void> {
+  if (!silent) {
+    loading.value = true
+    loadError.value = ''
+    feedback.value = null
+    restartNeeded.value = false
+  }
   try {
-    applyState(await api.channels())
+    const next = await api.channels()
+    if (preserveDrafts) applyState(next, 'none')
+    else applyState(next)
+    await refreshLoginState()
   } catch (exc) {
-    loadError.value = messageOf(exc)
+    if (!silent) loadError.value = messageOf(exc)
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
@@ -187,6 +281,7 @@ async function save(name: 'telegram' | 'weixin'): Promise<void> {
   }
   try {
     applyState(await api.saveChannels(patch), name)
+    restartNeeded.value = true
     feedback.value = { channel: name, kind: 'ok', text: t('channels.saved') }
   } catch (exc) {
     feedback.value = {
@@ -199,12 +294,14 @@ async function save(name: 'telegram' | 'weixin'): Promise<void> {
   }
 }
 
-/** The channels.json sits next to the weixin data dir, e.g. <data_dir>/channels.json. */
+/** Prefer the path the API exposes; fall back to the documented data-dir layout. */
 const channelsPath = computed(() => {
+  const explicit = state.value?.gateway.config_path
+  if (explicit) return explicit
   const dir = state.value?.weixin.data_dir?.trim() ?? ''
   const match = dir.match(/^(.*)\/channels\/weixin\/?$/)
   if (match) return `${match[1]}/channels.json`
-  return state.value?.gateway.config_path || '<data_dir>/channels.json'
+  return '<data_dir>/channels.json'
 })
 
 const gatewayCommand = computed(() => {
@@ -212,7 +309,7 @@ const gatewayCommand = computed(() => {
   return `${command} --channels-config ${channelsPath.value}`
 })
 
-async function copy(text: string, key: 'gateway' | 'login'): Promise<void> {
+async function copy(text: string, key: 'gateway'): Promise<void> {
   copyFailed.value = false
   try {
     await navigator.clipboard.writeText(text)
@@ -225,12 +322,163 @@ async function copy(text: string, key: 'gateway' | 'login'): Promise<void> {
   }
 }
 
+// — Telegram token (write-only, validated server-side) ————————
+async function saveTelegramToken(): Promise<void> {
+  const token = tokenDraft.value.trim()
+  if (!token || tokenBusy.value) return
+  tokenBusy.value = true
+  tokenError.value = ''
+  tokenNotice.value = ''
+  try {
+    const result = await api.setTelegramToken(token)
+    tokenDraft.value = ''
+    telegramUsername.value = result.username
+    rememberTelegramUsername(result.username)
+    await load(true, true)
+    restartNeeded.value = true
+    tokenNotice.value = result.username
+      ? t('channels.telegram.tokenSavedAs', { username: result.username })
+      : t('channels.telegram.tokenSaved')
+  } catch (exc) {
+    tokenError.value = t('channels.telegram.tokenFailed', { message: tokenErrorMessage(exc) })
+  } finally {
+    tokenBusy.value = false
+  }
+}
+
+function tokenErrorMessage(exc: unknown): string {
+  const message = messageOf(exc).replace(/^\d{3}\s+/, '')
+  if (/Telegram rejected/i.test(message)) return t('channels.telegram.tokenRejected')
+  return message
+}
+
+async function clearTelegramToken(): Promise<void> {
+  if (tokenBusy.value) return
+  if (!window.confirm(t('channels.telegram.clearConfirm'))) return
+  tokenBusy.value = true
+  tokenError.value = ''
+  tokenNotice.value = ''
+  try {
+    await api.setTelegramToken('')
+    telegramUsername.value = ''
+    rememberTelegramUsername('')
+    await load(true, true)
+    restartNeeded.value = true
+    tokenNotice.value = t('channels.telegram.tokenCleared')
+  } catch (exc) {
+    tokenError.value = t('channels.telegram.tokenFailed', { message: tokenErrorMessage(exc) })
+  } finally {
+    tokenBusy.value = false
+  }
+}
+
+// — WeChat QR login (POST starts the flow, GET polls every 2 s) ——
+function stopLoginPolling(): void {
+  if (loginTimer !== undefined) {
+    window.clearInterval(loginTimer)
+    loginTimer = undefined
+  }
+}
+
+function startLoginPolling(): void {
+  stopLoginPolling()
+  loginTimer = window.setInterval(() => {
+    void pollWeixinLogin()
+  }, 2000)
+}
+
+async function refreshLoginState(): Promise<void> {
+  try {
+    const current = await api.weixinLogin()
+    login.value = current
+    if (current.status === 'starting' || current.status === 'waiting') startLoginPolling()
+  } catch {
+    // QR is optional; a failed GET must not break the whole channels page.
+  }
+}
+
+async function beginWeixinLogin(): Promise<void> {
+  if (loginBusy.value || loginActive.value) return
+  loginBusy.value = true
+  try {
+    login.value = await api.startWeixinLogin()
+    if (loginActive.value) startLoginPolling()
+  } catch (exc) {
+    login.value = {
+      status: 'error',
+      qr_url: '',
+      qr_svg: '',
+      error: messageOf(exc),
+      account_id: '',
+    }
+  } finally {
+    loginBusy.value = false
+  }
+}
+
+async function pollWeixinLogin(): Promise<void> {
+  if (!loginActive.value) {
+    stopLoginPolling()
+    return
+  }
+  try {
+    const next = await api.weixinLogin()
+    login.value = next
+    if (next.status === 'confirmed') {
+      stopLoginPolling()
+      await load(true, true)
+      restartNeeded.value = true
+    } else if (next.status === 'error' || next.status === 'idle') {
+      stopLoginPolling()
+    }
+  } catch {
+    // transient poll failure: keep waiting, the next tick retries
+  }
+}
+
+// — managed gateway process ————————————————————————————————
+async function gatewayAction(action: 'start' | 'stop' | 'restart'): Promise<void> {
+  if (gatewayBusy.value) return
+  if (action === 'restart' && !window.confirm(t('channels.gateway.confirmRestart'))) return
+  gatewayBusy.value = action
+  gatewayError.value = ''
+  gatewayNotice.value = ''
+  try {
+    let result: ChannelGatewayStatus
+    if (action === 'start') result = await api.startChannelGateway()
+    else if (action === 'stop') result = await api.stopChannelGateway()
+    else result = await api.restartChannelGateway()
+    if (state.value) {
+      state.value = { ...state.value, gateway: { ...state.value.gateway, status: result } }
+    }
+    if (action !== 'stop' && result.running) restartNeeded.value = false
+    if (result.last_error) {
+      gatewayError.value = t('channels.gateway.actionFailed', { message: result.last_error })
+    } else {
+      gatewayNotice.value =
+        action === 'start'
+          ? t('channels.gateway.started')
+          : action === 'stop'
+            ? t('channels.gateway.stopped')
+            : t('channels.gateway.restarted')
+    }
+  } catch (exc) {
+    gatewayError.value = t('channels.gateway.actionFailed', { message: messageOf(exc) })
+  } finally {
+    gatewayBusy.value = ''
+  }
+}
+
 onBeforeRouteLeave(() => {
   if (!dirty.value) return true
   return window.confirm(t('channels.unsavedLeave'))
 })
 
-onMounted(load)
+onBeforeUnmount(stopLoginPolling)
+
+onMounted(() => {
+  void load()
+})
 </script>
 
 <template>
@@ -242,6 +490,7 @@ onMounted(load)
       <p class="ch-intro">{{ t('channels.introNote') }}</p>
     </div>
     <div v-if="state" class="page-head-side">
+      <span class="badge" :class="gatewayStatusTone">{{ gatewayStatusLabel }}</span>
       <span class="badge" :class="enabledCount ? 'badge-ok' : 'badge-muted'">
         {{ t('channels.enabledCount', { n: enabledCount }) }}
       </span>
@@ -254,7 +503,7 @@ onMounted(load)
     <AppIcon name="alert" :size="18" class="banner-icon" />
     <div>
       <p>{{ t('channels.loadError', { message: loadError }) }}</p>
-      <button type="button" class="btn btn-sm" style="margin-top: 10px" @click="load">{{ t('channels.retry') }}</button>
+      <button type="button" class="btn btn-sm" style="margin-top: 10px" @click="load()">{{ t('channels.retry') }}</button>
     </div>
   </div>
 
@@ -315,6 +564,49 @@ onMounted(load)
             </select>
           </div>
 
+          <div class="ch-token-editor">
+            <div class="ch-label-row">
+              <label class="ch-label" for="tg-token">{{ t('channels.telegram.tokenInput') }}</label>
+              <span v-if="telegramUsername && state.telegram.token_configured" class="field-hint">
+                {{ t('channels.telegram.botUsername', { username: telegramUsername }) }}
+              </span>
+            </div>
+            <div class="token-row">
+              <input
+                id="tg-token"
+                v-model="tokenDraft"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                :placeholder="t('channels.telegram.tokenPlaceholder')"
+                :disabled="tokenBusy"
+                @keyup.enter="saveTelegramToken"
+              />
+              <button
+                type="button"
+                class="btn btn-primary"
+                :disabled="tokenBusy || !tokenDraft.trim()"
+                @click="saveTelegramToken"
+              >
+                {{ tokenBusy ? t('channels.telegram.verifying') : t('channels.telegram.saveAndVerify') }}
+              </button>
+            </div>
+            <p v-if="!state.telegram.token_configured" class="field-hint">
+              {{ t('channels.telegram.tokenMissingHint') }}
+            </p>
+            <div v-if="state.telegram.token_configured" class="token-actions">
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                :disabled="tokenBusy"
+                @click="clearTelegramToken"
+              >
+                {{ t('channels.telegram.clearToken') }}
+              </button>
+            </div>
+            <p v-if="tokenError" class="note fail" role="alert">{{ tokenError }}</p>
+            <p v-if="tokenNotice" class="note ok" role="status">{{ tokenNotice }}</p>
+          </div>
           <p class="ch-token-note">{{ t('channels.telegram.tokenNote') }}</p>
         </div>
 
@@ -380,25 +672,55 @@ onMounted(load)
             <p v-else class="field-hint">{{ t('channels.weixin.noAccount') }}</p>
           </div>
 
-          <div class="ch-help">
-            <h3>{{ t('channels.weixin.qrTitle') }}</h3>
-            <ol>
-              <li>
-                {{ t('channels.weixin.qrStep1') }}
-                <div class="cmd-row">
-                  <code class="mono">{{ t('channels.weixin.loginCommand') }}</code>
-                  <button type="button" class="btn btn-sm" @click="copy(t('channels.weixin.loginCommand'), 'login')">
-                    {{ copied === 'login' ? t('channels.gateway.copied') : t('channels.gateway.copy') }}
-                  </button>
-                </div>
-              </li>
-              <li>{{ t('channels.weixin.qrStep2') }}</li>
-              <li>{{ t('channels.weixin.qrStep3') }}</li>
-            </ol>
-            <p class="field-hint">
-              {{ t('channels.weixin.dataDir') }}: <code class="mono">{{ state.weixin.data_dir }}</code>
+          <div class="ch-help ch-login">
+            <div class="ch-label-row">
+              <h3>{{ t('channels.weixin.qrTitle') }}</h3>
+              <span class="badge" :class="loginTone">{{ loginLabel }}</span>
+            </div>
+            <p class="field-hint">{{ t('channels.weixin.loginHint') }}</p>
+
+            <div v-if="qrSrc" class="qr-box">
+              <img :src="qrSrc" :alt="t('channels.weixin.qrAlt')" referrerpolicy="no-referrer" />
+              <a v-if="qrUrl" :href="qrUrl" target="_blank" rel="noopener noreferrer">
+                {{ t('channels.weixin.qrFallback') }}
+              </a>
+            </div>
+            <p v-else-if="qrUrl" class="field-hint">
+              <a :href="qrUrl" target="_blank" rel="noopener noreferrer">{{ t('channels.weixin.qrFallback') }}</a>
             </p>
-            <p v-if="copyFailed" class="note fail">{{ t('channels.gateway.copyFailed') }}</p>
+
+            <p v-if="login?.status === 'starting'" class="field-hint">{{ t('channels.weixin.loginStarting') }}</p>
+            <p v-else-if="login?.status === 'waiting'" class="field-hint">{{ t('channels.weixin.loginWaiting') }}</p>
+            <p v-else-if="login?.status === 'confirmed'" class="note ok" role="status">
+              {{ t('channels.weixin.loginConfirmed') }}
+            </p>
+            <p v-else-if="login?.status === 'error'" class="note fail" role="alert">
+              {{ t('channels.weixin.loginError', { message: login.error || t('common.error') }) }}
+            </p>
+
+            <div class="actions login-actions">
+              <button
+                type="button"
+                class="btn btn-primary"
+                :disabled="loginBusy || loginActive"
+                @click="beginWeixinLogin"
+              >
+                {{ loginBusy || login?.status === 'starting'
+                  ? t('channels.weixin.loginStarting')
+                  : loginActive
+                    ? t('channels.weixin.loginWaiting')
+                    : login?.status === 'confirmed'
+                      ? t('channels.weixin.relogin')
+                      : t('channels.weixin.loginButton') }}
+              </button>
+            </div>
+
+            <p v-if="loginAccount" class="field-hint">
+              {{ t('channels.weixin.boundAccount', { account: loginAccount }) }}
+            </p>
+            <p class="field-hint">
+              {{ t('channels.weixin.dataDirShort') }}: <code class="mono">{{ state.weixin.data_dir }}</code>
+            </p>
           </div>
 
           <div class="ch-field">
@@ -443,15 +765,87 @@ onMounted(load)
       </section>
     </div>
 
-    <!-- Gateway process -->
+    <div v-if="restartNeeded" class="banner banner-warn restart-banner" role="status">
+      <AppIcon name="refresh" :size="18" class="banner-icon" />
+      <span>{{ t('channels.restartNeeded') }}</span>
+      <button
+        type="button"
+        class="btn btn-sm btn-primary"
+        :disabled="gatewayBusy !== '' || !gatewayStatus || !gatewayStatus.enabled"
+        @click="gatewayAction('restart')"
+      >
+        {{ gatewayBusy === 'restart' ? t('channels.gateway.restarting') : t('channels.gateway.restart') }}
+      </button>
+    </div>
+
     <section class="surface gateway-card">
       <div class="block-head">
         <h2>{{ t('channels.gateway.title') }}</h2>
-        <span class="badge badge-muted">{{ t('channels.gateway.independent') }}</span>
+        <div class="ch-chips">
+          <span class="badge" :class="gatewayStatusTone">{{ gatewayStatusLabel }}</span>
+          <span class="badge badge-muted">{{ t('channels.gateway.managed') }}</span>
+        </div>
       </div>
       <p class="ch-desc">{{ t('channels.gateway.desc') }}</p>
 
-      <div class="ch-field">
+      <div class="gw-status">
+        <p v-if="!gatewayStatus" class="ch-token-note">{{ t('channels.gateway.unavailable') }}</p>
+        <template v-else>
+          <div class="gw-metrics">
+            <div>
+              <span class="ch-k">{{ t('channels.gateway.pid') }}</span>
+              <code class="mono">{{ gatewayStatus.pid ?? '—' }}</code>
+            </div>
+            <div>
+              <span class="ch-k">{{ t('channels.gateway.uptime') }}</span>
+              <code class="mono">{{ gatewayStatus.running ? formatUptime(gatewayStatus.uptime_s) : '—' }}</code>
+            </div>
+            <div class="wide">
+              <span class="ch-k">{{ t('channels.gateway.logPath') }}</span>
+              <code class="mono">{{ gatewayStatus.log_path || '—' }}</code>
+            </div>
+          </div>
+          <p v-if="!gatewayStatus.enabled" class="field-hint">{{ t('channels.gateway.disabledHint') }}</p>
+          <p v-if="gatewayStatus.last_error" class="note fail">
+            {{ t('channels.gateway.lastError') }}: {{ gatewayStatus.last_error }}
+          </p>
+        </template>
+      </div>
+
+      <div class="actions gateway-actions">
+        <button
+          type="button"
+          class="btn"
+          :disabled="gatewayBusy !== '' || !gatewayStatus || gatewayStatus.running || !gatewayStatus.enabled"
+          @click="gatewayAction('start')"
+        >
+          <AppIcon name="play" :size="13" />
+          {{ gatewayBusy === 'start' ? t('channels.gateway.starting') : t('channels.gateway.start') }}
+        </button>
+        <button
+          type="button"
+          class="btn"
+          :disabled="gatewayBusy !== '' || !gatewayStatus?.running"
+          @click="gatewayAction('stop')"
+        >
+          <AppIcon name="stop" :size="13" />
+          {{ gatewayBusy === 'stop' ? t('channels.gateway.stopping') : t('channels.gateway.stop') }}
+        </button>
+        <button
+          type="button"
+          class="btn btn-primary"
+          :disabled="gatewayBusy !== '' || !gatewayStatus || !gatewayStatus.enabled"
+          @click="gatewayAction('restart')"
+        >
+          <AppIcon name="refresh" :size="13" />
+          {{ gatewayBusy === 'restart' ? t('channels.gateway.restarting') : t('channels.gateway.restart') }}
+        </button>
+      </div>
+
+      <p v-if="gatewayNotice" class="note ok" role="status">{{ gatewayNotice }}</p>
+      <p v-if="gatewayError" class="note fail" role="alert">{{ gatewayError }}</p>
+
+      <div class="ch-field gw-command">
         <div class="ch-label-row">
           <span class="ch-label">{{ t('channels.gateway.command') }}</span>
           <span v-if="copied === 'gateway'" class="field-hint">{{ t('channels.gateway.copied') }}</span>
@@ -468,7 +862,7 @@ onMounted(load)
         </p>
       </div>
 
-      <p class="ch-restart">{{ t('channels.gateway.restart') }}</p>
+      <p class="ch-restart">{{ t('channels.gateway.restartNote') }}</p>
     </section>
   </template>
 </template>
@@ -680,6 +1074,129 @@ onMounted(load)
   margin-top: var(--s2);
 }
 
+.ch-token-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.token-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s2);
+  margin-top: 3px;
+}
+
+.token-row input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  font-size: 12.5px;
+}
+
+.token-row .btn {
+  flex: none;
+}
+
+.token-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.token-actions .field-hint {
+  margin: 0;
+}
+
+.qr-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.qr-box img {
+  display: block;
+  width: 200px;
+  max-width: 100%;
+  height: auto;
+}
+
+.qr-box a,
+.ch-help a {
+  color: var(--accent);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.login-actions {
+  justify-content: flex-start;
+  margin-top: var(--s2);
+}
+
+.gw-status {
+  margin-top: var(--s4);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.gw-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s2) var(--s4);
+}
+
+.gw-metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.gw-metrics .wide {
+  grid-column: 1 / -1;
+}
+
+.gw-metrics code {
+  font-size: 11px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.gw-status .note,
+.gw-status .field-hint {
+  margin-top: var(--s2);
+}
+
+.gateway-actions {
+  margin-top: var(--s4);
+}
+
+.restart-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: var(--s4);
+}
+
+.restart-banner .btn {
+  margin-left: auto;
+}
+
+.gateway-card .gw-command {
+  margin-top: var(--s4);
+}
+
 .cmd-row {
   display: flex;
   align-items: center;
@@ -770,6 +1287,39 @@ onMounted(load)
   .ch-actions .btn {
     flex: 1;
     min-height: 44px;
+  }
+
+  .token-row {
+    flex-direction: column;
+  }
+
+  .token-row input,
+  .token-row .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .token-actions .btn {
+    min-height: 44px;
+  }
+
+  .gw-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .gateway-actions .btn {
+    flex: 1 1 100%;
+    min-height: 44px;
+  }
+
+  .restart-banner .btn {
+    width: 100%;
+    margin-left: 0;
+    min-height: 44px;
+  }
+
+  .qr-box img {
+    width: 180px;
   }
 
   .cmd-row {

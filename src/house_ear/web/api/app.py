@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
+import httpx
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +31,8 @@ from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneSupervisor
 from ...audio.kws import KwsUnavailable, keyword_meta, model_files, write_keywords_file
 from ...audio.protocol import PlayFile, StopAudio
+from ...channels.supervisor import ChannelSupervisor
+from ...channels.weixin import WeixinAdapter
 from ...config.catalog import (
     coerce,
     field_specs,
@@ -1624,6 +1627,14 @@ def create_app(
         # MCP sessions first: an HTTP session gets its own connection closed, a stdio
         # server is a child process that must not outlive the control plane.
         await mcp_manager.stop()
+        login_task = getattr(app.state, "weixin_login_task", None)
+        if login_task is not None and not login_task.done():
+            login_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await login_task
+        channel_supervisor = getattr(app.state, "channel_supervisor", None)
+        if channel_supervisor is not None:
+            await channel_supervisor.stop()
         supervisor = getattr(app.state, "audio", None)
         if supervisor is not None:
             await supervisor.stop()
@@ -1636,6 +1647,13 @@ def create_app(
     # production the lifespan keeps them); create the containers eagerly.
     app.state.chat_histories: dict[str, list[dict]] = {}
     app.state.chat_lock = asyncio.Lock()
+    app.state.channel_supervisor = ChannelSupervisor(cfg, Path(cfg.system.data_dir))
+    # The console's WeChat QR flow is a control-plane task, not a gateway task: the
+    # account is saved here so the gateway can use it after Start.
+    app.state.weixin_login: dict[str, object] = {
+        "status": "idle", "qr_url": "", "qr_svg": "", "error": "", "account_id": "",
+    }
+    app.state.weixin_login_task: asyncio.Task | None = None
     app.state.config_path = config_path
     # The wizard can add a device at runtime; endpoints read this attribute, not a
     # startup closure, so a fresh probe does not need a control-plane restart.
@@ -2186,7 +2204,8 @@ def create_app(
                 for name in ("telegram", "weixin"):
                     if isinstance(saved.get(name), dict):
                         state[name].update(saved[name])
-        token = bool(os.environ.get("TELEGRAM_BOT_TOKEN")
+        token = bool(secrets.has("TELEGRAM_BOT_TOKEN")
+                     or os.environ.get("TELEGRAM_BOT_TOKEN")
                      or os.environ.get("HOUSE_EAR_TELEGRAM_TOKEN"))
         state["telegram"]["token_configured"] = token
         wx_dir = Path(state["weixin"].get("data_dir") or "")
@@ -2196,10 +2215,12 @@ def create_app(
         state["weixin"]["logged_in"] = bool(account.get("token"))
         state["weixin"]["account_id"] = str(account.get("accountId") or "")
         state["weixin"]["user_id"] = str(account.get("userId") or "")
+        supervisor = getattr(app.state, "channel_supervisor", None)
         state["gateway"] = {
             "command": "house-ear-channels",
             "config_note": "The gateway reads this state at startup; restart it after changes.",
             "config_path": str(path),
+            "status": supervisor.status() if supervisor is not None else None,
         }
         return state
 
@@ -2237,6 +2258,88 @@ def create_app(
         os.chmod(tmp, 0o600)
         tmp.replace(path)
         return _channels_state()
+
+    @app.post("/api/v1/channels/gateway/{action}", dependencies=[Depends(auth)])
+    async def channel_gateway_action(action: str) -> dict:
+        supervisor = getattr(app.state, "channel_supervisor", None)
+        if supervisor is None:
+            raise HTTPException(status_code=503, detail="channel supervisor is not ready")
+        if action == "start":
+            return await supervisor.start()
+        if action == "stop":
+            return await supervisor.stop()
+        if action == "restart":
+            return await supervisor.restart()
+        raise HTTPException(status_code=404, detail="action must be start/stop/restart")
+
+    @app.put("/api/v1/channels/telegram/token", dependencies=[Depends(auth)])
+    async def set_telegram_token(patch: Annotated[dict, Body()]) -> dict:
+        token = str(patch.get("token") or "").strip()
+        if not token:
+            secrets.put("TELEGRAM_BOT_TOKEN", "")
+            return {"ok": True, "username": "", "token_configured": False}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+        if response.status_code != 200:
+            raise HTTPException(status_code=422, detail="Telegram rejected this bot token")
+        data = response.json()
+        if not data.get("ok"):
+            raise HTTPException(status_code=422, detail="Telegram rejected this bot token")
+        secrets.put("TELEGRAM_BOT_TOKEN", token)
+        result = data.get("result") or {}
+        return {"ok": True, "username": str(result.get("username") or ""),
+                "token_configured": True}
+
+    def _qr_svg(url: str) -> str:
+        if not url:
+            return ""
+        try:
+            import io
+
+            import segno
+            qr = segno.make(url)
+            buf = io.BytesIO()
+            qr.save(buf, kind="svg", scale=6, border=2)
+            return "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+        except Exception:  # noqa: BLE001 - the URL still works without an inline QR
+            return ""
+
+    @app.post("/api/v1/channels/weixin/login", dependencies=[Depends(auth)])
+    async def start_weixin_login() -> dict:
+        state = app.state.weixin_login
+        task = app.state.weixin_login_task
+        if task is not None and not task.done():
+            return dict(state)
+        state.update({"status": "starting", "qr_url": "", "qr_svg": "", "error": "", "account_id": ""})
+
+        async def run() -> None:
+            channel = _channels_state()["weixin"]
+            data_dir = Path(str(channel.get("data_dir") or ""))
+            adapter = WeixinAdapter(data_dir)
+            try:
+                def on_qr(qrcode: str, image: str) -> None:
+                    url = image or qrcode
+                    state.update({"status": "waiting", "qr_url": url, "qr_svg": _qr_svg(url)})
+
+                account = await adapter.qr_login(on_qr=on_qr)
+                adapter.save_login(account)
+                state.update({"status": "confirmed",
+                              "account_id": str(account.get("accountId") or ""),
+                              "error": ""})
+            except asyncio.CancelledError:
+                state.update({"status": "idle"})
+                raise
+            except Exception as exc:  # noqa: BLE001
+                state.update({"status": "error", "error": str(exc)[:300]})
+            finally:
+                await adapter.stop()
+
+        app.state.weixin_login_task = asyncio.create_task(run(), name="weixin-login")
+        return dict(state)
+
+    @app.get("/api/v1/channels/weixin/login", dependencies=[Depends(auth)])
+    async def get_weixin_login() -> dict:
+        return dict(app.state.weixin_login)
 
     @app.post("/api/v1/chat", dependencies=[Depends(auth)])
     async def channel_chat(patch: Annotated[dict, Body()]) -> dict:
