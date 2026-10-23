@@ -543,6 +543,10 @@ def create_app(
                         with contextlib.suppress(Exception):
                             await runner.say(phrases.book.render("turn.failed"),
                                              _speaking(app, client), trace)
+                        # The plane's drain needs the flag or it falls back to the
+                        # no-reply grace; a failed turn is still a finished turn.
+                        with contextlib.suppress(Exception):
+                            await client.reply_finished()
                         return
                     if asr_report is not None:
                         result.stages.setdefault("asr", asr_report)

@@ -97,8 +97,10 @@ MAX_SPEAK_QUEUE_S = 120.0
 FADE_IN_MS = 12
 # A turn that ends without a reply (a failed LM round, a dead tool) still gives the
 # music back after this long - the old build's silent-wake watchdog used 4 s for the
-# same "do not keep the song down forever" rule.
-NO_REPLY_RESUME_S = 4.0
+# same "do not keep the song down forever" rule. 4 s was too short for a slow tool:
+# measured 08:41:57, a weather lookup ran 9 s and the song came back mid-turn.
+# 12 s covers a slow tool call; a genuinely dead turn gives the music back by then.
+NO_REPLY_RESUME_S = 12.0
 # While a conversation is open the song stays down: a follow-up window is armed
 # right after every reply, and music may only return once that window has closed.
 # Without the hold the reply drained first and the song blipped back in between
