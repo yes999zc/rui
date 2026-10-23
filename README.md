@@ -105,7 +105,7 @@ On the NAS (production), one command — details, config and models in
 [docs/deploy.md](docs/deploy.md):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yes999zc/house-ear/main/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 ```
 
 Then open `http://<nas-ip>:8080/` and run `docker compose exec house-ear house-ear doctor`.

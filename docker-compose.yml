@@ -1,10 +1,10 @@
 services:
   house-ear:
     # Pin a release in production. install.sh passes HOUSE_EAR_IMAGE, and .env can hold it
-    # for good: HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:0.0.1
+    # for good: HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.1
     # `latest` is the rolling default, not the only recommendation - a tag or a digest is
     # what makes a rollback (and a bug report) reproducible. See docs/runbook.md.
-    image: ${HOUSE_EAR_IMAGE:-ghcr.io/yes999zc/house-ear:latest}
+    image: ${HOUSE_EAR_IMAGE:-ghcr.io/yes999zc/rui:latest}
     container_name: house-ear
     restart: unless-stopped
     network_mode: host          # device audio is a long-lived socket; host avoids NAT surprises

@@ -10,7 +10,7 @@
 | 项 | 检查 | 命令/证据 |
 |---|---|---|
 | 仓库匿名可读 | `curl -fsSL .../deploy/install.sh \| head -1` 返回 200，不是 404 | 当前**未满足**：仓库仍私有 |
-| 镜像已发布 | `docker pull ghcr.io/yes999zc/house-ear:<tag>` | CI `docker-publish.yml` 在 main/v* 上推 GHCR |
+| 镜像已发布 | `docker pull ghcr.io/yes999zc/rui:<tag>` | CI `docker-publish.yml` 在 main/v* 上推 GHCR |
 | NAS 可用 | SSH 进 NAS，`docker version` 正常，`docker compose` 可用，空闲内存 ≥ 2 GB | |
 | 音箱可 SSH | 从 NAS `ssh root@<speaker-ip>` 能进（dropbear） | |
 | 密钥齐全 | NAS `.env`：`HOUSE_EAR_LLM_KEY`/`ASR_KEY`/`TTS_KEY`（讯飞可选 `XFYUN_*`）、`HOUSE_EAR_DEVICE_TOKEN`、HA token（可选） | `docker compose exec house-ear house-ear doctor` |
@@ -20,7 +20,7 @@
 **记录开始时间。** 空目录、无旧配置：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yes999zc/house-ear/main/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 # 或本机排练过的方式：HOUSE_EAR_IMAGE=ghcr.io/...:<tag> sh deploy/install.sh
 ```
 

@@ -26,7 +26,7 @@ ARG APT_MIRROR=
 ARG PIP_INDEX_URL=
 LABEL org.opencontainers.image.title="house-ear" \
       org.opencontainers.image.description="Self-hosted voice endpoint for smart speakers" \
-      org.opencontainers.image.source="https://github.com/yes999zc/house-ear" \
+      org.opencontainers.image.source="https://github.com/yes999zc/rui" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1

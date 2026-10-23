@@ -40,7 +40,7 @@
 ## 1. 这是什么
 
 **任何能 SSH 的音箱都能接的个人贾维斯，NAS 一键部署。** v1 只支持小米小爱音箱 Pro（LX06）。
-MIT，公开仓 `yes999zc/house-ear`（main）。
+MIT，公开仓 `yes999zc/rui`（main）。
 
 技术栈：Python 3.12+ / FastAPI / Pydantic v2 控制面；音频面（AEC/KWS/VAD/播放）独立进程；
 前端 Vue 3 + TS + Vite。旧项目 `xiaoai-voice-entry` **只读参考**：不 import、不改配置、
@@ -585,7 +585,7 @@ keywords.txt 内容逐字一致、probe 返回不可达原因、无音频面时�
   docs/scripts 里 `~/AI_Workspace`、`~/.hermes`、私有 checkout 引用全清；HANDOFF 写「公开仓」。
   验证：全量 pytest 绿、ruff clean、`sh -n install.sh` ok、安全 grep 全清。
 
-**⚠ C1 阻塞项（需 9哥 决定）**：`raw.githubusercontent.com/yes999zc/house-ear/main/...` 目前
+**⚠ C1 阻塞项（需 9哥 决定）**：`raw.githubusercontent.com/yes999zc/rui/main/...` 目前
 **404（仓库不可匿名访问）**，`install.sh` 的 `[1/5]` 拉不到 compose/config.example——一键冷装
 在自己机器上排练时是手工预置文件绕过的。C1「一条命令装好」要求仓库公开（或给出带认证的分发路径），
 这件事只能由 9哥 拍板。
@@ -1102,7 +1102,7 @@ setup plane_error 4 条、MCP env 2 条。剩余：真实 Navidrome 凭据保存
 **9哥 出门前授权**：仓库公开 + GHCR public、旧凭据轮换 + filter-repo、NAS 安装调试、给外网地址、
 Telegram 可行性测试。
 
-- **仓库公开**：`yes999zc/house-ear` 已 public；`raw.githubusercontent.com/.../deploy/install.sh`
+- **仓库公开**：`yes999zc/rui` 已 public；`raw.githubusercontent.com/.../deploy/install.sh`
   实测 **200**。
 - **历史清洗**：`git filter-repo` 全历史替换（LAN IP → `<LAN-IP>`、macOS home 绝对路径 → `<home>/`、
   音箱默认 root 密码 → `<redacted>`），并从全部历史移除 `docs/console-shots`（含真实环境截图）；

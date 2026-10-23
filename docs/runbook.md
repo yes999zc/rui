@@ -4,7 +4,7 @@
 本文只回答「现在怎么起停、出问题看哪里、怎么换、怎么退」。
 
 约定：`DIR=~/house-ear`（`HOUSE_EAR_HOME`），容器名 `house-ear`，镜像
-`ghcr.io/yes999zc/house-ear:<tag>`，默认端口 `:8080`、设备通道 `:4412`。
+`ghcr.io/yes999zc/rui:<tag>`，默认端口 `:8080`、设备通道 `:4412`。
 所有命令在 `DIR` 下执行。
 
 ## 1. 这台机器上有什么
@@ -109,7 +109,7 @@ docker compose exec house-ear house-ear doctor
 curl -s localhost:8080/health | python -m json.tool
 ```
 
-- 生产把版本写死在 `.env`：`HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:0.0.1`
+- 生产把版本写死在 `.env`：`HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.1`
   （或 `@sha256:<digest>`）。`latest` 是滚动默认，不是唯一推荐。
   `install.sh` 会把安装时用的 image 写进生成的 `.env`；**手工装**时也要写，否则之后
   `docker compose up -d` 会回落到 `latest` 并尝试拉取（实测：本地 rehearsal 镜像没写
@@ -125,7 +125,7 @@ curl -s localhost:8080/health | python -m json.tool
 ```bash
 cd ~/house-ear
 # 1) 选回滚版本：上一个 tag（或 digest）
-sed -i '' 's|^HOUSE_EAR_IMAGE=.*|HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:0.0.0|' .env  # NAS 用 sed -i
+sed -i '' 's|^HOUSE_EAR_IMAGE=.*|HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.0|' .env  # NAS 用 sed -i
 # 2) 恢复上一版配置（如果升级后改过配置）
 cp config/config.yaml.bak.upgrade.<时间戳> config/config.yaml
 # 3) 重建并验收
@@ -265,7 +265,7 @@ tar czf house-ear-backup-$(date +%Y%m%d).tar.gz house-ear/config house-ear/data 
 3. **设备有配置但 token 空时的确切报错**：plane 进程 `RuntimeError: HOUSE_EAR_DEVICE_TOKEN is empty: refusing to accept an unauthenticated speaker connection`；控制面 `WARNING … audio plane did not start: audio plane refused: …`；`/health` 仍 200（`devices=1, audio_plane=false`），healthcheck 转 unhealthy（`FailingStreak` 最终 20）。
 4. **无设备的默认配置是合法状态**：`/health` ok、`audio_plane=false`、healthcheck healthy、`doctor` degraded（`wake_path` 等）；日志 `audio plane did not start: no device this build can drive`。
 5. **Navidrome + ffmpeg 真机链路（容器内）**：真实 `resolve` 成功——`search: 2 track(s)`，输出 **8,581,722 B / 16 kHz / mono / s16 / 268.2 s**；ffmpeg 对其中一首 flac 打了 `invalid sync code / decode_frame() failed` 警告但退出码 0、音频完整（疑源文件问题，未深究）。
-6. **冷装一键脚本依赖 GitHub raw**：本机访问 `raw.githubusercontent.com/yes999zc/house-ear/main/...` 返回 **404**（仓库当前为私有/不可匿名访问），install.sh 的 `[1/5]` 会失败；排练时预先放好 `docker-compose.yml`/`config.example.yaml` 才跑通。见 §11.7。
+6. **冷装一键脚本依赖 GitHub raw**：本机访问 `raw.githubusercontent.com/yes999zc/rui/main/...` 返回 **404**（仓库当前为私有/不可匿名访问），install.sh 的 `[1/5]` 会失败；排练时预先放好 `docker-compose.yml`/`config.example.yaml` 才跑通。见 §11.7。
 7. **compose 不写 `.env` 的 image 会回落 latest**：`install.sh` 之外的 `docker compose up -d` 若 `.env` 没有 `HOUSE_EAR_IMAGE`，会去拉 `latest`（本机 TLS 超时失败）。已在 install.sh 生成的 `.env` 里写入 pin；实测 run3 之后不带任何 env 前缀的 `docker compose up -d` 直接使用了本地 `house-ear:rehearsal`，没有尝试拉取。
 8. **无设备时看门狗会空转刷日志**：`devices: []` 时 plane 本来就不该启动，但 `watch()` 仍会按退避重试并打印 `audio plane is down (no device this build can drive); restarting in 1 s` / `audio plane restart failed`。不影响健康检查（devices=0 时不查 plane），但首次装完、还没加音箱时日志会周期性出现。建议 `watch()` 在无设备（或 `start_audio=False`）时不启动。
 
@@ -295,5 +295,5 @@ tar czf house-ear-backup-$(date +%Y%m%d).tar.gz house-ear/config house-ear/data 
 | 3 天长稳观察 | P15 时间窗不足 | 启动/自愈已验，长稳后续看 |
 | x86_64 NAS 上运行 | 本机是 arm64；CI 多架构 workflow 未实跑 | 首次 NAS 冷装确认 |
 | 真实模型下载（hf-mirror / GitHub release） | 本机容器到 hf-mirror、GitHub release 均 TLS 握手超时；冷装排练用了预置模型 | 下载**路径/解包布局**已用本地假镜像与 Lead 本机下载验证；真实网络耗时在 NAS 首次安装时确认（KWS tarball 32.9 MB / 解包 39 MB / Lead 本机 597.7 s） |
-| `install.sh` 一条命令（`curl \| sh`） | `raw.githubusercontent.com/yes999zc/house-ear/main` 本机返回 404（仓库当前不可匿名访问）；排练时预置了 compose/config.example | 仓库公开后应可直接跑；发布前必须确认 raw 可匿名访问，否则 C1 一键装不可用 |
+| `install.sh` 一条命令（`curl \| sh`） | `raw.githubusercontent.com/yes999zc/rui/main` 本机返回 404（仓库当前不可匿名访问）；排练时预置了 compose/config.example | 仓库公开后应可直接跑；发布前必须确认 raw 可匿名访问，否则 C1 一键装不可用 |
 | 容器内音乐真机出声 | 需要真实音箱（声音归 Lead） | resolve/转码已验，播放未验 |

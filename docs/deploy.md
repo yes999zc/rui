@@ -43,7 +43,7 @@ docker compose exec house-ear house-ear token --rotate  # 轮换
 ## 2. 一条命令
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yes999zc/house-ear/main/deploy/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 ```
 
 `install.sh` 做五件事（幂等：已有文件不覆盖）：
@@ -60,9 +60,9 @@ curl -fsSL https://raw.githubusercontent.com/yes999zc/house-ear/main/deploy/inst
 
 ```sh
 HOUSE_EAR_HOME=~/house-ear          # 安装目录
-HOUSE_EAR_REPO=yes999zc/house-ear   # fork
+HOUSE_EAR_REPO=yes999zc/rui   # fork
 HOUSE_EAR_REF=main                  # 分支/tag
-HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:0.0.1   # 生产建议固定 tag 或 digest
+HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.1   # 生产建议固定 tag 或 digest
 ```
 
 ## 3. 冷装：到第一句回应
@@ -129,7 +129,7 @@ compose 把 `./data:/var/lib/house-ear`，同时把 `./data/models:/data/models`
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v ~/house-ear/data:/data \
-  ghcr.io/yes999zc/house-ear:<tag> fetch-models \
+  ghcr.io/yes999zc/rui:<tag> fetch-models \
   --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
 # 网络受限时可只装 ASR+VAD（唤醒词会失效）：加 --no-kws
 ```
@@ -139,7 +139,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v ~/house-ear/data:/data \
 `devices[].wake_words` 后必须重新生成，否则音箱还在听旧词：
 
 ```bash
-docker run --rm -v ~/house-ear/config:/config ghcr.io/yes999zc/house-ear:<tag> \
+docker run --rm -v ~/house-ear/config:/config ghcr.io/yes999zc/rui:<tag> \
   keywords --config /config/config.yaml
 ```
 
@@ -158,7 +158,7 @@ XFYUN_API_KEY=...
 XFYUN_API_SECRET=...
 HOUSE_EAR_HA_TOKEN=...       # 接 Home Assistant 时填
 HOUSE_EAR_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
-HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:0.0.1   # 可选：固定版本
+HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.1   # 可选：固定版本
 ```
 
 只填模板链里实际用到的即可：没有讯飞 key 就留空（自动落到火山 `volc_tts`，需要
@@ -260,7 +260,7 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 ## 7. 镜像版本与回滚
 
 - 不要只依赖 `latest`。生产在 `~/house-ear/.env` 里固定：
-  `HOUSE_EAR_IMAGE=ghcr.io/yes999zc/house-ear:<版本>`（或 `@sha256:<digest>`）。
+  `HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:<版本>`（或 `@sha256:<digest>`）。
 - 发布 tag：`vX.Y.Z` 由 CI 自动发同名 tag + `<major>.<minor>` + `latest` + `sha-<hash>`；
   `main` 分支发 `latest` 与 `sha-<hash>`。
 - 回滚：把 `.env` 的 tag 改回上一个版本 → `docker compose up -d`，然后按 §3.5 验收。
@@ -293,7 +293,7 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 ## 9. 本地开发（不走容器）
 
 ```bash
-git clone https://github.com/yes999zc/house-ear && cd house-ear
+git clone https://github.com/yes999zc/rui && cd house-ear
 uv sync && uv run house-ear doctor
 uv run house-ear serve
 ```

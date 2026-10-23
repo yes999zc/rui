@@ -2,7 +2,7 @@
 # One command: lay down compose + config + env, then start the service.
 set -eu
 
-REPO="${HOUSE_EAR_REPO:-yes999zc/house-ear}"
+REPO="${HOUSE_EAR_REPO:-yes999zc/rui}"
 REF="${HOUSE_EAR_REF:-main}"
 IMAGE="${HOUSE_EAR_IMAGE:-ghcr.io/$REPO:latest}"
 DIR="${HOUSE_EAR_HOME:-$HOME/house-ear}"
