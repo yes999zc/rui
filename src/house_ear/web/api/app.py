@@ -233,6 +233,15 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
+            "id": "memory", "title": "记忆", "icon": "◇", "group": "living", "order": 35,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/memory", "refresh_s": 0,
+            "blocks": [
+                {"type": "memory", "title": "记住的事",
+                 "empty": "还没有记住任何事。语音说「记住……」，或在这里添加。"},
+            ],
+        },
+        {
             "id": "settings", "title": "设置", "icon": "⚙", "group": "config", "order": 40,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/config", "refresh_s": 0,
@@ -255,6 +264,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                     {"key": "farewell", "label": "告别语", "kind": "select",
                      "options": ["off", "short", "full"]},
                     {"key": "farewell_text", "label": "短告别语", "kind": "text"},
+                    {"key": "keep_context", "label": "保留多轮上下文", "kind": "bool",
+                     "hint": "关掉 = 每句都当新的一句，不带上文"},
                     {"key": "history_rounds", "label": "上下文轮数", "kind": "number",
                      "min": 0, "max": 12, "unit": "轮"},
                     {"key": "vendor_quiet_s", "label": "让位静默窗口", "kind": "number",

@@ -11,7 +11,7 @@ import type { PanelBlock } from '../panels'
 
 const props = defineProps<{ block: PanelBlock; data: unknown; refresh: () => void }>()
 
-type Value = string | number | null
+type Value = string | number | boolean | null
 type Field = NonNullable<PanelBlock['fields']>[number]
 
 const section = computed(() => props.block.section ?? '')
@@ -21,7 +21,7 @@ const server = computed<Record<string, Value>>(() => {
   return (part as Record<string, Value>) ?? {}
 })
 
-const draft = ref<Record<string, Value>>({})
+const draft = ref<Record<string, any>>({})
 const errors = ref<Record<string, string>>({})
 const state = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
 const message = ref('')
@@ -44,6 +44,7 @@ const dirty = computed(() =>
 
 function coerce(field: Field): Value {
   const raw = draft.value[field.key]
+  if (field.kind === 'bool') return raw === true || raw === 'true'
   if (field.kind === 'number') return raw === '' ? null : Number(raw)
   return raw ?? ''
 }
@@ -95,7 +96,13 @@ function revert() {
         <span class="label">
           {{ f.label }}<span v-if="f.unit" class="unit">（{{ f.unit }}）</span>
         </span>
-        <select v-if="f.kind === 'select'" v-model="draft[f.key]" class="input">
+        <input
+          v-if="f.kind === 'bool'"
+          v-model="draft[f.key]"
+          class="checkbox"
+          type="checkbox"
+        />
+        <select v-else-if="f.kind === 'select'" v-model="draft[f.key]" class="input">
           <option v-for="opt in f.options" :key="opt" :value="opt">{{ opt }}</option>
         </select>
         <textarea v-else-if="f.kind === 'textarea'" v-model="draft[f.key]" class="input" rows="4" />
@@ -129,11 +136,13 @@ function revert() {
 .form-row { display: flex; align-items: center; gap: 12px; }
 .label { width: 180px; color: var(--muted); font-size: 13px; flex: none; }
 .unit { font-size: 11px; }
+.checkbox { width: 18px; height: 18px; }
 .input {
   font: inherit; font-size: 13px; padding: 6px 9px; border: 1px solid var(--line);
   border-radius: 8px; background: #fff; width: 100%; max-width: 340px;
 }
-textarea.input { max-width: 560px; resize: vertical; }
+textarea.checkbox { width: 18px; height: 18px; }
+.input { max-width: 560px; resize: vertical; }
 .actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
 .actions .ok { color: var(--ok); font-size: 12px; }
 .actions .fail { color: var(--fail); font-size: 12px; }

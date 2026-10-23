@@ -15,6 +15,7 @@ import BlockList from '../components/BlockList.vue'
 import BlockForm from '../components/BlockForm.vue'
 import BlockTable from '../components/BlockTable.vue'
 import BlockLog from '../components/BlockLog.vue'
+import BlockMemory from '../components/BlockMemory.vue'
 
 const route = useRoute()
 const { panels } = usePanels()
@@ -83,6 +84,7 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
       <BlockForm v-else-if="block.type === 'form'" :block="block" :data="dataFor(block)" :refresh="poll" />
       <BlockTable v-else-if="block.type === 'table'" :block="block" :data="dataFor(block)" />
       <BlockLog v-else-if="block.type === 'log'" :block="block" :data="dataFor(block)" />
+      <BlockMemory v-else-if="block.type === 'memory'" :block="block" :data="dataFor(block)" :refresh="poll" />
     </template>
   </template>
 </template>

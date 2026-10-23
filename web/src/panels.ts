@@ -30,7 +30,7 @@ export interface PanelButton {
 export interface PanelField {
   key: string
   label: string
-  kind?: 'text' | 'number' | 'textarea' | 'select'
+  kind?: 'text' | 'number' | 'textarea' | 'select' | 'bool'
   min?: number
   max?: number
   unit?: string

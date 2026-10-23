@@ -301,6 +301,9 @@ export const api = {
   /** Any GET by path - panel blocks know their sources, the client need not. */
   json: <T = unknown>(path: string) => request<T>(path),
   /** A panel button press: the spec carries the method, href and body. */
+  /** A POST by path - the memory panel's small CRUD. */
+  post: (path: string, body: unknown) =>
+    request<unknown>(path, { method: 'POST', body: JSON.stringify(body) }),
   action: (method: string, path: string, body: unknown) =>
     request<unknown>(path, { method, body: JSON.stringify(body) }),
   panels: () => request<{ revision: string; panels: PanelSpec[] }>('/api/v1/panels'),
