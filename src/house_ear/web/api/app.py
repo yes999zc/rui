@@ -324,9 +324,9 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
     return line
 
 
-# Seconds of quiet after a music transport command, so 「暂停」->「下一首」 works
-# without repeating the wake word. The song is ducked for this window.
-MUSIC_COMMAND_WINDOW_S = 2.0
+# No command window: 9哥 is fine repeating the wake word over music, and the
+# ducked gap only delayed the song. 0 = the song returns the moment it can.
+MUSIC_COMMAND_WINDOW_S = 0.0
 
 
 def _turn_light(result: object, default: str = "listening") -> str:
