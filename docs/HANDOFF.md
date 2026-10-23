@@ -562,3 +562,34 @@ keywords.txt 内容逐字一致、probe 返回不可达原因、无音频面时�
 ③ 向导保存设备改为按 id 合并到已有设备上，`listen_port`/`led`/`volume` 等不在表单里的字段
 不会被清空。dev 实测：`complete=true`、`/` 停在概览、`/setup` 四步全绿、音频面在线。
 
+### 12.11 2026-10-23 傍晚：P15b 收尾 / 本机冷装排练 / 公开仓清债（已 push）
+
+**HEAD `b259417`。** P15b（p15 agent）把部署面与 `7aacbd5` 对齐，并做了本机容器冷装排练：
+
+- **install.sh**：step1/2 说明改成「setup 写生产模板 + 自动生成 keywords」；step4 一次拉
+  ASR+VAD+KWS（老装缺 KWS 会补），`.env` 增加 `XFYUN_*` 并**写入 `HOUSE_EAR_IMAGE=$IMAGE`**
+  （否则后续 `docker compose up -d` 会回落 ghcr:latest，把本地镜像顶掉）。
+- **镜像内模板**：`resources.files('house_ear.config')/template.yaml` = 4804 B，provider 链齐全；
+  `setup` 0.49 s（热）/ ~13 s（rebuild 后首次容器冷启），config 4912 B，keywords 50 B 逐字一致；
+  `fetch-models --no-kws` 0.53 s 路径布局正确。
+- **冷装排练（本机 install.sh 全流程，预置模型）**：总计 **3 s（热）/ 14 s（冷路径）** →
+  `compose ps` Up(healthy)、`house-ear-healthcheck` ok、`/health` 200、doctor degraded 仅环境项。
+  镜像 `house-ear:rehearsal` = **428,964,012 B（409 MiB，arm64）**，增量构建 40.5 s。
+- **看门狗容器实测**：假设备 up 后 3 s `audio_plane=true`；kill plane pid → **2.0 s 新 pid、
+  restarts=1、/health 全程 200、容器 RestartCount=0**；假音箱 ~1 s 重连；`debug/say` 返回
+  `reply=现在三点。 audio_bytes=32000`、假音箱收到 15 帧/43,200 B。
+- **`devices: []` 空转修掉（`5f4bc72`）**：看门狗在无设备时不再空跑退避，`watch()` 直接 idle；
+  向导写设备的路径会重新 arm。
+- **公开仓清债（同一个 commit）**：10 个测试文件的私网 IP → TEST-NET；4 个测试的作者模型目录改成
+  `HOUSE_EAR_TEST_MODELS` opt-in（未设 skip）；measure 脚本 `--env`/`$HOUSE_EAR_ENV_FILE`；
+  docs/scripts 里 `~/AI_Workspace`、`~/.hermes`、私有 checkout 引用全清；HANDOFF 写「公开仓」。
+  验证：全量 pytest 绿、ruff clean、`sh -n install.sh` ok、安全 grep 全清。
+
+**⚠ C1 阻塞项（需 9哥 决定）**：`raw.githubusercontent.com/yes999zc/house-ear/main/...` 目前
+**404（仓库不可匿名访问）**，`install.sh` 的 `[1/5]` 拉不到 compose/config.example——一键冷装
+在自己机器上排练时是手工预置文件绕过的。C1「一条命令装好」要求仓库公开（或给出带认证的分发路径），
+这件事只能由 9哥 拍板。
+
+**P4 后的向导复验（d1c 2D-A/B）与修复见 §12.10；P6 设计在 `docs/phrasebook-editor.md`（d1c），
+Lead 已拍板：49 键全开/占位符硬拒绝/只交 pytest 场景契约；d1c 正在实现后端。**
+
