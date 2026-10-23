@@ -20,6 +20,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -106,7 +107,9 @@ class MemoryStore:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps({"items": [i.as_dict() for i in self._items]},
                                       ensure_ascii=False, indent=1), encoding="utf-8")
+            os.chmod(tmp, 0o600)
             tmp.replace(self.path)
+            os.chmod(self.path, 0o600)
         except OSError as exc:
             log.info("memory: write failed: %s", exc)
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -162,6 +163,7 @@ class HaBridge:
                 cache_path.write_text(
                     json.dumps({"t": int(time.time()), "entities": fresh},
                                ensure_ascii=False), encoding="utf-8")
+                os.chmod(cache_path, 0o600)
             except OSError:
                 pass
             self._entities_cache = fresh

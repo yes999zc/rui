@@ -285,7 +285,9 @@ class ReminderStore:
         payload = {"version": STORE_VERSION, "items": [_to_json(it) for it in items]}
         tmp = self.path.with_name(self.path.name + ".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.chmod(tmp, 0o600)
         os.replace(tmp, self.path)
+        os.chmod(self.path, 0o600)
 
     def add(self, text: str, at: dt.datetime, *, now: dt.datetime | None = None) -> Reminder:
         clean = " ".join((text or "").split())[:MAX_TEXT]

@@ -71,7 +71,9 @@ class AliasStore:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self._aliases, ensure_ascii=False, indent=1),
                            encoding="utf-8")
+            os.chmod(tmp, 0o600)
             tmp.replace(self.path)
+            os.chmod(self.path, 0o600)
             log.info("music alias: %s -> %s", wrong, right)
         except OSError as exc:
             log.info("music alias write failed: %s", exc)

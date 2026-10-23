@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -50,7 +51,9 @@ class PlayHistory:
             json.dumps({"plays": self.plays, "recent": self.recent}, ensure_ascii=False),
             encoding="utf-8",
         )
+        os.chmod(tmp, 0o600)
         tmp.replace(self.path)
+        os.chmod(self.path, 0o600)
 
     # ------------------------------------------------------------------ api
     def record(self, track: Track) -> None:

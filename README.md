@@ -263,7 +263,7 @@ Open `http://<nas-lan-ip>:8080/`, enter the console token printed at install tim
 ws://<nas-lan-ip>:4412/?token=<HOUSE_EAR_DEVICE_TOKEN>
 ```
 
-See [docs/deploy.md](docs/deploy.md) for volumes, keys, music/HA configuration and the speaker client, and [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md) for the LX06 wire protocol.
+See [docs/deploy.md](docs/deploy.md) for volumes, keys, music/HA configuration and the speaker client, [docs/open-xiaoai-client.md](docs/open-xiaoai-client.md) for the step-by-step client hookup, and [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md) for the LX06 wire protocol.
 
 ### Architecture
 

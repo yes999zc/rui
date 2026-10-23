@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import random
 import re
 import time
@@ -312,7 +313,9 @@ class LibraryIndex:
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")),
                        encoding="utf-8")
+        os.chmod(tmp, 0o600)
         tmp.replace(self.path)   # atomic: a reader never sees half a file
+        os.chmod(self.path, 0o600)
 
     # ------------------------------------------------------------------ build
     def _async_lock(self) -> Any:
