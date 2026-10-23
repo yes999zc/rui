@@ -36,6 +36,7 @@ from .protocol import (
     SpeakStart,
     VendorSignalMsg,
     Wake,
+    WakeIdle,
     decode_pcm,
     encode_json,
     encode_pcm,
@@ -68,11 +69,13 @@ class AudioPlaneClient:
         self.voice_frames = 0
         self.last_voice_ms: float | None = None
         self.wakes = 0
+        self.wake_idles = 0
         self.last_wake: Wake | None = None
         self.vendor_signals = 0
         # The control plane decides what a vendor wake means; the client only delivers it.
         self.on_vendor: Callable[[str, str], object] | None = None
         self.on_wake: Callable[[Wake], object] | None = None
+        self.on_wake_idle: Callable[[WakeIdle], object] | None = None
         # One non-looping file reached its natural end (the music queue advances
         # here); async because advancing resolves the next track.
         self.on_playback_finished: Callable[[str], Awaitable[None]] | None = None
@@ -171,6 +174,10 @@ class AudioPlaneClient:
             self.last_barge_ms = now_ms() if getattr(msg, "barge", False) else None
             if self.on_wake is not None:
                 self.on_wake(msg)
+        elif isinstance(msg, WakeIdle):
+            self.wake_idles += 1
+            if self.on_wake_idle is not None:
+                self.on_wake_idle(msg)
         elif isinstance(msg, VendorSignalMsg):
             self.vendor_signals += 1
             self.last_vendor = msg

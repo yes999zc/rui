@@ -1294,7 +1294,18 @@ def create_app(
                                  getattr(msg, "barged_s", 0.0))
                         runner.abort()
 
+                def on_wake_idle(msg: object) -> None:
+                    # A wake that heard nothing ends the session - silently. The old
+                    # build said goodbye 15 s later and 9哥 asked for that to stop; but
+                    # leaving the light in listening forever is not an exit either
+                    # (measured 16:10:38: 「你好小瑞」 then silence, nothing ended).
+                    runner.idle.stop()
+                    _light(app, "off")
+                    log.info("session closed: wake without speech (%.1f s)",
+                             float(getattr(msg, "waited_ms", 0.0)) / 1000.0)
+
                 client.on_wake = on_wake
+                client.on_wake_idle = on_wake_idle
                 music = getattr(app.state, "music", None)
                 if music is not None:
                     # The queue advances only on a file's natural end (the plane's

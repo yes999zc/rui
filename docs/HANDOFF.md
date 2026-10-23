@@ -881,3 +881,24 @@ AK/SK 是账号级 OpenAPI 凭据（查额度/列 key）；语音用的 `X-Api-K
 
 **验证**：真 silero VAD 全量 `666 passed / 1 skipped`、ruff clean；daemon 已重启加载修复。
 
+### 12.22 2026-10-23 16:1x：沉默唤醒不退出 + 打断后续播间隔太长（9哥 真机反馈）
+
+**1）「你好小瑞」后不说话，没有自动退出** — 16:10:38/58 日志只有 `wake with no speech
+after 6000 ms; disarming`（音频面自己关了门），控制面没有收到任何事件，所以会话一直停在
+listening/LED 不灭。修复：新增 plane→control 事件 `WakeIdle`；控制面收到后**静默结束会话**
+（`idle.stop()` + 关灯 + 日志 `session closed: wake without speech`），**不告别**（尊重
+10:22 那次「沉默 15 秒后说再见」被否掉的决定）。同时音频面在这里检查：如果唤醒时压住了
+音乐（`_speech_paused` 且不是用户手动暂停），自动恢复播放——否则「沉默唤醒」会把歌永远停住。
+
+**2）唱歌被打断后恢复的间隔太长** — 原来回复结束后固定等 **6 s**（`MUSIC_FOLLOWUP_MS=6000`，
+用于留时间直接说「换一首」不加唤醒词），16:10 实测两次间隔 6–17 s。改为配置项
+`music.resume_hold_ms`，**默认 2500 ms**，控制台「音乐」组可调 **0–10000**：
+0 = 答完立刻续播（之后换歌要重新唤醒）；调大 = 留时间说「换一首」但中间更静。
+保存后重启音频面/服务生效。新增 `test_a_silent_wake_is_reported_so_the_session_can_close`、
+`test_music_resume_hold_is_short_and_configurable` 等测试，并把 output-owner 的旧常量测试
+改为通过配置注入。
+
+**验证**：真 VAD 全量 **670 passed / 1 skipped**、ruff clean；dev 已重启；catalog 实测
+`music.resume_hold_ms` 默认值 **2500**。**待 9哥 复测**：①「你好小瑞」后沉默 6–8 秒，
+应无告别、灯灭、会话结束；②放歌→唤醒问一句→答完约 2.5 s 内音乐回来（可在控制台调更短）。
+

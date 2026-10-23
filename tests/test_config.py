@@ -189,3 +189,20 @@ def test_exit_words_cover_the_old_build_set() -> None:
     words = set(Config().session.end_words)
     assert {"停止", "别说了", "不听了", "退出", "结束", "再见", "拜拜", "睡了", "睡吧", "晚安",
             "退下吧"} <= words
+
+
+def test_music_resume_hold_is_short_and_configurable() -> None:
+    """6 s of silence after an answer was heard as a long gap (9哥, 16:10)."""
+    from house_ear.config import Config
+
+    assert Config().music.resume_hold_ms == 2500
+
+
+def test_the_catalog_exposes_the_music_resume_delay() -> None:
+    from house_ear.config import Config
+    from house_ear.config.catalog import document
+
+    fields = {field["path"]: field for field in document(Config())["fields"]}
+    field = fields["music.resume_hold_ms"]
+    assert (field["min"], field["max"]) == (0, 10000)
+    assert field["effect"] == "restart"

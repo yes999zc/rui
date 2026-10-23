@@ -76,6 +76,9 @@ class UtteranceGate:
         # so it is counted here instead of vanishing without a trace.
         self.interrupted = 0
         self._reset_state()
+        # Counts silent wakes across arms: disarm() resets the per-arm state, and the
+        # plane compares this counter before/after each block to send WakeIdle.
+        self.idle_events = 0
 
     def _reset_state(self) -> None:
         self._skipping = 0
@@ -204,6 +207,7 @@ class UtteranceGate:
                 if self._waited_ms >= self._max_wait_ms:
                     log.info("wake with no speech after %.0f ms; disarming", self._waited_ms)
                     self.discarded += 1
+                    self.idle_events += 1
                     self.disarm()
                 return None
             # First speech: include the preroll so the onset is not chopped.

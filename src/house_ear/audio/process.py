@@ -64,6 +64,7 @@ from .protocol import (
     StopAudio,
     VendorSignalMsg,
     Wake,
+    WakeIdle,
     decode_pcm,
     encode_json,
     encode_pcm,
@@ -110,7 +111,6 @@ NO_REPLY_RESUME_S = 12.0
 # right after every reply, and music may only return once that window has closed.
 # Without the hold the reply drained first and the song blipped back in between
 # turns (measured 08:30-08:35, "对话间隙音乐出声音").
-MUSIC_FOLLOWUP_MS = 6000
 
 
 class Pacer:
@@ -658,7 +658,23 @@ class AudioPlane:
         gate = self.gate
         if gate is None:
             return
+        before_idle = getattr(gate, "idle_events", 0)
         finished = gate.feed(pcm, ts_ms=ts_ms)
+        idle_events = getattr(gate, "idle_events", 0)
+        if idle_events != before_idle:
+            # A wake over a song pauses it. If the wake then hears nothing, the song must
+            # come back - a parked song waiting for a reply that will never come is the
+            # "music stopped after I woke it" symptom. An explicit 「暂停」 stays paused.
+            if self._speech_paused and not self._paused_explicit:
+                self._resume_after_speech()
+        if idle_events != before_idle and connected.is_set():
+            # The wake heard nothing: tell the control plane to close the session
+            # silently, otherwise the light/session stay in listening.
+            try:
+                writer.write(encode_json(WakeIdle(waited_ms=float(gate.cfg.max_wait_ms))))
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError):
+                connected.clear()
         if finished is None or not connected.is_set():
             return
         utt, ts = finished
@@ -991,7 +1007,8 @@ class AudioPlane:
                         # window instead of resuming between turns. A turn may shorten
                         # or cancel its own window (volume confirmations: 0).
                         delay = max(0.0, pacer.due - time.monotonic()) + 1.0
-                        hold_ms = (MUSIC_FOLLOWUP_MS if reply_hold is None
+                        hold_ms = (int(self.cfg.music.resume_hold_ms)
+                                   if reply_hold is None
                                    else max(0, int(reply_hold * 1000)))
                         self._music_hold_until = (
                             time.monotonic() + delay + hold_ms / 1000.0)

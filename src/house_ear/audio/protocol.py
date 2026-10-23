@@ -178,6 +178,19 @@ class Wake(BaseModel):
     ack_mode: str = ""
 
 
+class WakeIdle(BaseModel):
+    """plane -> control: the wake heard nothing and the listening gate disarmed.
+
+    The plane closes its own gate after `max_wait_ms`; without telling the control plane
+    the session stayed "open" with the light in listening (measured 16:10:38: 「你好小瑞」
+    then silence, and nothing ended). Closing is silent on purpose: the old build said
+    goodbye 15 s after a silent wake and 9哥 asked for it to stop.
+    """
+
+    type: Literal["wake_idle"] = "wake_idle"
+    waited_ms: float = 0.0
+
+
 class VendorSignalMsg(BaseModel):
     """plane -> control: the device's own assistant woke, or finished its dialog.
 
@@ -341,7 +354,7 @@ class ResumeMusic(BaseModel):
 
 ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | LedState
-    | SpeakStart | SpeakFinished | ReplyFinished | VendorSignalMsg | Error | Shutdown | ShellCommand
+    | SpeakStart | SpeakFinished | ReplyFinished | VendorSignalMsg | WakeIdle | Error | Shutdown | ShellCommand
     | ShellResult | DeviceVolume | DeviceVolumeResult | PlayFinished | PauseMusic | ResumeMusic,
     Field(discriminator="type"),
 ]

@@ -598,3 +598,30 @@ def test_an_unknown_preset_is_rejected_by_the_config_not_at_runtime() -> None:
     with pytest.raises(ValidationError):
         Config(**{"ack": {"chime": "no-such-preset"}})
     assert Config(**{"ack": {"chime": "windchime"}}).ack.chime == "windchime"
+
+
+@needs_vad
+def test_a_silent_wake_is_reported_so_the_session_can_close() -> None:
+    """16:10:38: 「你好小瑞」 then silence left the session in listening forever.
+
+    The plane closes its own gate after max_wait_ms; the control plane needs to know so
+    it can end the session (silently - the old 15 s goodbye was explicitly rejected).
+    """
+    from house_ear.audio.vad import GateConfig, UtteranceGate
+
+    cfg = GateConfig(max_wait_ms=1000)
+    gate = UtteranceGate(cfg, MODEL)
+    gate.arm()
+    assert gate.idle_events == 0
+    for block in _blocks(b"\x00\x00" * 48000):  # 1.5 s of silence
+        gate.feed(block)
+    assert gate.idle_events == 1
+    assert not gate.armed
+
+
+def test_wake_idle_is_a_control_message() -> None:
+    from house_ear.audio.protocol import CONTROL, WakeIdle
+
+    msg = CONTROL.validate_json('{"type":"wake_idle","waited_ms":6000}')
+    assert isinstance(msg, WakeIdle)
+    assert msg.waited_ms == 6000

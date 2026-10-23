@@ -171,3 +171,4 @@ music:
   queue_min_tracks: 2
   queue_batch: 20
   history_max: 60
+  resume_hold_ms: 2500   # 打断后多少毫秒恢复播放（0 = 答完立刻）

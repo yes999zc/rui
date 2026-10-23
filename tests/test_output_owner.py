@@ -239,12 +239,9 @@ def test_the_song_stays_down_between_the_question_and_the_answer(
     let the song blip back in for the ASR+LLM second before the answer. A live turn
     (utterance fired, reply not finished) keeps it down; ReplyFinished hands the song
     to the follow-up window, and it returns when that window closes."""
-    import house_ear.audio.process as proc
-
-    monkeypatch.setattr(proc, "MUSIC_FOLLOWUP_MS", 300)
-
     async def run() -> None:
         plane, _ = make_plane(tmp_path)
+        plane.cfg.music.resume_hold_ms = 300
         gate = StubGate(armed=True)
         plane.gate = gate  # type: ignore[assignment]
         song = tmp_path / "song.wav"
@@ -402,12 +399,9 @@ def test_music_stays_down_for_the_followup_window(tmp_path: Path,
     """Measured 08:30-08:35 ("对话间隙音乐出声音"): the reply drained, music
     resumed, and only then did the follow-up window arm. The song now stays
     down for the whole window and returns when it closes."""
-    import house_ear.audio.process as proc
-
-    monkeypatch.setattr(proc, "MUSIC_FOLLOWUP_MS", 700)
-
     async def run() -> None:
         plane, _ = make_plane(tmp_path)
+        plane.cfg.music.resume_hold_ms = 700
         gate = StubGate(armed=True)
         plane.gate = gate  # type: ignore[assignment]
         song = tmp_path / "song.wav"
@@ -478,12 +472,9 @@ def test_volume_reconciles_to_the_configured_target(tmp_path: Path) -> None:
 def test_a_reply_can_cancel_the_music_window(tmp_path: Path, monkeypatch) -> None:
     """Volume confirmations want the song back the moment the reply drains:
     ReplyFinished(hold_music_s=0) skips both the window and the arm."""
-    import house_ear.audio.process as proc
-
-    monkeypatch.setattr(proc, "MUSIC_FOLLOWUP_MS", 5000)
-
     async def run() -> None:
         plane, _ = make_plane(tmp_path)
+        plane.cfg.music.resume_hold_ms = 5000
         gate = StubGate()
         plane.gate = gate  # type: ignore[assignment]
         song = tmp_path / "song.wav"

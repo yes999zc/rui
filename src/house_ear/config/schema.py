@@ -464,6 +464,10 @@ class MusicConfig(BaseModel):
     # How many track ids the history remembers for radio dedup. The old build slid a
     # 40-60 window in memory and lost it on restart; ours persists.
     history_max: int = Field(default=60, ge=10, le=500)
+    # How long a song stays parked after an answer before it resumes by itself. The old
+    # build used 6 s, which 9哥 heard as a long gap between "pause" and the song coming
+    # back. 2.5 s still leaves a beat for 「换一首」 without the wake word.
+    resume_hold_ms: int = Field(default=2500, ge=0, le=10000)
 
     @model_validator(mode="after")
     def _music_needs_credentials(self) -> MusicConfig:

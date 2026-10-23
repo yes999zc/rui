@@ -1061,6 +1061,16 @@ def _music_fields() -> list[dict]:
                   "How many tracks' PCM to keep (1-64). Larger saves downloads and uses "
                   "disk; restart to apply."),
                effect="restart", minimum=1, maximum=64, advanced=True),
+        _field("music.resume_hold_ms", "music", "number",
+               _t("打断后续播延迟", "Resume delay after speech"),
+               _t("说话打断音乐后，答完再等多久恢复播放（毫秒）。0 = 答完立刻续播（之后"
+                  "要换歌得重新唤醒）；调大 = 留时间直接说「换一首」而不必唤醒，但中间"
+                  "安静更久。默认 2500。改完重启音频面/服务生效。",
+                  "How long the song stays parked after an answer ends (ms). 0 resumes "
+                  "immediately (a follow-up then needs the wake word); larger leaves room "
+                  "for 「换一首」 without a wake word but a longer silence. Default 2500. "
+                  "Restart the audio plane/service to apply."),
+               effect="restart", minimum=0, maximum=10000, unit=_t("ms", "ms")),
         _field("music.queue_min_tracks", "music", "number",
                _t("队列补齐阈值", "Top-up threshold"),
                _t("队列剩几首时开始补下一批（1–10）。调大更早补歌、几乎不断流，但会多占曲库请求。"
