@@ -15,6 +15,7 @@ Security posture (deliberate, documented in ``docs/socket-plug.md`` §7):
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
 
@@ -34,7 +35,7 @@ from .models import (
 )
 from .semver import Version, VersionError, parse_range, parse_version
 
-__all__ = ["load_plugin", "running_version"]
+__all__ = ["PluginScan", "discover_plugins", "load_plugin", "running_version"]
 
 _MAX_MANIFEST_BYTES = 1 << 20  # manifests are kilobytes; refuse a hostile 1 GiB read
 _MAX_ERRORS = 8
@@ -228,3 +229,57 @@ def _brief(exc: Exception) -> str:
     """One line, bounded, for a YAML/OS error message."""
     text = " ".join(str(exc).split())
     return text[:300] + ("..." if len(text) > 300 else "")
+
+
+@dataclass(frozen=True)
+class PluginScan:
+    """Best-effort scan of ``<data_dir>/plugs/*/plugin.yaml``.
+
+    ``errors`` is a list of readable one-line strings, never an exception: one broken
+    user plug must not stop startup or hide the plugs that do load.
+    """
+
+    plugins: list[Plugin] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+def discover_plugins(data_dir: str | Path | None) -> PluginScan:
+    """Load optional user plugs from ``<data_dir>/plugs/<dir>/plugin.yaml``.
+
+    Directories without a ``plugin.yaml`` are ignored (they are not plugs), symlinks are
+    skipped, and every failure is collected in :attr:`PluginScan.errors`. Duplicate ids
+    (including duplicates of an earlier user plug) are reported and skipped.
+    """
+    if data_dir is None or not str(data_dir).strip():
+        return PluginScan()
+    root = Path(data_dir).expanduser() / "plugs"
+    try:
+        if not root.is_dir():
+            return PluginScan()
+        children = sorted(root.iterdir(), key=lambda item: item.name)
+    except OSError as exc:
+        return PluginScan(errors=[f"cannot read plug directory {root}: {_brief(exc)}"])
+
+    plugins: list[Plugin] = []
+    errors: list[str] = []
+    seen: set[str] = set()
+    for child in children:
+        try:
+            if child.is_symlink() or not child.is_dir():
+                continue
+            manifest = child / "plugin.yaml"
+            if not manifest.is_file():
+                continue
+            plugin = load_plugin(child)
+        except PluginError as exc:
+            errors.append(str(exc))
+            continue
+        except Exception as exc:  # noqa: BLE001 - never let one plug stop the scan
+            errors.append(f"{child}: unexpected error while loading plug: {_brief(exc)}")
+            continue
+        if plugin.id in seen:
+            errors.append(f"{child}: duplicate plugin id {plugin.id!r}; skipped")
+            continue
+        seen.add(plugin.id)
+        plugins.append(plugin)
+    return PluginScan(plugins=plugins, errors=errors)

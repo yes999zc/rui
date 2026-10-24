@@ -11,8 +11,9 @@ Import surface for the upcoming wizard/API::
 """
 from __future__ import annotations
 
+from .builtin import BUILTIN_PLUGINS, builtin_plugin, builtin_plugins
 from .errors import PluginError
-from .loader import load_plugin, running_version
+from .loader import PluginScan, discover_plugins, load_plugin, running_version
 from .models import (
     DEVICE_SCHEMA,
     PLUGIN_SCHEMA,
@@ -44,6 +45,7 @@ from .semver import (
 __all__ = [
     "DEVICE_SCHEMA",
     "PLUGIN_SCHEMA",
+    "BUILTIN_PLUGINS",
     "Acceptance",
     "Comparator",
     "Compatibility",
@@ -56,6 +58,7 @@ __all__ = [
     "Plugin",
     "PluginError",
     "PluginManifest",
+    "PluginScan",
     "ProtocolSpec",
     "RuntimeMode",
     "RuntimeSpec",
@@ -63,6 +66,9 @@ __all__ = [
     "Version",
     "VersionError",
     "VersionRange",
+    "builtin_plugin",
+    "builtin_plugins",
+    "discover_plugins",
     "load_plugin",
     "parse_range",
     "parse_version",

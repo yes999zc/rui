@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from ... import __version__, billing, secrets
+from ... import setup_state as setup_store
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneSupervisor
@@ -82,6 +83,7 @@ from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
 from .security import install_security_headers
+from .setup_api import install_setup_routes
 
 START = time.time()
 log = logging.getLogger(__name__)
@@ -927,7 +929,7 @@ def _record_turn(app: FastAPI, turn: dict) -> None:
     if ring is None:
         ring = collections.deque(maxlen=50)
         app.state.recent_turns = ring
-    ring.append({**turn, "ts": time.strftime("%H:%M:%S")})
+    ring.append({**turn, "ts": time.strftime("%H:%M:%S"), "ts_epoch": time.time()})
 
 
 def _voice_rate(client: object) -> int:
@@ -1721,6 +1723,8 @@ def create_app(
     app.state.tools = registry  # the console and tests read the same registry turns use
     app.state.mcp_manager = mcp_manager  # generic MCP sessions/status (console reads it)
     app.state.plane_error = ""  # last device-write audio-plane restart outcome
+    # One lock per wizard step: two tabs must not race the same file/config write.
+    app.state.setup_locks = {step: asyncio.Lock() for step in setup_store.STEPS}
     app.state.trace_log = traces  # scripts and tests read the same log the API serves
     if music_service is not None:
         music_service.sender = _music_sender(app)
@@ -2217,17 +2221,8 @@ def create_app(
                                    gain=float(patch.get("gain", 1.0))))
         return {"playing": path}
 
-    @app.post("/api/v1/debug/say", dependencies=[Depends(auth)])
-    async def debug_say(patch: Annotated[dict, Body()]) -> dict:
-        """Run one text turn as if the person had said it (the console's 试一试).
-
-        Typing a request is the cheapest way to test a turn - no microphone, no wake
-        word, no standing next to the speaker - and it exercises the same runner, tools,
-        TTS and playback path as a spoken turn.
-        """
-        text = str(patch.get("text") or "").strip()
-        if not text:
-            raise HTTPException(status_code=422, detail="text is required")
+    async def _run_debug_say(text: str) -> dict:
+        """One fresh text turn. Shared by ``/debug/say`` and the wizard's try step."""
         supervisor = getattr(app.state, "audio", None)
         client = supervisor.client if supervisor is not None else None
         if client is None:
@@ -2274,6 +2269,19 @@ def create_app(
             "stages": result.stages,
             "audio_bytes": result.audio_bytes,
         }
+
+    @app.post("/api/v1/debug/say", dependencies=[Depends(auth)])
+    async def debug_say(patch: Annotated[dict, Body()]) -> dict:
+        """Run one text turn as if the person had said it (the console's 试一试).
+
+        Typing a request is the cheapest way to test a turn - no microphone, no wake
+        word, no standing next to the speaker - and it exercises the same runner, tools,
+        TTS and playback path as a spoken turn.
+        """
+        text = str(patch.get("text") or "").strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="text is required")
+        return await _run_debug_say(text)
 
     def _channels_path() -> Path:
         cfg_now = getattr(app.state, "cfg", cfg)
@@ -3426,6 +3434,24 @@ def create_app(
     async def setup_probe(payload: Annotated[dict, Body()]) -> dict:
         """Is the host a reachable speaker? TCP + SSH banner, no login, no commands."""
         return await _probe_host(_host(payload.get("host")))
+
+    # ---------------------------------------------------------------- plugs + setup steps
+    # The feature lives in its own module; these closures are the few pieces it needs
+    # from this factory (the live config, the writer that restarts the plane, the probe
+    # and the real turn path), so app.py stays a wiring file.
+    install_setup_routes(
+        app,
+        auth,
+        config_path=config_path,
+        current=lambda: getattr(app.state, "cfg", cfg),
+        plane_snapshot=_plane_snapshot,
+        write_devices=_write_devices,
+        probe_host=lambda host: _probe_host(host),
+        run_debug_say=_run_debug_say,
+        host_value=_host,
+        room_value=_room,
+        wake_words_value=_wake_words,
+    )
 
     # ---------------------------------------------------------------- device admin
     def _device_or_404(device_id: str, config: Config) -> DeviceConfig:

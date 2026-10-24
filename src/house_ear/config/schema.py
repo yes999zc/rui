@@ -10,7 +10,7 @@ Version history:
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -138,6 +138,10 @@ class DeviceConfig(BaseModel):
     # says so in the log: anyone on the LAN can open the microphone while it is on.
     allow_no_token: bool = False
     led: LedConfig = Field(default_factory=LedConfig)
+    # Plug-declared, non-secret values (see docs/install-wizard-design.md §7.1).
+    # The reserved key ``plug_id`` identifies which manifest owns the device when two
+    # models share one adapter. Old configs without this key load as ``{}``.
+    params: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("id")
     @classmethod
