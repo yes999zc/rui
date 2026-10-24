@@ -38,6 +38,8 @@ RUI 的安装起点是「音箱已经能运行 open-xiaoai client，并能回连
   `install.sh` 会在做任何事之前退出并给出提示。
 - **可写安装目录**：默认 `~/rui`（`RUI_HOME` 可改）。NAS 上 `/vol1/rui` 这类挂载点常是
   root-only；用 root 运行安装，或先建好目录并 `chown` 给安装用户，否则脚本会在建目录时失败。
+  容器以 **uid/gid 1000** 运行，`install.sh` 会把 `config/`、`data/` chown 到这个身份；
+  1000 已被占用时用 `RUI_UID`/`RUI_GID` 覆盖（见 [security.md](security.md)）。
 - **出网**：`raw.githubusercontent.com`、`ghcr.io`、`hf-mirror.com`。镜像拉取走 Docker daemon
   的代理；模型下载可选宿主机代理（安装脚本把 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` /
   `NO_PROXY` 传给 `fetch-models`）。`raw` 不稳定时用 `RUI_RAW` 镜像前缀；GHCR 不通时脚本会
@@ -161,16 +163,22 @@ docker compose exec -T rui rui token --rotate  # 轮换；重启服务后生效
 只用于排障/离线。正常路径用上面的 `install.sh`；手动部署要自己准备配置、`.env` 和模型：
 
 ```bash
-mkdir -p /vol1/rui/config /vol1/rui/data/models /vol1/rui/scripts && cd /vol1/rui
+mkdir -p /vol1/rui/config /vol1/rui/data/models /vol1/rui/data/state /vol1/rui/scripts && cd /vol1/rui
 curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/docker-compose.yml -O
 curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/config.example.yaml -O
 IMAGE=ghcr.io/yes999zc/rui:0.3.0
-docker run --rm --user "$(id -u):$(id -g)" -v /vol1/rui/config:/config "$IMAGE" \
+# 容器以 1000:1000 运行，先让两个可写卷归它所有（root/sudo）。
+chown -R 1000:1000 config data
+docker run --rm --user 1000:1000 -v /vol1/rui/config:/config "$IMAGE" \
   setup --config /config/config.yaml
-# 按 §3.4 写 .env：至少 RUI_DEVICE_TOKEN 和 RUI_IMAGE；密钥可选
-# 按 §3.3 跑 fetch-models 准备模型
+# 按 §3.4 写 .env：至少 RUI_DEVICE_TOKEN、RUI_IMAGE、RUI_UID=1000、RUI_GID=1000；密钥可选
+# 按 §3.3 跑 fetch-models 准备模型（同样用 --user 1000:1000）
 docker compose up -d
 ```
+
+`docker-compose.yml` 的 `user: "${RUI_UID:-1000}:${RUI_GID:-1000}"` 决定容器身份；
+手工部署时 `.env` 里也写上同一对 `RUI_UID`/`RUI_GID`，否则 reboot 后 compose 会回落到默认值。
+`config/` 与 `data/` 的属主必须与它一致，否则健康检查/服务会因读不到配置或写不了日志而失败。
 
 
 ## 3. 配置：第一次打开控制台到第一句话
@@ -223,7 +231,7 @@ Silero VAD 文件和 KWS 四件套；缺失项会列出来。点“重新检查�
 ```bash
 cd ~/rui
 IMAGE=$(sed -n 's/^RUI_IMAGE=//p' .env)
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/data:/data" "$IMAGE" \
+docker run --rm --user "${RUI_UID:-1000}:${RUI_GID:-1000}" -v "$PWD/data:/data" "$IMAGE" \
   fetch-models --dest /data/models/sensevoice \
   --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
 ```
@@ -398,7 +406,7 @@ compose 把 `./data:/var/lib/rui`，同时把 `./data/models:/data/models` 挂�
 删容器重建都不丢。手动重跑（默认会先复制 seed）：
 
 ```bash
-docker run --rm --user "$(id -u):$(id -g)" -v ~/rui/data:/data \
+docker run --rm --user 1000:1000 -v ~/rui/data:/data \
   ghcr.io/yes999zc/rui:<tag> fetch-models \
   --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
 # 网络受限时可只装 ASR+VAD（唤醒词会失效）：加 --no-kws
@@ -421,7 +429,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v ~/rui/data:/data \
 > `--seed-dir ''`；`--force` 单独用时仍优先使用 seed。
 
 ```bash
-docker run --rm --user "$(id -u):$(id -g)" -v ~/rui/data:/data \
+docker run --rm --user 1000:1000 -v ~/rui/data:/data \
   -e RUI_ASR_URL=https://models.example/sensevoice/model.int8.onnx \
   -e RUI_VAD_URL=https://models.example/silero_vad.onnx \
   -e RUI_KWS_URL=https://models.example/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2 \
@@ -490,7 +498,7 @@ docker compose logs --tail=100 rui
 |---|---|---|
 | `~/rui/config/config.yaml` | `devices[]`、provider 链、`web.auth_token` | 0600；改动前先备份 |
 | `~/rui/data/secrets.yaml` | 向导保存的密钥 | 0600，只写不读；环境变量优先 |
-| `~/rui/.env` | `RUI_DEVICE_TOKEN`、`RUI_IMAGE`、可选 key | 0600；`docker compose` 注入 |
+| `~/rui/.env` | `RUI_DEVICE_TOKEN`、`RUI_IMAGE`、`RUI_UID`/`RUI_GID`、可选 key | 0600；`docker compose` 注入 |
 | `~/rui/config/keywords.txt` | 唤醒词/KWS 参数 | 改唤醒词后重新生成 |
 | `~/rui/data/models/` | SenseVoice / VAD / KWS | 删了可重新 `fetch-models` |
 | `~/rui/data/setup.json` | 向导确认/时间戳 | 0600；不含密钥 |
@@ -504,8 +512,14 @@ docker compose logs --tail=100 rui
 - **换控制台 token**：`docker compose exec -T rui rui token --rotate`，再 `docker compose restart rui` 让服务加载新值；重启后旧 token 失效。
 - **升级**：`.env` 固定 `RUI_IMAGE` → `docker compose pull && docker compose up -d` →
   `docker compose ps` 等 healthy → `docker compose exec -T rui rui doctor`。
+- **升级到非 root 镜像（已有安装，一次性）**：先 `scripts/backup.sh --out ~/rui-backups`，
+  再 `sudo chown -R 1000:1000 config data`（只改属主，不改内容；models 会一起遍历），
+  然后 `docker compose pull && docker compose up -d --force-recreate`，最后
+  `docker compose exec -T rui rui-healthcheck`。重跑 `install.sh` 会自动做 chown 并补
+  `.env` 的 `RUI_UID`/`RUI_GID`；完整边界见 [security.md](security.md)。
 - **回滚**：把 `.env` 的 tag 改回上一版，先备份 `config/config.yaml`（旧镜像可能不认新字段），
-  再 `docker compose up -d`；详见 §7 和 [runbook.md](runbook.md#6-回滚)。
+  再 `docker compose up -d`；回滚到 root 镜像时把 `.env` 的 `RUI_UID`/`RUI_GID` 改成 `0`，
+  或临时用 `user: "0:0"`。详见 §7 和 [runbook.md](runbook.md#6-回滚)。
 - **备份/恢复**：`cd ~/rui && scripts/backup.sh --out ~/rui-backups`；恢复步骤见
   [runbook.md §9](runbook.md#9-备份与恢复)。
 
@@ -607,6 +621,11 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
   可能不认识）：`cp config/config.yaml config/config.yaml.bak.$(date +%Y%m%d-%H%M%S)`。
 - 升级：`docker compose pull && docker compose up -d`，看 `docker compose ps` 变 healthy，
   再跑一次 doctor。
+- **非 root 迁移（0.3.x 起镜像 USER=rui:1000）**：旧安装的 `config/`、`data/` 是 root
+  所有，直接 `up -d` 会因无法写配置/日志而失败。升级前：备份 → `sudo chown -R 1000:1000
+  config data` → `docker compose pull && docker compose up -d --force-recreate`。健康检查
+  也以 uid 1000 运行，能读 0600 的 config 即通过。回滚到 root 镜像时用
+  `RUI_UID=0 RUI_GID=0`（或 `user: "0:0"`），数据卷不需要改回 root。
 - 本机 OrbStack 构建的是 arm64；给 NAS 构建/发布用 CI 多架构，或在 x86 NAS 上
   `docker build --platform linux/amd64 ...`（慢，但可用）。构建镜像的国内镜像参数：
 
@@ -628,6 +647,10 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 
 备份只要 `config/` + `data/`（models 可重下）；恢复时把目录放回、`docker compose up -d`。
 `config.yaml` 每次写盘都有时间戳备份（`config.yaml.bak.*`），改坏了用最近的备份覆盖。
+
+**属主**：两个可写卷必须归 compose 的 `user:`（默认 `1000:1000`）所有。恢复备份/从别的机器
+拷贝目录后，重新执行一次 `sudo chown -R 1000:1000 config data`，否则容器会报
+`Permission denied`（配置读不到或 `/var/lib/rui` 写不进）。
 
 ## 9. 本地开发（不走容器）
 
@@ -661,3 +684,4 @@ uv run rui serve
 | 灯环不亮 | 0.3.0 新建 LX06 默认 `led.enabled: true`；老配置/手动配置可能仍是关闭 | 到 `params` 的“灯效”打开，或检查 `config.yaml` 的 `devices[].led.enabled`；保存会重启平面 |
 | 控制台 401 / 找不到 console token | `[2/5]` 的 `console token:` 只打印一次，容易被日志刷走 | `cd ~/rui && docker compose exec -T rui rui token` 找回；`--rotate` 轮换后重启服务。它和 `.env` 的 device token 不是同一个 |
 | `install.sh` 最后报 120 s 不健康 | 容器起了但 `/health` 未通过；常见是 token/端口/模型或配置问题 | 按脚本提示跑 `docker compose exec -T rui rui-healthcheck` 和 `docker compose logs --tail=100 rui`；修好后重跑脚本（同目录安全） |
+| 升级后容器反复重启 / 日志 `Permission denied` / healthcheck `cannot read config` | 非 root 镜像（uid 1000）读不了 root 所有的 bind mount | 备份后 `sudo chown -R 1000:1000 config data`，再 `docker compose up -d --force-recreate`；见 [security.md](security.md) |

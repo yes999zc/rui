@@ -19,7 +19,13 @@ Docker (network_mode: host)
   ./config -> /config            config.yaml（+ 可选的音乐凭据 lan_media.json）
   ./data   -> /var/lib/rui service.log / secrets.yaml / memory / 历史 / 缓存
   ./data/models -> /data/models  SenseVoice / VAD / KWS 模型
+  状态（在 data 卷内）: /var/lib/rui/state/audio.sock（音频面 IPC）
+                        /var/lib/rui/state/channels（channel gateway）
 ```
+
+容器以 **uid/gid 1000**（用户 `rui`）运行；`/app` 对运行用户只读，只有上面两个卷可写。
+`./config`、`./data` 的宿主机属主必须是 `1000:1000`（或 compose 的 `RUI_UID`/`RUI_GID`）。
+旧镜像的 socket 在 `/root/.local/state/rui`，升级后不再使用，也不需要迁移（重新配对即可）。
 
 进程关系很重要：**控制面活着不等于音频面活着**。`/health` 里
 `audio_plane: false` 就是「网页能开、音箱听不见」。配置了设备时健康检查会因此失败。
@@ -109,6 +115,23 @@ docker compose exec rui rui doctor
 curl -s localhost:8080/health | python -m json.tool
 ```
 
+- **首次升级到非 root 镜像（0.3.x 起）**：旧安装的 `config/`、`data/` 是 root 所有，
+  非 root 容器无法读写；`up -d` 后会重启循环或 healthcheck 报 `cannot read config`。
+  一次性迁移（只改属主，不改内容）：
+
+  ```bash
+  cd ~/rui
+  scripts/backup.sh --out ~/rui-backups        # 或至少备份 config/ 和 data/
+  sudo chown -R 1000:1000 config data
+  docker compose pull && docker compose up -d --force-recreate
+  docker compose exec -T rui rui-healthcheck   # 探针也以 uid 1000 运行
+  ```
+
+  重跑 `deploy/install.sh` 会自动 chown 并补 `.env` 的 `RUI_UID`/`RUI_GID`；边界与回滚见
+  [security.md](security.md)。1000 被占用时用 `RUI_UID`/`RUI_GID` 覆盖，compose 会替换
+  镜像默认 `USER`（无需重建镜像），但 `config/`、`data/` 必须 chown 成同一对身份。
+  `install.sh` 保留已有 compose 文件（不覆盖自定义）；旧文件也能非 root 运行（镜像
+  `USER rui`），但 `read_only`/`tmpfs`/`cap_drop` 等加固要手工合并新 compose 才会生效。
 - 生产把版本写死在 `.env`：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0`
   （或 `@sha256:<digest>`）。`latest` 是滚动默认，不是唯一推荐。
   `install.sh` 会把安装时用的 image 写进生成的 `.env`；**手工装**时也要写，否则之后
@@ -135,6 +158,12 @@ docker compose exec rui rui doctor
 ```
 
 回滚不会动 `data/`（记忆、提醒、日志、模型都在），所以回滚只影响代码和配置。
+
+回滚到 root 镜像（0.3.x 之前）时，容器身份也要一起改：`.env` 里加
+`RUI_UID=0`、`RUI_GID=0`（compose 的 `user:` 会覆盖镜像默认值），或临时把
+`docker-compose.yml` 的 `user:` 改成 `"0:0"`。数据卷**不需要** chown 回 root；
+root 可以读写 1000 所有的文件。继续用 `1000:1000` 跑旧镜像也可以（旧镜像没有
+`USER` 指令，compose 仍会覆盖），只要旧代码不依赖 `/root/.local/state`。
 
 ## 7. 自愈矩阵（谁负责让服务回来）
 
@@ -265,12 +294,19 @@ docker compose restart rui
 
 ## 10. 安全
 
+- **容器非 root**：镜像以 uid/gid 1000 运行，`/app` 只读，根文件系统只读（`/tmp` 为
+  256 MB tmpfs），持久可写的只有 `config/` 和 `data/`；`cap_drop: ALL` +
+  `no-new-privileges`，没有 gosu/提权入口。卷属主见 §5 的迁移命令；状态路径
+  （`/var/lib/rui/state`）与回滚见 [security.md](security.md)。
 - 控制台默认无鉴权。只在内网用；要暴露就设 `web.auth_token`，并优先走反代 + TLS。
 - `.env` 权限 600，含 provider key 与 device token；不要提交进 git（`.gitignore`/`.dockerignore` 都已排除）。
 - 音乐凭据（`music.secrets_path`，默认放在数据卷 `/var/lib/rui/lan_media.json`，
   也可以放配置卷）同样 600；不进日志、不进配置。
 - 设备通道 token 不一致会直接拒绝连接（fail closed，`allow_no_token` 默认 false）。
 - 公开仓审计：配置文件里只允许 `*_env` 变量名，不允许明文 key/内网 IP/绝对路径。
+- 出站 SSRF：HA / 通用 MCP / Navidrome / 联网搜索的用户可配 URL 由 `security.outbound`
+  统一校验（云元数据、链路本地、组播、保留地址永封；默认放内网、默认禁回环）。
+  放行自建服务、关闭策略和 DNS rebinding 等残余风险见 [security.md](security.md)。
 
 ## 11. P15/P15b 演练记录（2026-10-23）
 

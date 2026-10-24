@@ -138,7 +138,7 @@ CONFIG_CENTER_PANELS = {
     "tools": {"tools.weather", "tools.news", "tools.search", "tools.ha",
               "tools.mcp", "tools.exposure", "music"},
     # tier 1 process foundations only; assistant/session is its own panel.
-    "foundation": {"system", "web"},
+    "foundation": {"system", "web", "security"},
 }
 
 

@@ -134,6 +134,18 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     && apt-get update \
     && apt-get install -y --no-install-recommends libspeexdsp1 \
     && rm -rf /var/lib/apt/lists/*
+# The service runs unprivileged. uid/gid 1000 is both the image's runtime identity and
+# the identity deploy/install.sh chowns the ./config and ./data bind mounts to, so the
+# container can write its state without a root/gosu entrypoint. HOME is the data volume:
+# anything that still resolves a home-relative default writes to persistent state, not
+# to an unwritable /root. RUI_UID/RUI_GID + compose `user:` can override the mapping,
+# but then the host directories must be chowned to the same pair.
+RUN groupadd --gid 1000 rui \
+    && useradd --uid 1000 --gid 1000 --home-dir /var/lib/rui \
+        --no-create-home --shell /usr/sbin/nologin rui \
+    && mkdir -p /var/lib/rui/state \
+    && chown -R rui:rui /var/lib/rui \
+    && chmod 0750 /var/lib/rui /var/lib/rui/state
 # The statically linked binary from the builder stage. Re-run the license gate on the
 # artifact that actually ships (not just in the builder): this also proves the static
 # binary executes on this base image. A GPL/nonfree flag here fails the image build.
@@ -164,10 +176,39 @@ COPY --from=models /seed/ /opt/seed-models/
 # device with a dead audio plane as unhealthy. See deploy/rui-healthcheck.py.
 COPY deploy/rui-healthcheck.py /usr/local/bin/rui-healthcheck
 RUN chmod +x /usr/local/bin/rui-healthcheck
-ENV RUI_WEB_DIR=/app/web/dist
+# /app is installed as root:root and only ever read by the service. a+rX makes that
+# explicit for every file shipped above, so a future COPY cannot add a 0600 asset the
+# runtime user cannot read. The checks below are the non-root contract:
+#   * id -u rui is 1000 (also catches a base-image uid collision);
+#   * the ffmpeg binary, the web UI and both seed models are readable;
+#   * the state directory exists and is owned by rui.
+RUN chmod -R a+rX /app /opt/seed-models /usr/local/bin/rui-healthcheck \
+    && id -u rui \
+    && test "$(id -u rui)" = 1000 \
+    && test "$(id -g rui)" = 1000 \
+    && test -x /usr/local/bin/ffmpeg \
+    && test -r /app/web/dist/index.html \
+    && test -r /app/src/rui/__main__.py \
+    && test -r /opt/seed-models/silero_vad.onnx \
+    && test -n "$(find /opt/seed-models/kws -name tokens.txt -print -quit)" \
+    && test -d /var/lib/rui/state \
+    && test "$(stat -c '%u:%g' /var/lib/rui)" = "1000:1000"
+# State that used to live in /root/.local/state (audio-plane socket, channel gateway
+# data) now lives on the data volume. Both variables are read by the code today
+# (src/rui/audio/process.py, src/rui/channels/cli.py); RUI_STATE_DIR is the documented
+# anchor and the two paths below are its concrete consumers. Keeping them inside
+# /var/lib/rui means they survive container rebuilds and are writable by uid 1000.
+ENV HOME=/var/lib/rui \
+    RUI_STATE_DIR=/var/lib/rui/state \
+    RUI_AUDIO_SOCK=/var/lib/rui/state/audio.sock \
+    RUI_CHANNEL_DATA=/var/lib/rui/state/channels \
+    RUI_WEB_DIR=/app/web/dist
 EXPOSE 8080
 VOLUME ["/var/lib/rui"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD ["python", "/usr/local/bin/rui-healthcheck"]
+# The probe and ENTRYPOINT run as rui too; no gosu/su shim is needed. Bind mounts are
+# prepared by deploy/install.sh (or the documented chown for existing installs).
+USER rui
 ENTRYPOINT ["rui"]
 CMD ["serve"]

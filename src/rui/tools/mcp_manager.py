@@ -44,6 +44,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from ..config.schema import McpServerConfig
+from ..security.netguard import OutboundPolicy, guarded_async_client
 from .contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from .ha import _clean_untrusted, _untrusted  # one sanitizer for all MCP-sourced text
 from .mcp_client import RECONNECT_MAX_S, MCPUnavailable
@@ -151,7 +152,8 @@ def _stdio_parameters(server: McpServerConfig) -> tuple[str, list[str], dict[str
 
 
 @asynccontextmanager
-async def open_session(server: McpServerConfig) -> AsyncIterator[Any]:
+async def open_session(server: McpServerConfig,
+                       policy: OutboundPolicy | None = None) -> AsyncIterator[Any]:
     """One initialized `ClientSession` over the configured transport.
 
     Kept as a module-level async context manager so tests can replace it with a
@@ -180,19 +182,20 @@ async def open_session(server: McpServerConfig) -> AsyncIterator[Any]:
     if not url:
         raise MCPUnavailable(f"{server.name}: http transport needs a url")
     headers = getattr(server, "headers", None)
-    http_client = None
-    if isinstance(headers, dict) and headers:
-        import httpx
-
-        http_client = httpx.AsyncClient(headers=dict(headers), timeout=30)
+    # The guard is on the request hook, so it covers the handshake and every tool call
+    # (and any redirect hop, should the SDK follow one).
+    http_client = guarded_async_client(
+        policy or OutboundPolicy(),
+        headers=dict(headers) if isinstance(headers, dict) else None,
+        timeout=30,
+    )
     try:
         async with streamable_http_client(url, http_client=http_client) as streams:
             async with ClientSession(streams[0], streams[1]) as session:
                 yield session
     finally:
-        if http_client is not None:
-            with contextlib.suppress(Exception):
-                await http_client.aclose()
+        with contextlib.suppress(Exception):
+            await http_client.aclose()
 
 
 def _permission(raw: dict) -> tuple[Permission, bool]:
@@ -244,9 +247,11 @@ class ManagedServer:
     """
 
     def __init__(self, cfg: McpServerConfig,
-                 on_change: Callable[[], None] | None = None) -> None:
+                 on_change: Callable[[], None] | None = None,
+                 policy: OutboundPolicy | None = None) -> None:
         self.cfg = cfg
         self._on_change = on_change
+        self.policy = policy or OutboundPolicy()
         self._tools: list[dict] = []
         self._queue: asyncio.Queue[tuple[dict, asyncio.Future]] = asyncio.Queue()
         self._task: asyncio.Task | None = None
@@ -334,7 +339,7 @@ class ManagedServer:
         while not self._stopped:
             try:
                 connected_at = time.monotonic()
-                async with open_session(self.cfg) as session:
+                async with open_session(self.cfg, self.policy) as session:
                     await session.initialize()
                     listed = await session.list_tools()
                     handshake_ms = (time.monotonic() - connected_at) * 1000
@@ -413,8 +418,10 @@ class MCPManager:
 
     def __init__(self, servers: Sequence[McpServerConfig] = (),
                  on_change: Callable[[], None] | None = None,
-                 allow_stdio: bool = False) -> None:
+                 allow_stdio: bool = False,
+                 policy: OutboundPolicy | None = None) -> None:
         self._configs: list[McpServerConfig] = list(servers)
+        self.policy = policy or OutboundPolicy()
         self._servers: dict[str, ManagedServer] = {}
         self._signatures: dict[str, tuple] = {}
         self.on_change = on_change
@@ -464,7 +471,7 @@ class MCPManager:
                                  return_exceptions=True)
 
     async def _start_one(self, server: McpServerConfig) -> None:
-        managed = ManagedServer(server, on_change=self.on_change)
+        managed = ManagedServer(server, on_change=self.on_change, policy=self.policy)
         self._servers[server.name] = managed
         try:
             ok = await managed.start()
@@ -579,7 +586,8 @@ def _handler_for(managed: ManagedServer, tool: str) -> Callable[[dict], Any]:
 async def test_server(server: McpServerConfig,
                       timeout_s: float = HANDSHAKE_TIMEOUT_S,
                       *,
-                      allow_stdio: bool = False) -> dict:
+                      allow_stdio: bool = False,
+                      policy: OutboundPolicy | None = None) -> dict:
     """Connect one throwaway server, list its tools, disconnect. Nothing is saved.
 
     A stdio server is never spawned while `tools.mcp_allow_stdio` is off: the config is
@@ -593,7 +601,7 @@ async def test_server(server: McpServerConfig,
             "error": "stdio MCP is disabled: set tools.mcp_allow_stdio: true",
         }
     started = time.monotonic()
-    managed = ManagedServer(server)
+    managed = ManagedServer(server, policy=policy)
     try:
         ok = await managed.start(timeout_s)
         elapsed = round((time.monotonic() - started) * 1000)

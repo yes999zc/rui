@@ -10,6 +10,13 @@ services:
     container_name: rui
     restart: unless-stopped
     network_mode: host          # device audio is a long-lived socket; host avoids NAT surprises
+    # The image's USER is rui (1000:1000); spelling it here keeps the host ownership
+    # contract visible and lets an existing install override the pair. install.sh writes
+    # RUI_UID/RUI_GID to .env and chowns ./config + ./data to match. An existing install
+    # upgrading to this file must run:
+    #   sudo chown -R 1000:1000 ~/rui/config ~/rui/data
+    # A bare `docker compose up -d` on root-owned volumes otherwise fails to write.
+    user: "${RUI_UID:-1000}:${RUI_GID:-1000}"
     env_file:
       - .env
     volumes:
@@ -26,6 +33,30 @@ services:
     environment:
       RUI_CONFIG: /config/config.yaml
       RUI_WEB_DIR: /app/web/dist
+      # Everything the old image wrote under /root/.local/state now lives on the data
+      # volume. The image sets these defaults too; they are repeated here so a
+      # deployment can see (and override) the state location without inspecting the
+      # Dockerfile. Keep a custom RUI_STATE_DIR inside /var/lib/rui or the audio-plane
+      # socket will not survive a container rebuild.
+      # RUI_STATE_DIR moves both consumers at once; the two concrete paths can still be
+      # overridden individually (nested defaults are supported by compose interpolation).
+      RUI_STATE_DIR: ${RUI_STATE_DIR:-/var/lib/rui/state}
+      RUI_AUDIO_SOCK: ${RUI_AUDIO_SOCK:-${RUI_STATE_DIR:-/var/lib/rui/state}/audio.sock}
+      RUI_CHANNEL_DATA: ${RUI_CHANNEL_DATA:-${RUI_STATE_DIR:-/var/lib/rui/state}/channels}
+      HOME: /var/lib/rui
+    # /app is root-owned and never writable by the runtime user; the root filesystem is
+    # read-only as well, so only the two bind mounts persist writes. /tmp is a small
+    # tmpfs because ffmpeg/uvicorn and the schema's fallback music cache use it. These
+    # options make the hardening explicit without a root entrypoint: the container cannot
+    # gain privileges and starts with no Linux capabilities. Binding :8080/:4412 with
+    # host networking needs no capability (they are >1024).
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     # Log rotation belongs to the runtime: the app's own service.log already rotates
     # (2 MB x 3) but stdout/stderr are the container's json-file log and would otherwise
     # grow without bound on a NAS nobody logs into daily.

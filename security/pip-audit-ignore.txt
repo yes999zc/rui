@@ -1,0 +1,16 @@
+# Accepted Python vulnerabilities for pip-audit.
+#
+# Format (one per line):
+#   <ID> <expires YYYY-MM-DD> <justification>
+#
+# The audit script validates each line before running: a missing date, missing
+# justification, malformed ID, or expired date fails the job instead of silently
+# suppressing the finding. IDs are the ones pip-audit reports (CVE-, GHSA-,
+# PYSEC-, ...). Keep the justification concrete and remove the line as soon as a
+# fixed version exists.
+#
+# The dependency audit currently has no accepted vulnerabilities: the locked
+# 2026-10-24 (UTC) export (all extras) was clean under pip-audit 2.10.1.
+#
+# Example (do not uncomment without triage):
+# CVE-2024-00000 2027-01-23 accepted: no fixed release for the pinned version; not reachable from the request path; tracked in #123

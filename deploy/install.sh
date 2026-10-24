@@ -14,9 +14,16 @@ RAW="${RUI_RAW:-${HOUSE_EAR_RAW:-https://raw.githubusercontent.com/$REPO/$REF}}"
 # -4: hosts without a global IPv6 route get an unusable AAAA first answer; forcing
 # IPv4 removes one more way for a single fetch to stall.
 CURL="curl -4 -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors"
-# Created by this script, so the files belong to the person who ran it, not to root.
-# The service container itself still runs as root (it writes its own data volume).
-RUN_AS="$(id -u):$(id -g)"
+# The image runs unprivileged as 1000:1000. Bind mounts carry host ownership, so the
+# installer (normally root on a NAS) chowns ./config and ./data to this pair and compose
+# is given the same mapping. Override both together when 1000 is already taken on the
+# host: compose `user:` replaces the image default, and /app stays world-readable, so no
+# rebuild is needed. The one-off `docker run` helpers below use the same pair.
+RUI_UID="${RUI_UID:-1000}"
+RUI_GID="${RUI_GID:-1000}"
+case "$RUI_UID" in ''|*[!0-9]*) echo "ERROR: RUI_UID must be numeric, got '$RUI_UID'." >&2; exit 1;; esac
+case "$RUI_GID" in ''|*[!0-9]*) echo "ERROR: RUI_GID must be numeric, got '$RUI_GID'." >&2; exit 1;; esac
+RUN_AS="$RUI_UID:$RUI_GID"
 
 # Fail before any work: the usual cold-install failures are about the shell running this
 # script, not about the project. Catching them here beats a cryptic permission error
@@ -36,12 +43,38 @@ fi
 
 # The installer writes as the invoking user. NAS mounts such as /vol1 are often root-only;
 # fail with a readable message instead of leaving a half-created install directory.
-if ! mkdir -p "$DIR/config" "$DIR/data/models"; then
+if ! mkdir -p "$DIR/config" "$DIR/data/models" "$DIR/data/state"; then
   echo "ERROR: cannot create $DIR." >&2
   echo "       use a writable RUI_HOME, run the installer as root, or create the directory" >&2
   echo "       first and chown it to this user." >&2
   exit 1
 fi
+
+# The container is non-root, so the bind-mounted config/data trees must be owned by the
+# runtime uid/gid. This is also the upgrade path for installs created while the image ran
+# as root: chown is idempotent and does not rewrite file contents. A non-root invoker can
+# only do it when they already are that identity (or have CAP_CHOWN); otherwise fail with
+# the exact command instead of starting a container that cannot write.
+ensure_ownership() {
+  if chown -R "$RUN_AS" "$DIR/config" "$DIR/data" 2>/dev/null; then
+    return 0
+  fi
+  # uid is what matters for owner bits; the primary gid of the invoking shell does not
+  # have to equal RUI_GID if the container user owns the files. A different gid is only
+  # relevant for group-only access, so do not fail a working install on that alone.
+  if [ "$(id -u)" = "$RUI_UID" ] \
+      && [ -w "$DIR/config" ] && [ -w "$DIR/data" ] && [ -w "$DIR/data/models" ] \
+      && [ -w "$DIR/data/state" ]; then
+    return 0
+  fi
+  echo "ERROR: $DIR/config and $DIR/data are not writable by uid:gid $RUN_AS." >&2
+  echo "       the container runs as $RUN_AS; fix ownership as root (or with sudo):" >&2
+  echo "         sudo chown -R $RUN_AS \"$DIR/config\" \"$DIR/data\"" >&2
+  echo "       if this host cannot use 1000:1000, re-run with this account's ids:" >&2
+  echo "         RUI_UID=$(id -u) RUI_GID=$(id -g) sh install.sh" >&2
+  echo "       (compose overrides the image's USER; the chown above must still succeed)." >&2
+  exit 1
+}
 
 # A private GHCR package (or an offline registry) must not make the one-command install
 # fail forever. If the image cannot be pulled, build the same tag from the public source;
@@ -102,6 +135,17 @@ for f in backup.sh restore.sh acceptance-v1.py; do
   fi
 done
 
+# Existing installs predate the non-root image: their config/ and data/ are root-owned,
+# so this chown is the one-time upgrade step. Tell the operator before touching it and
+# point at the backup path, since the chown is safe but the version change may not be.
+if [ -f "$DIR/config/config.yaml" ]; then
+  echo "      existing install: ensuring config/ and data/ are owned by $RUN_AS"
+  echo "      backup before upgrading: $DIR/scripts/backup.sh (or cp -a $DIR/config $DIR/data)"
+elif [ "$(id -u)" = "0" ]; then
+  echo "      fresh install: config/ and data/ owned by $RUN_AS"
+fi
+ensure_ownership
+
 echo "[2/5] config + wake words"
 if [ ! -f "$DIR/config/config.yaml" ]; then
   # `setup` writes the production template (provider chains, model paths, ack TTS) and
@@ -112,7 +156,7 @@ if [ ! -f "$DIR/config/config.yaml" ]; then
   echo "      next: open http://<nas-lan-ip>:8080/ and finish the first-run wizard (/setup)"
   echo "            keys -> models -> prepare -> params -> wake -> connect -> test -> verify"
   echo "      no YAML editing is needed: the wizard writes devices[]; the device token is in .env"
-  echo "      after changing wake words: docker run --rm -v $DIR/config:/config $IMAGE keywords --config /config/config.yaml"
+  echo "      after changing wake words: docker run --rm --user $RUN_AS -v $DIR/config:/config $IMAGE keywords --config /config/config.yaml"
   echo "      reference: $DIR/config.example.yaml and docs/deploy.md"
 else
   echo "      keeping existing config.yaml"
@@ -134,11 +178,42 @@ RUI_DEVICE_TOKEN=$DEVICE_TOKEN
 # Pin the image compose uses, so a later plain `docker compose up -d` (or a reboot)
 # keeps the version that was installed instead of falling back to :latest.
 RUI_IMAGE=$IMAGE
+# Container identity. compose reads these for `user:`; the same pair owns config/data.
+RUI_UID=$RUI_UID
+RUI_GID=$RUI_GID
 ENV
   chmod 600 "$DIR/.env"
   echo "      wrote .env with a generated device token (${#DEVICE_TOKEN} hex chars)"
 else
   echo "      keeping existing .env"
+  # Existing installs upgrading to the non-root image need the compose mapping persisted,
+  # otherwise a later bare `docker compose up -d` falls back to 1000:1000 while the host
+  # directories may be owned by another pair. Upsert only these two keys; every other
+  # line (keys, tokens, image tag) is preserved byte for byte.
+  if ! grep -qx "RUI_UID=$RUI_UID" "$DIR/.env" || ! grep -qx "RUI_GID=$RUI_GID" "$DIR/.env"; then
+    TMP_ENV="$DIR/.env.tmp.$$"
+    if awk -v uid="$RUI_UID" -v gid="$RUI_GID" '
+        BEGIN { seen_uid = 0; seen_gid = 0 }
+        /^RUI_UID=/ { print "RUI_UID=" uid; seen_uid = 1; next }
+        /^RUI_GID=/ { print "RUI_GID=" gid; seen_gid = 1; next }
+        { print }
+        END {
+          if (!seen_uid) print "RUI_UID=" uid
+          if (!seen_gid) print "RUI_GID=" gid
+        }
+      ' "$DIR/.env" > "$TMP_ENV"; then
+      chmod 600 "$TMP_ENV"
+      mv "$TMP_ENV" "$DIR/.env"
+      echo "      updated RUI_UID/RUI_GID in .env for the non-root container"
+    else
+      rm -f "$TMP_ENV"
+      echo "ERROR: could not update RUI_UID/RUI_GID in $DIR/.env." >&2
+      echo "       add these lines by hand and re-run:" >&2
+      echo "         RUI_UID=$RUI_UID" >&2
+      echo "         RUI_GID=$RUI_GID" >&2
+      exit 1
+    fi
+  fi
 fi
 
 echo "[4/5] local models: ASR + VAD + wake word"
@@ -249,6 +324,9 @@ if ! docker ps --format '{{.Names}}' | grep -qx rui; then
 fi
 # Pass the compose file explicitly: it also pins the project directory, so a stray cwd
 # can never make compose start the *other* install's project.
+# Shell values win over .env, so an explicit RUI_UID/RUI_GID override on this run matches
+# the chown above even if .env still holds an older pair (which the block above rewrote).
+export RUI_UID RUI_GID
 RUI_IMAGE="$IMAGE" docker compose -f "$DIR/docker-compose.yml" --project-directory "$DIR" up -d
 
 # Wait for the service instead of printing a URL that may still 502. The probe is the

@@ -22,6 +22,8 @@ import logging
 import os
 from pathlib import Path
 
+from ..security.netguard import OutboundPolicy, guarded_async_client
+
 log = logging.getLogger(__name__)
 
 # The old build's prompt, verbatim (songname.py:18-22): translate, at most three
@@ -85,9 +87,13 @@ class AliasStore:
 class NameResolver:
     """Ask the model for proper-name candidates; never block a play request."""
 
-    def __init__(self, aliases: AliasStore, timeout_s: float = 6.0) -> None:
+    def __init__(self, aliases: AliasStore, timeout_s: float = 6.0,
+                 policy: OutboundPolicy | None = None) -> None:
         self.aliases = aliases
         self.timeout_s = timeout_s
+        # `DEEPSEEK_BASE_URL` is operator-controlled, but the request still goes
+        # through the same outbound policy as every other tool URL.
+        self.policy = policy or OutboundPolicy()
         self._cache: dict[str, list[str]] = {}
 
     async def candidates(self, name: str) -> list[str]:
@@ -120,9 +126,8 @@ class NameResolver:
             "thinking": {"type": "disabled"},
         }
         try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+            async with guarded_async_client(self.policy,
+                                            timeout=self.timeout_s) as client:
                 resp = await client.post(f"{base}/chat/completions",
                                          headers={"Authorization": f"Bearer {api_key}"},
                                          json=payload)

@@ -32,6 +32,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from ...security.netguard import OutboundPolicy, guarded_async_client, guarded_sync_client
 from ..model import Track
 from ..source import SourceError
 
@@ -68,8 +69,12 @@ class NavidromeSource:
     name = "navidrome"
 
     def __init__(self, secrets_path: Path, cache_dir: Path, cache_tracks: int = 8,
-                 transport: httpx.AsyncBaseTransport | None = None) -> None:
+                 transport: httpx.AsyncBaseTransport | None = None,
+                 policy: OutboundPolicy | None = None) -> None:
         self._secrets_path = secrets_path
+        # The URL comes from the credentials json, i.e. remote-configurable. Guard both
+        # the JSON API client and the blocking stream download.
+        self._policy = policy or OutboundPolicy()
         # expanduser twice over: the config accepts `~` (a literal ~ directory was
         # created under the repo before this, measured 22:02).
         self._cache_dir = cache_dir.expanduser()
@@ -94,8 +99,8 @@ class NavidromeSource:
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT_S,
-                                             transport=self._transport)
+            self._client = guarded_async_client(
+                self._policy, timeout=DOWNLOAD_TIMEOUT_S, transport=self._transport)
         return self._client
 
     async def close(self) -> None:
@@ -222,11 +227,11 @@ class NavidromeSource:
         src.unlink(missing_ok=True)
         raise SourceError(f"resolve {track.label}: {last}")
 
-    @staticmethod
-    def _download(url: str, dst: Path) -> int:
+    def _download(self, url: str, dst: Path) -> int:
         """Blocking download, run in a thread. Returns the byte count."""
         size = 0
-        with httpx.Client(timeout=DOWNLOAD_TIMEOUT_S) as client, dst.open("wb") as f:
+        with guarded_sync_client(self._policy,
+                                 timeout=DOWNLOAD_TIMEOUT_S) as client, dst.open("wb") as f:
             with client.stream("GET", url) as resp:
                 resp.raise_for_status()
                 for block in resp.iter_bytes(1 << 16):

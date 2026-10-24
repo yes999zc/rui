@@ -10,6 +10,20 @@ web:
   port: 8080
   auth_token: ""        # setup generates one; fill it before exposing the console
   allow_anonymous: false  # true = no token on a non-loopback bind (dev only)          # set this if the console is reachable beyond your LAN
+security:
+  # Outbound SSRF guard for HA, generic MCP, Navidrome and web search. The console
+  # operator is trusted; the risk is a URL injected through tool output / remote config.
+  # Cloud metadata, link-local, multicast, unspecified and reserved addresses are
+  # always blocked. Private LAN services stay allowed by default; loopback is not.
+  # See docs/security.md. Changes need a restart.
+  outbound:
+    enabled: true
+    allow_private: true
+    allow_loopback: false
+    extra_allowed_hosts: []
+    extra_allowed_cidrs: []
+    blocked_hosts: []
+    blocked_cidrs: []
 devices:
   - id: living
     adapter: xiaoai

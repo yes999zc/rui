@@ -101,7 +101,7 @@ flowchart LR
 主机前置条件：
 
 - **Docker Engine + `docker compose` 插件**；安装用户能访问 Docker daemon（`/var/run/docker.sock`）：root，或已加入 `docker` 组并重新登录（`docker info` 必须能通）。
-- **可写安装目录**：默认 `~/rui`（`RUI_HOME` 可改）。`/vol1/rui` 这类 NAS 挂载点常是 root-only：用 root 安装，或先建目录并 `chown` 给安装用户。
+- **可写安装目录**：默认 `~/rui`（`RUI_HOME` 可改）。`/vol1/rui` 这类 NAS 挂载点常是 root-only：用 root 安装，或先建目录并 `chown` 给安装用户。容器以 uid/gid **1000** 运行，安装脚本会把 `config/`、`data/` chown 到这个身份；1000 已被占用时用 `RUI_UID`/`RUI_GID` 覆盖（见 [docs/security.md](docs/security.md)）。
 - **出网**：能访问 `raw.githubusercontent.com`、`ghcr.io`、`hf-mirror.com`。镜像拉取走 Docker daemon 的代理；模型下载可选宿主机代理——安装脚本会把 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 传给 `fetch-models`。
 - **架构**：amd64 或 arm64；建议 4 核 / 4 GB 内存 / 2 GB 可用磁盘（另留约 250 MB 给模型）。
 
@@ -249,7 +249,8 @@ docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生�
 - **换 device token**：在 `connect` 步重新显示/复制；或在 `.env` 改 `RUI_DEVICE_TOKEN` 后 `docker compose up -d`，再把新值写进 client 并重启，最后回 `test` 确认。
 - **换控制台 token**：`docker compose exec -T rui rui token --rotate`，再 `docker compose restart rui` 让服务加载新值；重启后旧 token 失效，浏览器要重新输入。
 - **升级**：在 `.env` 固定 `RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0`；`docker compose pull && docker compose up -d`，等 healthy 后跑 `docker compose exec -T rui rui doctor`。
-- **回滚**：把 `.env` 的 `RUI_IMAGE` 改回上一个 tag，先备份 `config/config.yaml`（降级可能不认新字段），再 `docker compose up -d`。
+- **升级到非 root 镜像（已有安装）**：先 `scripts/backup.sh --out ~/rui-backups`，再 `sudo chown -R 1000:1000 config data`（只改属主，不改内容），然后 `docker compose pull && docker compose up -d --force-recreate`，最后 `docker compose exec -T rui rui-healthcheck`。重跑 `deploy/install.sh` 会自动做这一步；细节/回滚见 [docs/security.md](docs/security.md)。
+- **回滚**：把 `.env` 的 `RUI_IMAGE` 改回上一个 tag，先备份 `config/config.yaml`（降级可能不认新字段），再 `docker compose up -d`。回滚到 root 镜像时把 `.env` 的 `RUI_UID/RUI_GID` 改成 `0/0`（或删掉这两行后用 `user: "0:0"`）；数据卷不必再 chown 回 root。
 - **备份/恢复**：`cd ~/rui && scripts/backup.sh --out ~/rui-backups`，恢复见 [docs/runbook.md](docs/runbook.md)。
 - **日常验收**：`curl -fsS http://localhost:8080/health`、`docker compose exec -T rui rui doctor`、`docker compose logs -f --tail=200 rui`。
 
@@ -340,7 +341,7 @@ npm run typecheck
 npm run build
 ```
 
-- 部署与生产运维：[docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md)
+- 部署与生产运维：[docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md) · [docs/security.md](docs/security.md)
 - 设计/控制台契约：[docs/console.md](docs/console.md) · [docs/brand.md](docs/brand.md)
 - 音频时延与调参：[docs/audio-latency.md](docs/audio-latency.md) · [docs/audio-pipeline.md](docs/audio-pipeline.md)
 - Socket & Plug v1 参考插头：[plugins/rui-plugin-xiaoai](plugins/rui-plugin-xiaoai/README.md)（LX06，v0/RUI KWS）。0.4 才把核心 adapter 提取进插件包；当前 `src/rui/device/xiaoai/` 与内置 manifest 仍是默认回退。
@@ -351,6 +352,8 @@ npm run build
 - **本地优先**：音频、KWS/VAD/AEC 和本地 ASR 都在你自己的机器上；只有你配置的 LLM/TTS/搜索/音乐/HA 服务会收到相应请求。
 - **密钥只写不读**：`.env` 或 `secrets.yaml`（0600）注入；控制台只显示 `has_key`，所有接口都不回显值。
 - **控制台鉴权**：安装时生成随机 token；非 loopback 且无 token 时服务拒绝启动。不要把 `:8080` 直接暴露到公网；远程访问请走 Tailscale/VPN 或带 TLS 的反向代理。
+- **非 root 容器**：镜像以 `rui`（uid/gid 1000）运行，`/app` 对运行用户只读，根文件系统也是只读（`/tmp` 为 tmpfs），持久可写的只有 `config/` 和 `data/` 两个卷；`cap_drop: ALL` + `no-new-privileges`，无需 gosu/提权入口。已有安装升级前必须执行一次 `sudo chown -R 1000:1000 config data`，否则容器无法读写旧卷。状态路径、`RUI_UID/RUI_GID` 覆盖和回滚见 [docs/deploy.md §3.6](docs/deploy.md#36-装好之后密钥token升级回滚) 和 [docs/security.md](docs/security.md)。
+- **出站 SSRF 防护**：HA、通用 MCP、音乐音源和联网搜索里由配置/远端数据决定的 URL 统一校验；云元数据、链路本地、组播、保留地址始终拒绝，默认允许内网服务、默认拒绝回环。策略、放行示例与残余风险见 [docs/security.md](docs/security.md)。
 - 设备 token 决定音箱回连权限，和音箱管理员权限等同，按家庭网络边界保护。
 - 漏洞/安全问题请不要公开开 issue，先通过 GitHub 私下联系维护者。
 
@@ -414,7 +417,7 @@ Record these while flashing/installing the client — every later step uses them
 Host prerequisites:
 
 - **Docker Engine + the `docker compose` plugin**. The install user must be able to access the Docker daemon (`/var/run/docker.sock`): root, or in the `docker` group and logged in again (`docker info` must work).
-- **A writable install directory**: `~/rui` by default (`RUI_HOME` overrides it). NAS mounts such as `/vol1/rui` are often root-only: install as root, or create the directory and `chown` it to the install user first.
+- **A writable install directory**: `~/rui` by default (`RUI_HOME` overrides it). NAS mounts such as `/vol1/rui` are often root-only: install as root, or create the directory and `chown` it to the install user first. The container runs as uid/gid **1000**; the installer chowns `config/` and `data/` to that identity. Override with `RUI_UID`/`RUI_GID` if 1000 is taken (see [docs/security.md](docs/security.md)).
 - **Outbound network**: `raw.githubusercontent.com`, `ghcr.io`, `hf-mirror.com`. Image pulls use the Docker daemon proxy; model downloads can use a host proxy — the installer forwards `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` to `fetch-models`.
 - **Architecture**: amd64 or arm64; 4 cores / 4 GB RAM / 2 GB free disk recommended (plus ~250 MB for models).
 
@@ -561,7 +564,8 @@ The commands below assume `~/rui`; replace the path if you installed under `/vol
 - **Change the device token**: show/copy it again in `connect`, or edit `RUI_DEVICE_TOKEN` in `.env` and run `docker compose up -d`; then update the client, restart it, and re-run `test`.
 - **Rotate the console token**: `docker compose exec -T rui rui token --rotate`, then `docker compose restart rui` to load it; the old token stops working after the restart and the browser asks again.
 - **Upgrade**: pin `RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0` in `.env`; `docker compose pull && docker compose up -d`, wait for healthy, then run `docker compose exec -T rui rui doctor`.
-- **Roll back**: set `RUI_IMAGE` back to the previous tag, back up `config/config.yaml` first (old code may reject new fields), then `docker compose up -d`.
+- **Upgrade to the non-root image (existing installs)**: back up first (`scripts/backup.sh --out ~/rui-backups`), then `sudo chown -R 1000:1000 config data` (owner only; contents are untouched), then `docker compose pull && docker compose up -d --force-recreate`, and finally `docker compose exec -T rui rui-healthcheck`. Re-running `deploy/install.sh` does the chown automatically. Details and rollback: [docs/security.md](docs/security.md).
+- **Roll back**: set `RUI_IMAGE` back to the previous tag, back up `config/config.yaml` first (old code may reject new fields), then `docker compose up -d`. When rolling back to a root image, set `RUI_UID`/`RUI_GID` to `0`/`0` in `.env` (or use `user: "0:0"`); the volumes do not need to be chowned back.
 - **Backup/restore**: `cd ~/rui && scripts/backup.sh --out ~/rui-backups`; restore steps are in [docs/runbook.md](docs/runbook.md).
 - **Daily checks**: `curl -fsS http://localhost:8080/health`, `docker compose exec -T rui rui doctor`, `docker compose logs -f --tail=200 rui`.
 
@@ -617,11 +621,15 @@ npm run typecheck
 npm run build
 ```
 
-Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md). Audio latency notes: [docs/audio-latency.md](docs/audio-latency.md). Console contract: [docs/console.md](docs/console.md). Socket & Plug v1 reference plug: [plugins/rui-plugin-xiaoai](plugins/rui-plugin-xiaoai/README.md) (LX06, v0/RUI KWS). The core adapter moves into the package in 0.4; `src/rui/device/xiaoai/` and the in-code builtin manifest remain the default fallback. Downstream adapter hook (issue #7 Q1): `RUI_ADAPTER_PLUGINS=dot2=module:build` (or the `rui.adapters` entry-point group) registers an adapter at startup without `sitecustomize` or a core fork; see [docs/socket-plug-v1.md](docs/socket-plug-v1.md) §4.4 and [docs/plug-test-kit.md](docs/plug-test-kit.md).
+Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md) · [docs/security.md](docs/security.md). Audio latency notes: [docs/audio-latency.md](docs/audio-latency.md). Console contract: [docs/console.md](docs/console.md). Socket & Plug v1 reference plug: [plugins/rui-plugin-xiaoai](plugins/rui-plugin-xiaoai/README.md) (LX06, v0/RUI KWS). The core adapter moves into the package in 0.4; `src/rui/device/xiaoai/` and the in-code builtin manifest remain the default fallback. Downstream adapter hook (issue #7 Q1): `RUI_ADAPTER_PLUGINS=dot2=module:build` (or the `rui.adapters` entry-point group) registers an adapter at startup without `sitecustomize` or a core fork; see [docs/socket-plug-v1.md](docs/socket-plug-v1.md) §4.4 and [docs/plug-test-kit.md](docs/plug-test-kit.md).
 
 ### Security and privacy
 
-Audio and local recognition stay on your box; only the providers you configure receive the corresponding requests. Keys are injected via `.env` / `secrets.yaml` (0600) and are write-only through the API. The console uses a generated token and refuses to start on a non-loopback bind without one. Keep `:8080` on a trusted network (or put it behind TLS/VPN); the device token is equivalent to speaker control. See [docs/runbook.md](docs/runbook.md).
+Audio and local recognition stay on your box; only the providers you configure receive the corresponding requests. Keys are injected via `.env` / `secrets.yaml` (0600) and are write-only through the API. The console uses a generated token and refuses to start on a non-loopback bind without one. Keep `:8080` on a trusted network (or put it behind TLS/VPN); the device token is equivalent to speaker control.
+
+The container runs as the unprivileged `rui` user (uid/gid 1000): `/app` is root-owned and read-only to the service, the root filesystem is read-only (`/tmp` is a small tmpfs), only the `config/` and `data/` mounts persist writes, and the service starts with `cap_drop: ALL` + `no-new-privileges`. Existing installs must `sudo chown -R 1000:1000 config data` once before upgrading; see [docs/deploy.md §3.6](docs/deploy.md#36-装好之后密钥token升级回滚) and [docs/security.md](docs/security.md) for the migration, state paths, `RUI_UID`/`RUI_GID` overrides and rollback. See also [docs/runbook.md](docs/runbook.md).
+
+Dependency and image CVEs are scanned in CI (`.github/workflows/security.yml`): `pip-audit` on every push/PR and Trivy on the amd64 image for main, tags and a weekly schedule. Accepted exceptions are dated under `security/` and pruned when fixed; run `make security` locally. Policy, local commands, base-image bump steps and first-run expectations: [docs/security-scanning.md](docs/security-scanning.md).
 
 ### Configuration recovery
 

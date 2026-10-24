@@ -27,6 +27,7 @@ from typing import Any
 
 from .. import secrets
 from ..config.schema import HaConfig
+from ..security.netguard import OutboundPolicy
 from ..session import phrases
 from .contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from .mcp_client import MCPClient, MCPUnavailable
@@ -115,7 +116,8 @@ def _clean_entity(line: object) -> str:
 class HaBridge:
     """One HA MCP server: connection, whitelist, entity context, tool handlers."""
 
-    def __init__(self, cfg: HaConfig, data_dir: Path) -> None:
+    def __init__(self, cfg: HaConfig, data_dir: Path,
+                 policy: OutboundPolicy | None = None) -> None:
         url = cfg.base_url.rstrip("/")
         if not url.endswith("/api/mcp"):
             url = f"{url}/api/mcp"
@@ -123,6 +125,7 @@ class HaBridge:
         self.cfg = cfg
         self.client = MCPClient(
             _server_cfg(url), headers={"Authorization": f"Bearer {token}"} if token else {},
+            policy=policy,
         )
         self._data_dir = data_dir
         self._entities_cache: list[str] | None = None

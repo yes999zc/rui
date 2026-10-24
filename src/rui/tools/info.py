@@ -24,6 +24,7 @@ import httpx
 
 from .. import secrets
 from ..config.schema import Config
+from ..security.netguard import guarded_async_client, policy_from_config
 from ..session import briefing
 from .contract import Permission, ToolSpec
 
@@ -260,7 +261,9 @@ async def _news_from_search(cfg: Config, count: int) -> briefing.Briefing | None
         "need_content": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=min(float(conf.timeout_s), 8.0)) as client:
+        async with guarded_async_client(
+                policy_from_config(cfg.security),
+                timeout=min(float(conf.timeout_s), 8.0)) as client:
             resp = await client.post(
                 conf.base_url.rstrip("/") + "/v1/tools/search",
                 json=payload,
@@ -326,7 +329,8 @@ async def web_search(cfg: Config, args: dict) -> str:
         "need_content": False,
     }
     try:
-        async with httpx.AsyncClient(timeout=conf.timeout_s) as client:
+        async with guarded_async_client(
+                policy_from_config(cfg.security), timeout=conf.timeout_s) as client:
             resp = await client.post(
                 conf.base_url.rstrip("/") + "/v1/tools/search",
                 json=payload,

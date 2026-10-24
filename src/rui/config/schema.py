@@ -9,6 +9,7 @@ Version history:
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -48,6 +49,55 @@ class SystemConfig(BaseModel):
                 f"unknown IANA timezone {v!r}; use one like Asia/Shanghai"
             ) from exc
         return v
+
+
+class OutboundSecurityConfig(BaseModel):
+    """Outbound SSRF policy (docs/security.md).
+
+    Defaults are the self-hosted case: LAN/private services are reachable, loopback is
+    not, and cloud metadata/link-local is blocked regardless. `extra_allowed_*` is an
+    explicit escape hatch for a private hostname or range; `blocked_*` always wins.
+    """
+
+    enabled: bool = True
+    allow_private: bool = True
+    allow_loopback: bool = False
+    extra_allowed_hosts: list[str] = Field(default_factory=list)
+    extra_allowed_cidrs: list[str] = Field(default_factory=list)
+    blocked_hosts: list[str] = Field(default_factory=list)
+    blocked_cidrs: list[str] = Field(default_factory=list)
+
+    @field_validator("extra_allowed_hosts", "blocked_hosts")
+    @classmethod
+    def _bare_hosts(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in values:
+            host = str(raw or "").strip().lower().rstrip(".")
+            if not host:
+                raise ValueError("host allow/block entries must not be empty")
+            if any(char in host for char in "/:@[]"):
+                raise ValueError(f"{host!r} is not a bare hostname; use a CIDR for IPs")
+            if host not in out:
+                out.append(host)
+        return out
+
+    @field_validator("extra_allowed_cidrs", "blocked_cidrs")
+    @classmethod
+    def _known_cidrs(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in values:
+            try:
+                network = ipaddress.ip_network(str(raw or "").strip(), strict=False)
+            except ValueError as exc:
+                raise ValueError(f"invalid CIDR {raw!r}") from exc
+            text = str(network)
+            if text not in out:
+                out.append(text)
+        return out
+
+
+class SecurityConfig(BaseModel):
+    outbound: OutboundSecurityConfig = Field(default_factory=OutboundSecurityConfig)
 
 
 class WebConfig(BaseModel):
@@ -591,6 +641,7 @@ class Config(BaseModel):
     version: int = CONFIG_VERSION
     system: SystemConfig = Field(default_factory=SystemConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     devices: list[DeviceConfig] = Field(default_factory=list)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     ack: AckConfig = Field(default_factory=AckConfig)

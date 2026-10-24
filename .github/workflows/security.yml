@@ -1,0 +1,194 @@
+name: security
+
+# P3.5 security slice: dependency and container-image CVE scanning.
+#
+# - pip-audit runs on every push/PR and on the weekly schedule. It audits the
+#   locked dependency set (all extras) without installing it.
+# - Trivy builds the amd64 runtime image and scans it for HIGH/CRITICAL
+#   vulnerabilities. The image build is too expensive for every PR, so it runs
+#   on main, version tags, the weekly schedule and manual dispatch only.
+# - Accepted exceptions are dated files under security/; see
+#   docs/security-scanning.md for the policy and local commands.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # Mondays 03:17 UTC. Debian/bookworm and PyPI advisories change weekly.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-audit:
+    name: pip-audit (locked deps + extras)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.0"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Export lockfile and audit
+        env:
+          SECURITY_REPORT_DIR: ${{ runner.temp }}/security-reports
+          PIP_AUDIT_VERSION: "2.10.1"
+        run: bash scripts/security-pip-audit.sh
+
+      - name: Append audit result to job summary
+        if: always()
+        run: |
+          report="${{ runner.temp }}/security-reports/pip-audit.txt"
+          if [ -f "$report" ]; then
+            {
+              echo "## Python dependency audit"
+              echo '```'
+              cat "$report"
+              echo '```'
+              echo
+              echo "### Dated pip-audit allowlist"
+              echo '```'
+              grep -vE '^[[:space:]]*(#|$)' security/pip-audit-ignore.txt || echo "(no active entries)"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pip-audit-report
+          path: ${{ runner.temp }}/security-reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+  image-scan:
+    name: Trivy image scan (amd64)
+    # Keep the cold image build off PRs. The dependency audit still runs there.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build amd64 runtime image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: rui:security-scan
+          # Shares the default gha scope with docker-publish.yml, so the ffmpeg,
+          # npm and model layers are reused when a publish build already ran.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image for HIGH/CRITICAL
+        id: trivy
+        # Let the report upload and the job summary run even when Trivy exits 1.
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: rui:security-scan
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          # Do not hide the "unfixed" bucket: it is exactly what the dated
+          # allowlist in security/trivy-ignore.yaml exists to review.
+          ignore-unfixed: false
+          trivyignores: security/trivy-ignore.yaml
+          exit-code: "1"
+          format: sarif
+          output: trivy-results.sarif
+          limit-severities-for-sarif: true
+          cache: true
+
+      - name: Append scan result and allowlist to job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Container image scan"
+            echo
+            echo "- image: \`rui:security-scan\` (linux/amd64)"
+            echo "- scanner: Trivy v0.76.1, severity HIGH,CRITICAL, unfixed findings included"
+            if [ -f trivy-results.sarif ]; then
+              total=$(jq '[.runs[]?.results[]?] | length' trivy-results.sarif)
+              echo "- unignored findings in SARIF: **${total}**"
+              levels=$(jq -r '[.runs[]?.results[]?.level // "warning"] | group_by(.) | map("\(.[0])=\(length)") | join(", ")' trivy-results.sarif)
+              if [ -n "$levels" ]; then
+                echo "- SARIF levels: ${levels}"
+              fi
+            else
+              echo "- SARIF was not produced; inspect the scan step log."
+            fi
+            echo
+            count=$(awk '/^[[:space:]]*- id:/ { n++ } END { print n + 0 }' security/trivy-ignore.yaml)
+            echo "### Dated allowlist (${count} entries, ignored by Trivy)"
+            echo
+            awk '
+              /^[[:space:]]*- id:/ { id = $3 }
+              /^[[:space:]]*expired_at:/ { printf "- `%s` (review by %s)\n", id, $2 }
+            ' security/trivy-ignore.yaml
+            echo
+            echo "Each entry must be re-justified or removed before it expires; see docs/security-scanning.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$count" -gt 0 ]; then
+            echo "::warning title=Trivy allowlist::Trivy ignored ${count} dated CVEs; review security/trivy-ignore.yaml before expiry."
+          fi
+
+      - name: Upload SARIF to code scanning
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        # Public repos support code scanning; forks/restricted runners may not.
+        # The artifact upload below is the fallback, so do not fail the job here.
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
+
+      - name: Upload Trivy report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trivy-image-report
+          path: trivy-results.sarif
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail on unignored or unexpired HIGH/CRITICAL findings
+        if: steps.trivy.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "::error::Trivy reported unignored HIGH/CRITICAL findings (or the scan failed). See the trivy-image-report artifact and the job summary."
+          exit 1

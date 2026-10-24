@@ -24,3 +24,6 @@ docs/console-shots/brand-*.png
 
 # Guided acceptance output (docs/acceptance.md). May name the deployment; keep local.
 acceptance-runs/
+
+# Local output of scripts/security-pip-audit.sh; CI uploads it as an artifact.
+security-reports/

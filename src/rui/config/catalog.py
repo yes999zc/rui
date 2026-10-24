@@ -33,7 +33,7 @@ RESTART_COMMAND = "docker compose restart"
 # Top-level sections the dotted-path writer may touch. It is a coarse guard; the real
 # rule is per-field (`writable` in the directory below).
 WRITABLE_ROOT = [
-    "assistant", "session", "audio", "ack", "system", "web",
+    "assistant", "session", "audio", "ack", "system", "web", "security",
     "devices", "providers", "tools", "music",
 ]
 
@@ -82,6 +82,12 @@ _GROUPS: dict[str, tuple[dict, int, int, str, dict]] = {
     "web": (_t("控制台", "Console"), 1, 110, "restart", _t(
         "控制台自己的监听地址与端口。改完用新地址访问，需要重启服务。",
         "Where the console listens. Reach it on the new address after a restart.")),
+    "security": (_t("出站安全", "Outbound security"), 1, 120, "restart", _t(
+        "允许哪些外部/内网地址被工具访问（SSRF 防护）。云元数据与链路本地地址永远拒绝；"
+        "默认允许内网服务（NAS、Home Assistant），默认不允许回环地址。改完需要重启服务。",
+        "Which outbound addresses tools may reach (SSRF guard). Cloud metadata and "
+        "link-local addresses are always refused; LAN services are allowed by default "
+        "and loopback is not. Restart to apply.")),
     # --- tier 2: speaker ---------------------------------------------------------
     "devices": (_t("音箱", "Speakers"), 2, 10, "restart", _t(
         "已登记的音箱。新增/删除、唤醒词、音量目标和监听端口在「设备管理」页修改；"
@@ -356,6 +362,70 @@ def _foundation_fields() -> list[dict]:
                   "Console port (8080 by default). Change it on a port conflict, then "
                   "restart and use the new port."),
                effect="restart", minimum=1, maximum=65535),
+    ]
+
+
+def _security_fields() -> list[dict]:
+    return [
+        _field("security.outbound.enabled", "security", "bool",
+               _t("启用出站防护", "Enable outbound guard"),
+               _t("关闭后 HA/MCP/音乐/搜索的 URL 不再做 SSRF 检查。只应在排障时临时关闭；"
+                  "关闭后模型或外部数据可诱导服务访问云元数据或内网管理口。改完重启服务。",
+                  "Disables the SSRF check for HA, MCP, music and search URLs. Turn it "
+                  "off only while debugging: tool output or a stored URL could otherwise "
+                  "reach cloud metadata or an admin port. Restart to apply."),
+               effect="restart"),
+        _field("security.outbound.allow_private", "security", "bool",
+               _t("允许内网地址", "Allow private addresses"),
+               _t("默认 true：自建服务通常在 10/8、172.16/12、192.168/16 或 IPv6 ULA。"
+                  "设为 false 后只允许公网地址；云元数据、链路本地、组播、保留地址不受"
+                  "这个开关影响。改完重启服务。",
+                  "Default true because self-hosted services usually live on 10/8, "
+                  "172.16/12, 192.168/16 or an IPv6 ULA. False permits public addresses "
+                  "only. Metadata, link-local, multicast and reserved addresses stay "
+                  "blocked regardless. Restart to apply."),
+               effect="restart"),
+        _field("security.outbound.allow_loopback", "security", "bool",
+               _t("允许回环地址", "Allow loopback"),
+               _t("默认 false：127.0.0.1/::1 上通常是控制台、模型服务和本机管理口，"
+                  "不该由 MCP 工具或外部数据触发访问。只在本机开发且明确需要时打开，"
+                  "或改用「额外放行主机」精确放行。改完重启服务。",
+                  "Default false: 127.0.0.1/::1 usually holds the console, local model "
+                  "servers and admin ports. Enable only for local development, or use "
+                  "the extra-allowed host list for one exact name. Restart to apply."),
+               effect="restart"),
+        _field("security.outbound.extra_allowed_hosts", "security", "list",
+               _t("额外放行主机", "Extra allowed hosts"),
+               _t("精确主机名白名单（不带端口/协议）。用于 DNS 解析暂不可用、或想放行"
+                  "回环/内网中的单个名字；它仍然绕不过云元数据/链路本地等硬性封禁。"
+                  "改完重启服务。",
+                  "Exact hostnames (no scheme/port). Useful when DNS is flaky or you "
+                  "want one loopback/private name allowed. It cannot override the hard "
+                  "metadata/link-local blocks. Restart to apply."),
+               effect="restart"),
+        _field("security.outbound.extra_allowed_cidrs", "security", "list",
+               _t("额外放行网段", "Extra allowed CIDRs"),
+               _t("按解析后的 IP 匹配的 CIDR 白名单，例如 192.168.5.0/24。放行范围应尽量小；"
+                  "它同样绕不过云元数据/链路本地硬性封禁。改完重启服务。",
+                  "CIDRs matched against the resolved IP, e.g. 192.168.5.0/24. Keep the "
+                  "range as narrow as possible; the hard metadata/link-local blocks still "
+                  "win. Restart to apply."),
+               effect="restart"),
+        _field("security.outbound.blocked_hosts", "security", "list",
+               _t("额外封禁主机", "Extra blocked hosts"),
+               _t("精确主机名黑名单，优先级高于所有放行条目。用于封掉一个不该被工具访问的"
+                  "内网服务名。改完重启服务。",
+                  "Exact hostnames that always lose, even against an allow entry. Use it "
+                  "to deny one internal service name. Restart to apply."),
+               effect="restart"),
+        _field("security.outbound.blocked_cidrs", "security", "list",
+               _t("额外封禁网段", "Extra blocked CIDRs"),
+               _t("按解析后的 IP 匹配的 CIDR 黑名单，优先级最高。用于封掉一段内网管理地址；"
+                  "云元数据和链路本地本来就是永封。改完重启服务。",
+                  "CIDRs matched against the resolved IP; highest priority. Use it to "
+                  "deny an admin range. Metadata and link-local are already always "
+                  "blocked. Restart to apply."),
+               effect="restart"),
     ]
 
 
@@ -1293,6 +1363,7 @@ def field_specs(cfg: Config) -> list[dict]:
         *_assistant_fields(),
         *_session_fields(),
         *_foundation_fields(),
+        *_security_fields(),
         *_audio_fields(),
         *_device_fields(cfg),
         *_provider_fields(cfg),

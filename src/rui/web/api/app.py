@@ -73,6 +73,7 @@ from ...plugins import ParamSpec, ParamType, PlugCatalog, ResolvedPlug
 from ...providers import keycheck
 from ...providers.chain import build_stage
 from ...providers.volc_voices import voices_for
+from ...security.netguard import OutboundPolicy
 from ...session import phrasebook, phrases, prompts, rules
 from ...session.ack import ensure_ack_wav
 from ...session.briefing import Briefing
@@ -286,6 +287,11 @@ async def _never_sender(_msg: object) -> None:
     raise _NotWired("music sender used before the app was built")
 
 
+def _outbound_policy(cfg: Config) -> OutboundPolicy:
+    """The single conversion from `security.outbound` to the runtime guard policy."""
+    return OutboundPolicy.from_config(cfg.security)
+
+
 def _new_music_service(cfg: Config, sender: object) -> MusicService | None:
     """Assemble the music service for the configured source.
 
@@ -300,11 +306,12 @@ def _new_music_service(cfg: Config, sender: object) -> MusicService | None:
     source = NavidromeSource(
         Path(cfg.music.secrets_path).expanduser(),
         Path(cfg.music.cache_dir), cfg.music.cache_tracks,
+        policy=_outbound_policy(cfg),
     )
     history = PlayHistory(
         Path(cfg.system.data_dir) / "music_history.json", keep=cfg.music.history_max)
     aliases = AliasStore(Path(cfg.system.data_dir) / "music_aliases.json")
-    names = NameResolver(aliases, timeout_s=6.0)
+    names = NameResolver(aliases, timeout_s=6.0, policy=_outbound_policy(cfg))
     return MusicService(source, history, sender, cfg.music, names=names)  # type: ignore[arg-type]
 
 
@@ -491,9 +498,10 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "component": "config-center",
             "component_args": {
                 # Tier 1 foundation only: the data directory, the log level, the clock
-                # zone and the console's own bind address. Audio/speaker parameters moved
-                # to the speaker panel so a warning here is about the process, not DSP.
-                "groups": ["system", "web"],
+                # zone, the console's own bind address and the outbound SSRF policy.
+                # Audio/speaker parameters moved to the speaker panel so a warning here
+                # is about the process, not DSP.
+                "groups": ["system", "web", "security"],
                 "tier": 1,
                 "warning": {
                     "zh": "底子参数平时不要动：数据目录决定日志/记忆/密钥放哪，控制台端口"
@@ -1374,7 +1382,8 @@ def create_app(
     # stays here so the runner's tool list remains the single wiring point. HA keeps its
     # own bridge and naming (`local.ha_*`) - this is additive, not a replacement.
     mcp_manager = MCPManager(cfg.tools.mcp_servers,
-                            allow_stdio=cfg.tools.mcp_allow_stdio)
+                            allow_stdio=cfg.tools.mcp_allow_stdio,
+                            policy=_outbound_policy(cfg))
 
     def _sync_generic_mcp() -> None:
         """Register/replace the generic MCP tools from the manager's live servers.
@@ -1467,7 +1476,8 @@ def create_app(
         # the rest of the assistant never notices (old build's rule).
         ha: HaBridge | None = None
         if cfg.tools.ha.base_url:
-            ha = HaBridge(cfg.tools.ha, Path(cfg.system.data_dir))
+            ha = HaBridge(cfg.tools.ha, Path(cfg.system.data_dir),
+                          policy=_outbound_policy(cfg))
             if await ha.start():
                 for spec, handler in ha.tool_specs():
                     registry.register(spec)
@@ -2977,7 +2987,8 @@ def create_app(
         started = time.perf_counter()
         try:
             source = NavidromeSource(
-                use, Path(cfg.music.cache_dir or tempfile.gettempdir()), 1)
+                use, Path(cfg.music.cache_dir or tempfile.gettempdir()), 1,
+                policy=_outbound_policy(cfg))
             await asyncio.wait_for(source.random(1), timeout=8.0)
             error = ""
         except Exception as exc:  # noqa: BLE001 - the point of the endpoint is to report it
@@ -4294,7 +4305,8 @@ def create_app(
                           if not spec.name.startswith("local.ha_")]
         bridge: HaBridge | None = None
         if updated.tools.ha.base_url:
-            bridge = HaBridge(updated.tools.ha, Path(updated.system.data_dir))
+            bridge = HaBridge(updated.tools.ha, Path(updated.system.data_dir),
+                              policy=_outbound_policy(updated))
             if await bridge.start():
                 for spec, handler in bridge.tool_specs():
                     registry.register(spec, handler)
@@ -4320,6 +4332,10 @@ def create_app(
         immediately instead of waiting for the declared restart.
         """
         mcp_manager.allow_stdio = bool(updated.tools.mcp_allow_stdio)
+        # Servers started by this apply use the policy from the config being applied;
+        # already-running sessions keep their old policy until the restart the UI asks
+        # for (security fields are `restart` effects).
+        mcp_manager.policy = _outbound_policy(updated)
         await mcp_manager.apply(updated.tools.mcp_servers)
         _sync_generic_mcp()
         generic = mcp_manager.status()
@@ -4456,7 +4472,8 @@ def create_app(
                     for error in exc.errors(include_url=False)
                 ]) from exc
             result = await test_generic_mcp_server(
-                probe_server, allow_stdio=bool(cfg.tools.mcp_allow_stdio))
+                probe_server, allow_stdio=bool(cfg.tools.mcp_allow_stdio),
+                policy=_outbound_policy(cfg))
             log.info("mcp test: %s %s ok=%s attempted=%s tools=%d",
                      probe_server.transport, probe_server.name, result["ok"],
                      result.get("attempted", True), result["tools"])
@@ -4466,7 +4483,8 @@ def create_app(
             raise HTTPException(status_code=422,
                                 detail="base_url must start with http:// or https://")
         probe_cfg = cfg.tools.ha.model_copy(update={"base_url": base_url})
-        bridge = HaBridge(probe_cfg, Path(cfg.system.data_dir))
+        bridge = HaBridge(probe_cfg, Path(cfg.system.data_dir),
+                          policy=_outbound_policy(cfg))
         try:
             ok = await asyncio.wait_for(bridge.start(), timeout=10.0)
             result = {"ok": ok, **bridge.status,

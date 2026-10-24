@@ -380,7 +380,8 @@ def test_each_config_panel_owns_exactly_its_tier_groups(tmp_path) -> None:
     # Tier 1 is split by meaning: conversational fields vs process foundations.
     assert set(panels["assistant-session"]["component_args"]["groups"]) == {
         "assistant", "session"}
-    assert set(panels["foundation"]["component_args"]["groups"]) == {"system", "web"}
+    assert set(panels["foundation"]["component_args"]["groups"]) == {
+        "system", "web", "security"}
     assert (set(panels["assistant-session"]["component_args"]["groups"])
             | set(panels["foundation"]["component_args"]["groups"])) == by_tier[1]
     # The foundation warning is about the process, not about DSP numbers.

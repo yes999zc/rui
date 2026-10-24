@@ -23,6 +23,20 @@ web:
   # An empty token on 0.0.0.0 refuses to start unless allow_anonymous is true.
   auth_token: ""
   allow_anonymous: false
+security:
+  # Outbound SSRF guard for HA, generic MCP, Navidrome and web search. The console
+  # operator is trusted; the risk is a URL injected through tool output / remote config.
+  # Cloud metadata, link-local, multicast, unspecified and reserved addresses are
+  # always blocked. Private LAN services stay allowed by default; loopback is not.
+  # See docs/security.md. Changes need a restart.
+  outbound:
+    enabled: true
+    allow_private: true
+    allow_loopback: false
+    extra_allowed_hosts: []
+    extra_allowed_cidrs: []
+    blocked_hosts: []
+    blocked_cidrs: []
 devices: []
 audio:
   # Measured on LX06 1.94.13. Do not copy these numbers to another speaker; measure it.

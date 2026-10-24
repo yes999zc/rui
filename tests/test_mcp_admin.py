@@ -20,7 +20,7 @@ class FakeBridge:
 
     instances: list[FakeBridge] = []
 
-    def __init__(self, cfg, data_dir) -> None:
+    def __init__(self, cfg, data_dir, policy=None) -> None:
         self.cfg = cfg
         self._data_dir = data_dir
         self.stopped = False

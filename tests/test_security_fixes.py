@@ -34,6 +34,7 @@ from rui.music.model import Track
 from rui.music.sources.navidrome import NavidromeSource, _cache_stem
 from rui.providers.openai_compat import MissingKey, _key
 from rui.providers.xfyun_tts import XfyunTts
+from rui.security.netguard import OutboundPolicy
 from rui.session import phrases
 from rui.tools.ha import HaBridge, _clean_untrusted
 
@@ -258,7 +259,8 @@ def make_navidrome(tmp_path: Path) -> NavidromeSource:
     creds = tmp_path / "lan_media.json"
     creds.write_text(json.dumps(
         {"url": "http://nas.local", "user": "u", "password": "p"}), encoding="utf-8")
-    return NavidromeSource(creds, tmp_path / "cache")
+    return NavidromeSource(creds, tmp_path / "cache",
+                           policy=OutboundPolicy(enabled=False))
 
 
 @pytest.mark.parametrize("sid", ["../../escape", "a/b", "..", "a\\b"])

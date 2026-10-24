@@ -13,14 +13,18 @@ import httpx
 import pytest
 
 from rui.music.sources.navidrome import NavidromeSource, SourceError
+from rui.security.netguard import OutboundPolicy
 
 
 def make_source(tmp_path: Path, handler, cache_tracks: int = 2) -> NavidromeSource:
     secrets = tmp_path / "lan_media.json"
     secrets.write_text(json.dumps(
         {"url": "http://nas.local", "user": "u", "password": "p"}), encoding="utf-8")
+    # The mock transport never leaves the process; the SSRF guard is exercised in
+    # tests/test_netguard.py rather than through a fake hostname with no DNS answer.
     return NavidromeSource(secrets, tmp_path / "cache", cache_tracks=cache_tracks,
-                           transport=httpx.MockTransport(handler))
+                           transport=httpx.MockTransport(handler),
+                           policy=OutboundPolicy(enabled=False))
 
 
 def subsonic(body: dict) -> httpx.Response:

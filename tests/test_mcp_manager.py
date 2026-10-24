@@ -83,7 +83,7 @@ def fake_opener(sessions: dict[str, FakeSession | Exception]):
     opened: list[str] = []
 
     @asynccontextmanager
-    async def opener(server: McpServerConfig):
+    async def opener(server: McpServerConfig, policy=None):
         opened.append(server.name)
         item = sessions.get(server.name)
         if item is None:
@@ -199,7 +199,7 @@ def test_start_does_not_serialise_servers() -> None:
     async def run() -> None:
         # One opener per configured name, dispatched by name.
         @asynccontextmanager
-        async def opener(server_cfg: McpServerConfig):
+        async def opener(server_cfg: McpServerConfig, policy=None):
             events.append(f"start:{server_cfg.name}")
             await asyncio.sleep(0.2 if server_cfg.name == "slow" else 0.0)
             events.append(f"yield:{server_cfg.name}")
@@ -223,7 +223,7 @@ def test_both_http_and_stdio_servers_start_with_their_own_transport() -> None:
 
     async def run() -> dict:
         @asynccontextmanager
-        async def opener(server_cfg: McpServerConfig):
+        async def opener(server_cfg: McpServerConfig, policy=None):
             seen[server_cfg.name] = str(server_cfg.transport)
             yield FakeSession([FakeTool("ping")])
 
@@ -368,7 +368,7 @@ def test_tool_results_are_labelled_untrusted_and_errors_degrade() -> None:
         session = FakeSession([FakeTool("read")], text="hello from the server")
 
         @asynccontextmanager
-        async def opener(server_cfg: McpServerConfig):
+        async def opener(server_cfg: McpServerConfig, policy=None):
             yield session
 
         manager_module.open_session = opener  # type: ignore[assignment]
@@ -404,7 +404,7 @@ def test_a_lost_session_is_reopened_after_a_failed_call() -> None:
     opened: list[int] = []
 
     @asynccontextmanager
-    async def opener(server_cfg: McpServerConfig):
+    async def opener(server_cfg: McpServerConfig, policy=None):
         index = len(opened)
         opened.append(index)
         yield sessions[index]
@@ -651,7 +651,7 @@ def test_mcp_test_passes_env_to_the_generic_probe(app_with_mcp, monkeypatch) -> 
     app, _path, _opener = app_with_mcp
     captured: dict = {}
 
-    async def fake_probe(server_cfg, *, allow_stdio: bool = False):
+    async def fake_probe(server_cfg, *, allow_stdio: bool = False, policy=None):
         captured["server"] = server_cfg
         captured["allow_stdio"] = allow_stdio
         return {"ok": True, "attempted": True, "connected": True,
