@@ -2320,6 +2320,11 @@ def resolve_socket_path(path: Path) -> Path:
 
 
 def build_plane(cfg: Config, device_id: str, socket_path: Path | None = None) -> AudioPlane:
+    # The plane is a separate process (spawned by the control plane, or `rui audio`),
+    # so it must load the downstream adapters itself; issue #7 Q1 hook. Fail-soft.
+    from ..device.loader import load_adapter_plugins
+
+    load_adapter_plugins()
     return AudioPlane(cfg, device_id, resolve_socket_path(socket_path or default_socket_path()))
 
 

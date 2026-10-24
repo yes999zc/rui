@@ -32,6 +32,49 @@ python -m rui plug-test path/to/rui-plugin-dot2 \
 安装后也可以直接运行 `rui plug-test ...` 或 `rui-plug-test ...`（`pyproject.toml`
 里的 console script）。
 
+## 下游镜像配方（issue #7 Q1）
+
+0.3.x 的官方钩子是 `RUI_ADAPTER_PLUGINS`（语义见 `docs/socket-plug-v1.md` §4.4）。
+官方镜像 + 只加 adapter 层的 downstream 镜像是支持路径：**不 fork 核心**，升级时
+只重建 adapter 层。
+
+```dockerfile
+# 固定补丁 tag；下面 0.3.x 只是示意，生产请写具体版本（如 0.3.0）
+FROM ghcr.io/yes999zc/rui:0.3.x
+
+# 插件代码随镜像发布；不要从用户/设备可控路径动态导入
+COPY my_plugin /opt/rui-plugins/my_plugin
+
+ENV PYTHONPATH=/opt/rui-plugins
+# adapter 名默认取模块名；显式命名时写成 dot2=my_plugin.adapter:build
+ENV RUI_ADAPTER_PLUGINS=my_plugin.adapter:build
+```
+
+`devices[].adapter` 必须与注册名一致。上例未写 `name=`，注册名就是模块名
+`my_plugin.adapter`；推荐写成 `ENV RUI_ADAPTER_PLUGINS=dot2=my_plugin.adapter:build`，
+配置里用 `adapter: dot2`。builder 签名与内置相同：`build(dev, cfg) -> DeviceAdapter`。
+
+构建/升级：
+
+```bash
+docker build -t my-registry/rui-dot2:0.3.0 .
+docker compose up -d          # compose 里把 image 换成这个 tag
+```
+
+**manifest / 信任**：adapter 在 RUI 进程内导入，等价于允许执行代码，`RUI_ADAPTER_PLUGINS`
+只能由 root/容器运维方设置，**不得**接受用户输入或 `devices[].params`；插件能读到容器
+环境变量（含密钥），镜像与插件必须由你方审计、维护。manifest 声明
+`trust: trusted`（或 `builtin`）；`third-party` 仍不得 in-process。插件目录里仍应有
+`plugin.yaml` / `devices/*.yaml`，`rui plug-test` 会验收 manifest 与 adapter 表面：
+
+```bash
+python -m rui plug-test /opt/rui-plugins/my_plugin \
+  --adapter /opt/rui-plugins/my_plugin/adapter.py:build
+```
+
+0.4 会把该钩子收敛为正式插件加载（trusted in-process entrypoint / third-party
+sidecar）；当前 env 是 0.3.x 的稳定过渡接口。
+
 本仓库自带一个能跑通的参考插头：
 
 ```bash

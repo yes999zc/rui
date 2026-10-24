@@ -61,6 +61,7 @@ from ...config.schema import (
     McpServerConfig,
 )
 from ...config.store import ConfigError, load_config, redacted, save_config
+from ...device.loader import load_adapter_plugins
 from ...device.registry import build_adapters
 from ...doctor import run_doctor
 from ...env import get as env_get
@@ -1398,6 +1399,10 @@ def create_app(
             runner.set_tools(list(local_tools))
 
     mcp_manager.on_change = _sync_generic_mcp
+    # Downstream adapters (issue #7 Q1): env/entry points only, imported before the
+    # first build_adapters so a console-only configuration sees the new name. Fail-soft:
+    # a bad plugin is a warning in app.state, never an exception out of startup.
+    adapter_plugins = load_adapter_plugins()
     adapters = build_adapters(cfg)
     traces = TraceLog()
     for dev_id, err in adapters.errors.items():
@@ -1968,6 +1973,9 @@ def create_app(
     # The wizard can add a device at runtime; endpoints read this attribute, not a
     # startup closure, so a fresh probe does not need a control-plane restart.
     app.state.adapters = adapters
+    # Names/count only: warnings can contain module paths or exception text, and
+    # /health is unauthenticated.
+    app.state.adapter_plugins = adapter_plugins
     app.state.memory = memory
     app.state.tools = registry  # the console and tests read the same registry turns use
     app.state.mcp_manager = mcp_manager  # generic MCP sessions/status (console reads it)
@@ -2025,6 +2033,11 @@ def create_app(
             # a disabled device is configured but is not supposed to open a plane.
             "enabled_devices": sum(1 for device in cfg_now.devices if device.enabled),
             "device_errors": len(getattr(app.state, "adapters", adapters).errors),
+            # Downstream adapter hook (issue #7 Q1): names and warning count only.
+            "adapter_plugins": {
+                "registered": sorted(getattr(app.state, "adapter_plugins", adapter_plugins).registered),
+                "warnings": len(getattr(app.state, "adapter_plugins", adapter_plugins).warnings),
+            },
             "audio_plane": plane["running"],
             # "Up" is not "the room can hear": this is the plane's own link report.
             "speaker_connected": plane["speaker_connected"],

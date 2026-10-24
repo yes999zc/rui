@@ -193,6 +193,47 @@ def drain_wakes(self) -> list[DeviceWake]:
 
 adapter 只实现 `drain_wakes()`；音频面到控制面的 `DeviceWakeMsg` 是 RUI 内部消息（`src/rui/audio/protocol.py`），字段对齐 `DeviceWake`，只传事件、不做策略。
 
+### 4.4 Downstream adapter 加载钩子（0.3.x，issue #7 Q1）
+
+0.3.x 提供两个**显式、fail-soft** 的 out-of-tree adapter 入口。它们只加载运维方在环境变量或已安装发行版 entry point 里声明的代码，**不读取** `devices[].params`、`plugin.yaml`、控制台输入、配置文件或网络内容，也不启动子进程。`sitecustomize` / `PYTHONPATH` 注入不再是官方路径。
+
+**环境变量**（逗号分隔，按书写顺序处理）：
+
+```bash
+# 1) 最简：adapter 名默认取模块名
+RUI_ADAPTER_PLUGINS=my_plugin.adapter:build
+
+# 2) 显式 adapter 名（devices[].adapter 必须用这个名字）
+RUI_ADAPTER_PLUGINS=dot2=my_plugin.adapter:build
+
+# 3) 注册钩子：插件自己调用 registry.register()
+RUI_ADAPTER_PLUGINS=my_plugin.adapter:register
+
+# 4) 多个入口，env 优先于 entry points
+RUI_ADAPTER_PLUGINS=dot2=my_plugin.adapter:build,lx06x=other:build
+```
+
+| 写法 | 含义 |
+|---|---|
+| `module:build` | `build(dev, cfg) -> DeviceAdapter`，与内置 builder 同签名；启动时导入模块，按设备调用 |
+| `module:register` | 启动时以 `rui.device.registry` 模块为参数调用一次；钩子可自行 `registry.register("dot2", "my_plugin.adapter:build")` |
+| `module` | 先找 `build`，再找 `register` |
+| `name=module:attr` | `name` 是注册名；未写时优先用插件返回的 `adapter_name`/`name`，否则用模块名 |
+| 零参数 callable | 视为工厂，在启动时调用；返回值可以是 builder、带 `build`/`name` 的映射/对象，或 `module:attr` 字符串 |
+
+**Python entry points**（setuptools）：
+
+```toml
+[project.entry-points."rui.adapters"]
+dot2 = "my_plugin.adapter:build"
+```
+
+启动时扫描 group `rui.adapters`。entry point 名即 adapter 名；值既可以是普通 builder，也可以是返回 builder 的零参数 callable。完全相同的 `(name, value)` 只处理一次；entry point **不覆盖**环境变量或内置同名项；单条加载失败只记一条 warning。环境变量同名项之间后者覆盖前者（记 warning），因为那是运维方显式顺序。
+
+**fail-soft**：模块导入失败、属性缺失/不可调用、builder 工厂抛错、注册钩子抛错、entry point 的 `load()` 失败，都只记一条有界 warning 并继续启动。控制面仍会起来，`/health` 只暴露 `adapter_plugins.registered`（已注册名）和 `warnings`（数量），不返回异常文本；完整原因看日志。
+
+**信任要求**：`RUI_ADAPTER_PLUGINS` 等价于允许在 RUI 进程内执行代码，只能由 root/容器运维方设置；**不得**把用户输入、设备上报值或 `params` 拼进这个变量。插件在进程内可读到容器环境变量（包括密钥），所以 downstream 镜像和插件必须由运维方审计、维护；manifest 使用 `trust: trusted`（或 `builtin`），`third-party` 仍不得 in-process。0.4 会把该钩子收敛为正式插件加载：trusted 走 in-process entrypoint，third-party 走 sidecar。镜像配方见 `docs/plug-test-kit.md`。
+
 ## 5. RUI 的 `device_wake` 策略
 
 | RUI 状态 | 事件 | 动作 |
@@ -249,6 +290,8 @@ adapter 只实现 `drain_wakes()`；音频面到控制面的 `DeviceWakeMsg` 是
 | 6 | 向导：选插头 → 设备侧准备 → 参数 → 唤醒词 → 接线 → 测试 → 第一句 | `SetupState` 完成；有连接/探测证据 |
 | 7 | 真机验收：唤醒、barge、播放、灯/音量、厂商让位（A 类） | 填入 `acceptance`，附报告链接 |
 | 8 | 发布 tag + checksum；声明 `rui_compat` | 可复现安装；回滚说明齐全 |
+
+> adapter 随 downstream 镜像发布时，注册走 §4.4 的 `RUI_ADAPTER_PLUGINS` 或 `rui.adapters` entry point；`data/plugs/` 只承载 manifest/声明，不负责执行 adapter 代码。
 
 ### 6.2 契约测试工具
 
@@ -423,3 +466,18 @@ v0 schema 的最早移除仍是 0.5（见上），0.4 不删除 v0 支持。本�
 | Q8 sidecar | v1 只完整支持 in-process/可信 adapter；sidecar 降级为 KWS，RPC 后续 | 不扩大安全面 |
 
 另外：0.2 的 `_on_wake` 尚未读取 `voice.barge_in`，0.3 必须补上（已列入 §7 实现落点）。
+
+## 10. Q1–Q6 FAQ（issue #7 答复摘要，2026-10-25）
+
+Dot2 桥在 issue [#7](https://github.com/yes999zc/rui/issues/7) 提出的接入问题，0.3.x 的口径如下；详细契约以上文各节为准，这里只做索引，不重复展开。
+
+| Q | 问题 | 0.3.x 结论 | 0.4 方向 |
+|---|---|---|---|
+| Q1 | 官方 out-of-tree adapter / plug 入口 | 用 §4.4 的 `RUI_ADAPTER_PLUGINS` 或 `rui.adapters` entry points；官方镜像 + 只加 adapter 层的 downstream 镜像受支持，前提是不 fork 核心、manifest `trust: trusted`（或 builtin）、镜像由插件方维护 | 收敛为正式 entrypoint（trusted in-process）/ sidecar（third-party） |
+| Q2 | 多设备与端口 | 每设备 `devices[].listen_port` 已支持；**4412 不保留给 LX06**，Dot2 用 8870/wss 不冲突；0.3 仍是**一个音频面实例驱动一台设备**，多设备在线显式 warning，不做假仲裁 | 每个 enabled 设备独立音频面 + 独立端口；多设备唤醒仲裁 |
+| Q3 | 设备凭据 | 每设备 `token_env`（默认 `RUI_DEVICE_TOKEN`），0.3 设备管理支持逐设备 token 轮换；RUI token 是传输层准入，EchoMuse `X-EM-Token` 由 adapter 内层校验，**两层分离** | 不变 |
+| Q4 | AEC 归属 | 0.3 `audio.aec` 仍全局；`who=device` 表示 RUI 只消费 mono、不跑 AEC，barge 依赖设备唤醒/门控 + RUI 播放状态；`devices[].aec` 进 config v3 | config v3 参数化 + 每设备覆盖 |
+| Q5 | device_wake 多设备 | v1 接受 `device_wake` 为一等事件，turn/barge 最终由 RUI 决策；adapter 只诚实上报 `device_id/room/score/threshold/barge/playing/ts_ms`（可选 `last_active`），0.3 单设备语义完整 | RUI 侧多设备仲裁 |
+| Q6 | 响度 / EQ / 播放统计 | 核心只有每设备 `volume`（0–100）和 LED；EQ/limiter/trim 留在 plug `params`，由 adapter 自己执行；无 per-block 播放头的设备可按 EOS/固定间隔回报粗粒度统计，`played_ms` 是可选增强 | 每设备参数覆盖；Pacer 继续容忍粗粒度 |
+
+Q7（文档）：契约就是本文，自测工具见 `docs/plug-test-kit.md`；多设备 / AEC / config v3 的落地排在 `docs/ROADMAP.md` 的 0.4。

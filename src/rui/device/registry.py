@@ -24,9 +24,14 @@ log = logging.getLogger(__name__)
 
 Builder = Callable[[DeviceConfig, Config], DeviceAdapter]
 
-# name -> "module:function". A function, not a class, because adapters do not share a
+# A target is either a lazy "module:function" string (the built-ins) or a builder
+# callable. Downstream plugins (device/loader.py) register the callable directly, so a
+# plugin module is imported once at startup rather than once per device.
+Target = str | Builder
+
+# name -> target. A function, not a class, because adapters do not share a
 # constructor: one needs the capture layout, another needs nothing but its id.
-_BUILDERS: dict[str, str] = {
+_BUILDERS: dict[str, Target] = {
     "xiaoai": "rui.device.xiaoai:build",
     "mock": "rui.device.mock:build",
 }
@@ -45,8 +50,12 @@ class AdapterSet:
         return len(self.adapters)
 
 
-def register(name: str, target: str) -> None:
-    """Let a downstream build add a device without editing this file's table."""
+def register(name: str, target: Target) -> None:
+    """Let a downstream build add a device without editing this file's table.
+
+    ``target`` is a ``module:function`` string or the builder itself. Passing the
+    callable is what the env/entry-point loader does; strings keep the built-ins lazy.
+    """
     _BUILDERS[name] = target
 
 
@@ -60,6 +69,8 @@ def _builder(name: str) -> Builder:
         raise AdapterUnavailable(
             f"unknown adapter: {name!r} (this build has: {', '.join(available())})"
         )
+    if callable(target):
+        return target
     module_name, _, attribute = target.partition(":")
     try:
         module = importlib.import_module(module_name)
