@@ -65,6 +65,7 @@ from ...log_setup import LOG_FILE_NAME, tail_lines
 from ...music import MusicService, NavidromeSource, PlayHistory
 from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
+from ...plugins import ParamSpec, ParamType, PlugCatalog, ResolvedPlug
 from ...providers.chain import build_stage
 from ...providers.volc_voices import voices_for
 from ...session import phrasebook, phrases, prompts, rules
@@ -861,6 +862,30 @@ def _device_link(info: object, adapter: object, plane: dict) -> dict:
         "last_seen": float(last_seen) if last_seen else None,
         "latency_ms": round(float(latency), 1) if latency else None,
     }
+
+
+def _device_public_params(device: object | None, resolved: object | None) -> dict:
+    """Stored params minus manifest-declared secret values (write-only contract).
+
+    Secrets are normally written to ``secrets.yaml`` and never land in ``params``; the
+    filter also protects a config hand-edited before that rule existed.
+    """
+    params = dict(getattr(device, "params", None) or {})
+    if resolved is not None:
+        hidden = {spec.key for spec in resolved.device.params
+                  if spec.type is ParamType.SECRET}
+        for key in hidden:
+            params.pop(key, None)
+    return params
+
+
+def _device_plug_id(device: object | None, resolved: object | None) -> str | None:
+    """The resolved plug id, falling back to the stored value so the UI can show it."""
+    if resolved is not None:
+        return resolved.plug_id
+    params = getattr(device, "params", None)
+    stored = str(params.get("plug_id") or "").strip() if isinstance(params, dict) else ""
+    return stored or None
 
 
 _SECRET_QUERY_RE = re.compile(
@@ -3027,12 +3052,23 @@ def create_app(
         """
         out: list[dict] = []
         seen: set[str] = set()
+        cfg_now = getattr(app.state, "cfg", cfg)
+        configured = {dev.id: dev for dev in cfg_now.devices}
+        catalog = PlugCatalog(cfg_now.system.data_dir)
         adapters = app.state.adapters
         plane = _plane_snapshot(app)
         for adapter in adapters.adapters.values():
             info = await adapter.probe()
             seen.add(info.id)
+            device = configured.get(info.id)
+            resolved = catalog.resolve(
+                plug_id=_device_plug_id(device, None), adapter=info.adapter)
             link = _device_link(info, adapter, plane)
+            # The adapter reports what it can actually do; the manifest declares what the
+            # plug promises. Showing both keeps a missing capability visible before use.
+            capabilities = {str(capability) for capability in info.capabilities}
+            if resolved is not None:
+                capabilities.update(str(capability) for capability in resolved.device.capabilities)
             out.append(
                 {
                     "id": info.id,
@@ -3042,14 +3078,17 @@ def create_app(
                     "host": info.host,
                     "transport": info.transport.value,
                     **link,
-                    "capabilities": sorted(info.capabilities),
+                    "params": _device_public_params(device, resolved),
+                    "plug_id": _device_plug_id(device, resolved),
+                    "capabilities": sorted(capabilities),
                     "missing_for_barge_in": [c.value for c in info.missing_for_barge_in()],
                 }
             )
-        cfg_now = getattr(app.state, "cfg", cfg)
         for dev in cfg_now.devices:
             if not dev.enabled or dev.id in seen:
                 continue
+            resolved = catalog.resolve(
+                plug_id=_device_plug_id(dev, None), adapter=dev.adapter)
             out.append(
                 {
                     "id": dev.id,
@@ -3063,7 +3102,9 @@ def create_app(
                     "last_seen": None,
                     "latency_ms": None,
                     "error": adapters.errors.get(dev.id, "adapter not available"),
-                    "capabilities": [],
+                    "params": _device_public_params(dev, resolved),
+                    "plug_id": _device_plug_id(dev, resolved),
+                    "capabilities": resolved.capabilities if resolved else [],
                     "missing_for_barge_in": [],
                 }
             )
@@ -3294,7 +3335,20 @@ def create_app(
         _sync_devices(updated)
         supervisor = getattr(app.state, "audio", None)
         error = ""
-        if supervisor is not None:
+        if supervisor is not None and not any(item.enabled for item in updated.devices):
+            # Removing the last enabled speaker leaves nothing to drive: restarting
+            # would only raise "no device this build can drive". Stop cleanly and let
+            # the wizard show an empty device step instead of a plane error the user
+            # cannot fix. A disabled leftover is kept in config but still not drivable.
+            supervisor.cfg = updated
+            try:
+                await supervisor.stop()
+            except Exception as exc:  # noqa: BLE001 - a dead plane is not a delete failure
+                error = f"{type(exc).__name__}: {exc}"
+                log.warning("audio plane stop failed after the last device was removed: %s", exc)
+            finally:
+                supervisor.watch()
+        elif supervisor is not None:
             # The plane holds the device list, the wake model and the keywords file
             # from its own startup: a new speaker or a new wake word needs a restart.
             error = await _restart_audio(supervisor, updated)
@@ -3461,7 +3515,12 @@ def create_app(
         raise HTTPException(status_code=404, detail=f"no such device: {device_id}")
 
     async def _device_detail(device_id: str) -> dict:
-        device = _device_or_404(device_id, app.state.cfg)
+        cfg_now = getattr(app.state, "cfg", cfg)
+        device = _device_or_404(device_id, cfg_now)
+        catalog = PlugCatalog(cfg_now.system.data_dir)
+        resolved = catalog.resolve(
+            plug_id=_device_plug_id(device, None), adapter=device.adapter)
+        params = _device_public_params(device, resolved)
         live: dict = {"status": "unavailable", "connected": False,
                       "last_seen": None, "latency_ms": None}
         adapters_now = getattr(app.state, "adapters", None)
@@ -3469,10 +3528,17 @@ def create_app(
         if adapter is not None:
             info = await adapter.probe()
             plane = _plane_snapshot(app)
+            capabilities = {str(capability) for capability in info.capabilities}
+            if resolved is not None:
+                capabilities.update(str(capability) for capability in resolved.device.capabilities)
             live = {"model": info.model, "transport": info.transport.value,
                     **_device_link(info, adapter, plane),
-                    "capabilities": sorted(info.capabilities)}
-        return {"device": device.model_dump(mode="json"), "live": live,
+                    "capabilities": sorted(capabilities)}
+        payload = device.model_dump(mode="json")
+        payload["params"] = params
+        return {"device": payload, "live": live,
+                "plug_id": _device_plug_id(device, resolved),
+                "params": params,
                 # The last restart outcome belongs to the page: editing a device and
                 # leaving the plane dead must be visible, not inferred from logs.
                 "plane_error": str(getattr(app.state, "plane_error", "") or "")}
@@ -3540,6 +3606,117 @@ def create_app(
             "hint": hint,
         }
 
+    def _param_error(message: str, **details: object) -> HTTPException:
+        """Delete/update validation errors keep the object shape the wizard uses."""
+        return HTTPException(status_code=422, detail={
+            "code": "invalid_values", "message": message, "details": details})
+
+    def _unknown_plug_error(plug_id: str, catalog: PlugCatalog) -> HTTPException:
+        return HTTPException(status_code=422, detail={
+            "code": "unknown_plug",
+            "message": f"no such plug: {plug_id}",
+            "details": {"plug_id": plug_id, "available": sorted(catalog.entries)},
+        })
+
+    def _param_value(spec: ParamSpec | None, key: str, value: object) -> object:
+        """Type/choice/range check one non-secret value; a legacy key stays loose."""
+        if spec is None:
+            if isinstance(value, (bool, int, float, str)):
+                return value
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                return value
+            raise _param_error(f"param {key!r} must be a string, number, bool or string list",
+                               param=key)
+        kind = spec.type
+        if kind is ParamType.STRING:
+            if not isinstance(value, str):
+                raise _param_error(f"param {key!r} must be a string", param=key, expected="string")
+            return value.strip()
+        if kind is ParamType.INT:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise _param_error(f"param {key!r} must be an integer", param=key, expected="int")
+            return value
+        if kind is ParamType.BOOL:
+            if not isinstance(value, bool):
+                raise _param_error(f"param {key!r} must be a boolean", param=key, expected="bool")
+            return value
+        if kind is ParamType.LIST:
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise _param_error(f"param {key!r} must be a list of strings",
+                                   param=key, expected="list")
+            items = [item.strip() for item in value]
+            if spec.max is not None and len(items) > spec.max:
+                raise _param_error(f"param {key!r} allows at most {spec.max} items",
+                                   param=key, max=spec.max)
+            return items
+        if kind is ParamType.CHOICE:
+            if not isinstance(value, str) or value not in spec.options:
+                raise _param_error(
+                    f"param {key!r} must be one of {spec.options}",
+                    param=key, options=list(spec.options))
+            return value
+        raise _param_error(f"param {key!r} has an unsupported type {kind!r}", param=key)
+
+    def _merge_params(base: dict, submitted: dict, resolved: ResolvedPlug | None) -> dict:
+        """Merge ``payload.params`` into the device, validating against the manifest.
+
+        Secret params are written to ``secrets.yaml`` and never stored in ``params`` or
+        returned. A device whose plug is unknown keeps the old loose behaviour, which is
+        what makes an adapter registered by a future build still editable here.
+        """
+        params = dict(base.get("params") or {})
+        specs = ({spec.key: spec for spec in resolved.device.params}
+                 if resolved is not None else {})
+        for raw_key, value in submitted.items():
+            key = str(raw_key)
+            if key == "plug_id":
+                continue
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", key):
+                raise _param_error(f"invalid param key: {key!r}", param=key)
+            spec = specs.get(key)
+            if spec is not None and spec.type is ParamType.SECRET:
+                if value is None:
+                    params.pop(key, None)
+                    continue
+                if not isinstance(value, str):
+                    raise _param_error(f"secret param {key!r} must be a string",
+                                       param=key, expected="string")
+                try:
+                    secrets.put(key.upper(), value)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail={
+                        "code": "secret_rejected", "message": str(exc),
+                        "details": {"param": key},
+                    }) from exc
+                params.pop(key, None)
+                continue
+            if value is None:
+                params.pop(key, None)
+                continue
+            checked = _param_value(spec, key, value)
+            if spec is not None and key in DeviceConfig.model_fields:
+                # A manifest may declare config-level fields (host/room/wake_words).
+                # Writing them through the normal validators keeps one source of truth.
+                if key == "host":
+                    base["host"] = _host(checked)
+                elif key == "room":
+                    base["room"] = _room(checked)
+                elif key == "wake_words":
+                    base["wake_words"] = _wake_words({"wake_words": checked})
+                else:
+                    base[key] = checked
+            else:
+                params[key] = checked
+        if resolved is not None:
+            missing = [
+                spec.key for spec in resolved.device.params
+                if spec.required and spec.type is not ParamType.SECRET
+                and params.get(spec.key, base.get(spec.key)) in (None, "", [])
+            ]
+            if missing:
+                raise _param_error("missing required params", missing=missing)
+        return params
+
     @app.put("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
     async def device_update(device_id: str, payload: Annotated[dict, Body()]) -> dict:
         """Edit one device. Fields not sent are preserved (LED colours, volume target...)."""
@@ -3580,6 +3757,26 @@ def create_app(
                 base["listen_port"] = port
             else:
                 raise HTTPException(status_code=422, detail="listen_port must be an int 1..65535")
+        submitted_params = payload.get("params")
+        catalog = PlugCatalog(current.system.data_dir)
+        if submitted_params is not None:
+            if not isinstance(submitted_params, dict):
+                raise _param_error("params must be an object")
+            if "plug_id" in submitted_params:
+                raw_plug = submitted_params.get("plug_id")
+                explicit = "" if raw_plug is None else str(raw_plug).strip()
+                if explicit and catalog.get(explicit) is None:
+                    raise _unknown_plug_error(explicit, catalog)
+                params = dict(base.get("params") or {})
+                if explicit:
+                    params["plug_id"] = explicit
+                else:
+                    params.pop("plug_id", None)
+                base["params"] = params
+        stored_plug = str((base.get("params") or {}).get("plug_id") or "").strip() or None
+        resolved = catalog.resolve(plug_id=stored_plug, adapter=str(base.get("adapter") or ""))
+        if submitted_params is not None:
+            base["params"] = _merge_params(base, submitted_params, resolved)
         try:
             updated_device = DeviceConfig.model_validate(base)
         except ValidationError as exc:
@@ -3594,6 +3791,47 @@ def create_app(
         detail = await _device_detail(device_id)
         detail["plane_error"] = plane_error
         return detail
+
+    @app.post("/api/v1/devices/{device_id}/test", dependencies=[Depends(auth)])
+    async def device_test(device_id: str) -> dict:
+        """Connection test for one device: evidence only, no config write, no playback.
+
+        TCP/banner is the physical check (the same probe the wizard uses), the plane's
+        ``speaker_connected`` is the live link, the token is reported as configured or
+        not (never its value), and the manifest summarizes declared capabilities.
+        """
+        cfg_now = getattr(app.state, "cfg", cfg)
+        device = _device_or_404(device_id, cfg_now)
+        catalog = PlugCatalog(cfg_now.system.data_dir)
+        resolved = catalog.resolve(
+            plug_id=_device_plug_id(device, None), adapter=device.adapter)
+        probe = await _probe_host(device.host)
+        plane = _plane_snapshot(app)
+        plane_ok = bool(plane["speaker_connected"]) and plane["speaker_device"] in ("", device.id)
+        token_ok = bool(device.token_env and secrets.get(device.token_env)) or bool(
+            device.allow_no_token)
+        capabilities = resolved.capabilities if resolved is not None else []
+        missing = [name for name in ("reference", "playback") if name not in capabilities]
+        checks = [
+            {"name": "host", "ok": bool(probe.get("usable")),
+             "detail": {"ssh": probe.get("ssh") or {}, "hint": probe.get("hint") or ""}},
+            {"name": "plane", "ok": plane_ok,
+             "detail": {"speaker_connected": bool(plane["speaker_connected"]),
+                        "running": bool(plane["running"]),
+                        "device_id": plane["speaker_device"],
+                        "error": plane["error"]}},
+            {"name": "token", "ok": token_ok,
+             "detail": {"configured": token_ok, "token_env": device.token_env,
+                        "allow_no_token": bool(device.allow_no_token)}},
+            {"name": "capabilities", "ok": resolved is not None,
+             "detail": {"plug_id": _device_plug_id(device, resolved),
+                        "capabilities": capabilities,
+                        "missing_for_barge_in": missing if resolved is not None else []}},
+        ]
+        ok = all(check["ok"] for check in checks)
+        failed = [check["name"] for check in checks if not check["ok"]]
+        return {"ok": ok, "checks": checks,
+                "error": "" if ok else f"failed checks: {', '.join(failed)}"}
 
     @app.delete("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])
     async def device_delete(device_id: str) -> dict:

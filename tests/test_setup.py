@@ -332,7 +332,9 @@ def test_device_admin_endpoints_surface_plane_errors(wizard) -> None:
     assert detail["plane_error"] == body["plane_error"]
 
     removed = client.delete("/api/v1/devices/living").json()
-    assert "RuntimeError" in removed["plane_error"]
+    # The last speaker is a clean stop, not a failed restart: an empty device list has
+    # nothing to drive, so the console must not report a restart error for it.
+    assert removed["plane_error"] == ""
     assert removed["devices"] == []
 
     # A working plane clears the sentence again on the next write.

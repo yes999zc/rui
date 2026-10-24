@@ -32,6 +32,7 @@ from .models import (
     RuntimeSpec,
     TrustLevel,
 )
+from .resolve import PlugCatalog, PlugEntry, ResolvedPlug, resolve_device_plug
 from .semver import (
     Comparator,
     Version,
@@ -55,11 +56,14 @@ __all__ = [
     "DeviceSide",
     "ParamSpec",
     "ParamType",
+    "PlugCatalog",
+    "PlugEntry",
     "Plugin",
     "PluginError",
     "PluginManifest",
     "PluginScan",
     "ProtocolSpec",
+    "ResolvedPlug",
     "RuntimeMode",
     "RuntimeSpec",
     "TrustLevel",
@@ -72,6 +76,7 @@ __all__ = [
     "load_plugin",
     "parse_range",
     "parse_version",
+    "resolve_device_plug",
     "running_version",
     "satisfies",
 ]
