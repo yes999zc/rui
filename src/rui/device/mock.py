@@ -8,9 +8,24 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections import deque
+from collections.abc import AsyncIterator, Iterable
 
-from .contract import AudioFrame, Capability, DeviceAdapter, DeviceInfo, Transport
+from .contract import (
+    AudioFrame,
+    Capability,
+    DeviceAdapter,
+    DeviceInfo,
+    DeviceWake,
+    Transport,
+)
+
+# Bounded like the v1 contract asks: a leaked producer must not grow without limit.
+MAX_PENDING_WAKES = 32
+
+DEFAULT_CAPABILITIES = frozenset(
+    {Capability.MIC_ARRAY, Capability.REFERENCE, Capability.PLAYBACK, Capability.LED, Capability.VOLUME}
+)
 
 
 class MockServices:
@@ -40,16 +55,16 @@ class MockAdapter(DeviceAdapter):
         rate: int = 48000,
         mic_channels: int = 6,
         ref_channels: int = 2,
+        capabilities: Iterable[Capability] | None = None,
     ) -> None:
+        caps = DEFAULT_CAPABILITIES if capabilities is None else frozenset(capabilities)
         self.info = DeviceInfo(
             id=device_id,
             adapter="mock",
             model="mock",
             host=host,
             room=room,
-            capabilities=frozenset(
-                {Capability.MIC_ARRAY, Capability.REFERENCE, Capability.PLAYBACK, Capability.LED, Capability.VOLUME}
-            ),
+            capabilities=frozenset(caps),
             transport=Transport.OUTBOUND,
             channels=mic_channels + ref_channels,
             sample_rate=rate,
@@ -67,6 +82,10 @@ class MockAdapter(DeviceAdapter):
         self.services = MockServices(self)
         self._rate = rate
         self._channels = mic_channels + ref_channels
+        # Device-side wake injection for tests / the contract harness. Bounded so a test
+        # that injects in a loop cannot grow memory; oldest wins the drop, like an adapter
+        # that cannot keep up.
+        self._wakes: deque[DeviceWake] = deque(maxlen=MAX_PENDING_WAKES)
 
     async def probe(self) -> DeviceInfo:
         return self.info
@@ -76,6 +95,42 @@ class MockAdapter(DeviceAdapter):
 
     async def close(self) -> None:
         self._open = False
+        # Contract: no event survives close().
+        self._wakes.clear()
+
+    # ------------------------------------------------------------ device wake
+    def inject_wake(
+        self,
+        ts_ms: float | None = None,
+        score: float = 0.9,
+        threshold: float = 0.5,
+        barge: bool = False,
+        level: float | None = None,
+    ) -> DeviceWake:
+        """Queue one `DeviceWake` as if the device had detected our wake word.
+
+        `ts_ms` defaults to the current monotonic clock, the same origin as
+        `AudioFrame.ts_ms`, so the plane's staleness check sees a fresh event.
+        """
+        wake = DeviceWake(
+            ts_ms=time.monotonic() * 1000.0 if ts_ms is None else float(ts_ms),
+            score=float(score),
+            threshold=float(threshold),
+            barge=bool(barge),
+            level=level,
+        )
+        self._wakes.append(wake)
+        return wake
+
+    def inject_wake_event(self, wake: DeviceWake) -> DeviceWake:
+        """Queue an already-built event (lets a test send an invalid one on purpose)."""
+        self._wakes.append(wake)
+        return wake
+
+    def drain_wakes(self) -> list[DeviceWake]:
+        pending = list(self._wakes)
+        self._wakes.clear()
+        return pending
 
     async def frames(self, frame_ms: int = 20) -> AsyncIterator[AudioFrame]:
         """Silence at a fixed cadence, in the real channel layout and rate."""

@@ -28,6 +28,7 @@ from ...plugins import (
     discover_plugins,
 )
 from ...providers import keycheck
+from .device_rules import conflict_detail, port_conflict
 
 __all__ = ["install_setup_routes"]
 
@@ -984,6 +985,11 @@ def install_setup_routes(
                     except ValidationError as exc:
                         raise _setup_error(422, "invalid_values", "invalid config",
                                            {"errors": exc.errors(include_url=False)}) from exc
+                    conflict = port_conflict(updated.devices, updated.system.data_dir)
+                    if conflict is not None:
+                        detail = conflict_detail(conflict)
+                        raise _setup_error(422, detail["code"], detail["message"],
+                                           detail["details"])
                     await write_devices(updated)
             elif action == "wake.set":
                 current = _load_disk_config()

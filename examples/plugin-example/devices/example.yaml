@@ -1,0 +1,36 @@
+schema: rui-device/v1
+id: example-open-speaker
+model: "EX-01"
+name: "Example Open Speaker"
+vendor: "Example / EchoMuse"
+class: A
+transport: inbound
+protocol: {kind: ws, version: "1"}
+capabilities: [playback, volume, led, device_wake, barge_via_device]
+wake: {source: device, barge_via_device: true}
+device_side:
+  artifact: client
+  name: "Example RUI client"
+  source: "https://example.invalid/device/install"
+  version_min: "v1.0"
+  install_steps:
+    - "Install the example client on the speaker; confirm it reconnects to RUI."
+    - "Configure 你好小瑞 as the on-device wake word; it is reported through drain_wakes()."
+  rollback: "Stop and remove the example client; the stock firmware is untouched."
+runtime:
+  mode: in-process
+  entrypoint: "rui_plugin_example:build"
+  listen_port: 4412
+  token_env: RUI_DEVICE_TOKEN
+params:
+  - {key: host, label: "Speaker address", type: string, required: true, placeholder: "<speaker-host>"}
+  - {key: room, label: "Room", type: string, default: "Living room"}
+  - {key: wake_words, label: "Wake words", type: list, default: ["你好小瑞"], max: 3}
+compatibility:
+  rui_min: "0.2.0"
+  tested_with: ["0.2.2"]
+  notes: "Reference example for the P3.1 contract kit; a production v1 plug should raise rui_min to 0.3.0."
+acceptance:
+  verified: false
+  last_verified: ""
+  evidence: "Run: rui plug-test examples/plugin-example --adapter examples/plugin-example/rui_plugin_example.py:build --json"

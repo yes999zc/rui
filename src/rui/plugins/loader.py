@@ -15,6 +15,7 @@ Security posture (deliberate, documented in ``docs/socket-plug.md`` §7):
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
@@ -171,9 +172,19 @@ def _format_validation(exc: ValidationError, source: Path, *, prefix: str = "") 
     errors = exc.errors()
     for error in errors[:_MAX_ERRORS]:
         location = ".".join(str(part) for part in error["loc"]) or "<root>"
+        message = str(error["msg"])
+        # A model-level cross-field check (the v1 wake dependency table) has no field
+        # location. Its message names the field, e.g. "wake.source: ..."; surface that
+        # as the location so a plug author still gets `file: field: reason` (§3.3).
+        if location == "<root>":
+            message = message.removeprefix("Value error, ")
+            head, separator, rest = message.partition(":")
+            if separator and re.fullmatch(r"[a-z_][a-z0-9_.]*", head):
+                location = head
+                message = rest.strip()
         if prefix:
             location = f"{prefix}.{location}" if location != "<root>" else prefix
-        line = f"{source}: {location}: {error['msg']}"
+        line = f"{source}: {location}: {message}"
         raw = error.get("input")
         if isinstance(raw, (str, int, float, bool)):
             line += f" (got {raw!r})"

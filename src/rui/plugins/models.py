@@ -30,6 +30,7 @@ from .semver import VersionError, parse_range, parse_version
 __all__ = [
     "PLUGIN_SCHEMA",
     "DEVICE_SCHEMA",
+    "DEVICE_SCHEMA_V1",
     "Acceptance",
     "Compatibility",
     "DeviceArtifact",
@@ -44,10 +45,15 @@ __all__ = [
     "RuntimeMode",
     "RuntimeSpec",
     "TrustLevel",
+    "WakeSource",
+    "WakeSpec",
 ]
 
 PLUGIN_SCHEMA = "rui-plugin/v0"
 DEVICE_SCHEMA = "rui-device/v0"
+# Socket & Plug v1 (docs/socket-plug-v1.md §3). 0.3 accepts both: v0 stays exactly as it
+# was, v1 adds `model`, the optional `wake` block and two capabilities.
+DEVICE_SCHEMA_V1 = "rui-device/v1"
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _MODEL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -80,6 +86,29 @@ class DeviceArtifact(StrEnum):
     CLIENT = "client"
     APP = "app"
     NONE = "none"
+
+
+class WakeSource(StrEnum):
+    """Who detects the wake word for this device model (v1 §3.3)."""
+
+    DEVICE = "device"   # the device runs our wake word and reports DeviceWake
+    RUI = "rui"         # RUI's own KWS (the LX06 path, unchanged)
+
+
+class WakeSpec(BaseModel):
+    """The optional ``wake`` block on a ``rui-device/v1`` manifest.
+
+    `source` says who fires; `barge_via_device` says whether this plug *enables* the
+    device's advisory barge hint. Capability = "the device can", this block = "this plug
+    turns it on"; both must be true before RUI will act on one. RUI still owns the final
+    turn/barge decision, so nothing here grants a bypass.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: WakeSource = WakeSource.RUI
+    barge_via_device: bool = False
+
 
 
 class ParamType(StrEnum):
@@ -302,12 +331,19 @@ with warnings.catch_warnings():
     )
 
     class DeviceManifest(BaseModel):
-        """One speaker model (``devices/<model>.yaml``)."""
+        """One speaker model (``devices/<model>.yaml``).
+
+        Accepts ``rui-device/v0`` (unchanged) and ``rui-device/v1``. v0 manifests must
+        not declare the v1-only ``wake`` block or the two new capabilities: a silent
+        upgrade would change device behaviour, so it is an error (§7).
+        """
 
         model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-        schema: Literal["rui-device/v0"]
+        schema: Literal["rui-device/v0", "rui-device/v1"]
         id: str
+        # v1: hardware model string (e.g. "RS03QR"). Display only; not identity.
+        model: str = ""
         name: str = Field(min_length=1)
         vendor: str = Field(min_length=1)
         # `class` is a Python keyword; store it as device_class with a YAML alias.
@@ -315,6 +351,9 @@ with warnings.catch_warnings():
         transport: Transport
         protocol: ProtocolSpec
         capabilities: list[Capability]
+        # v1 only: who detects our wake word and whether the device barge hint is
+        # enabled. Omitting it is the v0 default (`source: rui`, barge off).
+        wake: WakeSpec | None = None
         device_side: DeviceSide | None = None
         runtime: RuntimeSpec | None = None
         params: list[ParamSpec]
@@ -337,6 +376,84 @@ with warnings.catch_warnings():
             if len(set(values)) != len(values):
                 raise ValueError("capabilities contains duplicate entries")
             return values
+
+        @model_validator(mode="after")
+        def _wake_contract(self) -> DeviceManifest:
+            """Enforce the v1 dependency table (docs/socket-plug-v1.md §2)."""
+            caps = set(self.capabilities)
+            wake = self.wake
+            if self.schema == DEVICE_SCHEMA:
+                if self.model:
+                    raise ValueError(
+                        "model: the model field is rui-device/v1 only; "
+                        "a v0 manifest must not declare it"
+                    )
+                if wake is not None:
+                    raise ValueError(
+                        "wake: the wake block is rui-device/v1 only; "
+                        "a v0 manifest must not declare it"
+                    )
+                for cap in (Capability.DEVICE_WAKE, Capability.BARGE_VIA_DEVICE):
+                    if cap in caps:
+                        raise ValueError(
+                            f"capabilities: {cap.value!r} requires schema rui-device/v1"
+                        )
+                return self
+
+            if Capability.NATIVE_KWS in caps:
+                raise ValueError(
+                    "capabilities: 'native_kws' is deprecated in rui-device/v1; "
+                    "omit wake for RUI KWS, or use wake.source: device"
+                )
+
+            source = wake.source if wake is not None else WakeSource.RUI
+            barge = bool(wake is not None and wake.barge_via_device)
+            if source is WakeSource.DEVICE:
+                if Capability.DEVICE_WAKE not in caps:
+                    raise ValueError(
+                        "wake.source: 'device' requires capability 'device_wake'"
+                    )
+                if barge and Capability.BARGE_VIA_DEVICE not in caps:
+                    raise ValueError(
+                        "wake.barge_via_device: true requires capability "
+                        "'barge_via_device' (and 'playback')"
+                    )
+                if barge and Capability.PLAYBACK not in caps:
+                    raise ValueError(
+                        "wake.barge_via_device: true requires capability 'playback'"
+                    )
+            else:
+                if Capability.DEVICE_WAKE in caps:
+                    raise ValueError(
+                        "capabilities: 'device_wake' requires wake.source: device"
+                    )
+                if Capability.BARGE_VIA_DEVICE in caps:
+                    raise ValueError(
+                        "capabilities: 'barge_via_device' requires wake.source: device"
+                    )
+                if barge:
+                    raise ValueError(
+                        "wake.barge_via_device: true requires wake.source: device"
+                    )
+
+            if Capability.BARGE_VIA_DEVICE in caps and (
+                Capability.DEVICE_WAKE not in caps or Capability.PLAYBACK not in caps
+            ):
+                raise ValueError(
+                    "capabilities: 'barge_via_device' requires 'device_wake' "
+                    "and 'playback'"
+                )
+            return self
+
+        @property
+        def wake_source(self) -> WakeSource:
+            """Effective wake source: an omitted block means RUI KWS."""
+            return self.wake.source if self.wake is not None else WakeSource.RUI
+
+        @property
+        def barge_via_device_enabled(self) -> bool:
+            """Whether this plug enables the device's advisory barge hint."""
+            return bool(self.wake is not None and self.wake.barge_via_device)
 
     class _PluginBase(BaseModel):
         """Fields shared by the on-disk plugin.yaml and the loaded Plugin."""

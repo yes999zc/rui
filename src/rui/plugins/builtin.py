@@ -88,7 +88,11 @@ _XIAOAI_LX06 = {
     "compatibility": {
         "rui_min": "0.2.0",
         "tested_with": ["0.2.0"],
-        "notes": "A-class coexistence with the stock firmware; open-xiaoai client required.",
+        # Socket & Plug v1: the LX06 is a closed device (open-xiaoai client only), so
+        # there is no device-side RUI wake model. The built-in manifest stays v0, which
+        # means `wake.source: rui` by the v0 default; it must never declare device_wake.
+        "notes": "A-class coexistence with the stock firmware; open-xiaoai client required. "
+                 "Wake is RUI KWS (v0 default), not device_wake.",
     },
     "acceptance": {
         "verified": True,

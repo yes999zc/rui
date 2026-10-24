@@ -314,6 +314,32 @@ adapter 只实现 `drain_wakes()`；音频面到控制面的 `DeviceWakeMsg` 是
 | `src/rui/config/schema.py` | `device_wake.debounce_ms`/`max_per_10s`/`stale_ms`（建议值） |
 | `tests/` | manifest v1、wake injection、playback gap、LX06 回归 |
 
+### 7.1 P3.0/P3.1 实现说明（2026-10-24）
+
+- **已落地**：`Capability.DEVICE_WAKE`/`BARGE_VIA_DEVICE`、`DeviceWake`、`drain_wakes()`
+  默认 `[]`；`rui-device/v1` 的 `model`/`wake` 与依赖表；`DeviceWakeMsg`；音频面
+  空闲/播放/去抖/限频/冲突/降级策略；`Metrics.device_wake_*`；`TurnTrace.note_wake()`。
+  `_on_wake` 现在读取 `voice.barge_in`：关闭打断时，播放中的 KWS 唤醒被忽略，
+  不停止播放、不 arm gate。
+- **v0**：仍按 `wake.source=rui` 处理；v0 声明 `wake`、`device_wake` 或
+  `barge_via_device` 直接报错。v1 中的 `native_kws` 报错而不是仅警告（§7 的
+  “弃用”按“拒绝新 manifest”执行；旧 v0 不受影响）。`wake` 中的未知字段
+  （含 token/地址）由 `extra=forbid` 拒绝。
+- **运行期启用**：音频面先解析设备对应的 plug manifest（`params.plug_id` 或 adapter，
+  `src/rui/plugins/resolve.py`），要求 `wake.source: device` 且声明
+  `device_wake`，再看 `probe()` 与 `drain_wakes()`。解析不到 manifest 的 adapter
+  （mock / 开发用 in-process adapter）没有可对照的上限，按 `probe()` 为准。
+- **常量而非配置**：`debounce=500 ms`、`5 次/10 s`、`stale>1500 ms`、`future>500 ms`、
+  `10 个无效事件降级`、`30 s drain 异常日志` 目前是 `src/rui/audio/process.py`
+  的模块常量；`device_wake.*` 配置项留到后续小版本，默认值与本文一致。
+- **IPC/观测**：每个有效 `DeviceWake`（含随后被去抖/限频/抑制/冲突丢弃的）发送一次
+  `DeviceWakeMsg`；只有真正 arm gate 或执行 barge 时才发 `Wake`，其
+  `source="device"`、`action`、`score`、`threshold`、`barge_hint` 供控制面写
+  `TurnTrace.meta`。控制面在消费 `last_wake` 时调用 `TurnTrace.note_wake()`（与
+  `note_playback_metrics()` 同类的鸭子类型钩子）；`WakeIdle`/`drain_wakes()` 异常/
+  VAD 缺失均不形成 turn、不调用 LLM。
+
+
 ## 8. 开放问题与明确非目标
 
 ### 8.1 需 9 哥 决策

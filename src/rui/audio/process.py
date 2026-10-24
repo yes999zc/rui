@@ -34,7 +34,7 @@ import numpy as np
 from .. import secrets
 from ..config import Config, load_config
 from ..device import build_adapters
-from ..device.contract import AudioFrame, DeviceAdapter
+from ..device.contract import AudioFrame, Capability, DeviceAdapter, DeviceWake
 from ..env import get as env_get
 from ..log_setup import setup_logging
 from ..trace import now_ms
@@ -46,6 +46,7 @@ from .protocol import (
     CONTROL,
     DeviceVolume,
     DeviceVolumeResult,
+    DeviceWakeMsg,
     Error,
     FrameType,
     Hello,
@@ -103,6 +104,26 @@ MAX_LEAD_S = 0.32
 # 0 disables the wait entirely.
 PREBUFFER_TIMEOUT_EXTRA_S = 0.25
 PREBUFFER_POLL_S = 0.01
+# --- Socket & Plug v1: device_wake policy (docs/socket-plug-v1.md §5) ----------------
+# Same event (or a ts_ms within this window of the last accepted one) is a duplicate:
+# a device model can fire twice on one phrase while its own debounce settles.
+DEVICE_WAKE_DEBOUNCE_MS = 500.0
+# ts_ms shares AudioFrame's monotonic origin. An event older than this is a late
+# delivery; one from the future means the adapter's clock is wrong. Neither can open a
+# turn, and neither updates the debounce clock (a bad event must not block a good one).
+DEVICE_WAKE_STALE_MS = 1500.0
+DEVICE_WAKE_FUTURE_MS = 500.0
+# Single-device rate limit: 5 accepted events per 10 s. Exceeding it drops without
+# falling back to KWS - a fallback here could produce two turns for one phrase.
+DEVICE_WAKE_RATE_MAX = 5
+DEVICE_WAKE_RATE_WINDOW_S = 10.0
+# Ten invalid events in a row from an adapter means its mapping is wrong for this
+# session; stop polling and let KWS carry the room (a restart retries).
+DEVICE_WAKE_MAX_INVALID = 10
+# A drain_wakes() that raises is contained, but a defective adapter should not cost a
+# log line (or a validation attempt) every 20 ms.
+DEVICE_WAKE_ERROR_LOG_S = 30.0
+DEVICE_WAKE_MAX_CONSECUTIVE_ERRORS = 5
 # A lead that goes negative by less than this is scheduler jitter (the loop wakes a few
 # ms late, the device still has audio), not an audible underrun. The issue's gap is
 # ~400 ms, an order of magnitude above the floor.
@@ -251,6 +272,34 @@ class AudioPlane:
         self.kws_error = ""
         self.wake_count = 0
         self.last_wake: Wake | None = None
+        # Socket & Plug v1 (§4.3/§5). `device_wake_active` is resolved from
+        # probe().capabilities + a real drain_wakes(); without both the plane is exactly
+        # the 0.2 plane. `device_wake_barge_active` additionally needs barge_via_device.
+        self.device_wake_active = False
+        self.device_wake_barge_active = False
+        self.device_wake_configured = False
+        self.device_wakes = 0
+        self.device_wake_turns = 0
+        self.device_wake_barges = 0
+        self.device_wake_debounced = 0
+        self.device_wake_invalid = 0
+        self.device_wake_suppressed = 0
+        self.device_wake_barge_suppressed = 0
+        self.device_wake_rate_limited = 0
+        self.device_wake_conflicts = 0
+        self.device_wake_interrupts = 0
+        self.device_wake_no_vad = 0
+        self.device_wake_fallbacks = 0
+        self.device_wake_degraded = False
+        self.device_wake_last_score: float | None = None
+        self._device_wake_invalid_streak = 0
+        self._device_wake_error_streak = 0
+        self._device_wake_error_logged = 0.0
+        self._last_accepted_wake_ts: float | None = None
+        self._device_wake_accept_times: deque[float] = deque()
+        # Wall-clock end of the cue/echo hold opened by the last accepted wake: a barge
+        # hint inside this window is our own audio, not a person (§5 "ACK mute/gate hold").
+        self._wake_hold_until = 0.0
         self.gate: UtteranceGate | None = None
         self.vad_error = ""
         self.utterances = 0
@@ -507,6 +556,7 @@ class AudioPlane:
         self._build_aec(info.mic_channels, info.ref_channels)
         self._build_kws()
         self._build_vad()
+        self._configure_device_wake(info)
         decimator = Decimator(
             factor=max(1, info.sample_rate // self.cfg.audio.voice.rate),
             channels=info.channels,
@@ -532,6 +582,25 @@ class AudioPlane:
                 for hit in self.wake.accept(pcm, ts_ms=frame.ts_ms):
                     self.wake_count += 1
                     await self._on_wake(hit, writer, connected)
+            # v1 §4.3: vendor signals are read first, then device wakes, in the same
+            # tick. A vendor wake this tick wins the conflict; the device event is
+            # counted and dropped instead of producing a second turn.
+            vendor_wake = False
+            for vendor in self._drain_signals():
+                if getattr(vendor, "kind", "") == "wake":
+                    vendor_wake = True
+                if connected.is_set():
+                    try:
+                        writer.write(encode_json(VendorSignalMsg(
+                            kind=vendor.kind, text=vendor.text, ts_ms=float(vendor.ts)
+                        )))
+                        await writer.drain()
+                    except (ConnectionResetError, BrokenPipeError):
+                        connected.clear()
+            if self.device_wake_active:
+                await self._drain_device_wakes(
+                    vendor_wake=vendor_wake, writer=writer, connected=connected
+                )
             if pcm:
                 # After the wake check: the frame that fired the wake is replayed from the
                 # ring, and feeding it again here would duplicate 20 ms inside the first
@@ -541,15 +610,6 @@ class AudioPlane:
                 self._capture_followup_tail(pcm, frame.ts_ms)
             if self.gate is not None and pcm:
                 await self._feed_gate(pcm, frame.ts_ms, writer, connected)
-            for vendor in self._drain_signals():
-                if connected.is_set():
-                    try:
-                        writer.write(encode_json(VendorSignalMsg(
-                            kind=vendor.kind, text=vendor.text, ts_ms=float(vendor.ts)
-                        )))
-                        await writer.drain()
-                    except (ConnectionResetError, BrokenPipeError):
-                        connected.clear()
             if not connected.is_set():
                 self.no_consumer += 1
             elif not self.ring.push(frame.seq, now_ms(), pcm):
@@ -560,6 +620,313 @@ class AudioPlane:
         """Vendor events the adapter saw (or none, for adapters that cannot report them)."""
         drain = getattr(self.adapter, "drain_signals", None)
         return list(drain()) if callable(drain) else []
+
+    # ------------------------------------------------- device_wake (v1 §5)
+    def _configure_device_wake(self, info: object) -> None:
+        """Decide once, from probe() + the adapter's methods, whether v1 is usable.
+
+        Manifest validation has already rejected an illegal combination (plugins loader);
+        this is the runtime half of §4.3: capability present, adapter method present.
+        Any miss falls back to RUI KWS with one warning - it must never look like a
+        device that simply cannot hear.
+        """
+        self.device_wake_configured = True
+        capabilities = getattr(info, "capabilities", frozenset())
+        manifest_source = self._manifest_wake_source()
+        if Capability.DEVICE_WAKE not in capabilities:
+            if manifest_source == "device":
+                # The manifest declared it but probe() did not verify it: runtime
+                # downgrade, one warning, KWS unchanged (§4.3).
+                self.device_wake_fallbacks += 1
+                log.warning(
+                    "device_wake: manifest declares wake.source=device, but probe() "
+                    "does not advertise it; falling back to RUI KWS"
+                )
+            return
+        if manifest_source == "rui":
+            # Manifest is the upper bound (§2): an adapter that can report wakes does
+            # not get to use them unless the plug declared `wake.source: device`.
+            self.device_wake_fallbacks += 1
+            log.warning(
+                "device_wake: probe advertises it but the device's plug manifest does "
+                "not; falling back to RUI KWS"
+            )
+            return
+        drain = getattr(self.adapter, "drain_wakes", None)
+        if not callable(drain):
+            self.device_wake_fallbacks += 1
+            log.warning(
+                "device_wake: adapter %r declares the capability but has no "
+                "drain_wakes(); RUI KWS continues unchanged",
+                getattr(info, "adapter", "?"),
+            )
+            return
+        self.device_wake_active = True
+        barge = Capability.BARGE_VIA_DEVICE in capabilities
+        if barge and Capability.PLAYBACK not in capabilities:
+            log.warning(
+                "device_wake: barge_via_device declared without playback; "
+                "barge hints will not be honoured"
+            )
+            barge = False
+        self.device_wake_barge_active = barge
+        log.info(
+            "device_wake on (probe: device_wake=true, barge_via_device=%s)",
+            barge,
+        )
+
+    def _manifest_allows_device_wake(self) -> bool:
+        """Whether the configured device's plug declares `wake.source: device`.
+
+        The adapter is built from config, not from the manifest, so this is the one
+        place the plane can still enforce "manifest is the upper bound". A device with
+        no resolvable plug (the mock adapter, a dev/in-process adapter) is allowed to
+        trust probe(): there is no manifest to contradict. Reading the catalog here is
+        once per connection, not per event.
+        """
+        device = next((item for item in self.cfg.devices if item.id == self.device_id), None)
+        if device is None:
+            return True
+        try:
+            from ..plugins.resolve import resolve_device_plug
+
+            resolved = resolve_device_plug(device, self.cfg.system.data_dir)
+        except Exception as exc:  # noqa: BLE001 - a broken plug must not block a mic
+            log.info("device_wake: could not resolve the plug manifest: %s", exc)
+            return True
+        if resolved is None:
+            return True
+        return (
+            str(getattr(resolved.device, "wake_source", "rui")) == "device"
+            and Capability.DEVICE_WAKE in resolved.device.capabilities
+        )
+
+    async def _drain_device_wakes(
+        self, *, vendor_wake: bool, writer: asyncio.StreamWriter,
+        connected: asyncio.Event,
+    ) -> None:
+        """Poll the adapter once per frame tick and hand events to the policy.
+
+        Exceptions are contained here: a defective adapter must not stop the frame loop
+        or RUI KWS. Five consecutive failures stop the polling for this session; the
+        next connection retries.
+        """
+        drain = getattr(self.adapter, "drain_wakes", None)
+        if not callable(drain):
+            return
+        try:
+            pending = drain()
+        except Exception as exc:  # noqa: BLE001 - adapter input is untrusted
+            self._device_wake_error_streak += 1
+            if self._device_wake_error_streak == 1:
+                self.device_wake_fallbacks += 1
+            now = time.monotonic()
+            if now - self._device_wake_error_logged >= DEVICE_WAKE_ERROR_LOG_S:
+                self._device_wake_error_logged = now
+                log.warning(
+                    "device_wake: drain_wakes() failed (%s: %s); RUI KWS continues",
+                    type(exc).__name__, exc,
+                )
+            if self._device_wake_error_streak >= DEVICE_WAKE_MAX_CONSECUTIVE_ERRORS:
+                self.device_wake_active = False
+                self.device_wake_degraded = True
+                log.warning(
+                    "device_wake degraded: %d consecutive drain_wakes() failures; "
+                    "RUI KWS continues for this session",
+                    self._device_wake_error_streak,
+                )
+            return
+        self._device_wake_error_streak = 0
+        for event in list(pending or []):
+            await self._handle_device_wake(
+                event, vendor_wake=vendor_wake, writer=writer, connected=connected
+            )
+
+    @staticmethod
+    def _finite(value: object) -> bool:
+        return isinstance(value, (int, float)) and math.isfinite(float(value))
+
+    def _device_wake_problem(self, wake: DeviceWake) -> str:
+        """Why this event cannot be acted on (§5 "无效条件"), or "" when it can."""
+        if not self._finite(wake.ts_ms):
+            return "ts_ms is not finite"
+        if not self._finite(wake.score):
+            return "score is not finite"
+        if not self._finite(wake.threshold):
+            return "threshold is not finite"
+        if wake.level is not None and not self._finite(wake.level):
+            return "level is not finite"
+        if wake.source != "device":
+            return f"source is {wake.source!r}, not 'device'"
+        if not 0.0 <= float(wake.score) <= 1.0:
+            return f"score {wake.score!r} is outside 0-1"
+        if float(wake.threshold) <= 0.0:
+            return f"threshold {wake.threshold!r} is not > 0"
+        if float(wake.score) < float(wake.threshold):
+            return f"score {wake.score:.3f} is below threshold {wake.threshold:.3f}"
+        age = now_ms() - float(wake.ts_ms)
+        if age > DEVICE_WAKE_STALE_MS:
+            return f"stale by {age:.0f} ms"
+        if age < -DEVICE_WAKE_FUTURE_MS:
+            return f"{abs(age):.0f} ms in the future"
+        if wake.barge and not self.device_wake_barge_active:
+            return "barge hint without the barge_via_device capability"
+        return ""
+
+    def _device_wake_is_debounced(self, wake: DeviceWake) -> bool:
+        last = self._last_accepted_wake_ts
+        return last is not None and abs(float(wake.ts_ms) - last) < DEVICE_WAKE_DEBOUNCE_MS
+
+    def _device_wake_rate_ok(self) -> bool:
+        now = time.monotonic()
+        times = self._device_wake_accept_times
+        while times and now - times[0] > DEVICE_WAKE_RATE_WINDOW_S:
+            times.popleft()
+        return len(times) < DEVICE_WAKE_RATE_MAX
+
+    def _note_device_wake_invalid(self, reason: str) -> None:
+        self.device_wake_invalid += 1
+        self._device_wake_invalid_streak += 1
+        log.debug("device_wake dropped: %s", reason)
+        if self._device_wake_invalid_streak >= DEVICE_WAKE_MAX_INVALID:
+            if not self.device_wake_degraded:
+                self.device_wake_degraded = True
+                self.device_wake_active = False
+                self.device_wake_fallbacks += 1
+                log.warning(
+                    "device_wake degraded after %d invalid events (last: %s); "
+                    "RUI KWS continues for this session",
+                    self._device_wake_invalid_streak, reason,
+                )
+
+    def _device_wake_playing(self) -> bool:
+        return self._speak_queued_s > 0.0 or (
+            self._playback_task is not None and not self._playback_task.done()
+        )
+
+    def _device_wake_barge_allowed(self) -> bool:
+        """Every gate that can still say no after the event said `barge=True`.
+
+        Adapter input is advice: RUI's own state decides. Barge-in off (or half-duplex),
+        the plug not enabling the hint, a hand-parked song, the cue/echo hold, or the
+        vendor talking all suppress it - the event is counted, the playback continues.
+        """
+        if not self.cfg.audio.voice.barge_in:
+            return False
+        if not self.device_wake_barge_active:
+            return False
+        if self._paused_explicit:
+            return False
+        if time.monotonic() < self._wake_hold_until:
+            return False
+        adapter = self.adapter
+        if (
+            adapter is not None
+            and getattr(adapter, "vendor_playing", False)
+            and time.monotonic() - getattr(adapter, "vendor_playing_ts", 0.0) < 90.0
+        ):
+            return False
+        return True
+
+    async def _handle_device_wake(
+        self, event: object, *, vendor_wake: bool, writer: asyncio.StreamWriter,
+        connected: asyncio.Event,
+    ) -> None:
+        """Apply §5 to one drained event. Never raises for adapter-supplied input."""
+        if not isinstance(event, DeviceWake):
+            self._note_device_wake_invalid(f"not a DeviceWake: {type(event).__name__}")
+            return
+        problem = self._device_wake_problem(event)
+        if problem:
+            self._note_device_wake_invalid(problem)
+            return
+        self._device_wake_invalid_streak = 0
+        self.device_wakes += 1
+        self.device_wake_last_score = round(float(event.score), 4)
+        await self._send_device_wake_msg(event, writer, connected)
+
+        if vendor_wake:
+            # §4.3: the vendor's wake wins the tick; ours is observed and dropped.
+            self.device_wake_conflicts += 1
+            log.info("device_wake conflict: vendor wake wins this tick (score=%.2f)",
+                     event.score)
+            return
+        if self._device_wake_is_debounced(event):
+            self.device_wake_debounced += 1
+            log.debug("device_wake debounced (ts_ms=%.0f)", event.ts_ms)
+            return
+        if not self._device_wake_rate_ok():
+            self.device_wake_rate_limited += 1
+            log.info("device_wake rate limited (%d accepted in %.0f s)",
+                     DEVICE_WAKE_RATE_MAX, DEVICE_WAKE_RATE_WINDOW_S)
+            return
+        self._last_accepted_wake_ts = float(event.ts_ms)
+        self._device_wake_accept_times.append(time.monotonic())
+
+        if self.gate is None:
+            # The event only opens ears; without VAD there is no turn. Never call the
+            # LLM from the event alone.
+            self.device_wake_no_vad += 1
+            log.info("device_wake: no VAD available; event cannot form a turn")
+            return
+
+        playing = self._device_wake_playing()
+        barged_s = self._speak_queued_s if playing else 0.0
+        if playing:
+            if not event.barge:
+                self.device_wake_suppressed += 1
+                log.info("device_wake during playback ignored (barge=false)")
+                return
+            if not self._device_wake_barge_allowed():
+                self.device_wake_suppressed += 1
+                self.device_wake_barge_suppressed += 1
+                log.info(
+                    "device_wake barge suppressed (barge_in=%s, capability=%s, "
+                    "parked=%s, cue_hold=%s)",
+                    self.cfg.audio.voice.barge_in, self.device_wake_barge_active,
+                    self._paused_explicit, time.monotonic() < self._wake_hold_until,
+                )
+                return
+            action = "barge"
+            self.device_wake_barges += 1
+            await self._stop_for_barge(barged_s)
+        else:
+            action = "interrupt" if self.gate.armed else "turn"
+            if action == "interrupt":
+                self.device_wake_interrupts += 1
+                log.info("device_wake while a turn is open: gate buffer discarded")
+        self.device_wake_turns += 1
+        await self._begin_wake_turn(
+            ts_ms=float(event.ts_ms),
+            keyword="",
+            barge=playing,
+            barged_s=round(barged_s, 2),
+            source="device",
+            score=event.score,
+            threshold=event.threshold,
+            barge_hint=event.barge,
+            action=action,
+            # §5: a device wake's phrase tail is not in RUI's stream to skip; use 0
+            # and align by ts_ms instead of the KWS path's 300 ms.
+            skip_after_wake_ms=0,
+            writer=writer,
+            connected=connected,
+        )
+
+    async def _send_device_wake_msg(
+        self, event: DeviceWake, writer: asyncio.StreamWriter, connected: asyncio.Event
+    ) -> None:
+        """Observability only: the control plane may see an event that became no turn."""
+        if not connected.is_set():
+            return
+        try:
+            writer.write(encode_json(DeviceWakeMsg(
+                ts_ms=event.ts_ms, score=event.score, threshold=event.threshold,
+                barge=event.barge, level=event.level,
+            )))
+            await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            connected.clear()
 
     # ---------------------------------------------------- wake, preroll, ack
     def _keep_preroll(self, pcm: bytes, ts_ms: float) -> None:
@@ -594,34 +961,87 @@ class AudioPlane:
         barged = self._speak_queued_s > 0.0 or (
             self._playback_task is not None and not self._playback_task.done()
         )
+        if barged and not self.cfg.audio.voice.barge_in:
+            # §5/§7: barge-in disabled (or half-duplex) means a wake during playback
+            # must not stop the speaker. Ignoring it is safer than arming a gate over
+            # our own audio; the wake word works again once the answer drains.
+            log.info("wake during playback ignored: voice.barge_in is off")
+            return
         barged_s = self._speak_queued_s
         if barged:
-            self.barges += 1
-            self.last_barge_s = barged_s
-            log.info("barge: %d wake during playback, dropped %.1f s queued", self.barges, barged_s)
-            # Time the server's own stop: flush the queue, pause the song, tell the
-            # device to drop what it holds. The acceptance number (<=300 ms) had only
-            # ever been measured in tests; this makes every production barge report it.
-            stop_started = time.monotonic()
-            self._flush_speech()
-            # A wake word interrupts speech, not the song: pause it where it is and let
-            # the turn's end bring it back (old build: paused_by_barge + auto-resume).
-            # The device still has up to a buffer of audio in hand, so it is told to drop
-            # it - that is the same stop_play a barge always needed.
-            self._pause_for_speech()
-            if self.adapter is not None:
-                try:
-                    await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
-                    self._device_audio_pending = False
-                except Exception as exc:  # noqa: BLE001 - the speaker may be gone
-                    log.info("barge: stop failed: %s", exc)
-            self.last_barge_stop_ms = (time.monotonic() - stop_started) * 1000.0
-            log.info(
-                "barge: silence_after_ms=%.0f (server-side: queue flushed, stop_play sent; "
-                "device ALSA buffer ~300 ms not included)",
-                self.last_barge_stop_ms,
-            )
+            await self._stop_for_barge(barged_s)
+        await self._begin_wake_turn(
+            ts_ms=hit.ts_ms,
+            keyword=hit.keyword,
+            barge=barged,
+            barged_s=barged_s,
+            source="rui",
+            score=None,
+            threshold=None,
+            barge_hint=False,
+            action="barge" if barged else "turn",
+            skip_after_wake_ms=None,
+            writer=writer,
+            connected=connected,
+        )
 
+    async def _stop_for_barge(self, barged_s: float) -> None:
+        """Flush the reply, park the song and tell the device to drop its buffer.
+
+        Shared by the KWS barge and a device `barge=true` hint: one stop path, one
+        measurement (`last_barge_stop_ms`), so the acceptance number means the same
+        thing whichever detector fired.
+        """
+        self.barges += 1
+        self.last_barge_s = barged_s
+        log.info("barge: %d wake during playback, dropped %.1f s queued", self.barges, barged_s)
+        # Time the server's own stop: flush the queue, pause the song, tell the
+        # device to drop what it holds. The acceptance number (<=300 ms) had only
+        # ever been measured in tests; this makes every production barge report it.
+        stop_started = time.monotonic()
+        self._flush_speech()
+        # A wake word interrupts speech, not the song: pause it where it is and let
+        # the turn's end bring it back (old build: paused_by_barge + auto-resume).
+        # The device still has up to a buffer of audio in hand, so it is told to drop
+        # it - that is the same stop_play a barge always needed.
+        self._pause_for_speech()
+        if self.adapter is not None:
+            try:
+                await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                self._device_audio_pending = False
+            except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+                log.info("barge: stop failed: %s", exc)
+        self.last_barge_stop_ms = (time.monotonic() - stop_started) * 1000.0
+        log.info(
+            "barge: silence_after_ms=%.0f (server-side: queue flushed, stop_play sent; "
+            "device ALSA buffer ~300 ms not included)",
+            self.last_barge_stop_ms,
+        )
+
+    async def _begin_wake_turn(
+        self,
+        *,
+        ts_ms: float,
+        keyword: str,
+        barge: bool,
+        barged_s: float,
+        source: str,
+        score: float | None,
+        threshold: float | None,
+        barge_hint: bool,
+        action: str,
+        skip_after_wake_ms: int | None,
+        writer: asyncio.StreamWriter,
+        connected: asyncio.Event,
+    ) -> None:
+        """One accepted wake -> cue, replay, gate, then the control-plane event.
+
+        Shared by RUI KWS (`source="rui"`) and `drain_wakes()` (`source="device"`).
+        The VAD gate is the hard requirement in both paths: the event only opens the
+        ears, the person's speech forms the turn. `skip_after_wake_ms=None` keeps the
+        KWS path's configured 300 ms; a device wake passes 0 because its phrase tail is
+        not in our stream (the adapter's ts_ms is the alignment).
+        """
         # Takeover: our wake outranks a running vendor dialog. The old build stayed
         # deaf while the vendor player ran (mic gated, assistant_v3.py:3115), so its
         # wake never had to stop 小爱; ours hears 你好小瑞 mid-answer, and taking the
@@ -648,18 +1068,26 @@ class AudioPlane:
         # a floor - the old build used 250 ms for exactly this - and anything arriving
         # meanwhile is buffered, not dropped.
         hold_ms = cue_ms + (float(self.cfg.ack.echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS)
+        # A device barge hint inside this window is our own cue/echo, not a person;
+        # `_device_wake_barge_allowed` consults this deadline (§5 ACK mute/gate hold).
+        self._wake_hold_until = max(self._wake_hold_until, time.monotonic() + hold_ms / 1000.0)
 
         event = Wake(
-            ts_ms=hit.ts_ms,
-            keyword=hit.keyword,
+            ts_ms=ts_ms,
+            keyword=keyword,
             erle_db=self.aec.erle_db if self.aec is not None else None,
             ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
             playback_s=round(self.playback_s, 1),
             voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
             ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
             ack_mode=mode,
-            barge=barged,
+            barge=barge,
             barged_s=round(barged_s, 2),
+            source=source,  # type: ignore[arg-type]
+            score=None if score is None else round(float(score), 4),
+            threshold=None if threshold is None else round(float(threshold), 4),
+            barge_hint=barge_hint,
+            action=action,
         )
         self.last_wake = event
 
@@ -669,7 +1097,7 @@ class AudioPlane:
                 # instead of letting a whole utterance disappear silently.
                 self.gate.interrupted += 1
                 log.info("wake while a turn was open: %.0f ms discarded", self.gate.speech_ms)
-            self.gate.arm()
+            self.gate.arm(skip_after_wake_ms=skip_after_wake_ms)
             self._followup_capture = False
             self._followup_tail.clear()
             self._followup_samples = 0
@@ -1528,6 +1956,20 @@ class AudioPlane:
             aec_channel=self.aec.selected if self.aec is not None else 0,
             ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
             wake_count=self.wake_count,
+            device_wakes=self.device_wakes,
+            device_wake_turns=self.device_wake_turns,
+            device_wake_barges=self.device_wake_barges,
+            device_wake_debounced=self.device_wake_debounced,
+            device_wake_invalid=self.device_wake_invalid,
+            device_wake_suppressed=self.device_wake_suppressed,
+            device_wake_barge_suppressed=self.device_wake_barge_suppressed,
+            device_wake_rate_limited=self.device_wake_rate_limited,
+            device_wake_conflicts=self.device_wake_conflicts,
+            device_wake_interrupts=self.device_wake_interrupts,
+            device_wake_no_vad=self.device_wake_no_vad,
+            device_wake_fallbacks=self.device_wake_fallbacks,
+            device_wake_degraded=self.device_wake_degraded,
+            device_wake_last_score=self.device_wake_last_score,
             kws_enabled=self.wake is not None,
             kws_error=self.kws_error,
             vad_enabled=self.gate is not None,

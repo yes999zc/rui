@@ -169,3 +169,22 @@ def test_the_lead_is_bounded_and_the_barge_flushes_the_device() -> None:
 
     assert 0.2 <= PREBUFFER_S <= 0.35
     assert MAX_LEAD_S <= 0.4
+
+
+def test_barge_in_off_ignores_a_wake_during_playback() -> None:
+    """§7: 0.2's `_on_wake` never read `voice.barge_in`; 0.3 must honour it.
+
+    With barge-in off (or half-duplex), a wake during an answer must not stop the
+    speaker or arm a gate over our own audio. The wake word works again once the
+    answer drains.
+    """
+    plane, adapter = make_plane()
+    plane.cfg.audio.voice.barge_in = False
+    queue_seconds(plane, 3.0)
+
+    frames = run_wake(plane)
+
+    assert adapter.stops == 0, "barge-in is off but the speaker was stopped"
+    assert plane.barges == 0
+    assert plane._speak_queued_s == pytest.approx(3.0, abs=0.05)
+    assert not any(frame.get("type") == "wake" for frame in frames)

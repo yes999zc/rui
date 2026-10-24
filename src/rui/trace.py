@@ -91,6 +91,32 @@ class TurnTrace:
         if max_gap is not None:
             self.meta["playback_max_gap_ms"] = round(float(max_gap), 1)
 
+    def note_wake(self, wake: object) -> None:
+        """Record where a turn's wake came from (Socket & Plug v1 §5).
+
+        Duck-typed on the ``Wake`` message, like :meth:`note_playback_metrics`: RUI KWS
+        turns get ``wake_source: "rui"``, device wakes add the score/threshold/barge
+        hint/action the plane decided. Diagnostic only - the source never changes what
+        the turn is allowed to do.
+        """
+        source = str(getattr(wake, "source", "") or "rui")
+        self.meta["wake_source"] = source
+        if source != "device":
+            return
+        score = getattr(wake, "score", None)
+        if score is not None:
+            self.meta["device_wake_score"] = round(float(score), 4)
+        threshold = getattr(wake, "threshold", None)
+        if threshold is not None:
+            self.meta["device_wake_threshold"] = round(float(threshold), 4)
+        self.meta["device_wake_barge_hint"] = bool(getattr(wake, "barge_hint", False))
+        action = getattr(wake, "action", "")
+        if action:
+            self.meta["device_wake_action"] = str(action)
+        debounced = getattr(wake, "debounced", None)
+        if debounced is not None:
+            self.meta["device_wake_debounced"] = bool(debounced)
+
     @property
     def first_response_ms(self) -> float | None:
         return self.delta("wake", "play_start")

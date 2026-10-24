@@ -16,6 +16,7 @@ from .errors import PluginError
 from .loader import PluginScan, discover_plugins, load_plugin, running_version
 from .models import (
     DEVICE_SCHEMA,
+    DEVICE_SCHEMA_V1,
     PLUGIN_SCHEMA,
     Acceptance,
     Compatibility,
@@ -31,6 +32,8 @@ from .models import (
     RuntimeMode,
     RuntimeSpec,
     TrustLevel,
+    WakeSource,
+    WakeSpec,
 )
 from .resolve import PlugCatalog, PlugEntry, ResolvedPlug, resolve_device_plug
 from .semver import (
@@ -45,6 +48,7 @@ from .semver import (
 
 __all__ = [
     "DEVICE_SCHEMA",
+    "DEVICE_SCHEMA_V1",
     "PLUGIN_SCHEMA",
     "BUILTIN_PLUGINS",
     "Acceptance",
@@ -70,6 +74,8 @@ __all__ = [
     "Version",
     "VersionError",
     "VersionRange",
+    "WakeSource",
+    "WakeSpec",
     "builtin_plugin",
     "builtin_plugins",
     "discover_plugins",

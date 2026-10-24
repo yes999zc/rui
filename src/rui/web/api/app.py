@@ -87,6 +87,13 @@ from ...tools.mcp_manager import test_server as test_generic_mcp_server
 from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
+from .device_rules import (
+    DEFAULT_LISTEN_PORT,
+    conflict_detail,
+    effective_listen_port,
+    is_inbound,
+    port_conflict,
+)
 from .security import install_security_headers
 from .setup_api import install_setup_routes
 
@@ -894,6 +901,142 @@ def _device_plug_id(device: object | None, resolved: object | None) -> str | Non
     return stored or None
 
 
+def _token_env(device: object) -> str:
+    """The secret name a device's token lives under (never the value)."""
+    name = str(getattr(device, "token_env", "") or "").strip()
+    return name or "RUI_DEVICE_TOKEN"
+
+
+def _token_configured(device: object) -> bool:
+    """Whether a client can authenticate: a stored token, or the deliberate no-token mode."""
+    return bool(secrets.resolve(_token_env(device))) or bool(
+        getattr(device, "allow_no_token", False))
+
+
+def _active_device_id(app: FastAPI, config: Config) -> str:
+    """The device the one supported audio plane is actually driving.
+
+    The supervisor picks the first drivable enabled adapter; asking it keeps the
+    warning truthful instead of assuming config order. Without a supervisor (tests,
+    setup-only boot) the first enabled device is the honest fallback.
+    """
+    supervisor = getattr(app.state, "audio", None)
+    pick = getattr(supervisor, "_pick_device", None)
+    if callable(pick):
+        try:
+            picked = pick()
+        except Exception:  # noqa: BLE001 - a warning must never break the list
+            picked = None
+        if picked:
+            return str(picked)
+    for device in config.devices:
+        if device.enabled:
+            return device.id
+    return ""
+
+
+def _device_warnings(config: Config, active_id: str) -> list[dict]:
+    """Explicit "more than one inbound speaker, only one can run" warning (P3.4).
+
+    0.3 has no multi-device arbitration: one audio plane drives one adapter. Rather
+    than silently pretending every enabled device is live, the list/status endpoints
+    say which one is active and which ones are only configured.
+    """
+    catalog = PlugCatalog(config.system.data_dir)
+    inbound = [device for device in config.devices
+               if device.enabled and is_inbound(device, catalog)]
+    if len(inbound) <= 1:
+        return []
+    ignored = [device.id for device in inbound if device.id != active_id]
+    return [{
+        "code": "multiple_enabled_inbound",
+        "message": (
+            "0.3 supports one active inbound audio plane; only "
+            f"{active_id or 'none'} is driven. Disable the other device or wait for "
+            "multi-device arbitration."
+        ),
+        "details": {
+            "active_device": active_id,
+            "enabled_inbound": [device.id for device in inbound],
+            "ignored_devices": ignored,
+            "max_active_inbound": 1,
+        },
+    }]
+
+
+async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
+                         warnings: list[dict] | None = None) -> dict:
+    """One device's management status: evidence only, and never a secret value.
+
+    ``ready`` is not "configured": it means enabled, authenticated, and the plane's
+    live link says connected. Every reason it is false is listed in ``errors`` as a
+    stable code so the console can translate it.
+    """
+    catalog = PlugCatalog(config.system.data_dir)
+    resolved = catalog.resolve(
+        plug_id=_device_plug_id(device, None), adapter=device.adapter)
+    plane = _plane_snapshot(app)
+    token_env = _token_env(device)
+    token_ok = _token_configured(device)
+    listen_port = effective_listen_port(device)
+    capabilities = {str(capability) for capability in (resolved.capabilities
+                                                       if resolved is not None else [])}
+    errors: list[str] = []
+    link: dict = {"status": "unavailable", "connected": False,
+                  "last_seen": None, "latency_ms": None}
+    adapters_now = getattr(app.state, "adapters", None)
+    adapter = adapters_now.adapters.get(device.id) if adapters_now is not None else None
+    if not device.enabled:
+        link = {"status": "disabled", "connected": False,
+                "last_seen": None, "latency_ms": None}
+    elif adapter is not None:
+        info = await adapter.probe()
+        link = _device_link(info, adapter, plane)
+        capabilities.update(str(capability) for capability in info.capabilities)
+    else:
+        errors.append("adapter_unavailable")
+    if not device.enabled:
+        errors.append("device_disabled")
+    if not token_ok:
+        errors.append("token_missing")
+    if resolved is None:
+        errors.append("plug_unresolved")
+    if device.enabled and not plane["running"]:
+        errors.append("audio_plane_stopped")
+    if plane["error"]:
+        errors.append("audio_plane_error")
+    if (device.enabled and token_ok and plane["running"]
+            and link["connected"] is False):
+        errors.append("not_connected")
+    setup = setup_store.read(config.system.data_dir)
+    stored_test = setup.get("test", {}).get("device", {}).get("test", {})
+    if not isinstance(stored_test, dict):
+        stored_test = {}
+    ready = bool(device.enabled and token_ok and link["status"] == "ready")
+    return {
+        "id": device.id,
+        "enabled": bool(device.enabled),
+        "ready": ready,
+        "token_configured": token_ok,
+        "token_env": token_env,
+        "listen_port": listen_port,
+        "plane": {
+            "speaker_connected": bool(plane["speaker_connected"]),
+            "last_seen": plane["last_seen"],
+            "audio_plane": bool(plane["running"]),
+        },
+        "capabilities": sorted(capabilities),
+        "setup_state": {
+            "configured": bool(device.host and device.wake_words and resolved is not None),
+            "wake_words": list(device.wake_words),
+            "last_test_ok": bool(stored_test.get("ok")),
+            "last_test_at": str(stored_test.get("at") or ""),
+        },
+        "errors": errors,
+        "warnings": list(warnings or []),
+    }
+
+
 _SECRET_QUERY_RE = re.compile(
     r"([?&](?:p|t|password|token|api_key|key|u)=)[^&\s]+", re.IGNORECASE)
 
@@ -1075,7 +1218,11 @@ def sweep_audition_files(directory: Path, *, ttl_s: float = AUDITION_TTL_S,
 
 # The inbound WS port an LX06 client dials when devices[].listen_port is unset. Kept
 # vendor-neutral here with a test pinning it to device/xiaoai/adapter.py's constant.
-DEVICE_DEFAULT_LISTEN_PORT = 4412
+DEVICE_DEFAULT_LISTEN_PORT = DEFAULT_LISTEN_PORT
+# Token rotation changes the credential a speaker dials in with, so a stuck button (or
+# a script) must not be able to lock the room out in a loop. One rotation per device
+# per window is enough for the console; the value is intentionally short.
+TOKEN_ROTATE_INTERVAL_S = 10.0
 
 
 def _host_without_port(value: str) -> str:
@@ -1376,6 +1523,7 @@ def create_app(
                     trace = TurnTrace(device_id=client.ready.device_id if client.ready else "")
                     if client.last_wake is not None:
                         trace.mark("wake", at_ms=client.last_wake.ts_ms)
+                        trace.note_wake(client.last_wake)
                         # Consume it: a follow-up utterance has no new wake event, and
                         # reusing this timestamp made first_response_ms 20-35 s.
                         client.last_wake = None
@@ -3126,28 +3274,30 @@ def create_app(
         network (audit #12). It now comes from the adapter's health report and the audio
         plane's `speaker_connected` metric; `connected` is null when no plane is running,
         because the control plane genuinely cannot see the inbound socket then.
+
+        P3.4 adds the management summary (`enabled`, `token_configured`, effective
+        `listen_port`) and an explicit warning when more than one enabled inbound device
+        exists: this build drives exactly one of them.
         """
         out: list[dict] = []
-        seen: set[str] = set()
         cfg_now = getattr(app.state, "cfg", cfg)
-        configured = {dev.id: dev for dev in cfg_now.devices}
         catalog = PlugCatalog(cfg_now.system.data_dir)
         adapters = app.state.adapters
         plane = _plane_snapshot(app)
-        for adapter in adapters.adapters.values():
-            info = await adapter.probe()
-            seen.add(info.id)
-            device = configured.get(info.id)
+        active_id = _active_device_id(app, cfg_now)
+        warnings = _device_warnings(cfg_now, active_id)
+        for dev in cfg_now.devices:
             resolved = catalog.resolve(
-                plug_id=_device_plug_id(device, None), adapter=info.adapter)
-            link = _device_link(info, adapter, plane)
-            # The adapter reports what it can actually do; the manifest declares what the
-            # plug promises. Showing both keeps a missing capability visible before use.
-            capabilities = {str(capability) for capability in info.capabilities}
-            if resolved is not None:
-                capabilities.update(str(capability) for capability in resolved.device.capabilities)
-            out.append(
-                {
+                plug_id=_device_plug_id(dev, None), adapter=dev.adapter)
+            token_ok = _token_configured(dev)
+            capabilities = {str(capability) for capability in (resolved.capabilities
+                                                               if resolved is not None else [])}
+            adapter = adapters.adapters.get(dev.id)
+            if adapter is not None:
+                info = await adapter.probe()
+                link = _device_link(info, adapter, plane)
+                capabilities.update(str(capability) for capability in info.capabilities)
+                row = {
                     "id": info.id,
                     "adapter": info.adapter,
                     "model": info.model,
@@ -3155,36 +3305,52 @@ def create_app(
                     "host": info.host,
                     "transport": info.transport.value,
                     **link,
-                    "params": _device_public_params(device, resolved),
-                    "plug_id": _device_plug_id(device, resolved),
-                    "capabilities": sorted(capabilities),
-                    "missing_for_barge_in": [c.value for c in info.missing_for_barge_in()],
                 }
-            )
-        for dev in cfg_now.devices:
-            if not dev.enabled or dev.id in seen:
-                continue
-            resolved = catalog.resolve(
-                plug_id=_device_plug_id(dev, None), adapter=dev.adapter)
-            out.append(
-                {
+            elif not dev.enabled:
+                # A disabled device is still configured: the console must show it so it
+                # can be enabled again. It is not an error and has no live link.
+                row = {
                     "id": dev.id,
                     "adapter": dev.adapter,
                     "model": "",
                     "room": dev.room,
                     "host": dev.host,
-                    "transport": "unknown",
+                    "transport": (str(resolved.device.transport)
+                                  if resolved is not None else "unknown"),
+                    "status": "disabled",
+                    "connected": False,
+                    "last_seen": None,
+                    "latency_ms": None,
+                }
+            else:
+                row = {
+                    "id": dev.id,
+                    "adapter": dev.adapter,
+                    "model": "",
+                    "room": dev.room,
+                    "host": dev.host,
+                    "transport": (str(resolved.device.transport)
+                                  if resolved is not None else "unknown"),
                     "status": "unavailable",
                     "connected": False,
                     "last_seen": None,
                     "latency_ms": None,
                     "error": adapters.errors.get(dev.id, "adapter not available"),
-                    "params": _device_public_params(dev, resolved),
-                    "plug_id": _device_plug_id(dev, resolved),
-                    "capabilities": resolved.capabilities if resolved else [],
-                    "missing_for_barge_in": [],
                 }
-            )
+            row.update({
+                "enabled": bool(dev.enabled),
+                "token_configured": token_ok,
+                "token_env": _token_env(dev),
+                "listen_port": effective_listen_port(dev),
+                "params": _device_public_params(dev, resolved),
+                "plug_id": _device_plug_id(dev, resolved),
+                "capabilities": sorted(capabilities),
+                "missing_for_barge_in": ([] if adapter is None
+                                         else [c.value for c in info.missing_for_barge_in()]),
+                "active": bool(dev.enabled and dev.id == active_id),
+                "warnings": warnings,
+            })
+            out.append(row)
         return out
 
     # ---------------------------------------------------------------- setup wizard
@@ -3522,6 +3688,9 @@ def create_app(
             updated = Config.model_validate(merged.model_dump(mode="json"))
         except ValidationError as exc:
             raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+        conflict = port_conflict(updated.devices, updated.system.data_dir)
+        if conflict is not None:
+            raise HTTPException(status_code=422, detail=conflict_detail(conflict))
         plane_error = await _write_devices(updated)
         log.info("setup: device %s written (host=%s, wake=%s, plane_error=%r)",
                  device.id, device.host, device.wake_words, plane_error)
@@ -3586,7 +3755,10 @@ def create_app(
                       "last_seen": None, "latency_ms": None}
         adapters_now = getattr(app.state, "adapters", None)
         adapter = adapters_now.adapters.get(device_id) if adapters_now is not None else None
-        if adapter is not None:
+        if not device.enabled:
+            live = {"status": "disabled", "connected": False,
+                    "last_seen": None, "latency_ms": None}
+        elif adapter is not None:
             info = await adapter.probe()
             plane = _plane_snapshot(app)
             capabilities = {str(capability) for capability in info.capabilities}
@@ -3597,9 +3769,15 @@ def create_app(
                     "capabilities": sorted(capabilities)}
         payload = device.model_dump(mode="json")
         payload["params"] = params
+        warnings = _device_warnings(cfg_now, _active_device_id(app, cfg_now))
         return {"device": payload, "live": live,
                 "plug_id": _device_plug_id(device, resolved),
                 "params": params,
+                "enabled": bool(device.enabled),
+                "token_configured": _token_configured(device),
+                "token_env": _token_env(device),
+                "listen_port": effective_listen_port(device),
+                "warnings": warnings,
                 # The last restart outcome belongs to the page: editing a device and
                 # leaving the plane dead must be visible, not inferred from logs.
                 "plane_error": str(getattr(app.state, "plane_error", "") or "")}
@@ -3609,16 +3787,144 @@ def create_app(
         """One device's editable config plus what the adapter reports right now."""
         return await _device_detail(device_id)
 
+    @app.get("/api/v1/devices/{device_id}/status", dependencies=[Depends(auth)])
+    async def device_status(device_id: str) -> dict:
+        """The P3.4 management status: config + live evidence + why it is not ready.
+
+        Deliberately no token value: ``token_configured``/``token_env`` are the whole
+        story a page needs. ``ready`` is true only when the device is enabled, its
+        credentials are usable, and the plane's live link says connected.
+        """
+        cfg_now = getattr(app.state, "cfg", cfg)
+        device = _device_or_404(device_id, cfg_now)
+        warnings = _device_warnings(cfg_now, _active_device_id(app, cfg_now))
+        return await _device_status(app, device, cfg_now, warnings)
+
+    def _device_ws_url(device: DeviceConfig, request: Request,
+                       token: str) -> tuple[str, str, str, bool]:
+        """The one client URL builder shared by ``/connect`` and token rotation.
+
+        ``ws_url`` keeps a reverse proxy's host (X-Forwarded-Host / Host), swaps the
+        console port for the device's inbound port, and carries the token as
+        ``?token=``. The token is quoted: a generated one is hex, but a hand-set one may
+        contain characters that would otherwise split the query string.
+        """
+        port = effective_listen_port(device)
+        host, host_source, loopback = resolve_connect_host(request)
+        scheme = request_ws_scheme(request)
+        url = f"{scheme}://{host}:{port}/?token={quote(token, safe='')}"
+        return url, host, host_source, loopback
+
+    @app.post("/api/v1/devices/{device_id}/enabled", dependencies=[Depends(auth)])
+    async def device_enabled(device_id: str, payload: Annotated[dict, Body()]) -> dict:
+        """Enable or disable one device, starting/stopping the audio plane accordingly.
+
+        Disabling the last enabled device stops the plane cleanly (same path as delete);
+        enabling refreshes adapters and restarts the plane. Enabling is port-checked so
+        two enabled inbound devices cannot silently fight for one listener.
+        """
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=422, detail={
+                "code": "invalid_values",
+                "message": "enabled must be a boolean",
+                "details": {"field": "enabled"},
+            })
+        if config_path is None or not Path(config_path).exists():
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        try:
+            current = load_config(Path(config_path))
+        except ConfigError as exc:
+            raise HTTPException(status_code=409, detail=f"config is not readable: {exc}") from exc
+        device = _device_or_404(device_id, current)
+        if device.enabled == enabled:
+            detail = await _device_detail(device_id)
+            detail["changed"] = False
+            return detail
+        changed = device.model_copy(update={"enabled": enabled})
+        updated = current.model_copy(update={"devices": [
+            changed if item.id == device_id else item for item in current.devices]})
+        if enabled:
+            conflict = port_conflict(updated.devices, updated.system.data_dir)
+            if conflict is not None:
+                raise HTTPException(status_code=422, detail=conflict_detail(conflict))
+        plane_error = await _write_devices(updated)
+        # Audit without secrets: the device id and the resulting state are enough.
+        log.info("audit: device %s %s from the console (plane_error=%r)",
+                 device_id, "enabled" if enabled else "disabled", plane_error)
+        detail = await _device_detail(device_id)
+        detail["plane_error"] = plane_error
+        detail["changed"] = True
+        return detail
+
+    @app.post("/api/v1/devices/{device_id}/token/rotate", dependencies=[Depends(auth)])
+    async def device_token_rotate(device_id: str, request: Request) -> dict:
+        """Replace the device token and return the new value exactly once.
+
+        The new secret goes to ``device.token_env`` through ``secrets.put`` (0600
+        secrets.yaml). The response is the only place the new value appears; the log
+        line names the env var, never the token. If the token currently comes from the
+        process environment, rotation would be a lie (env still wins over the file), so
+        that case is a 409 with the fix in the message. A per-device cooldown keeps a
+        stuck button from locking a speaker out repeatedly.
+        """
+        cfg_now = getattr(app.state, "cfg", cfg)
+        device = _device_or_404(device_id, cfg_now)
+        token_env = _token_env(device)
+        resolution = secrets.resolve(token_env)
+        if resolution is not None and resolution.source == "environment":
+            raise HTTPException(status_code=409, detail={
+                "code": "token_from_environment",
+                "message": (
+                    f"{token_env} is provided by the process environment; a rotated "
+                    "value in secrets.yaml would not take effect. Update the environment "
+                    "and restart, or remove it there first."
+                ),
+                "details": {"token_env": token_env},
+            })
+        now = time.monotonic()
+        rotations = getattr(app.state, "token_rotations", None)
+        if not isinstance(rotations, dict):
+            rotations = {}
+            app.state.token_rotations = rotations
+        last = rotations.get(device_id)
+        retry_after = TOKEN_ROTATE_INTERVAL_S - (now - float(last)) if last else 0.0
+        if retry_after > 0:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "rate_limited",
+                    "message": "token rotation was requested too recently; wait and retry",
+                    "details": {"device_id": device_id,
+                                "retry_after_s": round(retry_after, 1)},
+                },
+                headers={"Retry-After": str(int(retry_after) + 1)},
+            )
+        token = os.urandom(32).hex()
+        try:
+            secrets.put(token_env, token)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={
+                "code": "secret_rejected",
+                "message": str(exc),
+                "details": {"token_env": token_env},
+            }) from exc
+        rotations[device_id] = now
+        ws_url, _host, _host_source, _loopback = _device_ws_url(device, request, token)
+        log.info("audit: device %s token rotated (token_env=%s)", device_id, token_env)
+        return {"token": token, "ws_url": ws_url}
+
     @app.get("/api/v1/devices/{device_id}/connect", dependencies=[Depends(auth)])
     async def device_connect(device_id: str, request: Request) -> dict:
         """The exact client URL + token an LX06 must dial in with (cold-install step).
 
-        This is deliberately the ONLY endpoint that returns the token value: the
+        This is deliberately the ONLY GET endpoint that returns the token value: the
         speaker's boot script needs it in the ws URL, and typing it by hand from a
         `secrets.yaml` on the NAS is the step that made onboarding painful. The response
         is authenticated (same token middleware as the rest of the console) and the token
         is never logged. Masking stays in place everywhere else: `GET /api/v1/config`
-        still reports only `has_device_token`.
+        still reports only `has_device_token`, and the P3.4 status/list endpoints report
+        only `token_configured`.
 
         `ws_url` keeps a reverse proxy's host (X-Forwarded-Host / Host), swaps the console
         port for the device's inbound port, and carries the token as `?token=`. If no
@@ -3628,12 +3934,7 @@ def create_app(
         cfg_now = getattr(app.state, "cfg", cfg)
         device = _device_or_404(device_id, cfg_now)
         token = secrets.get(device.token_env) if device.token_env else ""
-        port = int(device.listen_port or DEVICE_DEFAULT_LISTEN_PORT)
-        host, host_source, loopback = resolve_connect_host(request)
-        scheme = request_ws_scheme(request)
-        # The token is quoted: a generated token is usually hex, but a hand-set one may
-        # contain characters that would otherwise split the query string.
-        ws_url = f"{scheme}://{host}:{port}/?token={quote(token, safe='')}"
+        ws_url, host, host_source, loopback = _device_ws_url(device, request, token)
         allow_no_token = bool(device.allow_no_token)
         configured = bool(token) or allow_no_token
         token_env = device.token_env or "RUI_DEVICE_TOKEN"
@@ -3869,6 +4170,9 @@ def create_app(
             ]) from exc
         others = [item for item in current.devices if item.id != device_id]
         updated = current.model_copy(update={"devices": [updated_device, *others]})
+        conflict = port_conflict(updated.devices, updated.system.data_dir)
+        if conflict is not None:
+            raise HTTPException(status_code=422, detail=conflict_detail(conflict))
         plane_error = await _write_devices(updated)
         log.info("device %s updated from the console (plane_error=%r)", device_id, plane_error)
         detail = await _device_detail(device_id)

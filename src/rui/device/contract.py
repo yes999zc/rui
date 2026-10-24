@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 
 class Capability(StrEnum):
@@ -27,8 +27,13 @@ class Capability(StrEnum):
     LED = "led"
     KEYS = "keys"
     VOLUME = "volume"
-    NATIVE_KWS = "native_kws"        # vendor wake engine we can lean on
+    NATIVE_KWS = "native_kws"        # deprecated in v1: vendor wake engine
     STREAMING_ASR = "streaming_asr"  # can push audio continuously
+    # Socket & Plug v1 (docs/socket-plug-v1.md §2). `device_wake` is our wake word
+    # detected on the device and reported through `drain_wakes()`; the vendor's own
+    # wake still travels through `drain_signals()` and the two channels never merge.
+    DEVICE_WAKE = "device_wake"
+    BARGE_VIA_DEVICE = "barge_via_device"  # device can suggest a barge while playing
 
 
 class Transport(StrEnum):
@@ -57,6 +62,28 @@ class DeviceInfo:
     def missing_for_barge_in(self) -> list[Capability]:
         need = [Capability.REFERENCE, Capability.PLAYBACK]
         return [c for c in need if c not in self.capabilities]
+
+
+@dataclass(frozen=True)
+class DeviceWake:
+    """One wake the *device* detected with *our* wake word.
+
+    A suggestion, not a decision: RUI validates it (finite/range/staleness), applies its
+    own debounce/rate limit and only then opens the VAD gate. It never calls the LLM,
+    never bypasses `voice.barge_in`, and never grants a capability.
+
+    `ts_ms` uses the same monotonic origin as `AudioFrame.ts_ms` (not wall-clock epoch),
+    so the plane can reject a stale or future event. `score` is normalised 0-1 by the
+    adapter; `threshold` is the device's own gate at decision time (advisory, recorded
+    for the trace). `level` (dBFS) is diagnostic only.
+    """
+
+    ts_ms: float
+    score: float
+    threshold: float
+    barge: bool = False
+    level: float | None = None
+    source: Literal["device"] = "device"
 
 
 @dataclass
@@ -163,6 +190,16 @@ class DeviceAdapter(Protocol):
 
         Default is empty: an adapter that cannot see the vendor's own assistant simply
         never reports one, and the core then behaves as it always did.
+        """
+        return []
+
+    def drain_wakes(self) -> list[DeviceWake]:
+        """Device-detected *RUI* wakes since the last call (Socket & Plug v1 §4.2).
+
+        Synchronous, non-blocking, no I/O, one caller, and no event returned twice.
+        Default is empty: an adapter without a device-side wake model is indistinguishable
+        from an LX06, and RUI's own KWS path stays exactly as it was. Vendor wakes belong
+        to ``drain_signals()``; the two channels must not be merged.
         """
         return []
 

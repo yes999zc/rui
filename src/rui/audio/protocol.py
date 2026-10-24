@@ -114,6 +114,24 @@ class Metrics(BaseModel):
     # wizard uses this to tell "no client yet" from "the client's token is wrong".
     speaker_rejected: int = 0
     wake_count: int = 0
+    # Socket & Plug v1 (docs/socket-plug-v1.md §5). `wake_count` stays the RUI KWS
+    # count; a device-detected wake is a different event and is counted separately.
+    # `device_wakes` is every valid event accepted for policy; the rest are the
+    # outcomes, one counter each so a log line never has to be the only record.
+    device_wakes: int = 0
+    device_wake_turns: int = 0
+    device_wake_barges: int = 0
+    device_wake_debounced: int = 0
+    device_wake_invalid: int = 0
+    device_wake_suppressed: int = 0
+    device_wake_barge_suppressed: int = 0
+    device_wake_rate_limited: int = 0
+    device_wake_conflicts: int = 0
+    device_wake_interrupts: int = 0
+    device_wake_no_vad: int = 0
+    device_wake_fallbacks: int = 0
+    device_wake_degraded: bool = False
+    device_wake_last_score: float | None = None
     kws_enabled: bool = False
     kws_error: str = ""
     vad_enabled: bool = False
@@ -188,6 +206,36 @@ class Wake(BaseModel):
     # Which acknowledgement actually played ("none" / "earcon" / "tts"): the config asks
     # for a mode, the plane reports what it could deliver.
     ack_mode: str = ""
+    # Socket & Plug v1: "rui" for RUI's own KWS, "device" for a DeviceWake. The score,
+    # threshold and barge hint travel so the turn trace can record why it fired; they
+    # are diagnostic only and never give the event authority.
+    source: Literal["rui", "device"] = "rui"
+    score: float | None = None
+    threshold: float | None = None
+    barge_hint: bool = False
+    action: str = ""
+    # Recorded in the turn trace. An accepted wake is by definition not debounced; the
+    # field exists so a future path that reports a suppressed duplicate can say so.
+    debounced: bool = False
+
+
+class DeviceWakeMsg(BaseModel):
+    """plane -> control: one validated device wake, before the plane's policy acts.
+
+    Fields mirror `rui.device.contract.DeviceWake` and nothing here carries policy:
+    the audio plane already validated/debounced it, and whether it becomes a turn, a
+    barge or nothing is reported by the `Wake` that may follow. This channel exists so
+    the control plane can observe events that were suppressed (no turn) without
+    inventing them from counters.
+    """
+
+    type: Literal["device_wake"] = "device_wake"
+    ts_ms: float
+    score: float
+    threshold: float
+    barge: bool = False
+    level: float | None = None
+    source: Literal["device"] = "device"
 
 
 class WakeIdle(BaseModel):
@@ -367,7 +415,8 @@ class ResumeMusic(BaseModel):
 ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | LedState
     | SpeakStart | SpeakFinished | ReplyFinished | VendorSignalMsg | WakeIdle | Error | Shutdown | ShellCommand
-    | ShellResult | DeviceVolume | DeviceVolumeResult | PlayFinished | PauseMusic | ResumeMusic,
+    | ShellResult | DeviceVolume | DeviceVolumeResult | PlayFinished | PauseMusic | ResumeMusic
+    | DeviceWakeMsg,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

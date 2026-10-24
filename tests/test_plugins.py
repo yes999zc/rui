@@ -15,6 +15,7 @@ from rui import __version__
 from rui.device.contract import Capability, Transport
 from rui.plugins import (
     DEVICE_SCHEMA,
+    DEVICE_SCHEMA_V1,
     PLUGIN_SCHEMA,
     DeviceArtifact,
     DeviceClass,
@@ -23,6 +24,8 @@ from rui.plugins import (
     RuntimeMode,
     TrustLevel,
     VersionError,
+    WakeSource,
+    builtin_plugin,
     load_plugin,
     parse_range,
     parse_version,
@@ -395,3 +398,137 @@ def test_bad_range_reports_the_offending_token() -> None:
         parse_range(">=0.1 || <0.3")
 
     assert "||" in str(error.value)
+
+
+# --- Socket & Plug v1: the wake block and its dependency table ----------------------
+
+
+def _v1_device_doc(**overrides) -> dict:
+    doc = _device_doc(**overrides)
+    doc["schema"] = DEVICE_SCHEMA_V1
+    return doc
+
+
+def test_a_v1_device_wake_manifest_loads(tmp_path: Path) -> None:
+    device = _v1_device_doc(
+        id="dot2-model",
+        model="RS03QR",
+        capabilities=["mic_array", "playback", "device_wake", "barge_via_device"],
+        wake={"source": "device", "barge_via_device": True},
+    )
+    plugin = load_plugin(_single(tmp_path, device=device))
+
+    loaded = plugin.devices[0]
+    assert loaded.schema == DEVICE_SCHEMA_V1
+    assert loaded.model == "RS03QR"
+    assert loaded.wake_source is WakeSource.DEVICE
+    assert loaded.barge_via_device_enabled is True
+    assert Capability.DEVICE_WAKE in loaded.capabilities
+
+
+def test_a_v0_manifest_defaults_to_rui_wake(tmp_path: Path) -> None:
+    plugin = load_plugin(_single(tmp_path, device=_device_doc()))
+    assert plugin.devices[0].wake_source is WakeSource.RUI
+    assert plugin.devices[0].barge_via_device_enabled is False
+
+
+def test_a_v0_manifest_cannot_declare_the_v1_wake_block(tmp_path: Path) -> None:
+    device = _device_doc(wake={"source": "rui"})
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+    assert "rui-device/v1 only" in str(error.value)
+
+
+def test_device_source_without_the_capability_is_rejected(tmp_path: Path) -> None:
+    device = _v1_device_doc(
+        capabilities=["mic_array", "playback"],
+        wake={"source": "device"},
+    )
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+
+    message = str(error.value)
+    assert "wake.source" in message
+    assert "device_wake" in message
+
+
+def test_barge_hint_requires_device_source(tmp_path: Path) -> None:
+    device = _v1_device_doc(wake={"source": "rui", "barge_via_device": True})
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+
+    message = str(error.value)
+    assert "barge_via_device" in message
+    assert "wake.source: device" in message
+
+
+def test_barge_capability_needs_playback(tmp_path: Path) -> None:
+    device = _v1_device_doc(
+        capabilities=["device_wake", "barge_via_device"],
+        wake={"source": "device", "barge_via_device": True},
+    )
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+
+    assert "playback" in str(error.value)
+
+
+def test_device_wake_capability_without_the_wake_block_is_rejected(tmp_path: Path) -> None:
+    # A capability that can never fire is a manifest bug, not a quiet no-op (§2).
+    device = _v1_device_doc(capabilities=["playback", "device_wake"])
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+
+    assert "wake.source: device" in str(error.value)
+
+
+def test_device_wake_capability_on_rui_source_is_rejected(tmp_path: Path) -> None:
+    device = _v1_device_doc(
+        capabilities=["playback", "device_wake"],
+        wake={"source": "rui"},
+    )
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+
+    assert "requires wake.source: device" in str(error.value)
+
+
+def test_native_kws_is_deprecated_in_v1(tmp_path: Path) -> None:
+    device = _v1_device_doc(capabilities=["playback", "native_kws"])
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+
+    assert "native_kws" in str(error.value)
+    assert "deprecated" in str(error.value)
+
+
+def test_unknown_wake_fields_are_rejected(tmp_path: Path) -> None:
+    device = _v1_device_doc(
+        capabilities=["playback", "device_wake"],
+        wake={"source": "device", "token": "hunter2"},
+    )
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+
+    message = str(error.value)
+    assert "wake" in message
+    assert "token" in message
+
+
+def test_lx06_stays_rui_kws_and_never_declares_device_wake() -> None:
+    plugin = builtin_plugin("xiaoai-lx06")
+    assert plugin is not None
+    device = plugin.devices[0]
+    assert device.schema == DEVICE_SCHEMA
+    assert device.wake is None, "v0 manifests must not carry the v1 wake block"
+    assert device.wake_source is WakeSource.RUI
+    assert Capability.DEVICE_WAKE not in device.capabilities
+    assert Capability.BARGE_VIA_DEVICE not in device.capabilities
+
+
+def test_a_v0_manifest_cannot_declare_the_v1_model_field(tmp_path: Path) -> None:
+    # §7: v0 + new fields is an error, never a silent upgrade.
+    device = _device_doc(model="RS03QR")
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+    assert "rui-device/v1 only" in str(error.value)

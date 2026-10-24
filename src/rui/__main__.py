@@ -442,6 +442,18 @@ def cmd_token(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_plug_test(args: argparse.Namespace) -> int:
+    """P3.1 contract test kit: validate a third-party plug, optionally its adapter."""
+    from .plugins.contract import run_contract
+
+    report = run_contract(args.directory, adapter=args.adapter)
+    if args.json:
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(report.to_text())
+    return report.exit_code
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -639,6 +651,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_kw.add_argument("--dest", default="", help="target file (default: next to the config)")
     p_kw.add_argument("--wake-word", action="append")
     p_kw.set_defaults(func=cmd_keywords)
+
+    p_plug = _leaf("plug-test",
+                   "validate a Socket & Plug manifest and optional adapter contract")
+    p_plug.add_argument("directory", help="plugin directory containing plugin.yaml")
+    p_plug.add_argument("--adapter", default=None, metavar="MODULE:ATTR",
+                        help="lazy in-process adapter entry point, e.g. my_plug:build "
+                             "or ./adapter.py:build")
+    p_plug.add_argument("--json", action="store_true",
+                        help="emit a contract-report/v1 JSON document")
+    p_plug.set_defaults(func=cmd_plug_test)
     return parser
 
 

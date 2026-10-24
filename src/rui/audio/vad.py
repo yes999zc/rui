@@ -130,13 +130,19 @@ class UtteranceGate:
 
     # ------------------------------------------------------------------ state
     def arm(self, *, start_after_ms: float = 0.0, followup: bool = False,
-            max_wait_ms: int | None = None) -> None:
+            max_wait_ms: int | None = None,
+            skip_after_wake_ms: int | None = None) -> None:
         """A wake word just fired: ignore the phrase tail, then listen.
 
         `start_after_ms` holds the gate shut for the acknowledgement: a spoken cue mutes
         the device microphone, so anything the VAD sees meanwhile is the box's own voice.
         The hold is spent in audio time, not wall time, so the same number means the same
         thing at any feed speed.
+
+        `skip_after_wake_ms` overrides the configured tail skip for this arm. RUI's KWS
+        reports the hit after the phrase, so it skips 300 ms; a device wake reports
+        `DeviceWake.ts_ms` and the phrase tail is not in our stream, so the plane passes
+        0 (Socket & Plug v1 §5).
         """
         self._vad.reset()
         self._reset_state()
@@ -144,7 +150,11 @@ class UtteranceGate:
         self._hold_ms = max(0.0, start_after_ms)
         # A follow-up has no wake phrase to skip and closes faster: the person already
         # knows the assistant is listening, so a natural pause must not hold the turn.
-        self._skipping = 0 if followup else int(self.rate * self.cfg.skip_after_wake_ms / 1000)
+        if skip_after_wake_ms is None:
+            skip_ms = 0 if followup else int(self.cfg.skip_after_wake_ms)
+        else:
+            skip_ms = max(0, int(skip_after_wake_ms))
+        self._skipping = int(self.rate * skip_ms / 1000)
         self._end_silence_ms = (
             self.cfg.end_silence_followup_ms if followup else self.cfg.end_silence_ms
         )

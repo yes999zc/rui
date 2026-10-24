@@ -35,6 +35,7 @@ weixin-voice = ["pilk>=0.2.4"]
 rui = "rui.__main__:main"
 rui-channels = "rui.channels.cli:main"
 rui-healthcheck = "rui.healthcheck:main"
+rui-plug-test = "rui.plugins.contract:main"
 
 [build-system]
 requires = ["hatchling"]
