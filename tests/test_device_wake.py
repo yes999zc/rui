@@ -343,6 +343,8 @@ def test_metrics_expose_the_device_wake_counters() -> None:
 
     metrics = plane.metrics()
     assert metrics.device_wakes == 1
+    assert metrics.device_wake_count == 1
+    assert metrics.device_barge_count == 0
     assert metrics.device_wake_turns == 1
     assert metrics.device_wake_barges == 0
     assert metrics.device_wake_debounced == 0
@@ -396,3 +398,53 @@ def test_a_manifest_without_device_wake_is_the_upper_bound(tmp_path: Path) -> No
 
     assert plane.device_wake_active is False
     assert plane.device_wake_fallbacks == 1
+
+
+def test_manifest_declares_device_wake_but_probe_does_not(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # §4.3: the manifest is the upper bound, but probe() must also verify it. A miss
+    # is a runtime downgrade with one warning, never a silent half-working path.
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    plane = AudioPlane(cfg, "living", Path("/tmp/device-wake.sock"))
+    adapter = WakeAdapter(frozenset({Capability.PLAYBACK}))
+    plane.adapter = adapter  # type: ignore[assignment]
+    monkeypatch.setattr(AudioPlane, "_manifest_wake_source", lambda self: "device")
+
+    plane._configure_device_wake(adapter.info)
+
+    assert plane.device_wake_active is False
+    assert plane.device_wake_fallbacks == 1
+
+
+def test_a_sidecar_manifest_degrades_to_kws(monkeypatch) -> None:
+    # Frozen Q8: v1 only supports device_wake for in-process/trusted adapters; a
+    # sidecar has no standardised wake RPC and must not pretend it does.
+    cfg = Config()
+    cfg.ack.mode = "none"
+    plane = AudioPlane(cfg, "living", Path("/tmp/device-wake.sock"))
+    adapter = WakeAdapter()
+    plane.adapter = adapter  # type: ignore[assignment]
+    plane.gate = FakeGate()  # type: ignore[assignment]
+    monkeypatch.setattr(AudioPlane, "_manifest_wake_source", lambda self: "sidecar")
+
+    plane._configure_device_wake(adapter.info)
+
+    assert plane.device_wake_active is False
+    assert plane.device_wake_fallbacks == 1
+
+
+def test_a_barge_hint_inside_the_vendor_quiet_window_is_suppressed() -> None:
+    # The device may claim barge while the vendor's assistant is answering; the plane
+    # mirrors VendorWindow locally so a hint cannot cut the vendor off.
+    plane, adapter = make_plane(gate=FakeGate())
+    plane._speak_queued_s = 1.0
+    plane._vendor_quiet_until = time.monotonic() + 5.0
+    adapter.inject_wake(barge=True)
+
+    frames = drain(plane)
+
+    assert all(frame["type"] != "wake" for frame in frames)
+    assert adapter.stops == 0
+    assert plane.device_wake_barge_suppressed == 1

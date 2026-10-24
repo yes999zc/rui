@@ -40,6 +40,18 @@ python -m rui plug-test examples/plugin-example \
   --adapter examples/plugin-example/rui_plugin_example.py:build --json
 ```
 
+真实设备的参考插头（LX06，v0/RUI KWS）在 `plugins/rui-plugin-xiaoai/`：
+
+```bash
+python -m rui plug-test plugins/rui-plugin-xiaoai
+python -m rui plug-test plugins/rui-plugin-xiaoai \
+  --adapter rui_plugin_xiaoai.adapter:build --json
+```
+
+它是 inbound 设备：`probe()` 和 adapter 表面可在无音箱时验收，`open()`/帧/播放在
+client 拨入前不存在，因此这些 live-I/O 检查为 SKIP；详见下文
+`kit_live_device_required`。退出码仍是 `0`。
+
 退出码：`0` = 没有 `FAIL`（`WARN`/`SKIP` 不阻断）；`1` = 至少一个 `FAIL`，或目录/
 adapter 无法读取/加载。
 
@@ -127,6 +139,20 @@ hook 给外部调用者。
 参考 fixture：`examples/plugin-example/rui_plugin_example.py`（16 kHz 单声道 fake，
 `drain_wakes()` 有界队列 32，`inject_wake()` 只做测试注入）。
 
+**可选 live-device 提示**（不属于 `DeviceAdapter`，只给契约工具用）：
+
+```python
+kit_live_device_required = True
+kit_live_device_reason = "inbound: wait for the real client to dial in"
+```
+
+inbound 插头（如 LX06）的 `probe()` 和 adapter 表面可以在没有设备时验收，但
+`open()`/`frames()`/`play()` 要等真实 client 拨入。设置该提示后，`device.open`、
+`capture.frames`、`capture.cadence`、`playback.sink` 记为 `SKIP`（不是 PASS），
+`probe()`、方法表面、两个 drain 和幂等 `close()` 仍照常检查。提示没有运行时含义，
+也不改变 `DeviceAdapter`；不要在提示里写地址、token 或 secret。参考实现：
+`plugins/rui-plugin-xiaoai/rui_plugin_xiaoai/adapter.py`。
+
 ## CI（第三方插头仓库）
 
 ```yaml
@@ -161,6 +187,8 @@ jobs:
 - 不执行 sidecar 容器，不验证镜像/协议 RPC；只验证 manifest 与 in-process adapter。
 - `WARN` 不会让 CI 失败；`device_wake` 在 `probe()` 缺失时按规范降级为 KWS，只 WARN。
 - 构造 adapter 时不会传真实设备参数（host/secret）；需要真机连接才能 `probe()` 的
-  adapter，请提供 fake/loopback 模式，或只跑 manifest 检查。
+  adapter，请提供 fake/loopback 模式，或只跑 manifest 检查。若只有帧/播放依赖真机
+  （典型 inbound 设备），可设置 `kit_live_device_required` 把 live-I/O 检查降为 SKIP；
+  这是插头自述，工具不会据此把任何检查记成 PASS，真机验收仍必需。
 - 旧 RUI（0.2.x）没有 v1 模型时，工具会启用 `kit-v1-compat` 兼容层校验 v1 manifest，
   报告里的 `plugin.loader` 会标明；0.3 起由核心 `load_plugin()` 作为唯一权威。

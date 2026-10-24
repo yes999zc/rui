@@ -15,7 +15,9 @@ Two layers are tested:
   imported lazily, built with a fake device/config, then exercised against a
   fake audio/playback sink: probe, frames, play, stop, signal/wake polling, an
   injected ``DeviceWake`` and idempotent close. No hardware and no audio plane
-  are involved.
+  are involved. An inbound adapter whose device must dial in may set the kit-only
+  ``kit_live_device_required`` hint; live-I/O checks then become SKIP while
+  probe/methods/drains/close are still checked (never PASS by assertion).
 
 The kit deliberately has no RUI turn/barge policy engine. The wake injection
 check answers the contract-level question ("does a valid event reach the
@@ -126,6 +128,14 @@ _FRAME_GAP_WARN_MS = 100.0
 _FRAME_GAP_FAIL_MS = 500.0
 #: Several drains are checked; an unbounded queue is a contract smell.
 _DRAIN_QUEUE_WARN = 32
+#: Optional kit-only adapter hints (not part of ``DeviceAdapter``). An inbound
+#: transport can expose a valid probe/method surface while ``open()``/capture/
+#: playback only work once its real device dials in. Such an adapter may set
+#: ``kit_live_device_required = True`` and an optional ``kit_live_device_reason``;
+#: the kit then reports those live-I/O checks as SKIP instead of FAIL. The hint
+#: never turns a check into PASS and has no runtime meaning.
+KIT_LIVE_DEVICE_REQUIRED = "kit_live_device_required"
+KIT_LIVE_DEVICE_REASON = "kit_live_device_reason"
 
 
 @dataclass
@@ -1281,6 +1291,11 @@ async def _smoke(adapter: Any, view: PluginView, report: ContractReport) -> None
     manifest_caps = device.capability_set()
     info: Any = None
     opened = False
+    live_device_required = bool(getattr(adapter, KIT_LIVE_DEVICE_REQUIRED, False))
+    live_device_reason = str(
+        getattr(adapter, KIT_LIVE_DEVICE_REASON, "")
+        or "adapter declares kit_live_device_required; its live device must dial in"
+    )
     try:
         # --- probe ---------------------------------------------------------
         try:
@@ -1315,19 +1330,29 @@ async def _smoke(adapter: Any, view: PluginView, report: ContractReport) -> None
             return
 
         # --- open ----------------------------------------------------------
-        try:
-            await _call(adapter.open, timeout=_OPEN_TIMEOUT_S)
-            opened = True
-        except Exception as exc:  # noqa: BLE001
-            report.add("device.open", FAIL, f"open() raised {type(exc).__name__}: {exc}")
-            return
-        report.add("device.open", PASS, "open() completed")
+        if live_device_required:
+            report.add("device.open", SKIP, live_device_reason)
+        else:
+            try:
+                await _call(adapter.open, timeout=_OPEN_TIMEOUT_S)
+                opened = True
+            except Exception as exc:  # noqa: BLE001
+                report.add("device.open", FAIL, f"open() raised {type(exc).__name__}: {exc}")
+                return
+            report.add("device.open", PASS, "open() completed")
 
         # --- frames --------------------------------------------------------
-        await _check_frames(adapter, info, report)
+        if live_device_required:
+            report.add("capture.frames", SKIP, live_device_reason)
+            report.add("capture.cadence", SKIP, live_device_reason)
+        else:
+            await _check_frames(adapter, info, report)
 
         # --- playback ------------------------------------------------------
-        await _check_playback(adapter, info, manifest_caps, report)
+        if live_device_required:
+            report.add("playback.sink", SKIP, live_device_reason)
+        else:
+            await _check_playback(adapter, info, manifest_caps, report)
 
         # --- polls ---------------------------------------------------------
         await _check_polls(adapter, report)

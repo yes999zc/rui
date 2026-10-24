@@ -6,6 +6,12 @@ models validate it as an on-disk ``plugin.yaml``.
 
 Nothing in this module imports or executes ``runtime.entrypoint``; it is a string, as
 required by ``docs/socket-plug.md``.
+
+The LX06 model is mirrored as the on-disk reference plug in
+``plugins/rui-plugin-xiaoai/`` (v0, RUI KWS). That package is for contract testing,
+not a runtime path: this in-code registry stays the fresh-install default until the
+0.4 extraction. ``tests/test_reference_plugin.py`` pins capability/param parity so
+the two copies cannot drift silently.
 """
 from __future__ import annotations
 

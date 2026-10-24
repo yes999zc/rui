@@ -1,0 +1,11 @@
+schema: rui-plugin/v0
+id: xiaoai-lx06
+name: "Xiaomi AI Speaker Pro (LX06) reference plug"
+version: 0.2.0
+rui_compat: ">=0.2 <0.4"
+license: MIT
+maintainer: "rui maintainers"
+homepage: "https://github.com/yes999zc/rui"
+trust: builtin
+devices:
+  - devices/lx06.yaml

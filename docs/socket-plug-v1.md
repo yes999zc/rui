@@ -273,6 +273,27 @@ adapter 只实现 `drain_wakes()`；音频面到控制面的 `DeviceWakeMsg` 是
 
 控制/数据两条 socket 若存在，起播/flush 屏障按 `docs/playback-path.md` §6.4 的 P3 设计并通过 gap harness；无 `reference` 合法（依赖设备侧 AEC）；`wake: {source: device, barge_via_device: true}` + 对应能力，`drain_wakes()` 映射 EchoMuse `oww_wake` 的 `score/threshold/ageMs/capturedMono/barge/level`；barge 只是建议，RUI 按 §5 最终判定；0.3 前可先用 v0 manifest 跑 KWS，`drain_wakes()` 可先实现但不会被 0.2 调用。
 
+### 6.5 参考插头：LX06（`plugins/rui-plugin-xiaoai/`）
+
+P3.1 把已内置的 LX06 能力落成一个可被 `load_plugin()` 读取的**参考插头**，用来证明 v1 契约不需要核心品牌分支。它**不是新的运行时路径**：0.2.x/0.3.x 仍以内置 manifest + `src/rui/device/xiaoai/` 为默认，参考包只用于对照和 kit 验收；同 id 时 builtin 优先。
+
+| 部件 | 内容 | 对应规范 |
+|---|---|---|
+| `plugin.yaml` | id `xiaoai-lx06`，trust `builtin`，`rui_compat: ">=0.2 <0.4"` | §3.1 / §3.2 |
+| `devices/lx06.yaml` | `rui-device/v0`，class A，inbound，`ws`，in-process，能力 `mic_array` / `reference` / `playback` / `led` / `keys` / `volume`，参数 `host` / `room` / `wake_words` | §3、§7 |
+| `rui_plugin_xiaoai/adapter.py` | `build(spec, config)` 转调 `rui.device.xiaoai.build`，不复制 LX06 行为 | §4.1 |
+| `wake` | 无；v0 默认 `source: rui`，LX06 继续走 RUI KWS | §2、§7 |
+
+```bash
+python -m rui plug-test plugins/rui-plugin-xiaoai
+python -m rui plug-test plugins/rui-plugin-xiaoai \
+  --adapter rui_plugin_xiaoai.adapter:build --json
+```
+
+预期：`manifest.*`、`adapter.import/construct/methods`、`device.ready/probe_layout`、两个 `poll.*`、`lifecycle.*` 通过；`device.open`、`capture.frames`、`capture.cadence`、`playback.sink` 记为 **SKIP**，因为 LX06 是 inbound，必须等 open-xiaoai client 拨入才能跑帧/播放；`wake.inject` 也 SKIP（v0/RUI KWS）。这些 SKIP 由 adapter 的 kit-only 提示 `kit_live_device_required` 标明（`docs/plug-test-kit.md`），不改变生产行为、不伪造设备，也不把 SKIP 记成 PASS。
+
+0.4 才把 `src/rui/device/xiaoai/` 提取进本包；见 §7。
+
 ## 7. 迁移与兼容
 
 | 项 | v0 | v1 |
@@ -302,6 +323,14 @@ adapter 只实现 `drain_wakes()`；音频面到控制面的 `DeviceWakeMsg` 是
 
 **弃用**：`rui-device/v0` 在 0.3.x 继续支持，最早 0.5.0 移除，且至少提前一个 minor 在日志/控制台提示；`native_kws` 自 v1 弃用；`streaming_asr` 保留为未定义值；`VendorSignalMsg`/`drain_signals()`/厂商让路窗口不弃用、不改语义；任何字段移除都“先警告、后 minor、再移除”，不得在 patch 移除。
 
+**0.4 提取计划（P3.1 只留参考包，不搬代码）**：`plugins/rui-plugin-xiaoai/` 现在是可验收的参考插头；`src/rui/device/xiaoai/` 与 `src/rui/plugins/builtin.py` 的内置 manifest 仍是 0.2.x/0.3.x 的默认回退（同 id 时 builtin 优先）。0.4 计划：
+
+1. 把 `src/rui/device/xiaoai/` 的实现移入插件包（或独立发行包），核心 registry 只保留发现与兼容 shim；
+2. 把 `builtin.py` 的内置 manifest 改为“参考包缺失时的最小回退”，至少提前一个 minor 在日志/控制台提示迁移；
+3. adapter entrypoint 从 `rui.device.xiaoai:build` 切到 `rui_plugin_xiaoai.adapter:build`，`devices[].adapter` 仍为 `xiaoai`，配置不变。
+
+v0 schema 的最早移除仍是 0.5（见上），0.4 不删除 v0 支持。本切片不移动核心目录、不改默认行为；参考包仍通过 `rui_plugin_xiaoai.adapter:build` 转调核心 builder。
+
 **0.3 实现落点（计划）**：
 
 | 文件 | 变化 |
@@ -320,15 +349,19 @@ adapter 只实现 `drain_wakes()`；音频面到控制面的 `DeviceWakeMsg` 是
   默认 `[]`；`rui-device/v1` 的 `model`/`wake` 与依赖表；`DeviceWakeMsg`；音频面
   空闲/播放/去抖/限频/冲突/降级策略；`Metrics.device_wake_*`；`TurnTrace.note_wake()`。
   `_on_wake` 现在读取 `voice.barge_in`：关闭打断时，播放中的 KWS 唤醒被忽略，
-  不停止播放、不 arm gate。
-- **v0**：仍按 `wake.source=rui` 处理；v0 声明 `wake`、`device_wake` 或
-  `barge_via_device` 直接报错。v1 中的 `native_kws` 报错而不是仅警告（§7 的
-  “弃用”按“拒绝新 manifest”执行；旧 v0 不受影响）。`wake` 中的未知字段
-  （含 token/地址）由 `extra=forbid` 拒绝。
+  不停止播放、不 arm gate。音频面本地镜像 `VendorWindow`（厂商 wake 打开、
+  我们的 wake 清除），窗口内的设备 barge 提示按 §5 抑制。
+- **v0**：仍按 `wake.source=rui` 处理；v0 声明 `model`、`wake`、`device_wake` 或
+  `barge_via_device` 直接报错（§7：v0 + 新字段不静默升级）。v1 中的 `native_kws`
+  报错而不是仅警告（§7 的“弃用”按“拒绝新 manifest”执行；旧 v0 不受影响）。`wake`
+  中的未知字段（含 token/地址）由 `extra=forbid` 拒绝。
 - **运行期启用**：音频面先解析设备对应的 plug manifest（`params.plug_id` 或 adapter，
   `src/rui/plugins/resolve.py`），要求 `wake.source: device` 且声明
   `device_wake`，再看 `probe()` 与 `drain_wakes()`。解析不到 manifest 的 adapter
-  （mock / 开发用 in-process adapter）没有可对照的上限，按 `probe()` 为准。
+  （mock / 开发用 in-process adapter）没有可对照的上限，按 `probe()` 为准；
+  manifest 声明了 device 但 `probe()` 缺失时同样降级 KWS 并计
+  `device_wake_fallbacks`。`runtime.mode: sidecar` 的插件即使声明
+  `device_wake` 也按 Q8 降级为 RUI KWS（sidecar 内部 RPC 尚未标准化）。
 - **常量而非配置**：`debounce=500 ms`、`5 次/10 s`、`stale>1500 ms`、`future>500 ms`、
   `10 个无效事件降级`、`30 s drain 异常日志` 目前是 `src/rui/audio/process.py`
   的模块常量；`device_wake.*` 配置项留到后续小版本，默认值与本文一致。

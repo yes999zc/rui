@@ -343,6 +343,7 @@ npm run build
 - 部署与生产运维：[docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md)
 - 设计/控制台契约：[docs/console.md](docs/console.md) · [docs/brand.md](docs/brand.md)
 - 音频时延与调参：[docs/audio-latency.md](docs/audio-latency.md) · [docs/audio-pipeline.md](docs/audio-pipeline.md)
+- Socket & Plug v1 参考插头：[plugins/rui-plugin-xiaoai](plugins/rui-plugin-xiaoai/README.md)（LX06，v0/RUI KWS）。0.4 才把核心 adapter 提取进插件包；当前 `src/rui/device/xiaoai/` 与内置 manifest 仍是默认回退。
 
 ### 安全与隐私
 
@@ -615,7 +616,7 @@ npm run typecheck
 npm run build
 ```
 
-Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md). Audio latency notes: [docs/audio-latency.md](docs/audio-latency.md). Console contract: [docs/console.md](docs/console.md).
+Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md). Audio latency notes: [docs/audio-latency.md](docs/audio-latency.md). Console contract: [docs/console.md](docs/console.md). Socket & Plug v1 reference plug: [plugins/rui-plugin-xiaoai](plugins/rui-plugin-xiaoai/README.md) (LX06, v0/RUI KWS). The core adapter moves into the package in 0.4; `src/rui/device/xiaoai/` and the in-code builtin manifest remain the default fallback.
 
 ### Security and privacy
 

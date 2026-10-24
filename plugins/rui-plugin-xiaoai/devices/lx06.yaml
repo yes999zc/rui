@@ -1,0 +1,44 @@
+# Reference Socket & Plug v0 manifest for the Xiaomi AI Speaker Pro (LX06).
+#
+# v0 is deliberate: the LX06 keeps RUI's own KWS (wake.source: rui by the v0
+# default) and must not declare device_wake/barge_via_device. The capability set
+# mirrors the in-code builtin manifest in src/rui/plugins/builtin.py; the
+# `model`/`wake` fields are v1-only and are intentionally absent.
+schema: rui-device/v0
+id: xiaoai
+name: "Xiaomi AI Speaker Pro (LX06)"
+vendor: "Xiaomi"
+class: A
+transport: inbound
+protocol: {kind: ws, version: "1"}
+capabilities: [mic_array, reference, playback, led, keys, volume]
+device_side:
+  artifact: client
+  name: "open-xiaoai client"
+  source: "https://github.com/coderzc/open-xiaoai"
+  version_min: "v0.x"
+  install_steps:
+    - "Record the speaker's LAN IP and add a DHCP reservation; the client dials this server on port 4412."
+    - "Enable SSH on the speaker following the open-xiaoai instructions, and write down the recovery path."
+    - "Install the open-xiaoai client; note its install path and the file or startup script that stores its server URL."
+    - "Point it at ws://<server-lan-ip>:4412/?token=<device-token>; the server and the client must use the same token."
+    - "Restart the client and confirm connected / 已连接 ws://... in its log; a 401 or close 1008 means the token differs."
+    - "Keep the rollback: stop/remove the client and restore the stock boot script; stock firmware and partitions are untouched."
+  rollback: "Stop and remove the open-xiaoai client, restore the stock boot script; the stock firmware and partitions are untouched."
+runtime:
+  mode: in-process
+  entrypoint: "rui_plugin_xiaoai.adapter:build"
+  listen_port: 4412
+  token_env: RUI_DEVICE_TOKEN
+params:
+  - {key: host, label: "Speaker address", type: string, required: true, placeholder: "<speaker-ip>"}
+  - {key: room, label: "Room", type: string, default: "Living room"}
+  - {key: wake_words, label: "Wake words", type: list, default: ["你好小瑞"], max: 3}
+compatibility:
+  rui_min: "0.2.0"
+  tested_with: ["0.2.2"]
+  notes: "v0 reference: the LX06 wakes through RUI KWS (wake.source: rui), not device_wake. Capabilities mirror the built-in manifest; the core fallback remains the default through 0.3, and extraction is planned for 0.4."
+acceptance:
+  verified: false
+  last_verified: ""
+  evidence: "Manifest and adapter surface: python -m rui plug-test plugins/rui-plugin-xiaoai --adapter rui_plugin_xiaoai.adapter:build. Live-device checks are SKIP; real LX06 acceptance stays on the built-in plug."

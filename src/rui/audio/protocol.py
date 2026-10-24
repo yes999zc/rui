@@ -184,6 +184,17 @@ class Metrics(BaseModel):
     audio_s: float
     rtf: float
 
+    # Short aliases used in task/acceptance vocabulary. The wire fields are the §5
+    # names above (`device_wakes`, `device_wake_barges`); these are read-only handles
+    # for code that asks for the task's `device_wake_count`/`device_barge_count`.
+    @property
+    def device_wake_count(self) -> int:
+        return self.device_wakes
+
+    @property
+    def device_barge_count(self) -> int:
+        return self.device_wake_barges
+
 
 class Wake(BaseModel):
     """plane -> control: the wake word fired. The turn clock starts here."""

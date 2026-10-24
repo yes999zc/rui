@@ -300,6 +300,9 @@ class AudioPlane:
         # Wall-clock end of the cue/echo hold opened by the last accepted wake: a barge
         # hint inside this window is our own audio, not a person (§5 "ACK mute/gate hold").
         self._wake_hold_until = 0.0
+        # Local mirror of the control plane's VendorWindow: a vendor wake puts the room
+        # in "we are quiet" for `session.vendor_quiet_s`; our own accepted wake clears it.
+        self._vendor_quiet_until = 0.0
         self.gate: UtteranceGate | None = None
         self.vad_error = ""
         self.utterances = 0
@@ -589,6 +592,12 @@ class AudioPlane:
             for vendor in self._drain_signals():
                 if getattr(vendor, "kind", "") == "wake":
                     vendor_wake = True
+                    # Mirror the control plane's VendorWindow locally: a device barge
+                    # hint inside it must not stop our playback (§5). Our own accepted
+                    # wake clears it in `_begin_wake_turn`.
+                    self._vendor_quiet_until = time.monotonic() + max(
+                        0.0, self.cfg.session.vendor_quiet_s
+                    )
                 if connected.is_set():
                     try:
                         writer.write(encode_json(VendorSignalMsg(
@@ -652,6 +661,16 @@ class AudioPlane:
                 "not; falling back to RUI KWS"
             )
             return
+        if manifest_source == "sidecar":
+            # Frozen Q8: v1 only supports device_wake for in-process/trusted adapters.
+            # A sidecar has no standardised wake RPC yet, so it degrades to KWS rather
+            # than pretending an unverified proxy channel is authoritative.
+            self.device_wake_fallbacks += 1
+            log.warning(
+                "device_wake: sidecar adapters are not supported in v1 (Q8); "
+                "falling back to RUI KWS"
+            )
+            return
         drain = getattr(self.adapter, "drain_wakes", None)
         if not callable(drain):
             self.device_wake_fallbacks += 1
@@ -675,31 +694,31 @@ class AudioPlane:
             barge,
         )
 
-    def _manifest_allows_device_wake(self) -> bool:
-        """Whether the configured device's plug declares `wake.source: device`.
+    def _manifest_wake_source(self) -> str | None:
+        """The configured device's manifest ``wake.source``, or None without a manifest.
 
         The adapter is built from config, not from the manifest, so this is the one
         place the plane can still enforce "manifest is the upper bound". A device with
-        no resolvable plug (the mock adapter, a dev/in-process adapter) is allowed to
-        trust probe(): there is no manifest to contradict. Reading the catalog here is
-        once per connection, not per event.
+        no resolvable plug (the mock adapter, a dev/in-process adapter) has no manifest
+        to contradict. Reading the catalog here is once per connection, not per event.
         """
         device = next((item for item in self.cfg.devices if item.id == self.device_id), None)
         if device is None:
-            return True
+            return None
         try:
             from ..plugins.resolve import resolve_device_plug
 
             resolved = resolve_device_plug(device, self.cfg.system.data_dir)
         except Exception as exc:  # noqa: BLE001 - a broken plug must not block a mic
             log.info("device_wake: could not resolve the plug manifest: %s", exc)
-            return True
+            return None
         if resolved is None:
-            return True
-        return (
-            str(getattr(resolved.device, "wake_source", "rui")) == "device"
-            and Capability.DEVICE_WAKE in resolved.device.capabilities
-        )
+            return None
+        runtime = getattr(resolved.device, "runtime", None)
+        if runtime is not None and str(getattr(runtime, "mode", "")) == "sidecar":
+            # Q8: no standardised wake RPC inside a sidecar yet.
+            return "sidecar"
+        return str(getattr(resolved.device, "wake_source", "rui"))
 
     async def _drain_device_wakes(
         self, *, vendor_wake: bool, writer: asyncio.StreamWriter,
@@ -737,7 +756,18 @@ class AudioPlane:
                 )
             return
         self._device_wake_error_streak = 0
-        for event in list(pending or []):
+        if pending is None:
+            return
+        try:
+            events = list(pending)
+        except TypeError:
+            # A bad adapter returning a bare DeviceWake (or a scalar) must not take the
+            # frame loop down; count it as an invalid event and keep KWS running.
+            self._note_device_wake_invalid(
+                f"drain_wakes returned {type(pending).__name__}, not a list"
+            )
+            return
+        for event in events:
             await self._handle_device_wake(
                 event, vendor_wake=vendor_wake, writer=writer, connected=connected
             )
@@ -818,6 +848,8 @@ class AudioPlane:
         if self._paused_explicit:
             return False
         if time.monotonic() < self._wake_hold_until:
+            return False
+        if time.monotonic() < self._vendor_quiet_until:
             return False
         adapter = self.adapter
         if (
@@ -1042,6 +1074,9 @@ class AudioPlane:
         KWS path's configured 300 ms; a device wake passes 0 because its phrase tail is
         not in our stream (the adapter's ts_ms is the alignment).
         """
+        # §5: our own accepted wake clears the vendor's quiet window (the control plane
+        # does the same in VendorWindow.ours_spoke).
+        self._vendor_quiet_until = 0.0
         # Takeover: our wake outranks a running vendor dialog. The old build stayed
         # deaf while the vendor player ran (mic gated, assistant_v3.py:3115), so its
         # wake never had to stop 小爱; ours hears 你好小瑞 mid-answer, and taking the
