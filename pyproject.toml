@@ -1,6 +1,6 @@
 [project]
 name = "rui"
-version = "0.3.0"
+version = "0.3.1"
 description = "Self-hosted voice endpoint for SSH-enabled smart speakers"
 readme = "README.md"
 requires-python = ">=3.11"
