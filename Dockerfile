@@ -76,6 +76,44 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 COPY web/ ./
 RUN npm run build
 
+# Models seed. The VAD and wake-word models are small, but their GitHub release asset is
+# the one download that stalls a mainland cold install (~55 KB/s direct, mirrors ~30 KB/s;
+# 33 MB then feels like forever). CI builds on GitHub Actions have no such problem, so the
+# image bakes both in and `fetch-models` copies them into the data volume before any
+# network access. The 239 MB SenseVoice ASR model is *not* seeded - hf-mirror serves it
+# at ~1 MB/s - so the image grows by ~40 MB (0.6 MB VAD + 39 MB extracted KWS dir; the
+# 33 MB tarball is deleted in this stage and never reaches the runtime layer).
+#
+# Bump a URL and its SHA256 together. The hash is checked before extraction, so a proxied
+# or mirrored copy cannot silently change the bytes that ship. The VAD default is the
+# GitHub release asset, not the hf-mirror URL: that HuggingFace repo returned 401/404 on
+# 2026-10-24, and a CI build must not depend on it.
+FROM debian:bookworm-slim AS models
+ARG VAD_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+ARG VAD_SHA256=9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6
+ARG KWS_REPO=sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
+ARG KWS_URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2
+ARG KWS_SHA256=68447f4fbc67e70eee3a93961f36e81e98f47aef73ce7e7ca00885c6cd3616a6
+# VAD_URL / KWS_URL are overridable for a China-side builder; the defaults are the fast
+# GitHub Actions path. ca-certificates + curl + bzip2 only; the builder's apt layer is not
+# copied into the runtime image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl bzip2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /seed/kws \
+    && curl -fsSL --retry 3 --retry-all-errors --max-time 300 \
+        -o /seed/silero_vad.onnx "$VAD_URL" \
+    && echo "$VAD_SHA256  /seed/silero_vad.onnx" | sha256sum -c - \
+    && curl -fsSL --retry 3 --retry-all-errors --max-time 600 \
+        -o /tmp/kws.tar.bz2 "$KWS_URL" \
+    && echo "$KWS_SHA256  /tmp/kws.tar.bz2" | sha256sum -c - \
+    && tar -xjf /tmp/kws.tar.bz2 -C /seed/kws \
+    && rm -f /tmp/kws.tar.bz2 \
+    && test -f "/seed/kws/$KWS_REPO/tokens.txt" \
+    && test -f "/seed/kws/$KWS_REPO/encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx" \
+    && test -f "/seed/kws/$KWS_REPO/joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx" \
+    && test -f "/seed/kws/$KWS_REPO/decoder-epoch-13-avg-2-chunk-8-left-64.onnx"
+
 FROM python:3.12-slim
 ARG VERSION=dev
 ARG APT_MIRROR=
@@ -116,6 +154,10 @@ COPY src ./src
 # PIP_INDEX_URL is inherited from the build arg when set; empty means PyPI.
 RUN pip install '.[kws,channels]'
 COPY --from=web /web/dist /app/web/dist
+# The seed is ~40 MB, all of it the two models the install used to pull from GitHub. It is
+# a single layer; `fetch-models` copies from /opt/seed-models before its first network
+# request. An older image without this directory keeps the old download behavior.
+COPY --from=models /seed/ /opt/seed-models/
 # Health probe: reads the port and the device list from config, and treats a configured
 # device with a dead audio plane as unhealthy. See deploy/healthcheck.py.
 COPY deploy/healthcheck.py /usr/local/bin/house-ear-healthcheck

@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 from . import __version__
 from .config import (
@@ -142,6 +145,18 @@ KWS_URLS = (
     f"kws-models/{KWS_REPO}.tar.bz2",
     f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/{KWS_REPO}.tar.bz2",
 )
+# The Docker image bakes the two small models in at /opt/seed-models so a cold install on
+# a mainland network never has to reach a GitHub release asset. `fetch-models` copies them
+# first and only falls back to the network when the seed is absent (older image) or
+# incomplete. An empty/nonexistent --seed-dir disables the copy.
+DEFAULT_SEED_DIR = "/opt/seed-models"
+# Self-hosted mirrors: each replaces the first URL of the respective list. The built-in
+# mirrors stay as fallbacks, so a stale/offline mirror still ends the same way as today.
+VAD_URL_ENV = "HOUSE_EAR_VAD_URL"
+KWS_URL_ENV = "HOUSE_EAR_KWS_URL"
+# ASR is a full-file URL (model.int8.onnx); tokens.txt is tried from the same directory
+# first, then the default hf-mirror base. The 239 MB ASR model still comes from the network.
+ASR_URL_ENV = "HOUSE_EAR_ASR_URL"
 DEFAULT_WAKE_WORDS = ("你好小瑞",)
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -172,10 +187,10 @@ def _new_web_token() -> str:
     return _secrets.token_urlsafe(24)
 
 
-# fetch-models pulls ~272 MB from a mirror. `timeout=None` meant a stalled connection
-# never failed, so `_download_first` could not move on to the next mirror. Connect is
-# capped tightly; read is generous because it is the gap *between* 1 MiB blocks, and a
-# slow-but-live large download must still finish.
+# fetch-models pulls up to ~272 MB (239 MB when VAD/KWS come from the image seed).
+# `timeout=None` meant a stalled connection never failed, so `_download_first` could not
+# move on to the next mirror. Connect is capped tightly; read is generous because it is
+# the gap *between* 1 MiB blocks, and a slow-but-live large download must still finish.
 DOWNLOAD_CONNECT_TIMEOUT_S = 10.0
 DOWNLOAD_READ_TIMEOUT_S = 60.0
 
@@ -235,8 +250,82 @@ def _download_first(urls: tuple[str, ...], target: Path, *, force: bool = False)
     raise last
 
 
+def _url_list(env_name: str, defaults: tuple[str, ...]) -> tuple[str, ...]:
+    """Put the env override first and keep the built-in mirrors as fallbacks."""
+    override = os.environ.get(env_name, "").strip()
+    if not override:
+        return defaults
+    return (override, *(url for url in defaults if url != override))
+
+
+def _sibling_url(url: str, name: str) -> str:
+    """The same-directory URL for another file (a self-hosted mirror's tokens.txt)."""
+    parts = urlsplit(url)
+    parent, _, _ = parts.path.rpartition("/")
+    path = f"{parent}/{name}" if parent else name
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+
+def _asr_urls(base: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(model URLs, tokens URLs); HOUSE_EAR_ASR_URL is a full model-file URL."""
+    model = f"{base}/model.int8.onnx"
+    tokens = f"{base}/tokens.txt"
+    override = os.environ.get(ASR_URL_ENV, "").strip()
+    if not override:
+        return (model,), (tokens,)
+    model_urls = _url_list(ASR_URL_ENV, (model,))
+    # A mirror that serves model.int8.onnx serves tokens.txt next to it. Fall back to the
+    # default base if the sibling is missing; never download the model bytes as tokens.
+    tokens_mirror = _sibling_url(override, "tokens.txt")
+    tokens_urls = (tokens_mirror,) if tokens_mirror == tokens else (tokens_mirror, tokens)
+    return model_urls, tokens_urls
+
+
+def _seed_models(
+    seed_dir: str, vad_target: Path, kws_dest: Path, *, force: bool, include_kws: bool = True
+) -> tuple[bool, bool]:
+    """Copy the image-baked VAD and wake model before any network access.
+
+    Returns (vad_seeded, kws_seeded). A missing/incomplete seed is not an error: the
+    caller falls through to the normal download path, which is what an older image (no
+    /opt/seed-models) does. The copy is atomic for the single VAD file and overwrites
+    files in place for the KWS directory, so an interrupted install never leaves a
+    half-written VAD.
+    """
+    if not seed_dir:
+        return False, False
+    seed = Path(seed_dir)
+    if not seed.is_dir():
+        return False, False
+
+    vad_seeded = False
+    source_vad = seed / VAD_FILE
+    if source_vad.is_file() and (force or not vad_target.exists()):
+        vad_target.parent.mkdir(parents=True, exist_ok=True)
+        part = vad_target.with_suffix(vad_target.suffix + ".seed")
+        shutil.copyfile(source_vad, part)
+        part.replace(vad_target)
+        print(f"seeded {vad_target.name} from {source_vad}")
+        vad_seeded = True
+
+    kws_seeded = False
+    source_kws = seed / "kws" / KWS_REPO
+    target_kws = kws_dest / KWS_REPO
+    if include_kws and (source_kws / "tokens.txt").is_file() and (
+        force or not (target_kws / "tokens.txt").exists()
+    ):
+        kws_dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_kws, target_kws, dirs_exist_ok=True)
+        print(f"seeded wake model from {source_kws}")
+        kws_seeded = True
+    return vad_seeded, kws_seeded
+
+
 def _fetch_kws_model(args: argparse.Namespace) -> int:
-    """Download + unpack the wake model; the keywords file is written by setup."""
+    """Download + unpack the wake model; the keywords file is written by setup.
+
+    --kws-url wins over HOUSE_EAR_KWS_URL, which wins over the built-in mirrors.
+    """
     import tarfile
 
     dest = Path(args.kws_dest)
@@ -244,7 +333,7 @@ def _fetch_kws_model(args: argparse.Namespace) -> int:
     tar_path = dest / f"{KWS_REPO}.tar.bz2"
     if not (model_dir / "tokens.txt").exists() or args.force:
         dest.mkdir(parents=True, exist_ok=True)
-        kws_urls = (args.kws_url,) if args.kws_url else KWS_URLS
+        kws_urls = (args.kws_url,) if args.kws_url else _url_list(KWS_URL_ENV, KWS_URLS)
         _download_first(kws_urls, tar_path, force=args.force)
         print(f"  unpacking {tar_path.name}")
         with tarfile.open(tar_path, "r:bz2") as tar:
@@ -262,31 +351,40 @@ def _fetch_kws_model(args: argparse.Namespace) -> int:
 def cmd_fetch_models(args: argparse.Namespace) -> int:
     """Download the local models to a data volume.
 
-    The image stays small and the models live with the data: a fresh install
-    fetches ~272 MB once, and a reinstall keeps it. That is the whole ASR chain
-    (SenseVoice first, cloud fallback) and the wake model - before this, KWS was
-    a manual download and a cold install could not hear its own wake word.
+    The ASR model lives with the data and is fetched once (~239 MB); the smaller VAD
+    and wake model are baked into the image at /opt/seed-models and copied from there
+    before any network access, so a Docker cold install never waits on a GitHub release
+    asset. A host without the seed (older image, source install, `--seed-dir ""`) keeps
+    the previous download path with the hf-mirror / proxy fallbacks.
     """
     from .providers.sherpa_asr import model_paths
 
     dest = Path(args.dest)
     dest.mkdir(parents=True, exist_ok=True)
+    vad_target = Path(args.vad_dest)
+    seed_dir = getattr(args, "seed_dir", DEFAULT_SEED_DIR)
+    vad_seeded, kws_seeded = _seed_models(
+        seed_dir, vad_target, Path(args.kws_dest), force=args.force,
+        include_kws=not args.no_kws)
+
     base = args.base or f"https://hf-mirror.com/{SENSEVOICE_REPO}/resolve/main"
+    model_urls, token_urls = _asr_urls(base)
     wanted = {
         "model.int8.onnx": dest / "model.int8.onnx",
         "tokens.txt": dest / "tokens.txt",
     }
-    for name, target in wanted.items():
-        _download_to(f"{base}/{name}", target, force=args.force)
-    vad_target = Path(args.vad_dest)
-    vad_urls = (args.vad_base,) if args.vad_base else VAD_URLS
-    _download_first(vad_urls, vad_target, force=args.force)
+    _download_first(model_urls, wanted["model.int8.onnx"], force=args.force)
+    _download_first(token_urls, wanted["tokens.txt"], force=args.force)
+    if not vad_seeded:
+        # --vad-base remains an explicit single URL (no silent fallback), as before.
+        vad_urls = (args.vad_base,) if args.vad_base else _url_list(VAD_URL_ENV, VAD_URLS)
+        _download_first(vad_urls, vad_target, force=args.force)
     onnx, tokens = model_paths(dest)  # recompute: the int8 file did not exist before
     if not onnx.exists() or not tokens.exists():
         print(f"model incomplete in {dest}")
         return 1
     print(f"local asr ready in {dest} - keep it as providers.catalog.<name>.model")
-    if not args.no_kws:
+    if not args.no_kws and not kws_seeded:
         if _fetch_kws_model(args) != 0:
             return 1
     return 0
@@ -498,6 +596,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_fetch.add_argument("--kws-dest", default="/data/models/kws",
                          help="directory the wake model is unpacked into")
     p_fetch.add_argument("--kws-url", default="", help="override the wake model tarball URL")
+    p_fetch.add_argument("--seed-dir", default=DEFAULT_SEED_DIR,
+                         help="copy VAD + wake model from this image directory first "
+                              "(default /opt/seed-models; empty disables)")
     p_fetch.add_argument("--no-kws", action="store_true", help="skip the wake model")
     p_fetch.add_argument("--force", action="store_true")
     p_fetch.set_defaults(func=cmd_fetch_models)

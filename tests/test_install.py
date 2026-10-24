@@ -18,12 +18,19 @@ import pytest
 from pydantic import ValidationError
 
 from house_ear.__main__ import (
+    ASR_URL_ENV,
     KWS_REPO,
+    KWS_URL_ENV,
+    KWS_URLS,
+    VAD_URL_ENV,
     VAD_URLS,
+    _asr_urls,
     _download_client,
     _download_first,
     _download_to,
     _fetch_kws_model,
+    _url_list,
+    cmd_fetch_models,
     main,
 )
 from house_ear.audio.kws import keyword_lines, write_keywords_file
@@ -103,6 +110,128 @@ def test_fetch_models_unpacks_the_wake_model(monkeypatch, tmp_path) -> None:
     model = tmp_path / "kws" / KWS_REPO
     assert (model / "tokens.txt").exists()
     assert not (tmp_path / "kws" / f"{KWS_REPO}.tar.bz2").exists()  # unpacked, not kept
+
+
+def test_fetch_models_seeds_vad_and_kws_before_downloading(monkeypatch, tmp_path) -> None:
+    """The image seed is the cold-install path: copy first, then the network for ASR only."""
+    seed = tmp_path / "seed"
+    kws_seed = seed / "kws" / KWS_REPO
+    kws_seed.mkdir(parents=True)
+    (seed / "silero_vad.onnx").write_bytes(b"seeded vad")
+    (kws_seed / "tokens.txt").write_text("tokens", encoding="utf-8")
+    (kws_seed / "encoder-chunk-8.int8.onnx").write_bytes(b"encoder")
+
+    calls: list[str] = []
+
+    def fake_download(url: str, target: Path, *, force: bool = False) -> int:
+        calls.append(url)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"from network")
+        return target.stat().st_size
+
+    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    args = argparse.Namespace(
+        dest=str(tmp_path / "asr"),
+        vad_dest=str(tmp_path / "models" / "silero_vad.onnx"),
+        vad_base="",
+        base="",
+        kws_dest=str(tmp_path / "models" / "kws"),
+        kws_url="",
+        seed_dir=str(seed),
+        no_kws=False,
+        force=False,
+    )
+    assert cmd_fetch_models(args) == 0
+    assert (tmp_path / "models" / "silero_vad.onnx").read_bytes() == b"seeded vad"
+    assert (tmp_path / "models" / "kws" / KWS_REPO / "tokens.txt").exists()
+    assert not (tmp_path / "models" / "kws" / f"{KWS_REPO}.tar.bz2").exists()
+    # Only the two ASR files came from the network; VAD/KWS never hit a mirror.
+    base = ("https://hf-mirror.com/csukuangfj/"
+            "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/main")
+    assert calls == [f"{base}/model.int8.onnx", f"{base}/tokens.txt"]
+
+
+def test_fetch_models_without_seed_keeps_the_network_fallbacks(monkeypatch, tmp_path) -> None:
+    """An older image has no /opt/seed-models: behave exactly like today."""
+    tarball = tmp_path / "kws.tar.bz2"
+    with tarfile.open(tarball, "w:bz2") as tar:
+        data = b"tokens"
+        info = tarfile.TarInfo(f"{KWS_REPO}/tokens.txt")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+
+    calls: list[str] = []
+
+    def fake_download(url: str, target: Path, *, force: bool = False) -> int:
+        calls.append(url)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(tarball.read_bytes() if url.endswith(".tar.bz2") else b"network")
+        return target.stat().st_size
+
+    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    args = argparse.Namespace(
+        dest=str(tmp_path / "asr"),
+        vad_dest=str(tmp_path / "models" / "silero_vad.onnx"),
+        vad_base="",
+        base="",
+        kws_dest=str(tmp_path / "models" / "kws"),
+        kws_url="",
+        seed_dir=str(tmp_path / "missing-seed"),
+        no_kws=False,
+        force=False,
+    )
+    assert cmd_fetch_models(args) == 0
+    assert calls[0].startswith("https://hf-mirror.com/") and calls[0].endswith("/model.int8.onnx")
+    assert calls[1].startswith("https://hf-mirror.com/") and calls[1].endswith("/tokens.txt")
+    assert calls[2] == VAD_URLS[0]
+    assert calls[3] == KWS_URLS[0]
+    assert (tmp_path / "models" / "silero_vad.onnx").read_bytes() == b"network"
+    assert (tmp_path / "models" / "kws" / KWS_REPO / "tokens.txt").exists()
+
+
+def test_url_env_overrides_take_precedence_with_mirror_fallback(monkeypatch) -> None:
+    base = "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-test/resolve/main"
+    monkeypatch.setenv(VAD_URL_ENV, "https://models.example/silero_vad.onnx")
+    monkeypatch.setenv(KWS_URL_ENV, "https://models.example/kws.tar.bz2")
+    monkeypatch.setenv(ASR_URL_ENV, "https://models.example/asr/model.int8.onnx")
+
+    vad_urls = _url_list(VAD_URL_ENV, VAD_URLS)
+    kws_urls = _url_list(KWS_URL_ENV, KWS_URLS)
+    model_urls, token_urls = _asr_urls(base)
+    assert vad_urls == ("https://models.example/silero_vad.onnx", *VAD_URLS)
+    assert kws_urls == ("https://models.example/kws.tar.bz2", *KWS_URLS)
+    assert model_urls == ("https://models.example/asr/model.int8.onnx",
+                          f"{base}/model.int8.onnx")
+    assert token_urls == ("https://models.example/asr/tokens.txt", f"{base}/tokens.txt")
+
+
+def test_url_env_override_falls_through_to_the_builtin_mirror(monkeypatch, tmp_path) -> None:
+    override = "https://models.example/silero_vad.onnx"
+    monkeypatch.setenv(VAD_URL_ENV, override)
+    calls: list[str] = []
+
+    def fake_download(url: str, target: Path, *, force: bool = False) -> int:
+        calls.append(url)
+        if "models.example" in url:
+            raise RuntimeError("mirror offline")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"vad")
+        return 3
+
+    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    target = tmp_path / "silero_vad.onnx"
+    assert _download_first(_url_list(VAD_URL_ENV, VAD_URLS), target) == 3
+    assert calls == [override, VAD_URLS[0]]
+    assert target.read_bytes() == b"vad"
+
+
+def test_url_env_absent_keeps_the_builtin_mirrors(monkeypatch) -> None:
+    base = "https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-test/resolve/main"
+    for name in (VAD_URL_ENV, KWS_URL_ENV, ASR_URL_ENV):
+        monkeypatch.delenv(name, raising=False)
+    assert _url_list(VAD_URL_ENV, VAD_URLS) == VAD_URLS
+    assert _url_list(KWS_URL_ENV, KWS_URLS) == KWS_URLS
+    assert _asr_urls(base) == ((f"{base}/model.int8.onnx",), (f"{base}/tokens.txt",))
 
 
 def test_vad_download_falls_back_when_the_hf_mirror_breaks(monkeypatch, tmp_path) -> None:

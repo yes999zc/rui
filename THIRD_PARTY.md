@@ -13,8 +13,8 @@ How each component reaches a user:
 
 | Delivery | Components |
 |---|---|
-| Bundled in the container image | sherpa-onnx (wheel), speexdsp (`libspeexdsp1`), FFmpeg (LGPL-only static build with libopus/libmp3lame), Python deps, compiled web console |
-| Downloaded at runtime into the data volume | SenseVoice ASR, Silero VAD, KWS wake-word model |
+| Bundled in the container image | sherpa-onnx (wheel), speexdsp (`libspeexdsp1`), FFmpeg (LGPL-only static build with libopus/libmp3lame), Python deps, compiled web console, Silero VAD + KWS wake-word model (`/opt/seed-models`) |
+| Downloaded at runtime into the data volume | SenseVoice ASR (the VAD/KWS seed is copied locally; older images still download all three) |
 | Installed by the user on the speaker | open-xiaoai client |
 | Reference only (no code shipped) | EchoMuse |
 
@@ -75,8 +75,14 @@ How each component reaches a user:
 
 ### Silero VAD
 
-- **Role:** voice-activity detection. `house-ear fetch-models` downloads `silero_vad.onnx`
-  from the sherpa-onnx release (with hf-mirror / proxy fallbacks) into the data volume.
+- **Role:** voice-activity detection. New images ship `silero_vad.onnx` at
+  `/opt/seed-models/silero_vad.onnx`; `house-ear fetch-models` copies it into the data volume
+  before any network access, so the file is **redistributed inside the image**. Older images
+  and source installs download it from the sherpa-onnx release (with hf-mirror / proxy
+  fallbacks) instead.
+- **Exact source used:** <https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx>
+  (SHA256 `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6`, 643,854 B).
+  The dead hf-mirror URL is only a download fallback, not the image build source.
 - **Links:** <https://github.com/snakers4/silero-vad> ·
   <https://github.com/k2-fsa/sherpa-onnx/releases>
 - **License:** MIT (verified: upstream `LICENSE`, © 2020-present Silero Team). The ONNX file is
@@ -85,11 +91,18 @@ How each component reaches a user:
 
 ### KWS wake-word model
 
-- **Role:** wake-word spotting. Downloaded at runtime from the k2-fsa/sherpa-onnx GitHub
-  release as `sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20`.
-- **Link:** <https://github.com/k2-fsa/sherpa-onnx/releases>
-- **License:** **to verify**. No explicit license file was confirmed for the released archive
-  on 2026-10-24. Do not relicense it as part of Rui.
+- **Role:** wake-word spotting. New images ship the extracted archive at
+  `/opt/seed-models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/`; `fetch-models`
+  copies it into the data volume before any network access, so these model files are
+  **redistributed inside the image**. Older images and source installs download the tarball
+  at runtime instead.
+- **Exact source used:** <https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2>
+  (SHA256 `68447f4fbc67e70eee3a93961f36e81e98f47aef73ce7e7ca00885c6cd3616a6`, 32,885,699 B).
+- **License:** Apache-2.0 (verified 2026-10-24 against the upstream
+  [k2-fsa/sherpa-onnx LICENSE](https://github.com/k2-fsa/sherpa-onnx/blob/master/LICENSE);
+  the release archive itself carries no separate LICENSE file, so the repository license is
+  the stated terms). Apache-2.0 requires preserving the license and NOTICE when redistributing.
+  Do not relicense the model as part of Rui.
 
 ## 4. Native and system components
 
@@ -231,6 +244,8 @@ The console is compiled during the image build; these packages are build-time de
 1. Keep the upstream MIT/BSD/Apache notices for code and models that are redistributed.
 2. Preserve Apache-2.0 `NOTICE` content for sherpa-onnx and other Apache-2.0 dependencies.
 3. Attribute SenseVoice/FunASR model names and source; comply with the FunASR Model License.
+   The image also redistributes Silero VAD (MIT) and the KWS wake-word model (Apache-2.0):
+   keep those notices with the `/opt/seed-models` copies.
 4. Keep the FFmpeg source pin/SHA-256 and the LGPL build gates (`--disable-gpl`, builder +
    runtime `ffmpeg -L`/`-version` checks) intact; re-run them whenever FFmpeg is bumped.
 5. Update this file and the README credits when a component is added or removed.

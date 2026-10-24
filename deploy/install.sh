@@ -97,10 +97,13 @@ else
 fi
 
 echo "[4/5] local models: ASR + VAD + wake word"
-# ~272 MB fetched once into the mounted data volume: SenseVoice (239 MB), Silero VAD
-# (0.6 MB) and the KWS wake model (32.9 MB tarball). Without ASR the chain silently
-# falls back to cloud; without VAD the gate never starts; without KWS the box cannot
-# hear its own wake word. Loud when it fails, but never blocks the install.
+# Fresh images ship Silero VAD and the KWS wake model at /opt/seed-models. fetch-models
+# copies those two out before its first network request, so a cold install only downloads
+# SenseVoice (239 MB, hf-mirror) - the 33 MB GitHub release asset that used to stall is
+# already in the image. An older image without /opt/seed-models falls back to the previous
+# download path automatically; no flag needed here. Without ASR the chain silently falls
+# back to cloud; without VAD the gate never starts; without KWS the box cannot hear its
+# own wake word. Loud when it fails, but never blocks the install.
 KWS_TOKENS="$DIR/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/tokens.txt"
 if [ -f "$DIR/data/models/sensevoice/model.int8.onnx" ] && [ -f "$KWS_TOKENS" ]; then
   echo "      models already present"

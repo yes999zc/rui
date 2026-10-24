@@ -102,7 +102,7 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 | 1 | 拉取 `docker-compose.yml` 和 `config.example.yaml` 到 `~/house-ear/` |
 | 2 | `house-ear setup` 写入生产配置模板，并生成默认唤醒词文件 `keywords.txt` |
 | 3 | 生成 `.env`（含随机设备 token，0600） |
-| 4 | 下载本地模型：SenseVoice ASR + Silero VAD + KWS 唤醒模型（约 272 MB，一次） |
+| 4 | 下载本地模型：SenseVoice ASR（约 239 MB，一次）；VAD/KWS 已内置镜像，直接复制 |
 | 5 | `docker compose up -d`，等待 health 通过 |
 
 镜像：`ghcr.io/yes999zc/rui:latest`（公开，多架构 amd64/arm64）。如果镜像拉取失败，脚本会**从公开源码自动构建**同一 tag；也可以手动：
@@ -160,6 +160,9 @@ docker compose up -d
 - 完整字段/效果/重启规则：[docs/config-catalog-contract.md](docs/config-catalog-contract.md)
 - 部署、密钥、音乐/HA 配置：[docs/deploy.md](docs/deploy.md)
 - 音乐层：[docs/music.md](docs/music.md)；通用 MCP：[docs/mcp-generic.md](docs/mcp-generic.md)
+- 模型自建镜像（可选）：`.env` 设 `HOUSE_EAR_ASR_URL` / `HOUSE_EAR_VAD_URL` /
+  `HOUSE_EAR_KWS_URL`（完整文件 URL，失败回退内置镜像）；VAD/KWS 默认从镜像 seed 复制，
+  不再访问 GitHub release。详见 [docs/deploy.md §3.3](docs/deploy.md#33-模型fetch-models-一次装齐)
 - 日常运维（起停、日志、升级、回滚）：[docs/runbook.md](docs/runbook.md)
 
 ### 远程通道（Telegram / 微信）
@@ -267,7 +270,7 @@ Requirements: a Docker host (NAS/Linux, amd64 or arm64), an LX06 with the **open
 curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 ```
 
-The installer writes `~/house-ear/`, generates a `.env` with a random device token, downloads the ASR/VAD/KWS models (~272 MB, one time), starts `docker compose`, and waits for health. Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch). If the registry is unreachable, the installer builds the same tag from public source; manual build:
+The installer writes `~/house-ear/`, generates a `.env` with a random device token, downloads the SenseVoice ASR model (~239 MB, one time; VAD/KWS are baked into the image and copied from `/opt/seed-models`), starts `docker compose`, and waits for health. For a self-hosted model mirror set `HOUSE_EAR_ASR_URL`, `HOUSE_EAR_VAD_URL` and `HOUSE_EAR_KWS_URL` in `.env` (full file URLs; built-in mirrors stay as fallbacks). Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch). If the registry is unreachable, the installer builds the same tag from public source; manual build:
 
 ```bash
 git clone https://github.com/yes999zc/rui.git

@@ -9,7 +9,8 @@
 
 ## 1. 前置条件
 
-- x86_64 或 arm64，4 核 / 4 GB 内存 / 2 GB 可用磁盘（首次要再留 ~250 MB 下模型）
+- x86_64 或 arm64，4 核 / 4 GB 内存 / 2 GB 可用磁盘（首次还要留 ~250 MB：镜像自带
+  VAD/KWS，只需下 239 MB 的 SenseVoice ASR）
 - Docker + `docker compose`，允许 `--network host`（设备音频是长连接 socket）
 - 音箱与 NAS 在同一 L2 网段；音箱端 client 指向 NAS 的 IP:4412
 - **镜像架构**：GitHub Actions 发的是 `linux/amd64` + `linux/arm64` 多架构镜像（见
@@ -53,7 +54,7 @@ curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh
 | 1 | 拉 `docker-compose.yml` + `config.example.yaml`（参考件） | `~/house-ear/` |
 | 2 | `setup` 写**生产模板**（provider 链、模型路径、playback 16k/1ch）+ 生成 `keywords.txt`（默认唤醒词），无设备/无密钥 | `~/house-ear/config/config.yaml`、`config/keywords.txt` |
 | 3 | 生成 `.env`，含随机 device token | `~/house-ear/.env`（chmod 600） |
-| 4 | 下 SenseVoice + Silero VAD + KWS 唤醒模型（~272 MB）到数据卷 | `~/house-ear/data/models/` |
+| 4 | 下 SenseVoice（~239 MB）+ 从镜像 seed 复制 Silero VAD / KWS 到数据卷（旧镜像无 seed 时仍下载这三个） | `~/house-ear/data/models/` |
 | 5 | `docker compose up -d` 并等 `/health` 通过 | 容器 `house-ear` |
 
 安装脚本里可用的环境变量（契约不变，只是补充说明）：
@@ -70,7 +71,8 @@ HOUSE_EAR_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
 
 > **中国大陆网络**：脚本的 fetch 已加超时/重试并强制 IPv4；如果 `raw.githubusercontent.com`
 > 仍不稳定，用 `HOUSE_EAR_RAW` 指到镜像前缀（注意有些代理会缓存旧文件，冷装前确认拿到的是 main）。
-> 模型下载走 hf-mirror；VAD/KWS 的 GitHub release 有 `ghproxy.net` / `gh-proxy.com` fallback。
+> 新镜像已内置 VAD/KWS（`/opt/seed-models`），`fetch-models` 先复制它们再联网，所以 Docker
+> 冷装不再需要访问 GitHub release，只剩 hf-mirror 上的 SenseVoice ASR。自建镜像见 §3.3。
 
 ## 3. 冷装：到第一句回应
 
@@ -124,22 +126,62 @@ providers:
 
 ### 3.3 模型（`fetch-models` 一次装齐）
 
+镜像在构建时把两个小模型放进 `/opt/seed-models/`：`silero_vad.onnx` 和
+`kws/<KWS_REPO>/`（Dockerfile 从 GitHub release 下载并校验 SHA256；GitHub Actions
+的构建网络不需要 mainland 的镜像）。`fetch-models` **在联网前**先把它们复制到
+`--vad-dest` / `--kws-dest`，所以新镜像的冷装只需要下载 SenseVoice ASR（239 MB，
+hf-mirror 约 1 MB/s），不再等 GitHub 上那个 33 MB 的 KWS 包。这就是 Docker 安装不再
+依赖 GitHub release 的原因。
+
 | 模型 | 怎么来 | 容器内路径 | 宿主机路径 |
 |---|---|---|---|
-| SenseVoice ASR（239 MB） | `install.sh` 自动 `fetch-models` | `/data/models/sensevoice` | `~/house-ear/data/models/sensevoice` |
-| Silero VAD（~0.6 MB） | 同上（`--vad-dest`） | `/data/models/silero_vad.onnx` | `~/house-ear/data/models/silero_vad.onnx` |
-| KWS 唤醒模型（32.9 MB 包） | 同上（`--kws-dest`，自动解包） | `/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/` | `~/house-ear/data/models/kws/` |
+| SenseVoice ASR（239 MB） | `install.sh` 自动 `fetch-models`，走 hf-mirror | `/data/models/sensevoice` | `~/house-ear/data/models/sensevoice` |
+| Silero VAD（~0.6 MB） | 新镜像从 `/opt/seed-models` 复制；旧镜像/源码安装回退下载 | `/data/models/silero_vad.onnx` | `~/house-ear/data/models/silero_vad.onnx` |
+| KWS 唤醒模型（32.9 MB 包） | 同上；seed 已是解包后的目录，复制时无需再解包 | `/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/` | `~/house-ear/data/models/kws/` |
+
+**旧镜像/无 seed**：`/opt/seed-models` 不存在时，`fetch-models` 完全保持原行为
+（VAD 依次试 hf-mirror / ghproxy / GitHub；KWS 依次试 ghproxy / gh-proxy / GitHub）。
+所以滚动升级期间不需要改 `install.sh`，也不需要额外参数。
 
 compose 把 `./data:/var/lib/house-ear`，同时把 `./data/models:/data/models` 挂进容器：
 数据卷负责持久化，`/data/models` 是模板和文档使用的路径。两者指向同一个宿主机目录，
-删容器重建都不丢。手动重跑：
+删容器重建都不丢。手动重跑（默认会先复制 seed）：
 
 ```bash
 docker run --rm --user "$(id -u):$(id -g)" -v ~/house-ear/data:/data \
   ghcr.io/yes999zc/rui:<tag> fetch-models \
   --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
 # 网络受限时可只装 ASR+VAD（唤醒词会失效）：加 --no-kws
+# 显式不用镜像 seed（强制从网络重下 VAD/KWS）：加 --seed-dir '' --force
 ```
+
+#### 自建模型镜像（非 Docker 用户/内网）
+
+`fetch-models` 支持三个环境变量，用来替换对应下载列表的第一项；该项失败后仍会
+回退到内置镜像（所以镜像临时离线不会让安装必然失败）：
+
+| 变量 | 含义 |
+|---|---|
+| `HOUSE_EAR_ASR_URL` | SenseVoice `model.int8.onnx` 的**完整文件 URL**；`tokens.txt` 先取同一目录，失败再回退 hf-mirror |
+| `HOUSE_EAR_VAD_URL` | `silero_vad.onnx` 完整 URL，替换 VAD 列表第一项 |
+| `HOUSE_EAR_KWS_URL` | KWS `.tar.bz2` 完整 URL，替换 KWS 列表第一项（下载后仍会解包） |
+
+> 新镜像默认先从 `/opt/seed-models` 复制 VAD/KWS，此时 `HOUSE_EAR_VAD_URL` /
+> `HOUSE_EAR_KWS_URL` 不会触发下载。要让这两个 URL 生效（或强制从网络重下），加
+> `--seed-dir ''`；`--force` 单独用时仍优先使用 seed。
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v ~/house-ear/data:/data \
+  -e HOUSE_EAR_ASR_URL=https://models.example/sensevoice/model.int8.onnx \
+  -e HOUSE_EAR_VAD_URL=https://models.example/silero_vad.onnx \
+  -e HOUSE_EAR_KWS_URL=https://models.example/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2 \
+  ghcr.io/yes999zc/rui:<tag> fetch-models \
+  --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
+```
+
+用 compose 时把它们写进 `~/house-ear/.env` 即可（`env_file` 会传入容器，改完
+`docker compose up -d`）。`--kws-url` / `--vad-base` 仍是单 URL 覆盖（优先于对应环境变量）；
+`--base` 是 ASR 的内置回退 base，环境变量仍排第一。
 
 **唤醒词**：`setup` 已按默认「你好小瑞」生成 `~/house-ear/config/keywords.txt`，内容形如
 `n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞`（token、boost、阈值、显示文案）。改
@@ -303,7 +345,7 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 |---|---|---|---|
 | `~/house-ear/config` | `/config` | `config.yaml`、`keywords.txt`（+ 可选 `lan_media.json`） | 要重配设备/provider/唤醒词 |
 | `~/house-ear/data` | `/var/lib/house-ear` | `service.log`、`secrets.yaml`、`memory.json`、提醒/会话历史、音乐缓存 | 记忆/提醒/密钥消失，模型还在（在 `data/models`） |
-| `~/house-ear/data/models` | `/data/models`（同一目录的第二个挂载点） | SenseVoice / VAD / KWS 模型 | 重下 ~272 MB |
+| `~/house-ear/data/models` | `/data/models`（同一目录的第二个挂载点） | SenseVoice / VAD / KWS 模型 | ASR 重下 ~239 MB；VAD/KWS 从镜像 seed 恢复 |
 
 备份只要 `config/` + `data/`（models 可重下）；恢复时把目录放回、`docker compose up -d`。
 `config.yaml` 每次写盘都有时间戳备份（`config.yaml.bak.*`），改坏了用最近的备份覆盖。
