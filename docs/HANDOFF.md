@@ -130,6 +130,10 @@ docker compose exec -T rui rui config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
+- 10-25 凌晨：两个独立审计（控制台 IA、Socket/Plug 契约+实现）完成；0.3.3 修 P0（导航两分组、向导 01 改名、
+  xfyun 就绪过滤、音乐死路、provider fallback 保留）与 socket P0/P1（trust 门控、能力交集、音量契约、DeviceWake、
+  音频守护、ws 上限、ts 对齐），issue #3/#7 更正已回。生产 0.3.3 非 root 运行。
+
 - 10-25 凌晨：0.3.2 P3.5 安全：SSRF 出站守卫、非 root 容器 + 状态/属主迁移、pip-audit/Trivy CI；
   生产已升级 0.3.2（非 root uid1000、read_only/cap_drop；一次性 chown + 新 compose；本机构建镜像因 CI 多架构慢，官方 0.3.2 镜像仍在构建）。
 
