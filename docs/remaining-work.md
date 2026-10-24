@@ -20,6 +20,10 @@
 
 ## B0. 交互缺陷（已定位，待修）
 
+- **控制台首次登录 token 不可见（issue #4，2026-10-24）**：全新 0.2.0 冷装后用户不知道
+  `web.auth_token`，install.sh 只在安装输出里打印一次。期望：首次打开未认证控制台 → 创建控制台
+  密码/token 页（写入 config），或安装结束醒目展示 + 固定文件；控制台提供轮换入口。优先级 P2。
+
 - **回复结束后的免唤醒追问首字丢失**：已按旧项目方案实现 follow-up echo-tail replay
   （`7693a4f`）：`pacer.due` 到 gate arm 之间缓存麦克风帧，arm 后回放给 VAD；日志会打印
   `follow-up gate replayed … ms of gated tail`。**已部署 NAS，9哥 真机复测「紧着说明天呢」成功 ✅。**
