@@ -130,6 +130,9 @@ docker compose exec -T house-ear house-ear config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
+- 10-24 深夜：0.1.3 官方 `latest`（rev 50df3b4）含 VAD/KWS 镜像内置、doctor sherpa 运行时探测（issue #2）、
+  模型下载 IPv4/代理/镜像策略修复、安装脚本容器预检；生产已切官方镜像 healthy。
+
 - 10-24 傍晚：0.1.1 打 tag（CI 多架构构建中，arm64 QEMU 编译 ffmpeg 很慢）；为不阻塞验证，用同一 Dockerfile
   在 Mac 上构建 amd64 并 `docker save/scp/load` 到 NAS，先部署 0.1.1（revision 74c6c42），再构建/部署
   0.1.2（含向导 UI、设备管理 UI、播放节奏 P2.9，revision ee772dd）。官方镜像完成后应把 `.env` 切回
