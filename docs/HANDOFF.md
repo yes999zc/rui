@@ -130,6 +130,9 @@ docker compose exec -T rui rui config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
+- 10-25 凌晨：P3.0–P3.4 完成并发布 0.3.0：Socket/Plug v1（device_wake 契约、契约测试工具、LX06 参考插头）、
+  设备管理（状态/启停/token 轮换/端口冲突/多设备 warning）；全量 948 tests；下一步 P3.5 安全。
+
 - 10-24 晚：全仓改名 house-ear→rui（包/CLI/env/路径/容器），发布 0.2.0；干净冷装（新智能体只读公开文档）
   85s healthy，装在 `/vol1/rui`，旧 `/vol1/house-ear` 停用保留。等待人工走向导配置 keys/设备。
 
