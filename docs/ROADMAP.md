@@ -65,7 +65,7 @@
 
 | # | 任务 | 判据 |
 |---|---|---|
-| P2.0 | EchoMuse Device Management 调研（进行中） | `docs/device-management-research.md`：流程映射、向导状态机、数据模型、开放问题 |
+| P2.0 | EchoMuse Device Management 调研 ✅ | `docs/device-management-research.md`（984 行）：流程映射、8 步向导、config.yaml+params、单设备 CRUD；**0.2 边界**：只做 manifest-only/内置可信插头，第三方可执行代码默认关闭（sidecar 后续）；不做 SQLite/approve/OTA/多设备仲裁 |
 | P2.1 | **`docs/socket-plug.md` 标准 v0**：插头 manifest（机型/A/B 等级/能力/参数 schema/协议/兼容版本/交付物+可选 adapter）、打包与校验、A/B 最小清单、信任模型、运行形态（in-process vs sidecar） | 标准文档可让第三方不看源码写出插头；LX06 与 dot2 都能套进去 |
 | P2.2 | **安装向导设计稿**：manifest 驱动，通用步（环境/密钥/模型）+ 插头步（设备侧安装链接/参数表单/连接测试），失败诊断、幂等/续跑 | 设计稿评审通过；每一步都有“用户做什么 / RUI 做什么” |
 | P2.3 | **真·陌生人冷装**：全新目录 + 公开命令 + 向导填 key + 自动下模型 + 内置 LX06 参考插头，不复制生产配置 | 从零到第一句 ≤30 min；全程只按文档操作 |

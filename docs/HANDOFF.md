@@ -70,6 +70,11 @@
 16. **ffmpeg 换 LGPL-only 构建**；MIT 只覆盖本项目代码，第三方组件进 `THIRD_PARTY.md` 并在 README 致谢（open-xiaoai / EchoMuse / sherpa-onnx / SenseVoice / silero-vad / speexdsp / FFmpeg）。
 17. **0.1.x 不拆 LX06**：核心保留 `device/xiaoai` 作为参考插头；0.2 再抽成独立包，避免契约未定稿就拆。
 18. **安装向导 manifest 驱动**；EchoMuse Device Management 作为参考，调研产出 `docs/device-management-research.md`。
+19. **0.2 插头边界（EchoMuse 调研后定）**：只支持 manifest-only 与内置/本地可信插头；第三方可执行 adapter 默认关闭，
+    后续走 sidecar（P3 安全项），0.2 不做签名市场。
+20. **设备注册表**：继续用 `config.yaml` + 新增 `DeviceConfig.params`；不引入 SQLite、不做 approve/pending 队列、
+    不做每设备 token/证书；设备列表/详情/connect/probe/test/delete 足够 0.2。
+21. **P2.4 范围**：单设备 CRUD + 参数表单 + 连接测试 + 删除；多设备/每设备端口/配置 v3/仲裁归 P3.3/P3.4。
 
 
 ## 4. 运维手册（详见 `docs/runbook.md`）
