@@ -10,12 +10,12 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear import secrets
-from house_ear.config import Config, DeviceConfig, load_config, save_config
-from house_ear.web.api import app as app_module
-from house_ear.web.api.app import create_app
+from rui import secrets
+from rui.config import Config, DeviceConfig, load_config, save_config
+from rui.web.api import app as app_module
+from rui.web.api.app import create_app
 
-TOKEN_ENV = "HOUSE_EAR_DEVICE_TOKEN"
+TOKEN_ENV = "RUI_DEVICE_TOKEN"
 
 
 class _Plane:

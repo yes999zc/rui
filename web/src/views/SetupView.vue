@@ -296,7 +296,7 @@ const tokenEnv = computed(() => {
   const resolved = plugDetail.value?.resolved?.devices?.find(
     (device) => device.id === selectedDeviceManifest.value?.id,
   )
-  return resolved?.token_env || 'HOUSE_EAR_DEVICE_TOKEN'
+  return resolved?.token_env || 'RUI_DEVICE_TOKEN'
 })
 
 const extraParams = computed(() =>

@@ -26,10 +26,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from house_ear.config import Config, load_config  # noqa: E402
-from house_ear.device import build_adapters  # noqa: E402
-from house_ear.device.xiaoai import protocol  # noqa: E402
-from house_ear.device.xiaoai.adapter import XiaoaiAdapter  # noqa: E402
+from rui.config import Config, load_config  # noqa: E402
+from rui.env import get as env_get  # noqa: E402
+from rui.device import build_adapters  # noqa: E402
+from rui.device.xiaoai import protocol  # noqa: E402
+from rui.device.xiaoai.adapter import XiaoaiAdapter  # noqa: E402
 
 
 async def fake_speaker(port: int, token_env: str, rate: int, channels: int, seconds: float) -> None:
@@ -38,7 +39,7 @@ async def fake_speaker(port: int, token_env: str, rate: int, channels: int, seco
 
     from websockets.asyncio.client import connect
 
-    token = os.environ.get(token_env, "")
+    token = env_get(token_env)
     uri = f"ws://127.0.0.1:{port}/?token={token}"
     await asyncio.sleep(0.4)  # let the server bind
     async with connect(uri, max_size=None) as ws:
@@ -139,7 +140,7 @@ def main() -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--device", required=True)
     parser.add_argument("--seconds", type=float, default=60.0)
-    parser.add_argument("--out", default="/tmp/house-ear-capture.wav")
+    parser.add_argument("--out", default="/tmp/rui-capture.wav")
     parser.add_argument("--fake", action="store_true", help="synthesize a speaker instead of waiting")
     parser.add_argument("--connect-timeout", type=float, default=120.0)
     parser.add_argument("--json", action="store_true")

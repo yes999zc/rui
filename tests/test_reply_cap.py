@@ -12,15 +12,15 @@ import asyncio
 import logging
 from typing import Any
 
-from house_ear.config.schema import AssistantConfig, Config
-from house_ear.providers.base import ChatChunk, Transcript
-from house_ear.session.turn import (
+from rui.config.schema import AssistantConfig, Config
+from rui.providers.base import ChatChunk, Transcript
+from rui.session.turn import (
     DirectSpeech,
     TurnRunner,
     enforce_reply_cap,
     reply_cap_for,
 )
-from house_ear.trace import TurnTrace
+from rui.trace import TurnTrace
 
 
 class FakeAsr:
@@ -65,7 +65,7 @@ class FakeTts:
 
 
 def _patch_chains(monkeypatch, llm: Any, tts: FakeTts) -> None:
-    import house_ear.session.turn as turn
+    import rui.session.turn as turn
 
     monkeypatch.setattr(turn, "asr_chain", lambda providers: [("a", FakeAsr())])
     monkeypatch.setattr(turn, "llm_chain", lambda providers: [("l", llm)])
@@ -182,7 +182,7 @@ def test_a_short_answer_is_spoken_whole(monkeypatch) -> None:
 
 
 def test_an_answer_exactly_at_the_cap_is_not_touched(monkeypatch, caplog) -> None:
-    caplog.set_level(logging.INFO, logger="house_ear.session.turn")
+    caplog.set_level(logging.INFO, logger="rui.session.turn")
     assistant = AssistantConfig(reply_max_chars=10)
     _runner, result, tts = _run_turn(
         monkeypatch, llm=FakeLlm(["第一句话。第二句话。"]), assistant=assistant
@@ -195,7 +195,7 @@ def test_an_answer_exactly_at_the_cap_is_not_touched(monkeypatch, caplog) -> Non
 def test_the_everyday_cap_stops_the_speech_not_only_the_reported_reply(
     monkeypatch, caplog
 ) -> None:
-    caplog.set_level(logging.INFO, logger="house_ear.session.turn")
+    caplog.set_level(logging.INFO, logger="rui.session.turn")
     assistant = AssistantConfig(reply_max_chars=12)
     runner, result, tts = _run_turn(
         monkeypatch,
@@ -222,7 +222,7 @@ def test_an_expansion_request_gets_the_long_budget(monkeypatch) -> None:
 
 
 def test_a_searched_answer_gets_the_search_budget(monkeypatch) -> None:
-    from house_ear.tools.contract import Permission, ToolSpec
+    from rui.tools.contract import Permission, ToolSpec
 
     spec = ToolSpec(name="local.web_search", description="搜索", permission=Permission.READ)
 
@@ -256,7 +256,7 @@ def test_a_run_on_answer_is_hard_cut_at_the_cap(monkeypatch) -> None:
 
 def test_direct_speech_keeps_its_own_420_char_path(monkeypatch) -> None:
     """The briefing path truncates at 420 in `app.py`; the turn cap must not cut twice."""
-    from house_ear.tools.contract import Permission, ToolSpec
+    from rui.tools.contract import Permission, ToolSpec
 
     spec = ToolSpec(name="local.news", description="新闻", permission=Permission.READ)
 
@@ -282,8 +282,8 @@ def test_direct_speech_keeps_its_own_420_char_path(monkeypatch) -> None:
 
 def test_a_read_aloud_request_gets_the_long_budget() -> None:
     """16:41: 「帮我朗读岳阳楼记」 missed the expand list and was cut at 120 chars."""
-    from house_ear.config import Config
-    from house_ear.session.turn import reply_cap_for
+    from rui.config import Config
+    from rui.session.turn import reply_cap_for
 
     for transcript in ("帮我朗读岳阳楼记", "背诵出师表", "念全文", "朗诵一首诗"):
         cap, source = reply_cap_for(Config().assistant, transcript, [])

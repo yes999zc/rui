@@ -10,10 +10,10 @@ import asyncio
 
 import pytest
 
-from house_ear.config import Config
-from house_ear.config.schema import DeviceConfig
-from house_ear.device import registry
-from house_ear.device.contract import NullServices
+from rui.config import Config
+from rui.config.schema import DeviceConfig
+from rui.device import registry
+from rui.device.contract import NullServices
 
 
 def cfg_with(adapter: str, **device) -> Config:
@@ -38,7 +38,7 @@ def test_an_unknown_adapter_is_a_config_that_loads_and_a_device_that_does_not() 
 def test_a_new_adapter_can_be_added_from_outside_the_registry_file() -> None:
     # A different name pointing at an existing builder is enough to prove the table is
     # data: a real device ships its own module and registers it the same way.
-    registry.register("fake-new-speaker", "house_ear.device.mock:build")
+    registry.register("fake-new-speaker", "rui.device.mock:build")
     try:
         built = registry.build_adapters(cfg_with("fake-new-speaker"))
         assert "d1" in built.adapters

@@ -12,13 +12,13 @@ import asyncio
 import re
 from pathlib import Path
 
-from house_ear.config.schema import Config
-from house_ear.music.history import PlayHistory
-from house_ear.music.model import Track
-from house_ear.music.service import MusicService
-from house_ear.music.source import SourceError
-from house_ear.music.tools import build_music_tools
-from house_ear.session import phrases
+from rui.config.schema import Config
+from rui.music.history import PlayHistory
+from rui.music.model import Track
+from rui.music.service import MusicService
+from rui.music.source import SourceError
+from rui.music.tools import build_music_tools
+from rui.session import phrases
 
 
 class FlakySource:
@@ -75,7 +75,7 @@ def make(tmp_path: Path, cfg: Config | None = None, source: object | None = None
 
 def say(specs: dict, name: str, result: object) -> str:
     """The turn runner's render, verbatim: exec[status] -> PhraseBook."""
-    from house_ear.tools.contract import ToolResult
+    from rui.tools.contract import ToolResult
 
     assert isinstance(result, ToolResult), f"{name} returned {type(result)}"
     spec = specs[name]
@@ -164,7 +164,7 @@ def test_the_music_module_carries_no_wording_of_its_own() -> None:
     model-facing contract, not speech - they stay. Everything else that reaches
     a user belongs in session/phrases.py.
     """
-    source = Path("src/house_ear/music/tools.py").read_text(encoding="utf-8")
+    source = Path("src/rui/music/tools.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     allowed: set[int] = set()   # node ids of the description arguments
     for node in ast.walk(tree):
@@ -189,7 +189,7 @@ def test_a_non_transport_word_falls_through_without_crashing() -> None:
     before reaching the turn, so nothing answered at all."""
     from types import SimpleNamespace
 
-    from house_ear.web.api.app import _music_transport
+    from rui.web.api.app import _music_transport
 
     async def run() -> None:
         service, _, _, _ = make(Path("/tmp"))
@@ -207,7 +207,7 @@ def test_transport_words_fall_through_when_nothing_plays() -> None:
     player that does not exist."""
     from types import SimpleNamespace
 
-    from house_ear.web.api.app import _music_transport
+    from rui.web.api.app import _music_transport
 
     async def run() -> None:
         service, _, _, _ = make(Path("/tmp"))
@@ -222,7 +222,7 @@ def test_a_music_turn_asks_the_plane_for_an_immediate_resume() -> None:
     """The turn's tools say whether the song is the answer: music/volume -> 0 s."""
     from types import SimpleNamespace
 
-    from house_ear.web.api.app import _turn_hold
+    from rui.web.api.app import _turn_hold
 
     assert _turn_hold(SimpleNamespace(tools=["music_play"])) == 0.0
     assert _turn_hold(SimpleNamespace(tools=["local.music_next"])) == 0.0
@@ -237,7 +237,7 @@ def test_a_successful_transport_is_silent(tmp_path: Path) -> None:
     (measured 09:38:27-30). Edges still speak."""
     from types import SimpleNamespace
 
-    from house_ear.web.api.app import _music_transport
+    from rui.web.api.app import _music_transport
 
     class Runner:
         def __init__(self) -> None:
@@ -391,7 +391,7 @@ def test_music_search_returns_the_candidate_list_to_the_model(tmp_path: Path) ->
     the candidate channel docs/interaction.md §6 called missing."""
     from types import SimpleNamespace
 
-    from house_ear.session.turn import TurnRunner
+    from rui.session.turn import TurnRunner
 
     async def run() -> None:
         _, _, tools, _ = make(tmp_path)

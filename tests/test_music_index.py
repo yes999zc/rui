@@ -13,14 +13,14 @@ from typing import Any
 
 import pytest
 
-from house_ear.music import library_index as li
-from house_ear.music.library_index import (
+from rui.music import library_index as li
+from rui.music.library_index import (
     LibraryIndex,
     LibraryIndexMissing,
     classify,
     mood_of,
 )
-from house_ear.music.source import SourceError
+from rui.music.source import SourceError
 
 
 class FakeLibrary:

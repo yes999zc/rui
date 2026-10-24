@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import asyncio
 
-from house_ear.config.schema import CaptureConfig, DeviceConfig, LedConfig, VoiceConfig
-from house_ear.device.contract import Capability
-from house_ear.device.xiaoai.adapter import XiaoaiAdapter
-from house_ear.device.xiaoai.services import XiaoaiServices
+from rui.config.schema import CaptureConfig, DeviceConfig, LedConfig, VoiceConfig
+from rui.device.contract import Capability
+from rui.device.xiaoai.adapter import XiaoaiAdapter
+from rui.device.xiaoai.services import XiaoaiServices
 
 
 def _adapter(**led: object) -> XiaoaiAdapter:

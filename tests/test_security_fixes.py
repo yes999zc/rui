@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from house_ear import secrets
-from house_ear.config.schema import (
+from rui import secrets
+from rui.config.schema import (
     CaptureConfig,
     Config,
     DeviceConfig,
@@ -27,18 +27,18 @@ from house_ear.config.schema import (
     ProviderConfig,
     VoiceConfig,
 )
-from house_ear.config.store import load_config, save_config
-from house_ear.device.xiaoai.adapter import XiaoaiAdapter
-from house_ear.log_setup import LOG_FILE_NAME, setup_logging
-from house_ear.music.model import Track
-from house_ear.music.sources.navidrome import NavidromeSource, _cache_stem
-from house_ear.providers.openai_compat import MissingKey, _key
-from house_ear.providers.xfyun_tts import XfyunTts
-from house_ear.session import phrases
-from house_ear.tools.ha import HaBridge, _clean_untrusted
+from rui.config.store import load_config, save_config
+from rui.device.xiaoai.adapter import XiaoaiAdapter
+from rui.log_setup import LOG_FILE_NAME, setup_logging
+from rui.music.model import Track
+from rui.music.sources.navidrome import NavidromeSource, _cache_stem
+from rui.providers.openai_compat import MissingKey, _key
+from rui.providers.xfyun_tts import XfyunTts
+from rui.session import phrases
+from rui.tools.ha import HaBridge, _clean_untrusted
 
-SECRET_KEY = "HOUSE_EAR_TEST_CONSOLE_KEY"
-SECRET_TOKEN = "HOUSE_EAR_TEST_CONSOLE_TOKEN"
+SECRET_KEY = "RUI_TEST_CONSOLE_KEY"
+SECRET_TOKEN = "RUI_TEST_CONSOLE_TOKEN"
 CONSOLE_KEY = "from-secrets-file"
 CONSOLE_TOKEN = "console-token"
 
@@ -74,8 +74,8 @@ def test_console_secret_reaches_the_openai_compat_provider(secret_store: Path) -
 def test_console_secret_reaches_xfyun_credentials(secret_store: Path,
                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     app_env, key_env, secret_env = (
-        "HOUSE_EAR_TEST_XFYUN_APP", "HOUSE_EAR_TEST_XFYUN_KEY",
-        "HOUSE_EAR_TEST_XFYUN_SECRET",
+        "RUI_TEST_XFYUN_APP", "RUI_TEST_XFYUN_KEY",
+        "RUI_TEST_XFYUN_SECRET",
     )
     for name in (app_env, key_env, secret_env):
         monkeypatch.delenv(name, raising=False)
@@ -109,8 +109,8 @@ def test_environment_still_wins_over_the_console_file(secret_store: Path,
 
 
 def test_a_missing_secret_still_fails_closed() -> None:
-    with pytest.raises(MissingKey, match="HOUSE_EAR_TEST_ABSENT_KEY"):
-        _key(ProviderConfig(api_key_env="HOUSE_EAR_TEST_ABSENT_KEY"))
+    with pytest.raises(MissingKey, match="RUI_TEST_ABSENT_KEY"):
+        _key(ProviderConfig(api_key_env="RUI_TEST_ABSENT_KEY"))
 
 
 # ------------------------------------------------------------- 2. HA domains
@@ -318,7 +318,7 @@ def test_service_log_is_private(tmp_path: Path) -> None:
     log_file = tmp_path / "data" / LOG_FILE_NAME
     try:
         setup_logging("info", log_file)
-        logging.getLogger("house_ear.test").info("hello")
+        logging.getLogger("rui.test").info("hello")
         assert file_mode(log_file) == 0o600
     finally:
         for handler in list(root.handlers):

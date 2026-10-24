@@ -1,6 +1,6 @@
 """P1.2: a fresh install reusing an old secrets file must still answer.
 
-The cold-install template asks for `HOUSE_EAR_LLM_KEY`, while deployments from before
+The cold-install template asks for `RUI_LLM_KEY`, while deployments from before
 the rename stored `DEEPSEEK_API_KEY`. The old name is a fallback in `secrets.get()` so
 the providers keep working, and `doctor` says out loud when that fallback is carrying
 the install. Missing both names is never a silent success.
@@ -9,19 +9,20 @@ from __future__ import annotations
 
 import pytest
 
-from house_ear import secrets
-from house_ear.config import Config
-from house_ear.doctor import run_doctor
-from house_ear.providers.openai_compat import MissingKey, _key
+from rui import secrets
+from rui.config import Config
+from rui.doctor import run_doctor
+from rui.providers.openai_compat import MissingKey, _key
 
-LLM_ENV = "HOUSE_EAR_LLM_KEY"
+LLM_ENV = "RUI_LLM_KEY"
 LEGACY_ENV = "DEEPSEEK_API_KEY"
+OLD_PREFIX_ENV = "HOUSE_EAR_LLM_KEY"
 
 
 @pytest.fixture(autouse=True)
 def _isolated_keys(tmp_path, monkeypatch):
     """No ambient key may decide these tests, and the store must not leak between them."""
-    for name in (LLM_ENV, LEGACY_ENV):
+    for name in (LLM_ENV, OLD_PREFIX_ENV, LEGACY_ENV):
         monkeypatch.delenv(name, raising=False)
     secrets.configure(tmp_path)
     yield

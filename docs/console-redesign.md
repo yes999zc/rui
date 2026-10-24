@@ -7,7 +7,7 @@
 
 ## 1. 产品 / 用户 / 目标
 
-- **产品**：house-ear 是自托管的家庭语音助手（音箱 + 控制面）。控制台是唯一的人机操作面。
+- **产品**：rui 是自托管的家庭语音助手（音箱 + 控制面）。控制台是唯一的人机操作面。
 - **用户**：设备主人兼管理员（9哥）：懂技术但不耐烦；两种使用姿势——
   - 手机（390px）站在音箱旁边，装完/调完立刻试一句；
   - 桌面（1440px）坐在电脑前，检查状态、批量改配置、看日志/诊断。
@@ -29,7 +29,7 @@
 ## 3. 信息架构
 
 ```
-House-ear console
+Rui console
 ├─ 运行 RUN        overview（概览）· turns（对话）· logs（日志）· [devices 在线设备]
 ├─ 生活 LIFE       music（音乐）· memory（记忆）
 ├─ 配置 CONFIG     assistant-session（助手与会话）· speaker（音箱参数）
@@ -150,7 +150,7 @@ House-ear console
 ## 7. 国际化（i18n）
 
 - `web/src/i18n.ts`：扁平字典（`type MsgKey = keyof typeof zh`），`zh` + `en` 必须键集完全一致（类型检查保证）。
-- 语言：侧栏底部 `中文 / EN` 分段控件；`localStorage['house-ear-language']`；`<html lang="zh-Hans|en">`；
+- 语言：侧栏底部 `中文 / EN` 分段控件；`localStorage['rui-language']`；`<html lang="zh-Hans|en">`；
   `document.title` 随页面与语言变化。
 - 面板标题：`title_en` 优先，缺失回退中文；catalog 的 `label/hint/unit` 是 `{zh,en}`，按语言取。
 - 后端 PanelSpec 里的自然语言（block title/label/map/empty/按钮文案等）仍是中文字符串：

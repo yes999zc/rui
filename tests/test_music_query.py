@@ -2,7 +2,7 @@
 old build (docs/music.md §2.3)."""
 from __future__ import annotations
 
-from house_ear.music import query as q
+from rui.music import query as q
 
 
 def test_wrappers_are_stripped() -> None:

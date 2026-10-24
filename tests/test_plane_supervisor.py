@@ -17,8 +17,8 @@ import signal
 
 import pytest
 
-from house_ear.audio.client import AudioPlaneSupervisor, PlaneHandle
-from house_ear.config import load_config
+from rui.audio.client import AudioPlaneSupervisor, PlaneHandle
+from rui.config import load_config
 
 CONFIG = """\
 version: 2

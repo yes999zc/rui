@@ -81,7 +81,7 @@ API, and every write goes through the same validation the CLI uses.
 ## 2. Process model
 
 ```
-house-ear serve                      house-ear audio (child)
+rui serve                      rui audio (child)
 ├─ FastAPI: REST + console           ├─ adapter: the inbound ws (mic + speaker)
 ├─ supervisor: spawns/restarts       ├─ DSP: decimate → HP → mix → AEC → KWS → VAD
 ├─ coordinator: turn + session       ├─ playback: speak / play_file / cue (one owner)

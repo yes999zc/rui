@@ -4,10 +4,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from house_ear.music import query as q
-from house_ear.music.model import Track
-from house_ear.music.names import AliasStore, _clean
-from house_ear.music.tools import _search
+from rui.music import query as q
+from rui.music.model import Track
+from rui.music.names import AliasStore, _clean
+from rui.music.tools import _search
 
 
 class FakeSource:

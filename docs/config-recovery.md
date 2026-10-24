@@ -18,8 +18,8 @@
    - 恢复后提示“重启服务生效”（这一版不自动重启）。
 4. **CLI**：
    ```bash
-   house-ear config restore --last-good
-   house-ear config restore --defaults
+   rui config restore --last-good
+   rui config restore --defaults
    ```
    两者都会先保留当前文件/备份，再写配置；之后需要重启服务。
 

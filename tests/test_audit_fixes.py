@@ -7,7 +7,7 @@ Each test pins a promise the audit found broken:
 * the container healthcheck counted disabled devices and fell back to port 8080 when
   the config could not be read;
 * the secrets page and catalog hard-coded dev variable names, so a production install
-  filled `HOUSE_EAR_*` and nothing used it;
+  filled `RUI_*` and nothing used it;
 * saving a speaker reset a hand-tuned wake threshold back to 0.15;
 * panels put audio/ack in "foundation" while the catalog called them tier 2;
 * the console could not write the music credentials at all;
@@ -15,7 +15,6 @@ Each test pins a promise the audit found broken:
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import pathlib
 import random
@@ -24,13 +23,13 @@ import string
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear.audio.kws import write_keywords_file
-from house_ear.config import Config, DeviceConfig, load_config, save_config
-from house_ear.config.catalog import document
-from house_ear.config.schema import ProviderConfig
-from house_ear.session import memory as memory_module
-from house_ear.session.memory import MemoryStore
-from house_ear.web.api.app import _memory_context, _redact_error, create_app
+from rui.audio.kws import write_keywords_file
+from rui.config import Config, DeviceConfig, load_config, save_config
+from rui.config.catalog import document
+from rui.config.schema import ProviderConfig
+from rui.session import memory as memory_module
+from rui.session.memory import MemoryStore
+from rui.web.api.app import _memory_context, _redact_error, create_app
 
 # --------------------------------------------------------------------- fixtures
 
@@ -154,11 +153,12 @@ def test_setup_state_reports_the_speaker_link(tmp_path) -> None:
 # --------------------------------------------------------- 2. healthcheck rules
 
 def _healthcheck_module():
-    path = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "healthcheck.py"
-    spec = importlib.util.spec_from_file_location("house_ear_healthcheck", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # The rules live in the installable module; the image copies the thin launcher in
+    # deploy/. Assert the launcher exists so packaging cannot silently lose it.
+    path = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "rui-healthcheck.py"
+    assert path.is_file()
+    from rui import healthcheck as module
+
     return module
 
 
@@ -169,7 +169,7 @@ def test_healthcheck_counts_only_enabled_devices(tmp_path, monkeypatch) -> None:
     cfg.devices = [_device(), _device(device_id="kitchen", enabled=False)]
     path = tmp_path / "config.yaml"
     save_config(path, cfg)
-    monkeypatch.setenv("HOUSE_EAR_CONFIG", str(path))
+    monkeypatch.setenv("RUI_CONFIG", str(path))
     port, enabled, error = hc._config()
     assert error == ""
     assert port == 8080
@@ -180,7 +180,7 @@ def test_healthcheck_fails_closed_when_the_config_is_unreadable(tmp_path, monkey
                                                                capsys) -> None:
     hc = _healthcheck_module()
     missing = tmp_path / "nope.yaml"
-    monkeypatch.setenv("HOUSE_EAR_CONFIG", str(missing))
+    monkeypatch.setenv("RUI_CONFIG", str(missing))
     port, enabled, error = hc._config()
     assert port is None and enabled == 0
     assert "cannot read config" in error
@@ -220,11 +220,11 @@ def test_healthcheck_falls_back_to_the_configured_count_for_old_servers() -> Non
 
 def _production_like_config() -> Config:
     cfg = Config()
-    cfg.providers.catalog["asr"].api_key_env = "HOUSE_EAR_ASR_KEY"
-    cfg.providers.catalog["tts"].api_key_env = "HOUSE_EAR_TTS_KEY"
-    cfg.providers.catalog["llm"].api_key_env = "HOUSE_EAR_LLM_KEY"
+    cfg.providers.catalog["asr"].api_key_env = "RUI_ASR_KEY"
+    cfg.providers.catalog["tts"].api_key_env = "RUI_TTS_KEY"
+    cfg.providers.catalog["llm"].api_key_env = "RUI_LLM_KEY"
     cfg.tools.search.api_key_env = "DEEPSEEK_API_KEY"
-    cfg.tools.ha.token_env = "HOUSE_EAR_HA_TOKEN"
+    cfg.tools.ha.token_env = "RUI_HA_TOKEN"
     cfg.devices = [_device()]
     return cfg
 
@@ -234,16 +234,16 @@ def test_secret_names_come_from_the_chains_not_a_hardcoded_list(monkeypatch) -> 
     # A provider that no chain references must not appear: filling its key would do
     # nothing, and showing it would promise an effect it cannot have.
     cfg.providers.catalog["orphan"] = ProviderConfig(api_key_env="ORPHAN_KEY")
-    monkeypatch.setenv("HOUSE_EAR_LLM_KEY", "sk-production-secret")
+    monkeypatch.setenv("RUI_LLM_KEY", "sk-production-secret")
     secrets = document(cfg)["secrets"]
-    assert {"HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY", "HOUSE_EAR_LLM_KEY",
-            "DEEPSEEK_API_KEY", "HOUSE_EAR_HA_TOKEN", "HOUSE_EAR_DEVICE_TOKEN",
+    assert {"RUI_ASR_KEY", "RUI_TTS_KEY", "RUI_LLM_KEY",
+            "DEEPSEEK_API_KEY", "RUI_HA_TOKEN", "RUI_DEVICE_TOKEN",
             "web.auth_token"} <= set(secrets)
     assert "ORPHAN_KEY" not in secrets
-    assert secrets["HOUSE_EAR_LLM_KEY"]["has_value"] is True
-    assert secrets["HOUSE_EAR_ASR_KEY"]["has_value"] is False
-    assert secrets["HOUSE_EAR_LLM_KEY"]["used_by"] == ["llm:llm"]
-    assert secrets["HOUSE_EAR_DEVICE_TOKEN"]["used_by"] == ["device:living"]
+    assert secrets["RUI_LLM_KEY"]["has_value"] is True
+    assert secrets["RUI_ASR_KEY"]["has_value"] is False
+    assert secrets["RUI_LLM_KEY"]["used_by"] == ["llm:llm"]
+    assert secrets["RUI_DEVICE_TOKEN"]["used_by"] == ["device:living"]
     for entry in secrets.values():
         assert entry["hint"]["zh"] and entry["hint"]["en"]
         assert isinstance(entry["used_by"], list) and entry["used_by"]
@@ -269,7 +269,7 @@ def test_secret_names_follow_a_dev_config_too(monkeypatch) -> None:
 
 
 def test_the_production_template_renders_its_own_key_names(tmp_path) -> None:
-    from house_ear.__main__ import main
+    from rui.__main__ import main
 
     path = tmp_path / "config.yaml"
     assert main(["setup", "--config", str(path)]) == 0
@@ -277,10 +277,10 @@ def test_the_production_template_renders_its_own_key_names(tmp_path) -> None:
     names = set(document(cfg)["secrets"])
     # The template's actual env names, which the old hard-coded secrets page missed.
     # SiliconFlow TTS is off the template chain (2026-10-23); Volcano is the fallback,
-    # so its API key replaces the old HOUSE_EAR_TTS_KEY entry.
-    assert {"HOUSE_EAR_ASR_KEY", "HOUSE_EAR_LLM_KEY",
+    # so its API key replaces the old RUI_TTS_KEY entry.
+    assert {"RUI_ASR_KEY", "RUI_LLM_KEY",
             "XFYUN_APPID", "XFYUN_API_KEY", "XFYUN_API_SECRET",
-            "DEEPSEEK_API_KEY", "HOUSE_EAR_HA_TOKEN", "VOLC_API_KEY",
+            "DEEPSEEK_API_KEY", "RUI_HA_TOKEN", "VOLC_API_KEY",
             "web.auth_token"} <= names
 
 

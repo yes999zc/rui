@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from house_ear.music.sources.navidrome import NavidromeSource, SourceError
+from rui.music.sources.navidrome import NavidromeSource, SourceError
 
 
 def make_source(tmp_path: Path, handler, cache_tracks: int = 2) -> NavidromeSource:
@@ -94,7 +94,7 @@ def test_resolve_caches_and_evicts(tmp_path: Path, monkeypatch: pytest.MonkeyPat
                         staticmethod(lambda src, dst: dst.write_bytes(b"\x01" * 50)))
 
     src = make_source(tmp_path, lambda r: subsonic({"status": "ok"}), cache_tracks=1)
-    from house_ear.music.model import Track
+    from rui.music.model import Track
     a = Track(id="subsonic:aa", title="A", artist="X", duration=100)
     b = Track(id="subsonic:bb", title="B", artist="X", duration=100)
 

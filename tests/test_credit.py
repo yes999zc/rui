@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import asyncio
 
-from house_ear.audio.process import Credit
-from house_ear.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
-from house_ear.device.xiaoai.adapter import XiaoaiAdapter
+from rui.audio.process import Credit
+from rui.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
+from rui.device.xiaoai.adapter import XiaoaiAdapter
 
 
 class FakeDevice:

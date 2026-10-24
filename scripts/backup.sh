@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Back up the files that make a house-ear install recoverable: config/ and data/
+# Back up the files that make a rui install recoverable: config/ and data/
 # (models excluded by default - they are a re-download), plus .env and compose.
 #
 # Safety rules:
@@ -20,8 +20,8 @@ FORMAT=1
 SCRIPT_VERSION="1"
 die() { printf 'backup: %s\n' "$1" >&2; exit "${2:-2}"; }
 
-home="${HOUSE_EAR_HOME:-$HOME/house-ear}"
-out="${HOUSE_EAR_BACKUP_DIR:-$HOME/house-ear-backups}"
+home="${RUI_HOME:-${HOUSE_EAR_HOME:-$HOME/rui}}"
+out="${RUI_BACKUP_DIR:-${HOUSE_EAR_BACKUP_DIR:-$HOME/rui-backups}}"
 with_models=0
 with_env=1
 dry_run=0
@@ -43,7 +43,7 @@ done
 [ -d "$home" ] || die "home directory does not exist: $home" 3
 home="$(cd "$home" && pwd -P)"
 [ "$home" != "/" ] || die "refusing to back up /" 2
-[ -d "$home/config" ] || die "no config/ in $home (not a house-ear install?)" 3
+[ -d "$home/config" ] || die "no config/ in $home (not a rui install?)" 3
 [ -d "$home/data" ] || die "no data/ in $home" 3
 
 out="${out/#\~/$HOME}"
@@ -53,8 +53,8 @@ out="$(cd "$out" && pwd -P)"
 chmod 700 "$out"
 
 stamp="$(date +%Y%m%d-%H%M%S)"
-archive="$out/house-ear-backup-$stamp.tar.gz"
-stage="$(mktemp -d "${TMPDIR:-/tmp}/house-ear-backup.XXXXXX")"
+archive="$out/rui-backup-$stamp.tar.gz"
+stage="$(mktemp -d "${TMPDIR:-/tmp}/rui-backup.XXXXXX")"
 cleanup() {
   rm -rf -- "$stage"
   if [ "${keep_archive:-0}" != 1 ] && [ -f "$archive" ] && [ "$dry_run" = 0 ]; then
@@ -74,9 +74,9 @@ image=""
 image_id=""
 image_version=""
 if command -v docker >/dev/null 2>&1; then
-  image="$(docker inspect house-ear --format '{{.Config.Image}}' 2>/dev/null || true)"
-  image_id="$(docker inspect house-ear --format '{{.Image}}' 2>/dev/null || true)"
-  image_version="$(docker inspect house-ear --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || true)"
+  image="$(docker inspect rui --format '{{.Config.Image}}' 2>/dev/null || true)"
+  image_id="$(docker inspect rui --format '{{.Image}}' 2>/dev/null || true)"
+  image_version="$(docker inspect rui --format '{{index .Config.Labels "org.opencontainers.image.version"}}' 2>/dev/null || true)"
 fi
 case "$image_version" in '<no value>'|'') image_version="unknown" ;; esac
 [ -n "$image" ] || image="unknown"
@@ -120,7 +120,7 @@ bytes_total="$(du -sk "$stage" 2>/dev/null | awk '{print $1 * 1024}')"
 cat > "$stage/MANIFEST.json" <<JSON
 {
   "backup_format": $FORMAT,
-  "tool": "house-ear backup.sh",
+  "tool": "rui backup.sh",
   "tool_version": "$SCRIPT_VERSION",
   "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "host": "$host_name",

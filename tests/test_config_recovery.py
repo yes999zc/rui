@@ -4,15 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from house_ear.config import Config, ConfigError, load_config
-from house_ear.config.recovery import (
+from rui.config import Config, ConfigError, load_config
+from rui.config.recovery import (
     last_good_path,
     load_with_recovery,
     read_marker,
     remember_last_good,
     restore,
 )
-from house_ear.config.store import save_config
+from rui.config.store import save_config
 
 
 def _last_good(tmp_path: Path) -> tuple[Path, Config]:
@@ -56,7 +56,7 @@ def test_restore_last_good_replaces_the_broken_file(tmp_path: Path) -> None:
 def test_recovery_api_and_banner_data(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 
-    from house_ear.web.api.app import create_app
+    from rui.web.api.app import create_app
 
     path, cfg = _last_good(tmp_path)
     path.write_text("audio: [bad", encoding="utf-8")
@@ -78,7 +78,7 @@ def test_recovery_api_and_banner_data(tmp_path: Path) -> None:
 def test_successful_startup_snapshots_last_good(tmp_path: Path) -> None:
     from fastapi.testclient import TestClient
 
-    from house_ear.web.api.app import create_app
+    from rui.web.api.app import create_app
 
     path = tmp_path / "config.yaml"
     cfg = Config(system={"data_dir": str(tmp_path / "data")})

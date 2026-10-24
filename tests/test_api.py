@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config, DeviceConfig
-from house_ear.web.api.app import create_app
+from rui.config import Config, DeviceConfig
+from rui.web.api.app import create_app
 
 
 def client(cfg: Config | None = None) -> TestClient:
@@ -44,7 +44,7 @@ def test_xiaoai_device_is_reported_as_an_inbound_speaker() -> None:
 
 def test_an_adapter_that_cannot_be_built_is_reported_not_raised(monkeypatch) -> None:
     """A broken adapter must surface per device, never as a startup failure."""
-    from house_ear.device import registry
+    from rui.device import registry
 
     def boom(dev, cfg):
         raise registry.AdapterUnavailable("adapter exploded")
@@ -71,8 +71,8 @@ def test_secrets_are_not_in_payload() -> None:
 
 def test_present_key_is_reported_as_a_flag_only(monkeypatch) -> None:
     cfg = Config()
-    cfg.providers.catalog["llm"].api_key_env = "HOUSE_EAR_TEST_KEY"
-    monkeypatch.setenv("HOUSE_EAR_TEST_KEY", "sk-do-not-leak")
+    cfg.providers.catalog["llm"].api_key_env = "RUI_TEST_KEY"
+    monkeypatch.setenv("RUI_TEST_KEY", "sk-do-not-leak")
     payload = client(cfg).get("/api/v1/config").json()
     block = payload["providers"]["catalog"]["llm"]
     assert block["has_key"] is True
@@ -81,7 +81,7 @@ def test_present_key_is_reported_as_a_flag_only(monkeypatch) -> None:
 
 def test_device_token_is_reported_as_a_flag_only(monkeypatch) -> None:
     cfg = Config(devices=[DeviceConfig(id="living", adapter="mock", host="127.0.0.1")])
-    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", "dev-secret")
+    monkeypatch.setenv("RUI_DEVICE_TOKEN", "dev-secret")
     payload = client(cfg).get("/api/v1/config").json()
     assert payload["devices"][0]["has_device_token"] is True
     assert "dev-secret" not in str(payload)
@@ -109,7 +109,7 @@ def test_traces_are_empty_before_the_audio_plane_exists() -> None:
 
 def test_the_console_can_write_the_two_conversational_sections(tmp_path) -> None:
     """PUT /api/v1/config: merge, validate, back up, and apply the prompt live."""
-    from house_ear.config.store import load_config, save_config
+    from rui.config.store import load_config, save_config
 
     path = tmp_path / "config.yaml"
     save_config(path, Config())
@@ -134,7 +134,7 @@ def test_the_console_can_write_the_two_conversational_sections(tmp_path) -> None
 
 
 def test_the_write_endpoint_refuses_what_it_does_not_own(tmp_path) -> None:
-    from house_ear.config.store import save_config
+    from rui.config.store import save_config
 
     path = tmp_path / "config.yaml"
     save_config(path, Config())

@@ -5,8 +5,8 @@ import asyncio
 
 import pytest
 
-from house_ear.audio.client import AudioPlaneError, AudioPlaneSupervisor
-from house_ear.config import load_config
+from rui.audio.client import AudioPlaneError, AudioPlaneSupervisor
+from rui.config import load_config
 
 CONFIG = """\
 version: 2
@@ -89,7 +89,7 @@ def test_supervisor_reports_a_missing_device_instead_of_hanging(config_path, tmp
 def test_a_mid_song_stream_stop_is_not_a_finished_song() -> None:
     """15:53:28: the speaker dropped after a resume; the 207 s track "finished" in 0.7 s
     and the queue advanced. A short stream must not look like a natural end."""
-    from house_ear.audio.process import AudioPlane
+    from rui.audio.process import AudioPlane
 
     step = 640
     assert AudioPlane.playback_reached_end(position=1000 + 204_800, offset=1000,

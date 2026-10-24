@@ -53,7 +53,7 @@
     桌面 provider 输入框 32px，可选提到 40px。
 17. 中文未内嵌 CJK webfont（保持系统栈）；如要求全平台一致需再定。
 18. Logo GIF 未导出（页面用 SVG/CSS 动效）；需要文档/社媒素材时可抓帧生成。
-19. 改名边界：GitHub repo/镜像已是 `rui`；Python 包/CLI/配置路径仍 house-ear（兼容）。完整迁移留待单独窗口。
+19. ✅ 改名完成（0.2.0）：repo/镜像/Python 包/CLI/配置路径/环境变量统一为 `rui`；旧变量名按迁移说明回退。
 
 ## E. 本轮已完成（不要重复）
 
@@ -121,7 +121,7 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
   配置 schema + 控制台呈现），核心代码不出现品牌分支；**插头** = 一份机型描述包（机型/权限等级 A 或 B、
   能力矩阵、client 安装与连接方式、协议版本、参数 schema，加可选的 adapter 实现）；
   **插入** = 控制台添加设备时选插头/填参数 → RUI 校验 → 生成连接信息并启用，不用改 RUI 代码。
-- 已经有的地基：`src/house_ear/device/contract.py` 的 `DeviceAdapter`/`Capability`/`Transport` 就是插座雏形；
+- 已经有的地基：`src/rui/device/contract.py` 的 `DeviceAdapter`/`Capability`/`Transport` 就是插座雏形；
   `registry.register(name, target)` 是插头注册钩子；`rui-dot2-bridge` 已用「adapter 放本仓库、不改 rui 核心」
   的方式真机跑通，是第一个真实插头样板。
 - 还缺（将来做）：插头的**声明格式**（manifest：机型/能力/参数 schema/依赖/兼容版本）、安装与校验流程、

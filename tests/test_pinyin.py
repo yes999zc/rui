@@ -1,8 +1,8 @@
 """Pinyin matching, ported from the old build's measured cases."""
 from __future__ import annotations
 
-from house_ear.music import query as q
-from house_ear.session import pinyin, rules
+from rui.music import query as q
+from rui.session import pinyin, rules
 
 
 def test_simplified_and_traditional_are_the_same_sound() -> None:

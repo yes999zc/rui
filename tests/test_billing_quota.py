@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 
-from house_ear import billing
+from rui import billing
 
 
 def test_usage_totals_sums_today_and_the_window() -> None:

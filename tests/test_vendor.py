@@ -11,10 +11,10 @@ import json
 
 import pytest
 
-from house_ear.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
-from house_ear.device.xiaoai import protocol
-from house_ear.device.xiaoai.adapter import XiaoaiAdapter
-from house_ear.session.vendor import VendorWindow
+from rui.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
+from rui.device.xiaoai import protocol
+from rui.device.xiaoai.adapter import XiaoaiAdapter
+from rui.session.vendor import VendorWindow
 
 
 def instruction(namespace: str, name: str, payload: dict | None = None, as_string: bool = True):
@@ -111,7 +111,7 @@ def test_yielded_turns_are_counted_so_a_silent_assistant_is_explainable() -> Non
 def make_adapter() -> XiaoaiAdapter:
     dev = DeviceConfig(
         id="living", adapter="xiaoai", host="192.0.2.10",
-        token_env="HOUSE_EAR_TEST_DEVICE_TOKEN",
+        token_env="RUI_TEST_DEVICE_TOKEN",
     )
     return XiaoaiAdapter(dev, CaptureConfig(), VoiceConfig())
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from house_ear.audio.aec import AecChain, AecUnavailable, EchoCanceller, speex_available
+from rui.audio.aec import AecChain, AecUnavailable, EchoCanceller, speex_available
 
 pytestmark = pytest.mark.skipif(
     not speex_available(), reason="libspeexdsp is not installed on this box"
@@ -111,7 +111,7 @@ def test_a_diverged_filter_resets_instead_of_passing_garbage() -> None:
 
 
 def test_aec_reports_missing_library_instead_of_silently_doing_nothing(monkeypatch) -> None:
-    import house_ear.audio.aec as aec
+    import rui.audio.aec as aec
 
     monkeypatch.setattr(aec, "_LIB_CANDIDATES", ("/nonexistent/libspeexdsp.dylib",))
     with pytest.raises(AecUnavailable):

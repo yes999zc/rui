@@ -8,7 +8,7 @@ import { formatClock, t, type MsgKey } from '../i18n'
  * The secrets page (docs/config-catalog-contract.md §1).
  *
  * Names come from the catalog's `secrets` table (plus anything already on disk),
- * so a production install shows HOUSE_EAR_* keys and a dev install shows the
+ * so a production install shows RUI_* keys and a dev install shows the
  * provider variables — no hard-coded name list. Values are write-only: the page
  * can only ever learn `has_value`, and the input is wiped on success.
  */

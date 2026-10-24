@@ -121,7 +121,7 @@ watch(tokenOpen, async (open) => {
 })
 
 onMounted(async () => {
-  window.addEventListener('house-ear-401', onUnauthorized)
+  window.addEventListener('rui-401', onUnauthorized)
   window.addEventListener('keydown', onKeydown)
   document.addEventListener('visibilitychange', refreshSignal)
 
@@ -142,7 +142,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (timer) window.clearInterval(timer)
-  window.removeEventListener('house-ear-401', onUnauthorized)
+  window.removeEventListener('rui-401', onUnauthorized)
   window.removeEventListener('keydown', onKeydown)
   document.removeEventListener('visibilitychange', refreshSignal)
   document.body.style.overflow = ''

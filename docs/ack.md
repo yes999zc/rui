@@ -7,7 +7,7 @@ What the speaker does between "你好小瑞" and the answer. Three modes, one co
 
 On an LX06 the microphone is muted for about 1.2 s while the speaker plays. A spoken
 acknowledgement therefore eats the beginning of the request it is supposed to introduce.
-The old deployment learned this in production and settled on a 160 ms tone; house-ear
+The old deployment learned this in production and settled on a 160 ms tone; rui
 copies that decision, and `ack.max_ms` (default 600) is what keeps `mode: tts` from
 reintroducing the problem.
 
@@ -63,14 +63,14 @@ measuring it:
 ```bash
 # one configuration: 20 rounds, real KWS/VAD/ASR, fake speaker, no room needed
 uv run python scripts/measure_turn_pipeline.py \
-    --config /tmp/house-ear-scratch/house-ear-s4/real-device.yaml \
-    --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav \
+    --config /tmp/rui-scratch/rui-s4/real-device.yaml \
+    --command /tmp/rui-scratch/rui-s4/commands/01-weather.wav \
     --rounds 20 --gap-ms 0 --speed 1.0 --tight --asr-only \
     --ack-mode earcon --preroll-ms 500 --gate-preroll-ms 350 \
-    --out /tmp/house-ear-scratch/house-ear-s5a/earcon-gap0.jsonl
+    --out /tmp/rui-scratch/rui-s5a/earcon-gap0.jsonl
 
 # then aggregate a whole sweep directory
-uv run python scripts/summarize_ack.py /tmp/house-ear-scratch/house-ear-s5a
+uv run python scripts/summarize_ack.py /tmp/rui-scratch/rui-s5a
 ```
 
 `--asr-only` stops the turn after transcription: first-word loss is an ASR question and

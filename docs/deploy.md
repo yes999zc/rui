@@ -2,7 +2,7 @@
 
 **生产目标是 NAS 上的 Docker：一条命令冷装。** Mac 只是开发机（`:8091` 的开发服务和设备
 指向 Mac 的调试链路都在 `docs/HANDOFF.md`）。生产形态是 NAS 上 `deploy/install.sh` 拉镜像、
-写配置、起服务；`--network host`，默认 `:8080`，配置在 `~/house-ear/config`。
+写配置、起服务；`--network host`，默认 `:8080`，配置在 `~/rui/config`。
 
 运维手册（起停、日志、换配置、换镜像、回滚、常见故障）在
 [`docs/runbook.md`](runbook.md)。
@@ -30,12 +30,12 @@
   开通「大模型流式语音识别」资源并拿到 `VOLC_API_KEY`，再把 `providers.asr.chain` 改成
   `[volc-asr, local-asr]`；流式识别比本地 SenseVoice 多约 1 s 延迟，可在控制台随时切回。
 
-`install.sh` 里的 `house-ear setup` 会生成随机 `web.auth_token` 并打印一次：
+`install.sh` 里的 `rui setup` 会生成随机 `web.auth_token` 并打印一次：
 
 ```bash
-docker compose logs house-ear | grep "console token"   # 或：
-docker compose exec house-ear house-ear token
-docker compose exec house-ear house-ear token --rotate  # 轮换
+docker compose logs rui | grep "console token"   # 或：
+docker compose exec rui rui token
+docker compose exec rui rui token --rotate  # 轮换
 ```
 
 控制台没有 token 会返回 401（页面会提示输入 `X-Auth-Token`）。**只有在本机开发**才可以显式
@@ -51,32 +51,32 @@ curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh
 
 | 步骤 | 做什么 | 落在哪 |
 |---|---|---|
-| 1 | 拉 `docker-compose.yml` + `config.example.yaml`（参考件） | `~/house-ear/` |
-| 2 | `setup` 写**生产模板**（provider 链、模型路径、playback 16k/1ch）+ 生成 `keywords.txt`（默认唤醒词），无设备/无密钥 | `~/house-ear/config/config.yaml`、`config/keywords.txt` |
-| 3 | 生成 `.env`，含随机 device token | `~/house-ear/.env`（chmod 600） |
-| 4 | 下 SenseVoice（~239 MB）+ 从镜像 seed 复制 Silero VAD / KWS 到数据卷（旧镜像无 seed 时仍下载这三个） | `~/house-ear/data/models/` |
-| 5 | `docker compose up -d` 并等 `/health` 通过 | 容器 `house-ear` |
+| 1 | 拉 `docker-compose.yml` + `config.example.yaml`（参考件） | `~/rui/` |
+| 2 | `setup` 写**生产模板**（provider 链、模型路径、playback 16k/1ch）+ 生成 `keywords.txt`（默认唤醒词），无设备/无密钥 | `~/rui/config/config.yaml`、`config/keywords.txt` |
+| 3 | 生成 `.env`，含随机 device token | `~/rui/.env`（chmod 600） |
+| 4 | 下 SenseVoice（~239 MB）+ 从镜像 seed 复制 Silero VAD / KWS 到数据卷（旧镜像无 seed 时仍下载这三个） | `~/rui/data/models/` |
+| 5 | `docker compose up -d` 并等 `/health` 通过 | 容器 `rui` |
 
 安装脚本里可用的环境变量（契约不变，只是补充说明）：
 
 ```sh
-HOUSE_EAR_HOME=~/house-ear          # 安装目录
-HOUSE_EAR_REPO=yes999zc/rui   # fork
-HOUSE_EAR_REF=main                  # 分支/tag
-HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.1.0   # 生产建议固定 tag 或 digest
-HOUSE_EAR_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
+RUI_HOME=~/rui          # 安装目录
+RUI_REPO=yes999zc/rui   # fork
+RUI_REF=main                  # 分支/tag
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0   # 生产建议固定 tag 或 digest
+RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
                                     # 可选：raw 不通时换成镜像前缀，例如
                                     # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main
 ```
 
 > **中国大陆网络**：脚本的 fetch 已加超时/重试并强制 IPv4；如果 `raw.githubusercontent.com`
-> 仍不稳定，用 `HOUSE_EAR_RAW` 指到镜像前缀（注意有些代理会缓存旧文件，冷装前确认拿到的是 main）。
+> 仍不稳定，用 `RUI_RAW` 指到镜像前缀（注意有些代理会缓存旧文件，冷装前确认拿到的是 main）。
 > 新镜像已内置 VAD/KWS（`/opt/seed-models`），`fetch-models` 先复制它们再联网，所以 Docker
 > 冷装不再需要访问 GitHub release，只剩 hf-mirror 上的 SenseVoice ASR。自建镜像见 §3.3。
 
 ## 3. 冷装：到第一句回应
 
-`setup` 写出的是**生产模板**（`src/house_ear/config/template.yaml`）：provider 链、模型
+`setup` 写出的是**生产模板**（`src/rui/config/template.yaml`）：provider 链、模型
 路径、16 kHz 单声道播放、ack TTS 都已按生产值配好，并自动生成 `config/keywords.txt`。
 冷装只剩三件事：**加 devices[]、填 `.env` 密钥、下模型**（`install.sh` 自动完成模型这一步）。
 `config.example.yaml` 是同一份配置的带注释版本，可对照。
@@ -92,7 +92,7 @@ devices:
     wake_words: ["你好小瑞"]
     volume: 0                 # 0 = 不接管音量，沿用原厂
     listen_port: 4412         # 音箱 client 回连的端口
-    token_env: HOUSE_EAR_DEVICE_TOKEN
+    token_env: RUI_DEVICE_TOKEN
     led:
       enabled: false          # 灯环默认关；亮度按真机调，不照抄
 ```
@@ -113,14 +113,14 @@ providers:
 | 用途 | `.env` 变量 | 说明 |
 |---|---|---|
 | 本地 ASR | — | `fetch-models` 放模型，不需要 key；缺模型时走 `siliconflow_asr` |
-| 云端 ASR 兜底 | `HOUSE_EAR_ASR_KEY` | SiliconFlow |
+| 云端 ASR 兜底 | `RUI_ASR_KEY` | SiliconFlow |
 | TTS 主 | `XFYUN_APPID`、`XFYUN_API_KEY`、`XFYUN_API_SECRET` | 讯飞 websocket TTS |
 | TTS 兜底 | `VOLC_API_KEY` | 火山豆包 TTS 2.0（`volc_tts`） |
-| LLM | `HOUSE_EAR_LLM_KEY` | DeepSeek（模板用 `deepseek-flash`） |
-| HA | `HOUSE_EAR_HA_TOKEN` | 见 §5 |
+| LLM | `RUI_LLM_KEY` | DeepSeek（模板用 `deepseek-flash`） |
+| HA | `RUI_HA_TOKEN` | 见 §5 |
 | 搜索（可选） | `DEEPSEEK_API_KEY` | 模板里 `tools.search.enabled: false`，开了才需要 |
 
-密钥只放 `~/house-ear/.env`（或控制台「设置→密钥」写入 `data/secrets.yaml`，写后不可读回），
+密钥只放 `~/rui/.env`（或控制台「设置→密钥」写入 `data/secrets.yaml`，写后不可读回），
 **不要写进 config.yaml**。容器里 `env_file: .env` 注入。要换 provider（例如全用火山）
 就改 `providers.catalog` + 三条链，`config.example.yaml` 有完整写法。
 
@@ -135,20 +135,20 @@ hf-mirror 约 1 MB/s），不再等 GitHub 上那个 33 MB 的 KWS 包。这就�
 
 | 模型 | 怎么来 | 容器内路径 | 宿主机路径 |
 |---|---|---|---|
-| SenseVoice ASR（239 MB） | `install.sh` 自动 `fetch-models`，走 hf-mirror | `/data/models/sensevoice` | `~/house-ear/data/models/sensevoice` |
-| Silero VAD（~0.6 MB） | 新镜像从 `/opt/seed-models` 复制；旧镜像/源码安装回退下载 | `/data/models/silero_vad.onnx` | `~/house-ear/data/models/silero_vad.onnx` |
-| KWS 唤醒模型（32.9 MB 包） | 同上；seed 已是解包后的目录，复制时无需再解包 | `/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/` | `~/house-ear/data/models/kws/` |
+| SenseVoice ASR（239 MB） | `install.sh` 自动 `fetch-models`，走 hf-mirror | `/data/models/sensevoice` | `~/rui/data/models/sensevoice` |
+| Silero VAD（~0.6 MB） | 新镜像从 `/opt/seed-models` 复制；旧镜像/源码安装回退下载 | `/data/models/silero_vad.onnx` | `~/rui/data/models/silero_vad.onnx` |
+| KWS 唤醒模型（32.9 MB 包） | 同上；seed 已是解包后的目录，复制时无需再解包 | `/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/` | `~/rui/data/models/kws/` |
 
 **旧镜像/无 seed**：`/opt/seed-models` 不存在时，`fetch-models` 完全保持原行为
 （VAD 依次试 hf-mirror / ghproxy / GitHub；KWS 依次试 ghproxy / gh-proxy / GitHub）。
 所以滚动升级期间不需要改 `install.sh`，也不需要额外参数。
 
-compose 把 `./data:/var/lib/house-ear`，同时把 `./data/models:/data/models` 挂进容器：
+compose 把 `./data:/var/lib/rui`，同时把 `./data/models:/data/models` 挂进容器：
 数据卷负责持久化，`/data/models` 是模板和文档使用的路径。两者指向同一个宿主机目录，
 删容器重建都不丢。手动重跑（默认会先复制 seed）：
 
 ```bash
-docker run --rm --user "$(id -u):$(id -g)" -v ~/house-ear/data:/data \
+docker run --rm --user "$(id -u):$(id -g)" -v ~/rui/data:/data \
   ghcr.io/yes999zc/rui:<tag> fetch-models \
   --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
 # 网络受限时可只装 ASR+VAD（唤醒词会失效）：加 --no-kws
@@ -162,33 +162,33 @@ docker run --rm --user "$(id -u):$(id -g)" -v ~/house-ear/data:/data \
 
 | 变量 | 含义 |
 |---|---|
-| `HOUSE_EAR_ASR_URL` | SenseVoice `model.int8.onnx` 的**完整文件 URL**；`tokens.txt` 先取同一目录，失败再回退 hf-mirror |
-| `HOUSE_EAR_VAD_URL` | `silero_vad.onnx` 完整 URL，替换 VAD 列表第一项 |
-| `HOUSE_EAR_KWS_URL` | KWS `.tar.bz2` 完整 URL，替换 KWS 列表第一项（下载后仍会解包） |
+| `RUI_ASR_URL` | SenseVoice `model.int8.onnx` 的**完整文件 URL**；`tokens.txt` 先取同一目录，失败再回退 hf-mirror |
+| `RUI_VAD_URL` | `silero_vad.onnx` 完整 URL，替换 VAD 列表第一项 |
+| `RUI_KWS_URL` | KWS `.tar.bz2` 完整 URL，替换 KWS 列表第一项（下载后仍会解包） |
 
-> 新镜像默认先从 `/opt/seed-models` 复制 VAD/KWS，此时 `HOUSE_EAR_VAD_URL` /
-> `HOUSE_EAR_KWS_URL` 不会触发下载。要让这两个 URL 生效（或强制从网络重下），加
+> 新镜像默认先从 `/opt/seed-models` 复制 VAD/KWS，此时 `RUI_VAD_URL` /
+> `RUI_KWS_URL` 不会触发下载。要让这两个 URL 生效（或强制从网络重下），加
 > `--seed-dir ''`；`--force` 单独用时仍优先使用 seed。
 
 ```bash
-docker run --rm --user "$(id -u):$(id -g)" -v ~/house-ear/data:/data \
-  -e HOUSE_EAR_ASR_URL=https://models.example/sensevoice/model.int8.onnx \
-  -e HOUSE_EAR_VAD_URL=https://models.example/silero_vad.onnx \
-  -e HOUSE_EAR_KWS_URL=https://models.example/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2 \
+docker run --rm --user "$(id -u):$(id -g)" -v ~/rui/data:/data \
+  -e RUI_ASR_URL=https://models.example/sensevoice/model.int8.onnx \
+  -e RUI_VAD_URL=https://models.example/silero_vad.onnx \
+  -e RUI_KWS_URL=https://models.example/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2 \
   ghcr.io/yes999zc/rui:<tag> fetch-models \
   --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
 ```
 
-用 compose 时把它们写进 `~/house-ear/.env` 即可（`env_file` 会传入容器，改完
+用 compose 时把它们写进 `~/rui/.env` 即可（`env_file` 会传入容器，改完
 `docker compose up -d`）。`--kws-url` / `--vad-base` 仍是单 URL 覆盖（优先于对应环境变量）；
 `--base` 是 ASR 的内置回退 base，环境变量仍排第一。
 
-**唤醒词**：`setup` 已按默认「你好小瑞」生成 `~/house-ear/config/keywords.txt`，内容形如
+**唤醒词**：`setup` 已按默认「你好小瑞」生成 `~/rui/config/keywords.txt`，内容形如
 `n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞`（token、boost、阈值、显示文案）。改
 `devices[].wake_words` 后必须重新生成，否则音箱还在听旧词：
 
 ```bash
-docker run --rm -v ~/house-ear/config:/config ghcr.io/yes999zc/rui:<tag> \
+docker run --rm -v ~/rui/config:/config ghcr.io/yes999zc/rui:<tag> \
   keywords --config /config/config.yaml
 ```
 
@@ -199,20 +199,20 @@ docker run --rm -v ~/house-ear/config:/config ghcr.io/yes999zc/rui:<tag> \
 ### 3.4 `.env`
 
 ```bash
-HOUSE_EAR_LLM_KEY=...        # DeepSeek（模板 llm 链）
-HOUSE_EAR_ASR_KEY=...        # SiliconFlow（云端 ASR 兜底）
+RUI_LLM_KEY=...        # DeepSeek（模板 llm 链）
+RUI_ASR_KEY=...        # SiliconFlow（云端 ASR 兜底）
 VOLC_API_KEY=...             # 火山豆包 TTS/ASR（模板 tts 兜底；ASR 可选）
 XFYUN_APPID=...              # 讯飞 TTS（模板 tts 主）
 XFYUN_API_KEY=...
 XFYUN_API_SECRET=...
-HOUSE_EAR_HA_TOKEN=...       # 接 Home Assistant 时填
-HOUSE_EAR_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
-HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.1.0   # 可选：固定版本
+RUI_HA_TOKEN=...       # 接 Home Assistant 时填
+RUI_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0   # 可选：固定版本
 ```
 
 只填模板链里实际用到的即可：没有讯飞 key 就留空（自动落到火山 `volc_tts`，需要
 `VOLC_API_KEY`）；没有 SiliconFlow ASR key 时本地 ASR 顶上（需已跑 `fetch-models`）。
-硅基流动 TTS 已从控制台与模板链下线（2026-10-23），旧的 `HOUSE_EAR_TTS_KEY` 不再使用。
+硅基流动 TTS 已从控制台与模板链下线（2026-10-23），旧的 `RUI_TTS_KEY` 不再使用。
 
 改完 `.env` / `config.yaml` 后：`docker compose up -d`（配置读盘，无需重建镜像）。
 
@@ -222,7 +222,7 @@ HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.1.0   # 可选：固定版本
 docker compose ps                       # STATUS 应为 healthy
 curl -s localhost:8080/health | python -m json.tool
 curl -s localhost:8080/api/v1/doctor | python -m json.tool
-docker compose logs --tail=100 house-ear
+docker compose logs --tail=100 rui
 ```
 
 期望：`/health` 的 `status=ok`、`audio_plane=true`（配置了设备时）；`/api/v1/doctor`
@@ -236,8 +236,8 @@ docker compose logs --tail=100 house-ear
 不如不注册。启用需要三样东西：
 
 1. Navidrome（或任意 Subsonic 兼容服务）的地址/账号，写成 JSON **放在卷上**（
-   `config.example.yaml` 默认放数据卷：`/var/lib/house-ear/lan_media.json`，
-   宿主机 `~/house-ear/data/lan_media.json`；放配置卷 `config/lan_media.json` 也可以，
+   `config.example.yaml` 默认放数据卷：`/var/lib/rui/lan_media.json`，
+   宿主机 `~/rui/data/lan_media.json`；放配置卷 `config/lan_media.json` 也可以，
    路径以 `music.secrets_path` 为准），权限 `chmod 600`：
 
    ```json
@@ -251,8 +251,8 @@ docker compose logs --tail=100 house-ear
    music:
      enabled: true
      source: navidrome
-     secrets_path: /var/lib/house-ear/lan_media.json   # 与上面放的位置一致
-     cache_dir: /var/lib/house-ear/music_cache
+     secrets_path: /var/lib/rui/lan_media.json   # 与上面放的位置一致
+     cache_dir: /var/lib/rui/music_cache
      cache_tracks: 8
      queue_min_tracks: 2
      queue_batch: 20
@@ -268,8 +268,8 @@ docker compose logs --tail=100 house-ear
    容器内自检：
 
    ```bash
-   docker compose exec house-ear ffmpeg -version   # configuration: 不含 --enable-gpl/--enable-nonfree
-   docker compose exec house-ear ffmpeg -L          # GNU Lesser General Public ... version 2.1
+   docker compose exec rui ffmpeg -version   # configuration: 不含 --enable-gpl/--enable-nonfree
+   docker compose exec rui ffmpeg -L          # GNU Lesser General Public ... version 2.1
    ```
 
    二进制装到 `/usr/local/bin/ffmpeg`（旧镜像是 `/ffmpeg`），但代码一直按 PATH 里的
@@ -285,10 +285,10 @@ docker compose logs --tail=100 house-ear
 HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 
 1. Home Assistant 安装 MCP Server 集成并开放 `http://<ha>:8123/api/mcp`。
-2. 生成长期访问令牌，写进 `~/house-ear/.env`：
+2. 生成长期访问令牌，写进 `~/rui/.env`：
 
    ```bash
-   HOUSE_EAR_HA_TOKEN=<long-lived token>
+   RUI_HA_TOKEN=<long-lived token>
    ```
 
 3. 配置：
@@ -297,7 +297,7 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
    tools:
      ha:
        base_url: http://homeassistant.local:8123   # 代码会自动补 /api/mcp
-       token_env: HOUSE_EAR_HA_TOKEN
+       token_env: RUI_HA_TOKEN
    ```
 
    `tools.mcp_servers[]` 是**通用 MCP 预留位**：schema 已接受
@@ -306,21 +306,21 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 
 ## 6. 健康检查与日志
 
-- compose 健康检查 `python /usr/local/bin/house-ear-healthcheck`：**从 config 读端口**
+- compose 健康检查 `python /usr/local/bin/rui-healthcheck`：**从 config 读端口**
   （改 `web.port` 不会误报），`/health` 必须 200，且**配置了设备时 `audio_plane` 必须为
   true**——控制面活着但音频面死了，是这台机器最常见的「看起来在线、其实听不见」。
   `start_period: 90s`，之后每 30s 一次、3 次失败标记 unhealthy。
 - Docker 不因为 unhealthy 自动重启容器；unhealthy 是**告警**，处理见 runbook。
 - 容器 stdout/stderr：`json-file`，`max-size=10m`、`max-file=3`（30 MB 封顶）。
 - 应用自己的 `data/service.log`：2 MB × 3 轮转，控制台「日志」页读它；
-  容器内路径 `/var/lib/house-ear/service.log`。
-- 查看：`docker compose logs -f --tail=200 house-ear`；按时间/关键字过滤：
-  `docker compose logs --since 30m house-ear | grep -E "turn:|audio plane|error"`。
+  容器内路径 `/var/lib/rui/service.log`。
+- 查看：`docker compose logs -f --tail=200 rui`；按时间/关键字过滤：
+  `docker compose logs --since 30m rui | grep -E "turn:|audio plane|error"`。
 
 ## 7. 镜像版本与回滚
 
-- 不要只依赖 `latest`。生产在 `~/house-ear/.env` 里固定：
-  `HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:<版本>`（或 `@sha256:<digest>`）。
+- 不要只依赖 `latest`。生产在 `~/rui/.env` 里固定：
+  `RUI_IMAGE=ghcr.io/yes999zc/rui:<版本>`（或 `@sha256:<digest>`）。
 - 发布 tag：`vX.Y.Z` 由 CI 自动发同名 tag + `<major>.<minor>` + `latest` + `sha-<hash>`；
   `main` 分支发 `latest` 与 `sha-<hash>`。
 - 回滚：把 `.env` 的 tag 改回上一个版本 → `docker compose up -d`，然后按 §3.5 验收。
@@ -336,16 +336,16 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
     --build-arg APT_MIRROR=mirrors.aliyun.com \
     --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
     --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-    -t house-ear:dev .
+    -t rui:dev .
   ```
 
 ## 8. 卷与备份
 
 | 宿主机 | 容器内 | 内容 | 丢了会怎样 |
 |---|---|---|---|
-| `~/house-ear/config` | `/config` | `config.yaml`、`keywords.txt`（+ 可选 `lan_media.json`） | 要重配设备/provider/唤醒词 |
-| `~/house-ear/data` | `/var/lib/house-ear` | `service.log`、`secrets.yaml`、`memory.json`、提醒/会话历史、音乐缓存 | 记忆/提醒/密钥消失，模型还在（在 `data/models`） |
-| `~/house-ear/data/models` | `/data/models`（同一目录的第二个挂载点） | SenseVoice / VAD / KWS 模型 | ASR 重下 ~239 MB；VAD/KWS 从镜像 seed 恢复 |
+| `~/rui/config` | `/config` | `config.yaml`、`keywords.txt`（+ 可选 `lan_media.json`） | 要重配设备/provider/唤醒词 |
+| `~/rui/data` | `/var/lib/rui` | `service.log`、`secrets.yaml`、`memory.json`、提醒/会话历史、音乐缓存 | 记忆/提醒/密钥消失，模型还在（在 `data/models`） |
+| `~/rui/data/models` | `/data/models`（同一目录的第二个挂载点） | SenseVoice / VAD / KWS 模型 | ASR 重下 ~239 MB；VAD/KWS 从镜像 seed 恢复 |
 
 备份只要 `config/` + `data/`（models 可重下）；恢复时把目录放回、`docker compose up -d`。
 `config.yaml` 每次写盘都有时间戳备份（`config.yaml.bak.*`），改坏了用最近的备份覆盖。
@@ -353,9 +353,9 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 ## 9. 本地开发（不走容器）
 
 ```bash
-git clone https://github.com/yes999zc/rui && cd house-ear
-uv sync && uv run house-ear doctor
-uv run house-ear serve
+git clone https://github.com/yes999zc/rui && cd rui
+uv sync && uv run rui doctor
+uv run rui serve
 ```
 
 ## 10. 已知缺口（P15 记录，本版 0.0.1-p15；部分已由 Lead 接）

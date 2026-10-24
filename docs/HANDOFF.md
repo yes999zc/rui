@@ -1,4 +1,4 @@
-# HANDOFF — house-ear / 小瑞
+# HANDOFF — rui / 小瑞
 
 > 接手入口：先读这一份。历史开发日志（2026-10-20 → 2026-10-24，旧 §1–§12.35）已归档在
 > `docs/archive/HANDOFF-history-to-2026-10-24.md`；正文里出现的旧 § 编号都指那份归档。
@@ -12,7 +12,7 @@
 | 版本 | **v0.1.0**（tag `v0.1.0`，release commit `1966db6`），2026-10-24 已部署 NAS |
 | 生产镜像 | `ghcr.io/yes999zc/rui@sha256:694fc924…`（tag `0.1.0`；回滚 tag `acceptance-f2abcef`） |
 | Release | https://github.com/yes999zc/rui/releases/tag/v0.1.0 |
-| 质量 | 749 passed / 17 skipped（无模型环境）、765/1（设 `HOUSE_EAR_TEST_MODELS`）；ruff clean；web typecheck/build 绿 |
+| 质量 | 749 passed / 17 skipped（无模型环境）、765/1（设 `RUI_TEST_MODELS`）；ruff clean；web typecheck/build 绿 |
 | v1 四门槛 | 冷装 423 s；唤醒 **19/20**；barge 24.2/64.5/205.2 ms；公开仓 ✅ |
 | 附加验收 | Telegram 4/4、微信接口保留、配置恢复 smoke、备份/恢复 smoke ✅ |
 
@@ -28,19 +28,19 @@
 - IPC：5 字节帧头（type 1 + length 4）+ PCM（带 seq/ts_ms）；控制消息 JSON。音频面内部统一 `[-1,1]` 浮点。
 - 分段：跳过唤醒尾巴、保留 preroll、600 ms 静音收尾、10 s 硬截断、唤醒后 5 s 无人说话放弃；
   一轮结束后开「续听门」（无唤醒词，5 s 自动关）。
-- 设备差异全部收在 `src/house_ear/device/`（`DeviceAdapter` + `Capability` + `registry.register`）；
+- 设备差异全部收在 `src/rui/device/`（`DeviceAdapter` + `Capability` + `registry.register`）；
   控制面/音频面不为品牌加分支。新增机型 = 一个 adapter（详见 `remaining-work.md` §I/§K）。
 - 播放仲裁：提示音 > 回答 > 提醒 > 音乐；同一时刻一个 owner。
-- 渠道：`src/house_ear/channels/` 独立进程（Telegram / 微信 iLink），复用 `POST /api/v1/chat`，不依赖音频面。
+- 渠道：`src/rui/channels/` 独立进程（Telegram / 微信 iLink），复用 `POST /api/v1/chat`，不依赖音频面。
 
 ## 2. 环境与部署
 
 | 项 | 值 |
 |---|---|
 | 生产主机 | Bakey-NAS（fnOS，x86_64，Docker 28.5.2 / Compose v2.40.3） |
-| 安装目录 | `/vol1/house-ear`（compose 项目）；配置 `config/config.yaml`；数据 `data/`；模型 `data/models/` |
-| 备份 | `/vol1/house-ear-backups/`（0600，含 `.env`；最近：`house-ear-backup-20261024-125842.tar.gz`，sha256 `9c879d60…`） |
-| 冷装证据 | `/vol1/house-ear-verify/`（269 MB，可删；`install.log` 与冷装 service.log 已拷到验收工作区） |
+| 安装目录 | `/vol1/rui`（compose 项目）；配置 `config/config.yaml`；数据 `data/`；模型 `data/models/` |
+| 备份 | `/vol1/rui-backups/`（0600，含 `.env`；最近：`rui-backup-20261024-125842.tar.gz`，sha256 `9c879d60…`） |
+| 冷装证据 | `/vol1/rui-verify/`（269 MB，可删；`install.log` 与冷装 service.log 已拷到验收工作区） |
 | 端口 | 控制台 `8080`、设备入口 `4412`（host network）；`allow_no_token: false` |
 | 开发机 | Mac：仓库 + `.venv`（Python 3.13）+ Node 22；**无 docker CLI**（只有 OrbStack 的 `orb/orbctl`），compose/冷装只能在 NAS 上跑 |
 | GHCR | `0.1.0` / `0.1` / `latest` / `sha-1966db6`（多架构 amd64+arm64） |
@@ -50,7 +50,7 @@
 1. **目标载体 NAS**：生产只跑在 NAS 容器里；Mac 不作为运行宿主。
 2. **ASR**：本地 SenseVoice int8 优先；NAS 现配置为火山 ASR 单链路（省内存），本地模型保留可切回。
 3. **TTS**：讯飞主用、火山兜底；`ack.mode: tts`（NAS `ack.max_ms: 800`），冷装模板同链。
-4. **LLM**：`deepseek-flash`，thinking 关；冷装模板读 `HOUSE_EAR_LLM_KEY`，旧部署 `secrets.yaml` 用
+4. **LLM**：`deepseek-flash`，thinking 关；冷装模板读 `RUI_LLM_KEY`，旧部署 `secrets.yaml` 用
    `DEEPSEEK_API_KEY`（待 P1.2 统一）。
 5. **模型不进镜像**：`fetch-models` 下载到 data 卷；源顺序 hf-mirror → GitHub release → ghproxy 镜像
    （VAD 上游 hf 仓 2026-10-24 已失效，GitHub release 是当前主源）。
@@ -60,7 +60,7 @@
 9. **音量不自动写**，厂商会自己改 mysoftvol（见过 160→255→160）。
 10. **渠道**：NAS 只启用 Telegram（托管 gateway，出网走本机 mihomo SOCKS）；微信只保留接口
     `enabled=false`。同一 bot 只能一个长轮询消费者；**同一 4412 入口只能一个音箱客户端**。
-11. **配置恢复**：last-good + 启动回退 + 控制台 banner + `house-ear config restore`；
+11. **配置恢复**：last-good + 启动回退 + 控制台 banner + `rui config restore`；
     密钥/用户数据 0600；坏配置不静默覆盖（空文件例外，见 P1.1）。
 12. **公开仓硬约束**：不硬编码 key / 内网 IP / 私人路径；MIT；发布走 GHCR 多架构。
 13. **生产变更需 9 哥 明确点头**（部署/重启 NAS）；测试期间也不要同时跑 Mac 外部 gateway。
@@ -80,28 +80,28 @@
 ## 4. 运维手册（详见 `docs/runbook.md`）
 
 ```bash
-cd ~/house-ear                                  # NAS 上
+cd ~/rui                                  # NAS 上
 docker compose ps
 curl -s http://127.0.0.1:8080/health
-docker compose exec -T house-ear house-ear doctor
-docker compose logs --tail=100 house-ear
-docker compose exec -T house-ear house-ear token    # 只留在 shell 里，不要回显/上传
-scripts/backup.sh --out ~/house-ear-backups
-scripts/restore.sh <archive> --home /tmp/house-ear-restore-smoke
-docker compose exec -T house-ear house-ear config restore --last-good
+docker compose exec -T rui rui doctor
+docker compose logs --tail=100 rui
+docker compose exec -T rui rui token    # 只留在 shell 里，不要回显/上传
+scripts/backup.sh --out ~/rui-backups
+scripts/restore.sh <archive> --home /tmp/rui-restore-smoke
+docker compose exec -T rui rui config restore --last-good
 ```
 
-- 升级/回滚：改 `.env` 的 `HOUSE_EAR_IMAGE`（当前 `ghcr.io/yes999zc/rui:0.1.0`）→ `docker compose up -d`；
+- 升级/回滚：改 `.env` 的 `RUI_IMAGE`（当前 `ghcr.io/yes999zc/rui:0.1.0`）→ `docker compose up -d`；
   回滚用 `ghcr.io/yes999zc/rui:acceptance-f2abcef`。
 - 验收记录器：`python3 scripts/acceptance-v1.py wake|barge --url http://<NAS-IP>:8080 --out <dir>`（纯 stdlib）。
 - 开发：`.venv/bin/python -m pytest -o addopts="" -q`；`ruff check .`；`cd web && npm run typecheck && npm run build`。
-- 模型测试：`HOUSE_EAR_TEST_MODELS=/path/with/silero_vad.onnx+model dirs`。
+- 模型测试：`RUI_TEST_MODELS=/path/with/silero_vad.onnx+model dirs`。
 
 ## 5. 已知问题与欠账（与 `ROADMAP` §2/§3 对齐，基础设施优先）
 
 **P1 可靠性（0.1.1）**
 - 空 config（0 字节）→ schema defaults → `insecure_bind` 拒绝 → crash loop（未走 last-good）
-- 新模板 `HOUSE_EAR_LLM_KEY` vs 旧 `secrets.yaml` 的 `DEEPSEEK_API_KEY`
+- 新模板 `RUI_LLM_KEY` vs 旧 `secrets.yaml` 的 `DEEPSEEK_API_KEY`
 - `fetch-models` 的 httpx `timeout=None`，直连失败会拖住 fallback
 - 验收脚本输出曾在容器内 `/data/...`，容器重建后 barge JSON 丢失
 - GHCR 发布 workflow 不跑测试（tag push 直接构建）

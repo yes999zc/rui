@@ -26,10 +26,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from house_ear.config import load_config  # noqa: E402
-from house_ear.log_setup import setup_logging  # noqa: E402
-from house_ear.providers.base import TtsProvider  # noqa: E402
-from house_ear.providers.chain import tts_chain  # noqa: E402
+from rui.config import load_config  # noqa: E402
+from rui.env import get as env_get  # noqa: E402
+from rui.log_setup import setup_logging  # noqa: E402
+from rui.providers.base import TtsProvider  # noqa: E402
+from rui.providers.chain import tts_chain  # noqa: E402
 
 log = logging.getLogger("measure_tts_latency")
 
@@ -42,7 +43,7 @@ DEFAULT_TEXTS = (
     "现在几点了，小瑞？",
     "帮我定一个明天早上七点的闹钟。",
     "播放一首周杰伦的《安静》。",
-    "帮我打开 GitHub 上的 house-ear 仓库。",
+    "帮我打开 GitHub 上的 rui 仓库。",
     "帮我查一下从沈阳到北京的高铁。",
     "冰箱里还有没有牛奶？",
     "请用一句话解释什么是回声消除。",
@@ -62,7 +63,7 @@ class Sample:
 
 
 def load_env_file(path: Path) -> None:
-    """Provider keys live in $HOUSE_EAR_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
+    """Provider keys live in $RUI_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
     if not path.exists():
         return
     for line in path.read_text().splitlines():
@@ -208,7 +209,7 @@ def main() -> int:
                              "cycles when shorter")
     parser.add_argument("--texts", default="",
                         help="comma-separated sentences (default: 10 built-in Chinese ones)")
-    parser.add_argument("--env", default=os.environ.get("HOUSE_EAR_ENV_FILE", ".env"),
+    parser.add_argument("--env", default=env_get("RUI_ENV_FILE", ".env"),
                         help="KEY=VALUE file with provider keys, loaded without overwriting "
                              "the caller's environment")
     args = parser.parse_args()

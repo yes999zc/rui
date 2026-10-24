@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from house_ear.audio.ring import ArrivalStats, PcmRing
+from rui.audio.ring import ArrivalStats, PcmRing
 
 
 def test_ring_drops_instead_of_growing() -> None:

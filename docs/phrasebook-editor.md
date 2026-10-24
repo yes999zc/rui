@@ -340,8 +340,8 @@ ha.multi_entity_rule       —
 
 | 文件 | 内容 |
 |---|---|
-| `src/house_ear/session/phrases.py`（改） | `DEFAULT_SLOTS`（由 DEFAULTS 自动解析，不手写）；`validate_override(key, template) -> list[str]`；`validate_overrides(mapping) -> {key: [errors]}`；`apply_overrides(mapping)`（全有或全无，非法抛 `PhraseOverrideError(errors)`）；`load_overrides(path) -> (applied, errors)`（永不抛，坏文件保留默认）；`reset(key | None)`；`current_overrides()`；`snapshot()`；`PhraseBook.template()`；`render()` 缺槽改为 **warning + `book.last_errors`**（仍返回 `_strip_slots` 的兜底文本，行为不炸） |
-| `src/house_ear/session/phrasebook.py`（新） | `data_dir/phrases.yaml` 读写：`read(path)`、`load(data_dir)`、`save(data_dir, overrides)`、`clear(data_dir, keys=None)`、`document(data_dir)`、`path_for()`；YAML 复用 `config.store._yaml`；原子 tmp+replace；0600；保留 1 个 `.bak-*`；只存 `version/updated_at/overrides` |
+| `src/rui/session/phrases.py`（改） | `DEFAULT_SLOTS`（由 DEFAULTS 自动解析，不手写）；`validate_override(key, template) -> list[str]`；`validate_overrides(mapping) -> {key: [errors]}`；`apply_overrides(mapping)`（全有或全无，非法抛 `PhraseOverrideError(errors)`）；`load_overrides(path) -> (applied, errors)`（永不抛，坏文件保留默认）；`reset(key | None)`；`current_overrides()`；`snapshot()`；`PhraseBook.template()`；`render()` 缺槽改为 **warning + `book.last_errors`**（仍返回 `_strip_slots` 的兜底文本，行为不炸） |
+| `src/rui/session/phrasebook.py`（新） | `data_dir/phrases.yaml` 读写：`read(path)`、`load(data_dir)`、`save(data_dir, overrides)`、`clear(data_dir, keys=None)`、`document(data_dir)`、`path_for()`；YAML 复用 `config.store._yaml`；原子 tmp+replace；0600；保留 1 个 `.bak-*`；只存 `version/updated_at/overrides` |
 | `tests/test_phrasebook.py`（新，15 条） | 49 键槽位契约；改措辞/换顺序通过、删槽/加槽/未知键/坏括号/format spec/换行/控制字符/超长拒绝；apply/reset；缺槽记录 last_errors；嵌套 taste；文件 round-trip/0600/备份/坏文件/单键非法全不生效/未知键 unused/clear/document；`load_overrides` 入口；两条 YAML 剧本契约 |
 
 ### 11.2 最终槽位规则（代码事实）

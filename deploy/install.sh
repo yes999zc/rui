@@ -2,11 +2,11 @@
 # One command: lay down compose + config + env, then start the service.
 set -eu
 
-REPO="${HOUSE_EAR_REPO:-yes999zc/rui}"
-REF="${HOUSE_EAR_REF:-main}"
-IMAGE="${HOUSE_EAR_IMAGE:-ghcr.io/$REPO:latest}"
-DIR="${HOUSE_EAR_HOME:-$HOME/house-ear}"
-RAW="${HOUSE_EAR_RAW:-https://raw.githubusercontent.com/$REPO/$REF}"
+REPO="${RUI_REPO:-${HOUSE_EAR_REPO:-yes999zc/rui}}"
+REF="${RUI_REF:-${HOUSE_EAR_REF:-main}}"
+IMAGE="${RUI_IMAGE:-${HOUSE_EAR_IMAGE:-ghcr.io/$REPO:latest}}"
+DIR="${RUI_HOME:-${HOUSE_EAR_HOME:-$HOME/rui}}"
+RAW="${RUI_RAW:-${HOUSE_EAR_RAW:-https://raw.githubusercontent.com/$REPO/$REF}}"
 # Every fetch below is bounded: on a mainland network raw.githubusercontent.com can
 # accept the TCP connection and then stall forever, and this script used to hang at
 # step [1/5] with no output (seen 2026-10-24). A timeout turns that into a visible
@@ -78,17 +78,17 @@ if [ ! -f "$DIR/.env" ]; then
   # One random secret per install, never printed except as a length.
   DEVICE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   cat > "$DIR/.env" <<ENV
-HOUSE_EAR_LLM_KEY=
-HOUSE_EAR_ASR_KEY=
+RUI_LLM_KEY=
+RUI_ASR_KEY=
 VOLC_API_KEY=
 XFYUN_APPID=
 XFYUN_API_KEY=
 XFYUN_API_SECRET=
-HOUSE_EAR_HA_TOKEN=
-HOUSE_EAR_DEVICE_TOKEN=$DEVICE_TOKEN
+RUI_HA_TOKEN=
+RUI_DEVICE_TOKEN=$DEVICE_TOKEN
 # Pin the image compose uses, so a later plain `docker compose up -d` (or a reboot)
 # keeps the version that was installed instead of falling back to :latest.
-HOUSE_EAR_IMAGE=$IMAGE
+RUI_IMAGE=$IMAGE
 ENV
   chmod 600 "$DIR/.env"
   echo "      wrote .env with a generated device token (${#DEVICE_TOKEN} hex chars)"
@@ -134,15 +134,15 @@ echo "[5/5] starting"
 # A second install on the same host would collide on the fixed container name. Fail with
 # an actionable message instead of a raw Docker "Conflict" (seen while testing a cold
 # install next to a running production instance on 2026-10-24).
-if docker ps -a --format '{{.Names}}' | grep -qx house-ear; then
-  echo "ERROR: a container named 'house-ear' already exists."
+if docker ps -a --format '{{.Names}}' | grep -qx rui; then
+  echo "ERROR: a container named 'rui' already exists."
   echo "       stop the other install first, e.g. (cd /path/to/other/install && docker compose down)"
   exit 1
 fi
 cd "$DIR"
 # Pass the compose file explicitly: it also pins the project directory, so a stray cwd
 # can never make compose start the *other* install's project.
-HOUSE_EAR_IMAGE="$IMAGE" docker compose -f "$DIR/docker-compose.yml" --project-directory "$DIR" up -d
+RUI_IMAGE="$IMAGE" docker compose -f "$DIR/docker-compose.yml" --project-directory "$DIR" up -d
 
 # Wait for the service instead of printing a URL that may still 502. The probe is the
 # image's own healthcheck: it reads web.port from config and also requires the audio
@@ -151,7 +151,7 @@ HOUSE_EAR_IMAGE="$IMAGE" docker compose -f "$DIR/docker-compose.yml" --project-d
 echo "      waiting for the service to answer /health"
 i=0
 while [ "$i" -lt 120 ]; do
-  if docker compose exec -T house-ear house-ear-healthcheck >/dev/null 2>&1; then
+  if docker compose exec -T rui rui-healthcheck >/dev/null 2>&1; then
     echo "      healthy"
     break
   fi
@@ -159,15 +159,15 @@ while [ "$i" -lt 120 ]; do
   sleep 1
 done
 if [ "$i" -ge 120 ]; then
-  echo "      WARNING: not healthy after 120 s; inspect: docker compose logs --tail=100 house-ear"
+  echo "      WARNING: not healthy after 120 s; inspect: docker compose logs --tail=100 rui"
 fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 PORT="$(grep -E '^[[:space:]]*port:' "$DIR/config/config.yaml" 2>/dev/null | head -1 | awk '{print $2}')"
 echo
 echo "done. open http://${IP:-127.0.0.1}:${PORT:-8080}/"
-echo "  doctor:  docker compose exec house-ear house-ear doctor"
-echo "  logs:    docker compose logs -f house-ear"
+echo "  doctor:  docker compose exec rui rui doctor"
+echo "  logs:    docker compose logs -f rui"
 echo "  keys:    fill in $DIR/.env, then: docker compose up -d"
 echo "  speaker: open the console -> Setup -> Speaker connection to copy the ws URL + device token"
 echo "           (step-by-step: docs/open-xiaoai-client.md)"

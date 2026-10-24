@@ -10,9 +10,9 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from house_ear.__main__ import cmd_setup, cmd_token, insecure_bind
-from house_ear.config import Config, load_config
-from house_ear.web.api.app import create_app
+from rui.__main__ import cmd_setup, cmd_token, insecure_bind
+from rui.config import Config, load_config
+from rui.web.api.app import create_app
 
 
 def test_an_exposed_console_without_a_token_refuses_to_start() -> None:

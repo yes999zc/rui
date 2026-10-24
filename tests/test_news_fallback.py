@@ -13,8 +13,8 @@ import json
 
 import pytest
 
-from house_ear.config import Config
-from house_ear.tools import info
+from rui.config import Config
+from rui.tools import info
 
 
 @pytest.fixture()
@@ -82,7 +82,7 @@ def test_a_stale_cache_is_not_read(cfg, tmp_path, monkeypatch) -> None:
 
 def test_search_backs_the_digest_when_mirrors_and_cache_are_down(cfg, monkeypatch) -> None:
     """The search API is the endpoint the turns already rely on; use it as a fallback."""
-    from house_ear.session.briefing import from_news
+    from rui.session.briefing import from_news
 
     async def down(url, timeout, params=None):
         raise OSError("network unreachable")
@@ -137,8 +137,8 @@ def test_the_search_fallback_is_a_short_spoken_digest(cfg, monkeypatch) -> None:
 def test_a_long_direct_script_is_cut_for_the_turn_budget() -> None:
     """A verbatim briefing longer than the turn can synthesise is truncated at a
     sentence boundary; history still carries the whole script."""
-    from house_ear.session.briefing import from_news
-    from house_ear.web.api.app import DIRECT_SPEECH_MAX_CHARS, _direct_speech
+    from rui.session.briefing import from_news
+    from rui.web.api.app import DIRECT_SPEECH_MAX_CHARS, _direct_speech
 
     items = [f"第{i}条新闻的内容" * 20 + "。" for i in range(6)]
     brief = from_news(items, date=_today(), limit=6)

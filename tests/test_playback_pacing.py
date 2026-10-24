@@ -21,14 +21,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from house_ear.audio.process import (
+from rui.audio.process import (
     PLAYBACK_GAP_MIN_MS,
     PREBUFFER_TIMEOUT_EXTRA_S,
     AudioPlane,
 )
-from house_ear.audio.protocol import Metrics, encode_json, parse_control
-from house_ear.config import Config
-from house_ear.trace import TurnTrace
+from rui.audio.protocol import Metrics, encode_json, parse_control
+from rui.config import Config
+from rui.trace import TurnTrace
 
 
 class RecordingAdapter:

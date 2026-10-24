@@ -200,8 +200,8 @@ restart 字段保存后返回 `restart_fields`，界面显示 `docker compose re
 
 ### 12.3 鉴权与安全
 
-- 非 loopback 绑定且 `web.auth_token` 为空时**拒绝启动**；`house-ear setup` 生成 token 并打印一次，
-  `house-ear token` 可打印，`--rotate` 轮换。控制台在 401 时提示输入 `X-Auth-Token`。
+- 非 loopback 绑定且 `web.auth_token` 为空时**拒绝启动**；`rui setup` 生成 token 并打印一次，
+  `rui token` 可打印，`--rotate` 轮换。控制台在 401 时提示输入 `X-Auth-Token`。
 - `web.allow_anonymous` 只在本机开发显式打开（catalog 里标「危险」并写明后果）；
   dev 配置 `tools-4399-dev.yaml` 已开，生产模板默认关闭。
 - `hmac.compare_digest` + 每 IP 失败限速（10 次/分钟 → 429）。

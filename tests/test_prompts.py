@@ -5,9 +5,9 @@ model receives, and what never leaves the speaker.
 """
 from __future__ import annotations
 
-from house_ear.config.schema import AssistantConfig
-from house_ear.session import prompts
-from house_ear.session.text import (
+from rui.config.schema import AssistantConfig
+from rui.session import prompts
+from rui.session.text import (
     clean_reply,
     has_markup,
     sanitize_spoken,
@@ -94,7 +94,7 @@ def test_sanitize_spoken_drops_markup_fragments_between_sentences() -> None:
 
 def test_the_token_budget_can_hold_the_long_band() -> None:
     """max_tokens is a ceiling, not a target - but 220 cut the 900-character band in half."""
-    from house_ear.config.schema import ProviderConfig
+    from rui.config.schema import ProviderConfig
 
     assert ProviderConfig().max_tokens >= 1200
 
@@ -108,7 +108,7 @@ def test_the_old_wake_word_still_works_for_the_old_homophones() -> None:
 
 
 def test_session_rules_keep_noise_and_stop_words_out_of_the_model() -> None:
-    from house_ear.session import rules
+    from rui.session import rules
 
     # noise: the real-device 「嗯。」 that became a whole turn
     for text in ("嗯。", "嗯嗯", "啊？", "。。。", "", "  "):
@@ -130,7 +130,7 @@ def test_session_rules_keep_noise_and_stop_words_out_of_the_model() -> None:
     assert rules.stop_reply(0) != rules.stop_reply(1)
 
     # while music plays, 停止/别放 stops the sound; 退下吧 only dismisses the talk
-    from house_ear.session.rules import is_dismiss
+    from rui.session.rules import is_dismiss
 
     assert is_dismiss("退下吧")
     assert is_dismiss("不聊了。")
@@ -140,7 +140,7 @@ def test_session_rules_keep_noise_and_stop_words_out_of_the_model() -> None:
 
 def test_what_we_just_said_cannot_become_a_turn() -> None:
     """Ported from the old build's `_is_self_echo`, whose filler case started this."""
-    from house_ear.session.rules import SpokenMemory
+    from rui.session.rules import SpokenMemory
 
     m = SpokenMemory()
     m.remember("我想想。")                     # the incident: our own filler came back
@@ -182,7 +182,7 @@ def test_transport_words_are_recognised_before_the_dismiss_list() -> None:
     """Measured 08:24:52: 「暂停」 is in end_words, so the session ended and the
     song played on. The app now asks the transport layer first; this test pins the
     word sets that make that safe."""
-    from house_ear.session import rules
+    from rui.session import rules
 
     # the four transports, including the two that are also dismiss words
     assert rules.music_transport("暂停") == "pause"
@@ -199,7 +199,7 @@ def test_transport_words_are_recognised_before_the_dismiss_list() -> None:
 
 def test_volume_words_are_recognised_without_a_model() -> None:
     """Measured 09:03: 「音量调到50%」 answered 「调到50%了」 with no tool call."""
-    from house_ear.session import rules
+    from rui.session import rules
 
     assert rules.volume_level("音量大一点") == "up"
     assert rules.volume_level("声音小点") == "down"
@@ -214,7 +214,7 @@ def test_volume_words_are_recognised_without_a_model() -> None:
 def test_a_bare_device_name_is_a_question_not_a_command() -> None:
     """The old build measured 5/5 runs turning the light ON for 「餐厅灯。」 - the
     model guessed the direction when the ASR ate the verb."""
-    from house_ear.session import rules
+    from rui.session import rules
 
     assert rules.verbless_device_name("餐厅灯。")
     assert rules.verbless_device_name("儿童房的灯")
@@ -226,7 +226,7 @@ def test_a_bare_device_name_is_a_question_not_a_command() -> None:
 
 def test_a_claim_without_a_tool_call_is_caught() -> None:
     """2 of 3 identical runs answered 「餐厅灯已经关掉了」 with zero tool calls."""
-    from house_ear.session import rules
+    from rui.session import rules
 
     assert rules.claims_device_success("关闭餐厅灯。", "餐厅灯已经关掉了。")
     assert rules.claims_device_success("把窗帘拉上", "好，窗帘关好了。")

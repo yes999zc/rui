@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 from ruamel.yaml import YAML
 
-from house_ear import __version__
-from house_ear.device.contract import Capability, Transport
-from house_ear.plugins import (
+from rui import __version__
+from rui.device.contract import Capability, Transport
+from rui.plugins import (
     DEVICE_SCHEMA,
     PLUGIN_SCHEMA,
     DeviceArtifact,

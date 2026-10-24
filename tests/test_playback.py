@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 from websockets.asyncio.client import connect
 
-from house_ear.audio.client import AudioPlaneSupervisor
-from house_ear.audio.protocol import PlayFile, StopAudio
-from house_ear.config import load_config
-from house_ear.device.xiaoai import protocol
+from rui.audio.client import AudioPlaneSupervisor
+from rui.audio.protocol import PlayFile, StopAudio
+from rui.config import load_config
+from rui.device.xiaoai import protocol
 
-TOKEN_ENV = "HOUSE_EAR_PLAY_TOKEN"
+TOKEN_ENV = "RUI_PLAY_TOKEN"
 TOKEN = "play-token"
 
 
@@ -65,7 +65,7 @@ audio:
 
 def test_play_file_reaches_the_speaker_and_stop_play_follows(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv(TOKEN_ENV, TOKEN)
-    monkeypatch.setenv("HOUSE_EAR_AUDIO_SOCK", str(tmp_path / "audio.sock"))
+    monkeypatch.setenv("RUI_AUDIO_SOCK", str(tmp_path / "audio.sock"))
     tone = tmp_path / "tone.wav"
     write_tone(tone)
     port = free_port()

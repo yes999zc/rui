@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from house_ear.session.router import WakeArbiter, WakeEvent, decide
+from rui.session.router import WakeArbiter, WakeEvent, decide
 
 
 def test_earliest_wins() -> None:

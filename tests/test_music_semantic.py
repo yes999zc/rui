@@ -11,10 +11,10 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from house_ear.music import semantic
-from house_ear.music.library_index import LibraryIndex
-from house_ear.music.model import Track
-from house_ear.music.source import SourceError
+from rui.music import semantic
+from rui.music.library_index import LibraryIndex
+from rui.music.model import Track
+from rui.music.source import SourceError
 
 
 def song(sid: str, title: str, artist: str = "", genre: str = "",

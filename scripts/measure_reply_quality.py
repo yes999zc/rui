@@ -2,8 +2,8 @@
 """Measure reply quality: the same question N times, through the real ASR and LLM.
 
     uv run python scripts/measure_reply_quality.py --config real-device.yaml \
-        --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav --rounds 20 \
-        --out /tmp/house-ear-scratch/house-ear-s5b/baseline-weather.jsonl
+        --command /tmp/rui-scratch/rui-s4/commands/01-weather.wav --rounds 20 \
+        --out /tmp/rui-scratch/rui-s5b/baseline-weather.jsonl
 
 Turn quality is not an audio question: the transcript is the same in every round, so what
 is being measured is the prompt, the history window and the reply shaping. This harness
@@ -36,11 +36,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from house_ear import secrets  # noqa: E402
-from house_ear.config import load_config  # noqa: E402
-from house_ear.session.turn import TurnRunner  # noqa: E402
-from house_ear.tools.info import build_tools  # noqa: E402
-from house_ear.trace import TurnTrace  # noqa: E402
+from rui import secrets  # noqa: E402
+from rui.config import load_config  # noqa: E402
+from rui.env import get as env_get  # noqa: E402
+from rui.session.turn import TurnRunner  # noqa: E402
+from rui.tools.info import build_tools  # noqa: E402
+from rui.trace import TurnTrace  # noqa: E402
 
 DIGITS = re.compile(r"[0-9０-９]|零|一|二|三|四|五|六|七|八|九|十|两")
 WEATHER = re.compile(r"晴|雨|雪|多云|阴天|度|风力|空气|霾|雾")
@@ -49,7 +50,7 @@ DIGIT_EXEMPT = ("一", "两句", "万一")
 
 
 def load_env_file(path: Path) -> None:
-    """Provider keys live in $HOUSE_EAR_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
+    """Provider keys live in $RUI_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
     if not path.exists():
         return
     for line in path.read_text().splitlines():
@@ -178,8 +179,8 @@ def main() -> int:
     p.add_argument("--no-tools", dest="tools", action="store_false",
                    help="run without the information tools (reproduces the S5b baseline)")
     p.add_argument("--tts", action="store_true", help="also synthesise (costs time, no data)")
-    p.add_argument("--out", default="/tmp/house-ear-quality.jsonl")
-    p.add_argument("--env", default=os.environ.get("HOUSE_EAR_ENV_FILE", ".env"))
+    p.add_argument("--out", default="/tmp/rui-quality.jsonl")
+    p.add_argument("--env", default=env_get("RUI_ENV_FILE", ".env"))
     return asyncio.run(run(p.parse_args()))
 
 

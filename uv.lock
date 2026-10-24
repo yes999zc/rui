@@ -268,65 +268,6 @@ wheels = [
 ]
 
 [[package]]
-name = "house-ear"
-version = "0.0.1"
-source = { editable = "." }
-dependencies = [
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "psutil" },
-    { name = "pydantic" },
-    { name = "pypinyin" },
-    { name = "ruamel-yaml" },
-    { name = "segno" },
-    { name = "socksio" },
-    { name = "uvicorn" },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-channels = [
-    { name = "cryptography" },
-]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-kws = [
-    { name = "sherpa-onnx" },
-]
-weixin-voice = [
-    { name = "pilk" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cryptography", marker = "extra == 'channels'", specifier = ">=42" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
-    { name = "mcp", specifier = ">=2.3.0" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "pilk", marker = "extra == 'weixin-voice'", specifier = ">=0.2.4" },
-    { name = "psutil", specifier = ">=5.9" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "pypinyin", specifier = ">=0.55.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "ruamel-yaml", specifier = ">=0.18" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
-    { name = "segno", specifier = ">=1.6" },
-    { name = "sherpa-onnx", marker = "extra == 'kws'", specifier = ">=1.12" },
-    { name = "socksio", specifier = ">=1.0" },
-    { name = "uvicorn", specifier = ">=0.30" },
-    { name = "websockets", specifier = ">=13" },
-]
-provides-extras = ["dev", "kws", "channels", "weixin-voice"]
-
-[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1123,6 +1064,65 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6a/2e/da3d9589bae8e8b58f3a48bd5bc0b980232fb14a83bf02c3be7660f87c1b/ruff-0.17.1-py3-none-win_amd64.whl", hash = "sha256:5df76f16580fab58d0f6c98a3ac254a4abceb7b2489b8b678335869cff77b3d7", size = 10097955, upload-time = "2026-10-15T15:23:13.309Z" },
     { url = "https://files.pythonhosted.org/packages/df/c9/0f2a4dea06a5e12c1191ee3d96b1e1233797d0d5e18f97a2b909a95a9836/ruff-0.17.1-py3-none-win_arm64.whl", hash = "sha256:42400b9a6ff8515ff27796f07f92e0195be011c86e81e381606f58ea5502fef4", size = 9853542, upload-time = "2026-10-15T15:23:16.05Z" },
 ]
+
+[[package]]
+name = "rui"
+version = "0.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "psutil" },
+    { name = "pydantic" },
+    { name = "pypinyin" },
+    { name = "ruamel-yaml" },
+    { name = "segno" },
+    { name = "socksio" },
+    { name = "uvicorn" },
+    { name = "websockets" },
+]
+
+[package.optional-dependencies]
+channels = [
+    { name = "cryptography" },
+]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+kws = [
+    { name = "sherpa-onnx" },
+]
+weixin-voice = [
+    { name = "pilk" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", marker = "extra == 'channels'", specifier = ">=42" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
+    { name = "mcp", specifier = ">=2.3.0" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pilk", marker = "extra == 'weixin-voice'", specifier = ">=0.2.4" },
+    { name = "psutil", specifier = ">=5.9" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pypinyin", specifier = ">=0.55.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "ruamel-yaml", specifier = ">=0.18" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "segno", specifier = ">=1.6" },
+    { name = "sherpa-onnx", marker = "extra == 'kws'", specifier = ">=1.12" },
+    { name = "socksio", specifier = ">=1.0" },
+    { name = "uvicorn", specifier = ">=0.30" },
+    { name = "websockets", specifier = ">=13" },
+]
+provides-extras = ["dev", "kws", "channels", "weixin-voice"]
 
 [[package]]
 name = "segno"

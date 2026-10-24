@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from house_ear.device.xiaoai import protocol
+from rui.device.xiaoai import protocol
 
 
 def test_request_is_a_text_control_frame() -> None:
@@ -78,7 +78,7 @@ def test_base64_helper_matches_stdlib() -> None:
 def test_a_vendor_dialog_finish_is_the_end_signal() -> None:
     """Measured 08:49: the vendor sent `playing Playing` but never `playing Idle`;
     Dialog.Finish is the end that actually arrives, and V4 gives music back on it."""
-    from house_ear.device.xiaoai.protocol import parse_vendor_signal
+    from rui.device.xiaoai.protocol import parse_vendor_signal
 
     line = {"header": {"namespace": "Dialog", "name": "Finish"}, "payload": {}}
     signal = parse_vendor_signal({"event": "instruction", "data": {"NewLine": line}})
@@ -89,7 +89,7 @@ def test_an_intermediate_recognition_is_a_soft_vendor_signal() -> None:
     """Measured 08:58:29.97: the vendor's recognizer produced intermediate results
     0.7 s after its wake, 2.5 s before the final transcript. Music parks on that,
     without the 12 s quiet window the final wake opens."""
-    from house_ear.device.xiaoai.protocol import parse_vendor_signal
+    from rui.device.xiaoai.protocol import parse_vendor_signal
 
     line = {"header": {"namespace": "SpeechRecognizer", "name": "RecognizeResult"},
             "payload": {"is_final": False, "results": [{"text": "今天"}]}}

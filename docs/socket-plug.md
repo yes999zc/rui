@@ -94,7 +94,7 @@ runtime:                      # adapter 怎么跑
   entrypoint: "rui_plugin_example:build"   # in-process 必填
   image: "ghcr.io/example/rui-plugin-example:1.2.0"  # sidecar 必填
   listen_port: 4412           # inbound 设备端口（默认 4412）
-  token_env: HOUSE_EAR_DEVICE_TOKEN   # 连接令牌的环境变量名
+  token_env: RUI_DEVICE_TOKEN   # 连接令牌的环境变量名
 params:                       # 向导要渲染的表单（用户可填）
   - key: host
     label: "音箱地址"
@@ -116,7 +116,7 @@ params:                       # 向导要渲染的表单（用户可填）
     required: true
     help: "由 RUI 生成或向导写入；不要发到公开渠道"
 compatibility:
-  rui_min: "0.1.0"
+  rui_min: "0.2.0"
   tested_with: ["0.1.0"]
   notes: "A 类需要 open-xiaoai client ≥ v0.x；固件 1.94.x 验证"
 acceptance:                   # 插头作者自己的验收记录（人读 + 向导展示）
@@ -129,7 +129,7 @@ acceptance:                   # 插头作者自己的验收记录（人读 + 向
 - `class`、`capabilities`、`transport`、`params` 必填；`device_side`、`runtime` 视情况。
 - 能力缺省即降级：例如无 `led` 不显示灯效配置；无 `reference` 不能承诺放歌打断。
 - 参数类型：`string | int | bool | list | secret | choice`；`secret` 只写不读，日志不回显，且 manifest 不得写 `default`（只能由用户或 RUI 写入）；`choice` 必须提供非空 `options`，`default` 必须在其中。
-- 端口/令牌默认值来自 RUI 约定（`listen_port: 4412`、`token_env: HOUSE_EAR_DEVICE_TOKEN`），manifest 可覆盖但要在向导里显式提示。
+- 端口/令牌默认值来自 RUI 约定（`listen_port: 4412`、`token_env: RUI_DEVICE_TOKEN`），manifest 可覆盖但要在向导里显式提示。
 
 ## 6. 安装向导契约（RUI 读 manifest 后渲染）
 
@@ -161,7 +161,7 @@ acceptance:                   # 插头作者自己的验收记录（人读 + 向
 
 规则：`trust=third-party` 默认 sidecar；`builtin/trusted` 可 in-process。向导必须在安装前展示“将运行第三方代码”的警告与信任依据。
 
-v0 loader 策略（`house_ear.plugins.load_plugin`）：
+v0 loader 策略（`rui.plugins.load_plugin`）：
 - `runtime.mode` 省略时按信任级别解析：`third-party` → `sidecar`，`builtin/trusted` → `in-process`；`sidecar` 必须有 `image`，`in-process` 必须有 `entrypoint`。
 - `third-party` 显式写 `runtime.mode: in-process` **在加载时直接拒绝**，不静默降级；想同进程运行必须先审核为 `builtin/trusted`。
 - 省略整个 `runtime` 块 = 纯声明插头，允许；loader 不导入/执行任何代码，`entrypoint`/`image` 只做字符串校验。

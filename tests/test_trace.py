@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from house_ear.trace import TraceLog, TurnTrace
+from rui.trace import TraceLog, TurnTrace
 
 
 def test_marks_are_relative_to_turn_start() -> None:

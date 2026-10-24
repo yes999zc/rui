@@ -5,8 +5,8 @@ import wave
 import numpy as np
 import pytest
 
-from house_ear.audio.process import read_wav_mono
-from house_ear.audio.resample import resample
+from rui.audio.process import read_wav_mono
+from rui.audio.resample import resample
 
 
 def sine(freq: float, seconds: float, rate: int) -> np.ndarray:

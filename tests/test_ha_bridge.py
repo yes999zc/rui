@@ -5,10 +5,10 @@ import asyncio
 import json
 from pathlib import Path
 
-from house_ear.config.schema import HaConfig
-from house_ear.session import phrases
-from house_ear.tools.ha import HaBridge
-from house_ear.tools.mcp_client import MCPUnavailable
+from rui.config.schema import HaConfig
+from rui.session import phrases
+from rui.tools.ha import HaBridge
+from rui.tools.mcp_client import MCPUnavailable
 
 
 class FakeClient:

@@ -3,7 +3,7 @@
 
     uv run python scripts/measure_turn_pipeline.py --config real-device.yaml \
         --wake tests/fixtures/wake-nihao-xiaorui.wav \
-        --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav --rounds 20
+        --command /tmp/rui-scratch/rui-s4/commands/01-weather.wav --rounds 20
 
 A fake speaker dials the real adapter, streams the wake word and then the request as 8 ch
 frames at device pace, and the reply comes back as PCM frames. Everything between is real:
@@ -32,14 +32,15 @@ from websockets.asyncio.client import connect
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from house_ear.config import load_config, save_config  # noqa: E402
-from house_ear.device.xiaoai import protocol  # noqa: E402
-from house_ear.log_setup import setup_logging  # noqa: E402
-from house_ear.web.api.app import create_app  # noqa: E402
+from rui.config import load_config, save_config  # noqa: E402
+from rui.env import get as env_get  # noqa: E402
+from rui.device.xiaoai import protocol  # noqa: E402
+from rui.log_setup import setup_logging  # noqa: E402
+from rui.web.api.app import create_app  # noqa: E402
 
 
 def load_env_file(path: Path) -> None:
-    """Provider keys live in $HOUSE_EAR_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
+    """Provider keys live in $RUI_ENV_FILE (default: .env); a harness must not depend on the caller's shell."""
     if not path.exists():
         return
     for line in path.read_text().splitlines():
@@ -49,7 +50,7 @@ def load_env_file(path: Path) -> None:
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
-TOKEN_ENV = "HOUSE_EAR_DEVICE_TOKEN"
+TOKEN_ENV = "RUI_DEVICE_TOKEN"
 
 
 def read_pcm(path: Path, rate: int) -> bytes:
@@ -269,7 +270,7 @@ async def run(args: argparse.Namespace) -> int:
 
     # The audio plane is a separate process and only reads a config file from disk, so the
     # randomized port has to exist on disk too - not just in this process's object.
-    tmp_dir = Path(tempfile.mkdtemp(prefix="house-ear-pipeline-"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="rui-pipeline-"))
     run_config = tmp_dir / "config.yaml"
     cfg.system.data_dir = str(tmp_dir / "data")
     save_config(run_config, cfg)
@@ -290,7 +291,7 @@ async def run(args: argparse.Namespace) -> int:
         # First-word loss is an ASR question, not an LLM one. Stopping after the
         # transcript keeps 20 rounds per configuration cheap enough to sweep gaps.
         runner = app.state.runner
-        from house_ear.session.turn import TurnResult
+        from rui.session.turn import TurnResult
 
         async def transcribe_only(pcm: bytes, speak, trace) -> TurnResult:  # noqa: ARG001
             result = TurnResult()
@@ -465,8 +466,8 @@ def main() -> int:
                    help="trailing silence per round; default 2*vad_end_silence_ms + 600")
     p.add_argument("--wait-s", type=float, default=25.0)
     p.add_argument("--between", type=float, default=1.0)
-    p.add_argument("--out", default="/tmp/house-ear-pipeline.jsonl")
-    p.add_argument("--env", default=os.environ.get("HOUSE_EAR_ENV_FILE", ".env"))
+    p.add_argument("--out", default="/tmp/rui-pipeline.jsonl")
+    p.add_argument("--env", default=env_get("RUI_ENV_FILE", ".env"))
     return asyncio.run(run(p.parse_args()))
 
 

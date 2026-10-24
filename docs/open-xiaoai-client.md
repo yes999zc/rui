@@ -11,7 +11,7 @@
 | 参数 | 示例 | 说明 |
 |---|---|---|
 | WebSocket URL | `ws://<server-lan-ip>:4412/?token=<device-token>` | 音箱 client 回连地址 |
-| Device token | `<HOUSE_EAR_DEVICE_TOKEN>` | 服务端 `.env` / secrets 里同一个值 |
+| Device token | `<RUI_DEVICE_TOKEN>` | 服务端 `.env` / secrets 里同一个值 |
 | 端口 | `4412`（默认） | `devices[].listen_port`，容器需放行 |
 
 URL 和 token 是**等价于音箱控制权**的凭证，不要发到公开群/截图里。
@@ -42,7 +42,7 @@ URL 和 token 是**等价于音箱控制权**的凭证，不要发到公开群/�
 
 | 现象 | 检查 |
 |---|---|
-| 401 / close 1008 | token 不一致：NAS `.env` 的 `HOUSE_EAR_DEVICE_TOKEN` 与 URL 的 `?token=` 必须相同 |
+| 401 / close 1008 | token 不一致：NAS `.env` 的 `RUI_DEVICE_TOKEN` 与 URL 的 `?token=` 必须相同 |
 | 连接被拒绝 | NAS 防火墙/端口未放行；`listen_port` 不是 4412；容器 host network 是否生效 |
 | 连上但没声音 | 先看 NAS `/health` 的 `speaker_connected` 和 `audio_plane`；再看音箱 client 日志 |
 | 频繁断线 | 音箱与 NAS 不在同一稳定 LAN；检查 Wi-Fi/路由器；client 是否被 watchdog 重启 |

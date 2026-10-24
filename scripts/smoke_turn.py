@@ -20,9 +20,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from house_ear.config import load_config  # noqa: E402
-from house_ear.session.turn import TurnRunner  # noqa: E402
-from house_ear.trace import TurnTrace  # noqa: E402
+from rui.config import load_config  # noqa: E402
+from rui.env import get as env_get  # noqa: E402
+from rui.session.turn import TurnRunner  # noqa: E402
+from rui.trace import TurnTrace  # noqa: E402
 
 
 def load_env_file(path: Path) -> None:
@@ -91,7 +92,7 @@ def main() -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--wav", required=True)
     parser.add_argument("--out", default="/tmp/turn-reply.wav")
-    parser.add_argument("--env", default=os.environ.get("HOUSE_EAR_ENV_FILE", ".env"))
+    parser.add_argument("--env", default=env_get("RUI_ENV_FILE", ".env"))
     parser.add_argument("--prompt", default="", help="override the spoken-reply system prompt")
     args = parser.parse_args()
     load_env_file(Path(args.env))

@@ -11,10 +11,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from house_ear.audio.decimate import Decimator
-from house_ear.audio.process import AudioPlane
-from house_ear.config import Config
-from house_ear.device.contract import AudioFrame
+from rui.audio.decimate import Decimator
+from rui.audio.process import AudioPlane
+from rui.config import Config
+from rui.device.contract import AudioFrame
 
 
 def make_frame(rate: int, amplitude: float = 8000.0) -> AudioFrame:
@@ -52,7 +52,7 @@ def test_voice_pcm_keeps_the_amplitude(rate: int, factor: int) -> None:
 
 def test_echo_cancelled_path_keeps_the_amplitude_too(monkeypatch) -> None:
     pytest.importorskip("numpy")
-    from house_ear.audio import aec as aec_module
+    from rui.audio import aec as aec_module
 
     if not aec_module.speex_available():
         pytest.skip("libspeexdsp not installed")

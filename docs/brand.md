@@ -4,8 +4,8 @@
 
 - **产品显示名：小瑞（Rui）**，与唤醒词「你好小瑞」一致；英文环境显示 `Rui`，旁边保留小号「小瑞」。
 - 本轮只改用户可见品牌：浏览器 title/meta、侧栏、移动端 header、i18n 品牌文案、favicon。
-- **内部标识暂不改**：repo、Python 包、CLI（`house-ear`）、路由、localStorage key、面板 ID 全部保持
-  `house-ear`，避免升级时丢配置/书签/会话。完整改名（repo/CLI/README/GitHub）需要单独迁移窗口。
+- **内部标识（0.2.0 起）**：repo、Python 包、CLI、配置/数据路径、localStorage key 与面板 ID
+  全部为 `rui`；旧环境变量前缀只保留一个发布周期的回退，见迁移说明。
 
 ## 2. 字体（本地加载，无第三方请求）
 

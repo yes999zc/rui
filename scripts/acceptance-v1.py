@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guided acceptance recorder for house-ear v1 (wake N/M and barge latency).
+"""Guided acceptance recorder for rui v1 (wake N/M and barge latency).
 
 This is a *recorder*, not a measurement device that invents numbers:
 
@@ -11,7 +11,7 @@ This is a *recorder*, not a measurement device that invents numbers:
 
 Usage (run where it can reach the control plane; token comes from an env var):
 
-    export HOUSE_EAR_TOKEN="$(docker compose exec -T house-ear house-ear token)"
+    export RUI_TOKEN="$(docker compose exec -T rui rui token)"
     python3 scripts/acceptance-v1.py wake  --url http://127.0.0.1:8080 --trials 20
     python3 scripts/acceptance-v1.py barge --url http://127.0.0.1:8080 --trials 3
 
@@ -42,7 +42,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-SCHEMA = "house-ear-acceptance/1"
+SCHEMA = "rui-acceptance/1"
 SCRIPT_VERSION = "1"
 
 
@@ -181,7 +181,7 @@ def write_outputs(mode: str, payload: dict, out_dir: Path) -> tuple[Path, Path]:
 
 
 def render_markdown(mode: str, p: dict) -> str:
-    lines = [f"# house-ear acceptance - {mode}", ""]
+    lines = [f"# rui acceptance - {mode}", ""]
     lines.append(f"- schema: `{p['schema']}`")
     lines.append(f"- started/finished: {p['started_at']} / {p['finished_at']}")
     lines.append(f"- url: `{p['url']}`")
@@ -511,13 +511,14 @@ def run_check(api: Api) -> int:
 def _default_out() -> str:
     """Host-visible output dir: containers often run on a read-only image layer.
 
-    The mounted data volume (/var/lib/house-ear) survives a container recreate; a path
+    The mounted data volume (/var/lib/rui) survives a container recreate; a path
     under /data or the cwd does not (an earlier run lost its barge JSON that way).
     """
-    env = os.environ.get("HOUSE_EAR_ACCEPTANCE_OUT", "").strip()
+    env = (os.environ.get("RUI_ACCEPTANCE_OUT")
+           or os.environ.get("HOUSE_EAR_ACCEPTANCE_OUT") or "").strip()
     if env:
         return env
-    mounted = Path("/var/lib/house-ear")
+    mounted = Path("/var/lib/rui")
     try:
         if mounted.is_dir() and os.access(mounted, os.W_OK):
             return str(mounted / "acceptance-runs")
@@ -534,12 +535,12 @@ def main() -> int:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--url", default="http://127.0.0.1:8080",
                        help="control-plane base URL (default loopback)")
-        p.add_argument("--token-env", default="HOUSE_EAR_TOKEN",
-                       help="env var holding X-Auth-Token (default HOUSE_EAR_TOKEN)")
+        p.add_argument("--token-env", default="RUI_TOKEN",
+                       help="env var holding X-Auth-Token (default RUI_TOKEN)")
         p.add_argument("--out", default=_default_out(),
                        help="directory for JSON/Markdown (default: ./acceptance-runs, or "
-                            "/var/lib/house-ear/acceptance-runs inside the container; "
-                            "override with HOUSE_EAR_ACCEPTANCE_OUT)")
+                            "/var/lib/rui/acceptance-runs inside the container; "
+                            "override with RUI_ACCEPTANCE_OUT)")
         p.add_argument("--label", default="", help="label, e.g. near-field or far-field")
         p.add_argument("--check", action="store_true",
                        help="only GET /health, /audio, /traces and exit")
@@ -566,8 +567,8 @@ def main() -> int:
     token = os.environ.get(args.token_env, "")
     if not token:
         print(f"not set: {args.token_env}. Get it with:\n"
-              "  docker compose exec -T house-ear house-ear token\n"
-              "then: export HOUSE_EAR_TOKEN=...   (do not paste the token into chat/logs)",
+              "  docker compose exec -T rui rui token\n"
+              "then: export RUI_TOKEN=...   (do not paste the token into chat/logs)",
               file=sys.stderr)
         # Loopback/dev may allow anonymous; continue and let the API answer.
     api = Api(args.url, token)

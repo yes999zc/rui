@@ -8,7 +8,7 @@ import { ref } from 'vue'
 export type ThemePref = 'auto' | 'light' | 'dark'
 export type ResolvedTheme = 'light' | 'dark'
 
-const STORAGE_KEY = 'house-ear-theme'
+const STORAGE_KEY = 'rui-theme'
 
 function readPreference(): ThemePref {
   try {

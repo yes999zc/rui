@@ -1,9 +1,9 @@
-# Runbook — house-ear 运维手册
+# Runbook — rui 运维手册
 
 面向 NAS 上的生产容器。安装/配置的完整说明在 [`docs/deploy.md`](deploy.md)；
 本文只回答「现在怎么起停、出问题看哪里、怎么换、怎么退」。
 
-约定：`DIR=~/house-ear`（`HOUSE_EAR_HOME`），容器名 `house-ear`，镜像
+约定：`DIR=~/rui`（`RUI_HOME`），容器名 `rui`，镜像
 `ghcr.io/yes999zc/rui:<tag>`，默认端口 `:8080`、设备通道 `:4412`。
 所有命令在 `DIR` 下执行。
 
@@ -11,13 +11,13 @@
 
 ```
 Docker (network_mode: host)
-└─ house-ear 容器
-   ├─ house-ear serve          控制面 :8080（HTTP API + 控制台）
-   │  └─ house-ear audio ...   音频面子进程（AEC/KWS/VAD/播放，Unix socket）
+└─ rui 容器
+   ├─ rui serve          控制面 :8080（HTTP API + 控制台）
+   │  └─ rui audio ...   音频面子进程（AEC/KWS/VAD/播放，Unix socket）
    └─ 音箱 client 反向连入 :4412（长连接，不是容器暴露的端口）
 卷（bind mount）:
   ./config -> /config            config.yaml（+ 可选的音乐凭据 lan_media.json）
-  ./data   -> /var/lib/house-ear service.log / secrets.yaml / memory / 历史 / 缓存
+  ./data   -> /var/lib/rui service.log / secrets.yaml / memory / 历史 / 缓存
   ./data/models -> /data/models  SenseVoice / VAD / KWS 模型
 ```
 
@@ -27,17 +27,17 @@ Docker (network_mode: host)
 ## 2. 起停
 
 ```bash
-cd ~/house-ear
+cd ~/rui
 
 docker compose up -d          # 起（镜像不存在会先拉）
 docker compose ps             # STATUS 里看 healthy/unhealthy
-docker compose restart house-ear   # 只重启容器（配置改动后用这个）
+docker compose restart rui   # 只重启容器（配置改动后用这个）
 docker compose stop           # 停（保留容器）
 docker compose down           # 删容器（卷是 bind mount，数据还在）
 docker compose up -d          # 用同一份 compose 重建
 ```
 
-- **不要**用 `docker rm -f house-ear` 代替 `down`，也不要手工 `docker run`——compose
+- **不要**用 `docker rm -f rui` 代替 `down`，也不要手工 `docker run`——compose
   里的日志轮转/健康检查/卷挂载会全部丢失。
 - 升级/重建容器不会丢配置和数据（三个 bind mount）。
 - 停机维护前正常 `stop`；`restart: unless-stopped` 下，**手动 stop 的容器不会在
@@ -49,22 +49,22 @@ docker compose up -d          # 用同一份 compose 重建
 
 ```bash
 # 1) 容器 stdout/stderr（uvicorn + 应用日志；json-file 10 MB x 3 轮转）
-docker compose logs -f --tail=200 house-ear
+docker compose logs -f --tail=200 rui
 
 # 2) 应用自己的文件日志（控制台「日志」页读同一份；2 MB x 3 轮转）
-docker compose exec house-ear tail -n 200 /var/lib/house-ear/service.log
+docker compose exec rui tail -n 200 /var/lib/rui/service.log
 
 # 3) 健康检查最近一次的输出/状态（为什么 unhealthy）
-docker inspect --format '{{json .State.Health}}' house-ear | python -m json.tool
+docker inspect --format '{{json .State.Health}}' rui | python -m json.tool
 ```
 
 常用过滤：
 
 ```bash
-docker compose logs --since 30m house-ear | grep -E "turn:|audio plane|plane:|error|WARNING"
-docker compose logs --since 60m house-ear | grep -E "xiaoai: speaker (connected|disconnected)"
+docker compose logs --since 30m rui | grep -E "turn:|audio plane|plane:|error|WARNING"
+docker compose logs --since 60m rui | grep -E "xiaoai: speaker (connected|disconnected)"
 # 音频面自愈（看门狗）
-docker compose logs --since 60m house-ear | grep -E "audio plane (is down|restarted|restart failed)"
+docker compose logs --since 60m rui | grep -E "audio plane (is down|restarted|restart failed)"
 ```
 
 日志轮转是双层的：容器层 `max-size=10m / max-file=3`（compose），应用层
@@ -73,13 +73,13 @@ docker compose logs --since 60m house-ear | grep -E "audio plane (is down|restar
 
 ## 4. 改配置
 
-配置文件只有一份真相：`~/house-ear/config/config.yaml`（原子写 + 时间戳备份
+配置文件只有一份真相：`~/rui/config/config.yaml`（原子写 + 时间戳备份
 `config.yaml.bak.*`）。
 
 | 改什么 | 怎么生效 |
 |---|---|
-| `.env`（密钥、`HOUSE_EAR_IMAGE`） | `docker compose up -d`（recreate 容器，env_file 才会重读） |
-| `config.yaml`（设备、provider、音频、音乐） | `docker compose restart house-ear` |
+| `.env`（密钥、`RUI_IMAGE`） | `docker compose up -d`（recreate 容器，env_file 才会重读） |
+| `config.yaml`（设备、provider、音频、音乐） | `docker compose restart rui` |
 | 控制台 → 设置里的 `assistant` / `session` | 立即生效（写回 config.yaml），无需重启 |
 | 控制台 → 密钥（`secrets.yaml`） | 立即生效，API 不可读回 |
 | 记忆确认/删除 | 立即生效（`data/memory.json`） |
@@ -87,11 +87,11 @@ docker compose logs --since 60m house-ear | grep -E "audio plane (is down|restar
 改之前先备份（配置本身也会留备份，但手工备份最省事）：
 
 ```bash
-cd ~/house-ear
+cd ~/rui
 cp config/config.yaml "config/config.yaml.bak.$(date +%Y%m%d-%H%M%S)"
 $EDITOR config/config.yaml
-docker compose restart house-ear
-docker compose exec house-ear house-ear doctor
+docker compose restart rui
+docker compose exec rui rui doctor
 ```
 
 改坏了：`ls -t config/config.yaml.bak.* | head`，用最近的备份覆盖后重启。
@@ -100,16 +100,16 @@ docker compose exec house-ear house-ear doctor
 ## 5. 换镜像 / 升级
 
 ```bash
-cd ~/house-ear
+cd ~/rui
 cp config/config.yaml "config/config.yaml.bak.upgrade.$(date +%Y%m%d-%H%M%S)"
 docker compose pull
 docker compose up -d
 docker compose ps                       # 等 healthy
-docker compose exec house-ear house-ear doctor
+docker compose exec rui rui doctor
 curl -s localhost:8080/health | python -m json.tool
 ```
 
-- 生产把版本写死在 `.env`：`HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.1.0`
+- 生产把版本写死在 `.env`：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0`
   （或 `@sha256:<digest>`）。`latest` 是滚动默认，不是唯一推荐。
   `install.sh` 会把安装时用的 image 写进生成的 `.env`；**手工装**时也要写，否则之后
   `docker compose up -d` 会回落到 `latest` 并尝试拉取（实测：本地 rehearsal 镜像没写
@@ -123,15 +123,15 @@ curl -s localhost:8080/health | python -m json.tool
 镜像回滚 + 配置回滚，两步都要做（只回镜像通常也够，但先把配置备份放好）：
 
 ```bash
-cd ~/house-ear
+cd ~/rui
 # 1) 选回滚版本：上一个 tag（或 digest）
-sed -i '' 's|^HOUSE_EAR_IMAGE=.*|HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.0|' .env  # NAS 用 sed -i
+sed -i '' 's|^RUI_IMAGE=.*|RUI_IMAGE=ghcr.io/yes999zc/rui:0.0.0|' .env  # NAS 用 sed -i
 # 2) 恢复上一版配置（如果升级后改过配置）
 cp config/config.yaml.bak.upgrade.<时间戳> config/config.yaml
 # 3) 重建并验收
 docker compose up -d
 docker compose ps && curl -s localhost:8080/health | python -m json.tool
-docker compose exec house-ear house-ear doctor
+docker compose exec rui rui doctor
 ```
 
 回滚不会动 `data/`（记忆、提醒、日志、模型都在），所以回滚只影响代码和配置。
@@ -159,16 +159,16 @@ docker compose exec house-ear house-ear doctor
 
 | 症状 | 先查 | 处理 |
 |---|---|---|
-| 容器 `Restarting` / 起不来 | `docker compose logs --tail=100 house-ear` | 配置 YAML 语法/字段错：恢复备份；端口占用：改 `web.port`/`listen_port` |
+| 容器 `Restarting` / 起不来 | `docker compose logs --tail=100 rui` | 配置 YAML 语法/字段错：恢复备份；端口占用：改 `web.port`/`listen_port` |
 | `unhealthy`，`/health` 还 200 | `docker inspect ... .State.Health`；`/api/v1/audio` 的 `restarts`；`docker compose logs \| grep "audio plane"` | 音频面崩溃由看门狗自动重建（约 2 s，`restarts` +1），一般无需人工；若 `restarts` 持续增长，查退避日志和 plane 错误（模型/token/端口） |
 | 网页打不开 | `docker compose ps`；`ss -ltnp \| grep 8080`；`curl -v localhost:8080/health` | 端口被占：改配置；容器没起：`up -d` |
-| 音箱不出声、不响应唤醒 | `/api/v1/devices`（`connected`）、`docker compose logs \| grep xiaoai`、`ss -ltnp \| grep 4412` | token 不一致（`.env` 的 `HOUSE_EAR_DEVICE_TOKEN` 与音箱 client 不同）→ 改一致后重启；4412 被旧进程占 → 停旧的；音箱 client 没指向 NAS IP |
-| 能连上但永远不唤醒 | `house-ear doctor` 的 `wake_runtime`（import/onnxruntime）和 `wake_path`（模型路径）；`kws_enabled` / `kws_model_dir`；`config/keywords.txt`；日志 `kws off:` / `vad off:` | 模型由 `fetch-models` 自动装（KWS 32.9 MB，`--kws-dest`）；`setup` 已生成 keywords；改过 `devices[].wake_words` 后跑 `house-ear keywords --config /config/config.yaml` 重生成；日志写 `failed to load: libonnxruntime.so...` 时按 §14 处理 |
-| `audio_plane=false` 且日志 `audio plane did not start` | `docker compose logs house-ear \| grep -A2 "audio plane"` | 有设备但 device token 空 → 填 `.env`（plane 会拒绝未认证连接）；`listen_port` 被占 → 改端口；没有 `devices[]` 时这是**正常状态**（只开控制台）。看门狗只重建「已经起来过」的进程，起不来的原因仍看这条日志 |
+| 音箱不出声、不响应唤醒 | `/api/v1/devices`（`connected`）、`docker compose logs \| grep xiaoai`、`ss -ltnp \| grep 4412` | token 不一致（`.env` 的 `RUI_DEVICE_TOKEN` 与音箱 client 不同）→ 改一致后重启；4412 被旧进程占 → 停旧的；音箱 client 没指向 NAS IP |
+| 能连上但永远不唤醒 | `rui doctor` 的 `wake_runtime`（import/onnxruntime）和 `wake_path`（模型路径）；`kws_enabled` / `kws_model_dir`；`config/keywords.txt`；日志 `kws off:` / `vad off:` | 模型由 `fetch-models` 自动装（KWS 32.9 MB，`--kws-dest`）；`setup` 已生成 keywords；改过 `devices[].wake_words` 后跑 `rui keywords --config /config/config.yaml` 重生成；日志写 `failed to load: libonnxruntime.so...` 时按 §14 处理 |
+| `audio_plane=false` 且日志 `audio plane did not start` | `docker compose logs rui \| grep -A2 "audio plane"` | 有设备但 device token 空 → 填 `.env`（plane 会拒绝未认证连接）；`listen_port` 被占 → 改端口；没有 `devices[]` 时这是**正常状态**（只开控制台）。看门狗只重建「已经起来过」的进程，起不来的原因仍看这条日志 |
 | 音频面反复重启、`restarts` 持续增长 | `/api/v1/audio` 的 `restarts`；日志 `audio plane restart failed`、`restarting in N s` | 退避到 60 s 封顶；按 `audio plane did not start` 那条查根因（token/端口/模型），修好后看门狗自动恢复，无需重启容器 |
 | 音箱连着但 `frames_in` 一直 0、没有转写 | `/api/v1/audio` 的 `frames_in`；`vad_enabled` | 模型文件损坏/不匹配会让采集循环静默停摆（实测：换回有效 `silero_vad.onnx` 立即恢复）→ 重新 `fetch-models` 或换有效模型后重启 |
 | 唤醒后没回答 | 日志 `turn:` / `asr`；provider 密钥 | `.env` 密钥空/错 → 填好 `up -d`；本地 ASR 模型缺失会走云 ASR（慢但可用） |
-| 音乐没声音 | `/api/v1/music`；`music.enabled`；配置的 `music.secrets_path` 是否可读（`docker compose exec house-ear test -r <path>`）；`ffmpeg -version` | 枚举：enabled=false / secrets 文件不存在或权限不是 600 可读 / Navidrome 地址不可达 / 镜像太旧没有 ffmpeg |
+| 音乐没声音 | `/api/v1/music`；`music.enabled`；配置的 `music.secrets_path` 是否可读（`docker compose exec rui test -r <path>`）；`ffmpeg -version` | 枚举：enabled=false / secrets 文件不存在或权限不是 600 可读 / Navidrome 地址不可达 / 镜像太旧没有 ffmpeg |
 | HA 指令没反应 | 日志 `grep "ha:"`；`tools.ha.base_url`；token | HA MCP Server 集成没开 / token 过期 / base_url 少了端口；HA 挂了不影响说话 |
 | 控制台 401 | `web.auth_token` | 在「设置→密钥」或控制台登录框填同一个 token |
 | 磁盘满 | `docker system df`；`du -sh data/*` | 清 `data/music-cache`、旧 `*.bak.*`、`docker image prune`（谨慎） |
@@ -178,19 +178,19 @@ docker compose exec house-ear house-ear doctor
 
 用仓库里的脚本，不要手写 tar 命令（手工 tar 容易把模型打进去、漏 `.env`、或忘 sha256）。
 `deploy/install.sh` 会把 `scripts/backup.sh`、`scripts/restore.sh` 和验收记录脚本
-`scripts/acceptance-v1.py` 拉到 `~/house-ear/scripts/`；老安装或手工部署可从仓库补齐：
+`scripts/acceptance-v1.py` 拉到 `~/rui/scripts/`；老安装或手工部署可从仓库补齐：
 
 ```bash
-mkdir -p ~/house-ear/scripts
+mkdir -p ~/rui/scripts
 for f in backup.sh restore.sh acceptance-v1.py; do
   curl -fsSL "https://raw.githubusercontent.com/<repo>/main/scripts/$f" \
-    -o ~/house-ear/scripts/$f && chmod 755 ~/house-ear/scripts/$f
+    -o ~/rui/scripts/$f && chmod 755 ~/rui/scripts/$f
 done
 ```
 
 ```bash
-cd ~/house-ear
-scripts/backup.sh --out ~/house-ear-backups
+cd ~/rui
+scripts/backup.sh --out ~/rui-backups
 # 可选：
 #   --with-models   连 data/models（~272 MB）一起备份；默认排除，可重下
 #   --no-env        不备份 .env（默认包含；归档 0600，脚本只打印“included”不打印值）
@@ -199,7 +199,7 @@ scripts/backup.sh --out ~/house-ear-backups
 
 脚本行为：
 
-- 归档 `house-ear-backup-<UTC时间>.tar.gz`，**0600**；旁边写 `.manifest.json`
+- 归档 `rui-backup-<UTC时间>.tar.gz`，**0600**；旁边写 `.manifest.json`
   （backup_format、时间、config_version、镜像 ref/digest/version、包含项、排除项、文件数）
   和 `.sha256`；
 - 只读 `--home` 下的 `config/`、`data/`、`.env`、`docker-compose.yml`；
@@ -210,16 +210,16 @@ scripts/backup.sh --out ~/house-ear-backups
 
 ```bash
 # 先演练：恢复到临时目录，绝不碰生产目录
-scripts/restore.sh ~/house-ear-backups/<archive>.tar.gz --home /tmp/house-ear-restore-smoke
-diff -r ~/house-ear/config /tmp/house-ear-restore-smoke/config   # 允许 .bak 差异
+scripts/restore.sh ~/rui-backups/<archive>.tar.gz --home /tmp/rui-restore-smoke
+diff -r ~/rui/config /tmp/rui-restore-smoke/config   # 允许 .bak 差异
 
 # 真恢复（会先把旧树移走，不删除）：
-cd ~/house-ear
+cd ~/rui
 docker compose stop
-scripts/restore.sh ~/house-ear-backups/<archive>.tar.gz --home ~/house-ear --force
+scripts/restore.sh ~/rui-backups/<archive>.tar.gz --home ~/rui --force
 docker compose up -d
 docker compose ps                         # healthy
-docker compose exec -T house-ear house-ear doctor
+docker compose exec -T rui rui doctor
 curl -s http://127.0.0.1:8080/health | python3 -m json.tool
 ```
 
@@ -240,16 +240,16 @@ curl -s http://127.0.0.1:8080/health | python3 -m json.tool
 
 ```bash
 # 看当前恢复状态
-curl -s -H "X-Auth-Token: $HOUSE_EAR_TOKEN" \
+curl -s -H "X-Auth-Token: $RUI_TOKEN" \
   http://127.0.0.1:8080/api/v1/config/recovery | python3 -m json.tool
 
 # 用最近一次成功启动时的快照覆盖当前配置（需重启服务）
-docker compose exec -T house-ear house-ear config restore --last-good
-docker compose restart house-ear
+docker compose exec -T rui rui config restore --last-good
+docker compose restart rui
 
 # 回到全新模板（会丢 devices/providers 配置，慎用；不删密钥/模型）
-docker compose exec -T house-ear house-ear config restore --defaults
-docker compose restart house-ear
+docker compose exec -T rui rui config restore --defaults
+docker compose restart rui
 ```
 
 - 每次成功启动会自动刷新 `config.last-good.yaml`（见 `app.py: remember_last_good`）；
@@ -267,15 +267,15 @@ docker compose restart house-ear
 
 - 控制台默认无鉴权。只在内网用；要暴露就设 `web.auth_token`，并优先走反代 + TLS。
 - `.env` 权限 600，含 provider key 与 device token；不要提交进 git（`.gitignore`/`.dockerignore` 都已排除）。
-- 音乐凭据（`music.secrets_path`，默认放在数据卷 `/var/lib/house-ear/lan_media.json`，
+- 音乐凭据（`music.secrets_path`，默认放在数据卷 `/var/lib/rui/lan_media.json`，
   也可以放配置卷）同样 600；不进日志、不进配置。
 - 设备通道 token 不一致会直接拒绝连接（fail closed，`allow_no_token` 默认 false）。
 - 公开仓审计：配置文件里只允许 `*_env` 变量名，不允许明文 key/内网 IP/绝对路径。
 
 ## 11. P15/P15b 演练记录（2026-10-23）
 
-> 环境：Mac / OrbStack（arm64）。两代镜像：`house-ear:0.0.1-p15`（P15 首轮）和
-> `house-ear:rehearsal`（Lead 的 setup 模板 + KWS 自动安装 + 看门狗之后重建）。临时目录
+> 环境：Mac / OrbStack（arm64）。两代镜像：`rui:0.0.1-p15`（P15 首轮）和
+> `rui:rehearsal`（Lead 的 setup 模板 + KWS 自动安装 + 看门狗之后重建）。临时目录
 > `/tmp/p15-install`（P15）与 `/tmp/p15-cold/run2`（冷装排练）；假音箱 `:14412`。真机
 > （NAS + 音箱）不参与；Lead 的 dev 服务（`:8091`/`:4399`）全程只读。数字均为本轮实测。
 
@@ -283,12 +283,12 @@ docker compose restart house-ear
 
 | 项 | 结果 |
 |---|---|
-| 命令 | `docker build --network host --build-arg VERSION=rehearsal --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn --build-arg PIP_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple -t house-ear:rehearsal .` |
+| 命令 | `docker build --network host --build-arg VERSION=rehearsal --build-arg APT_MIRROR=mirrors.tuna.tsinghua.edu.cn --build-arg PIP_INDEX_URL=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple -t rui:rehearsal .` |
 | 冷构建耗时（P15 首轮，`--no-cache`） | **91.8 s**（npm install + npm run build + apt + pip 全从零） |
 | 增量构建耗时 | **40.5 s**（P15b：src 变更触发 pip 重装，其余层命中缓存） |
 | 镜像大小 | P15b rehearsal **428,964,012 B ≈ 409 MiB**；P15 首轮 428,815,328 B（差异只在构建参数元数据）。静态 ffmpeg 自身 104,424,600 B ≈ 100 MiB |
 | 平台 | 本机 arm64；生产 x86_64 由 CI 多架构构建（workflow 已写，尚未在 CI 实跑） |
-| 镜像内检查 | `house_ear.config/template.yaml` **4804 B** 可读；`ffmpeg 7.1`（flac/mp3/opus）；HEALTHCHECK 30 s/10 s/start 90 s/retries 3；label `version=rehearsal` |
+| 镜像内检查 | `rui.config/template.yaml` **4804 B** 可读；`ffmpeg 7.1`（flac/mp3/opus）；HEALTHCHECK 30 s/10 s/start 90 s/retries 3；label `version=rehearsal` |
 
 构建参数说明：本机 OrbStack 容器到 deb.debian.org 只有 ~64 KB/s、到 pypi.org TLS 握手
 超时，而 tuna 实测 **2.6 MB/s / 642 KB/s**。Dockerfile 里这些 build arg 默认为空（官方源），
@@ -298,18 +298,18 @@ docker compose restart house-ear
 
 | 步骤 | 命令 | 实测 |
 |---|---|---|
-| `setup` 写生产模板 | `docker run --rm --user $(id -u):$(id -g) -v config:/config house-ear:rehearsal setup --config /config/config.yaml` | **~0.5 s**；写出 4912 B 配置 + `keywords.txt`。`providers` 链齐全：`asr [local_asr, siliconflow_asr]`、`tts [xfyun_tts, siliconflow_tts]`、`llm [deepseek_llm]`；`kws_model_dir=/data/models/kws/...`、`vad_model_path=/data/models/silero_vad.onnx`、playback `16000/1ch` |
+| `setup` 写生产模板 | `docker run --rm --user $(id -u):$(id -g) -v config:/config rui:rehearsal setup --config /config/config.yaml` | **~0.5 s**；写出 4912 B 配置 + `keywords.txt`。`providers` 链齐全：`asr [local_asr, siliconflow_asr]`、`tts [xfyun_tts, siliconflow_tts]`、`llm [deepseek_llm]`；`kws_model_dir=/data/models/kws/...`、`vad_model_path=/data/models/silero_vad.onnx`、playback `16000/1ch` |
 | keywords 生成 | 同上 | 逐字匹配预期：`n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞`（50 B，含换行） |
-| `fetch-models --no-kws` | `docker run --rm --network host -v data:/data house-ear:rehearsal fetch-models --no-kws --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --base <local-mirror> --vad-base <local-mirror>` | **0.53 s**；文件落 `./data/models/{sensevoice,silero_vad.onnx}` |
+| `fetch-models --no-kws` | `docker run --rm --network host -v data:/data rui:rehearsal fetch-models --no-kws --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --base <local-mirror> --vad-base <local-mirror>` | **0.53 s**；文件落 `./data/models/{sensevoice,silero_vad.onnx}` |
 | KWS 真下载 | `fetch-models --kws-dest /data/models/kws` | **未验**：本机容器到 GitHub release TLS 握手超时（见 §12）；Lead 在本机实测 tarball **32.9 MB / 解包 39 MB / 597.7 s**，解包布局与 `fetch-models` 一致 |
 
 ### 11.3 自愈与一次真实回合
 
 | 演练 | 命令 | 实测 |
 |---|---|---|
-| 服务进程退出 → 自动重启 | `docker exec house-ear python -c "import os,signal; os.kill(1, signal.SIGTERM)"` | 容器退出后 `restart: unless-stopped` 拉起：`RestartCount 0→1`，HTTP **2 s**、healthy **6 s**、`uptime` 归零、`audio_plane=true` |
-| 手动 `docker kill -9` | `docker kill --signal=SIGKILL house-ear` | 容器 `Exited (137)`，**没有**自动重启（`RestartCount=0`）——显式 kill 被视为手动停机；`docker start` 后恢复 |
-| 计划重启 | `docker compose restart house-ear` | HTTP **1 s**、healthy **5–7 s**、`audio_plane=true` |
+| 服务进程退出 → 自动重启 | `docker exec rui python -c "import os,signal; os.kill(1, signal.SIGTERM)"` | 容器退出后 `restart: unless-stopped` 拉起：`RestartCount 0→1`，HTTP **2 s**、healthy **6 s**、`uptime` 归零、`audio_plane=true` |
+| 手动 `docker kill -9` | `docker kill --signal=SIGKILL rui` | 容器 `Exited (137)`，**没有**自动重启（`RestartCount=0`）——显式 kill 被视为手动停机；`docker start` 后恢复 |
+| 计划重启 | `docker compose restart rui` | HTTP **1 s**、healthy **5–7 s**、`audio_plane=true` |
 | **音频面崩溃（P15b 看门狗）** | 容器内对 plane pid 发 `SIGKILL` | **2.0 s** 后出现新 pid（42→168）、`/api/v1/audio.restarts=1`；`/health` 全程 200、`audio_plane=true`，容器 `RestartCount=0` 且保持 healthy；日志 `audio plane is down (child exited); restarting in 1 s` → `audio plane restarted (#1, pid=168)` |
 | 崩溃后音箱重连 + 回合 | 新假音箱连 `:14412` → `POST /api/v1/debug/say {"text":"再说一遍"}` | 重连 ~1 s；回合返回 `reply=现在三点。, error="", audio_bytes=32000`，stages `llm=rehearsal_llm / tts=rehearsal_tts`；假音箱收到 `start_play` 并上报 consumed（14–15 帧 / 43,200 B） |
 | 假音箱断线/重连（P15） | 假客户端两轮 connect/disconnect | `speaker_connected` 两次 True/False；plane `frames_in 100→200→300`、`dropped=0`、`rtf=0.158` |
@@ -329,33 +329,33 @@ docker compose restart house-ear
 | 项 | 实测 |
 |---|---|
 | config / data / models 三类 | 三处各写 marker + 模型文件；`docker compose down`（删容器）→ `up -d` 后全部仍在 |
-| 模型路径映射 | 宿主机 `./data/models/sensevoice/...` 在容器内 `/data/models/sensevoice/...` 可见；`/var/lib/house-ear/models` 是同一宿主机目录的第二个挂载点（预期） |
+| 模型路径映射 | 宿主机 `./data/models/sensevoice/...` 在容器内 `/data/models/sensevoice/...` 可见；`/var/lib/rui/models` 是同一宿主机目录的第二个挂载点（预期） |
 | 重建耗时 | `down` + `up` 后 HTTP 1 s、healthy 6 s；配置里的设备/端口原样生效 |
 
 ### 11.6 本轮实测发现
 
 1. **音频面自愈已由看门狗解决**（旧 P15 发现已关闭）：`AudioPlaneSupervisor.watch()` 1 s 轮询、退避 1→60 s；实测 kill 后 2.0 s 重建、`restarts=1`。旧版「崩溃后 90 s 不自建、需手动 restart」不再成立。
 2. **坏 VAD 模型文件会让采集静默停摆**：把 `silero_vad.onnx` 换成随机字节后，plane 不报错、`frames_in` 一直 0；换回有效模型立即恢复（100 帧、rtf 0.158）。建议模型加载做校验/超时并把失败打进日志。
-3. **设备有配置但 token 空时的确切报错**：plane 进程 `RuntimeError: HOUSE_EAR_DEVICE_TOKEN is empty: refusing to accept an unauthenticated speaker connection`；控制面 `WARNING … audio plane did not start: audio plane refused: …`；`/health` 仍 200（`devices=1, audio_plane=false`），healthcheck 转 unhealthy（`FailingStreak` 最终 20）。
+3. **设备有配置但 token 空时的确切报错**：plane 进程 `RuntimeError: RUI_DEVICE_TOKEN is empty: refusing to accept an unauthenticated speaker connection`；控制面 `WARNING … audio plane did not start: audio plane refused: …`；`/health` 仍 200（`devices=1, audio_plane=false`），healthcheck 转 unhealthy（`FailingStreak` 最终 20）。
 4. **无设备的默认配置是合法状态**：`/health` ok、`audio_plane=false`、healthcheck healthy、`doctor` degraded（`wake_path` 等）；日志 `audio plane did not start: no device this build can drive`。
 5. **Navidrome + ffmpeg 真机链路（容器内）**：真实 `resolve` 成功——`search: 2 track(s)`，输出 **8,581,722 B / 16 kHz / mono / s16 / 268.2 s**；ffmpeg 对其中一首 flac 打了 `invalid sync code / decode_frame() failed` 警告但退出码 0、音频完整（疑源文件问题，未深究）。
 6. **冷装一键脚本依赖 GitHub raw**：本机访问 `raw.githubusercontent.com/yes999zc/rui/main/...` 返回 **404**（仓库当前为私有/不可匿名访问），install.sh 的 `[1/5]` 会失败；排练时预先放好 `docker-compose.yml`/`config.example.yaml` 才跑通。见 §11.7。
-7. **compose 不写 `.env` 的 image 会回落 latest**：`install.sh` 之外的 `docker compose up -d` 若 `.env` 没有 `HOUSE_EAR_IMAGE`，会去拉 `latest`（本机 TLS 超时失败）。已在 install.sh 生成的 `.env` 里写入 pin；实测 run3 之后不带任何 env 前缀的 `docker compose up -d` 直接使用了本地 `house-ear:rehearsal`，没有尝试拉取。
+7. **compose 不写 `.env` 的 image 会回落 latest**：`install.sh` 之外的 `docker compose up -d` 若 `.env` 没有 `RUI_IMAGE`，会去拉 `latest`（本机 TLS 超时失败）。已在 install.sh 生成的 `.env` 里写入 pin；实测 run3 之后不带任何 env 前缀的 `docker compose up -d` 直接使用了本地 `rui:rehearsal`，没有尝试拉取。
 8. **无设备时看门狗会空转刷日志**：`devices: []` 时 plane 本来就不该启动，但 `watch()` 仍会按退避重试并打印 `audio plane is down (no device this build can drive); restarting in 1 s` / `audio plane restart failed`。不影响健康检查（devices=0 时不查 plane），但首次装完、还没加音箱时日志会周期性出现。建议 `watch()` 在无设备（或 `start_audio=False`）时不启动。
 
 ### 11.7 容器冷装排练（install.sh 全流程，本机）
 
-准备：`HOUSE_EAR_HOME=/tmp/p15-cold/run2`；把本机模型预置到 `data/models/`（SenseVoice 239 MB + VAD 0.6 MB + KWS 39 MB；APFS 拷贝共 **0.36 s**，避免 272 MB 下载）；因 raw 404，手工预置 compose/config.example。
+准备：`RUI_HOME=/tmp/p15-cold/run2`；把本机模型预置到 `data/models/`（SenseVoice 239 MB + VAD 0.6 MB + KWS 39 MB；APFS 拷贝共 **0.36 s**，避免 272 MB 下载）；因 raw 404，手工预置 compose/config.example。
 
 | 步骤 | 实测 |
 |---|---|
 | `[1/5] compose` | 保留已有 compose；config.example 拉取 404（warning，不影响） |
 | `[2/5] setup + keywords` | +1–2 s（镜像已热）/ +13 s（rebuild 后首次 `docker run` 冷启动）；配置来自**新模板**（provider 链齐全）、`/config/keywords.txt` 逐字正确 |
-| `[3/5] .env` | 同轮；生成 48 hex device token，并写入 `HOUSE_EAR_IMAGE=house-ear:rehearsal` |
+| `[3/5] .env` | 同轮；生成 48 hex device token，并写入 `RUI_IMAGE=rui:rehearsal` |
 | `[4/5] models` | 同轮；检测到预置模型，走「models already present」分支（真下载路径由 §11.2 单独验证） |
 | `[5/5] up + health` | 容器 1–2 s 起；脚本等待 healthcheck：+1 s `healthy` |
 | **install.sh 总计** | **3 s**（热镜像/热 page cache）；**14 s**（重建镜像后首次启动容器的冷路径）。均不含真实模型下载 |
-| 验收 | `docker compose ps` → `Up (healthy)`；`docker compose exec house-ear house-ear-healthcheck` → `ok: uptime=21.1s devices=0 audio_plane=False`；`/health` 200；`doctor` `verdict=degraded`，PASS：arch/cpu/disk/capture/playback(16k/1ch)/aec_rtf 0.010/wake_path，WARN：ram 3.9(VM)、container_runtime(镜像无 docker CLI)、web_auth、ack_wav(未填 TTS key) |
+| 验收 | `docker compose ps` → `Up (healthy)`；`docker compose exec rui rui-healthcheck` → `ok: uptime=21.1s devices=0 audio_plane=False`；`/health` 200；`doctor` `verdict=degraded`，PASS：arch/cpu/disk/capture/playback(16k/1ch)/aec_rtf 0.010/wake_path，WARN：ram 3.9(VM)、container_runtime(镜像无 docker CLI)、web_auth、ack_wav(未填 TTS key) |
 | 加设备后 | 配置加 `devices[0]`（host 127.0.0.1、listen 14412、token_env 指向生成的 token）→ `up -d`：**3 s** 后 `audio_plane=true`、`devices=1`、KWS/VAD `true`；无设备时 plane 不启动且 healthcheck 仍 healthy（两种状态都合法） |
 
 未验：真实网络下的模型下载耗时（本轮预置跳过）、raw 拉取（404）、NAS 上 `hostname -I` 分支。
@@ -369,14 +369,14 @@ docker compose restart house-ear
 | 3 天长稳观察 | P15 时间窗不足 | 启动/自愈已验，长稳后续看 |
 | x86_64 NAS 上运行 | 本机是 arm64；CI 多架构 workflow 未实跑 | ✅ 2026-10-24 NAS 冷装通过（`e3ea158`，423 s 到第一句） |
 | 真实模型下载（hf-mirror / GitHub release） | 本机容器到 hf-mirror、GitHub release 均 TLS 握手超时；冷装排练用了预置模型 | ✅ 2026-10-24 NAS 冷装真实下载成功（ASR 239 MB / VAD 643,854 B / KWS 39 MB）；国内网络需镜像 fallback |
-| `install.sh` 一条命令（`curl \| sh`） | raw 匿名可读已确认；NAS 到 GitHub 偶发 TLS stall | ✅ 2026-10-24 NAS 一键安装通过（install.sh 234 s）；脚本已加超时/IPv4/`HOUSE_EAR_RAW` 换源 |
+| `install.sh` 一条命令（`curl \| sh`） | raw 匿名可读已确认；NAS 到 GitHub 偶发 TLS stall | ✅ 2026-10-24 NAS 一键安装通过（install.sh 234 s）；脚本已加超时/IPv4/`RUI_RAW` 换源 |
 | 容器内音乐真机出声 | 需要真实音箱（声音归 Lead） | resolve/转码已验，播放未验 |
 
 ## 13. 冷装网络与并发接入排障（2026-10-24 验收日记录）
 
 - **`raw.githubusercontent.com` 卡住**：表现为 `curl` 连上后 TLS 不返回、install.sh 停在 `[1/5]` 无输出。
   install.sh 已加 `--connect-timeout 10 --max-time 120 --retry 3` 并强制 IPv4；仍不稳定时用
-  `HOUSE_EAR_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main`。
+  `RUI_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main`。
   注意代理可能缓存旧 `install.sh`/`docker-compose.yml`，冷装前确认内容是最新（`container_name`、脚本版本）。
 - **模型下载**：ASR 走 hf-mirror；VAD/KWS 的 GitHub release 有 `ghproxy.net` / `gh-proxy.com` fallback
   （`fetch-models` 按顺序试，日志会打印 `mirror failed`）。
@@ -401,8 +401,8 @@ ImportError: .../libonnxruntime.so: version `VERS_1.28.2' not found
 先区分「没装包」和「装上了但加载失败」：
 
 ```bash
-cd house-ear
-uv run house-ear doctor        # wake_runtime FAIL 会带真实异常文本
+cd rui
+uv run rui doctor        # wake_runtime FAIL 会带真实异常文本
 uv run python -c "import sherpa_onnx; print(sherpa_onnx.__version__)"
 ldd .venv/lib/python*/site-packages/sherpa_onnx/lib/_sherpa_onnx*.so | grep onnxruntime
 ```
@@ -420,7 +420,7 @@ tar -xzf /tmp/ort.tgz -C /tmp
 cp -a /tmp/onnxruntime-linux-x64-1.28.2/lib/libonnxruntime.so* \
   .venv/lib/python*/site-packages/sherpa_onnx/lib/
 uv run python -c "import sherpa_onnx; print(sherpa_onnx.__version__)"
-uv run house-ear doctor        # wake_runtime 应为 PASS
+uv run rui doctor        # wake_runtime 应为 PASS
 ```
 
 - 重新 `uv sync --reinstall-package sherpa-onnx-core`（或重建 venv）会覆盖手放的库，需重做。

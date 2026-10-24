@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Restore a house-ear backup made by scripts/backup.sh (or a compatible tar.gz).
+# Restore a rui backup made by scripts/backup.sh (or a compatible tar.gz).
 #
 # Safety rules:
 #   * verifies <archive>.sha256 when present, and refuses path-unsafe archives;
@@ -23,7 +23,7 @@ FORMAT=1
 die() { printf 'restore: %s\n' "$1" >&2; exit "${2:-2}"; }
 
 archive=""
-home="${HOUSE_EAR_HOME:-$HOME/house-ear}"
+home="${RUI_HOME:-${HOUSE_EAR_HOME:-$HOME/rui}}"
 force=0
 dry_run=0
 while [ "$#" -gt 0 ]; do
@@ -69,7 +69,7 @@ unsafe="$(tar -tzf "$archive" | awk '
 ' | head -n 5)"
 [ -z "$unsafe" ] || die "archive contains path-unsafe entries: $unsafe" 3
 
-stage="$(mktemp -d "${TMPDIR:-/tmp}/house-ear-restore.XXXXXX")"
+stage="$(mktemp -d "${TMPDIR:-/tmp}/rui-restore.XXXXXX")"
 trap 'rm -rf -- "$stage"' EXIT
 tar -xzf "$archive" -C "$stage"
 
@@ -77,10 +77,10 @@ tar -xzf "$archive" -C "$stage"
 # contain config/ data/ without ./; accept both, but reject anything else.
 if [ -d "$stage/config" ]; then
   src="$stage"
-elif [ -d "$stage/house-ear/config" ]; then
-  src="$stage/house-ear"
+elif [ -d "$stage/rui/config" ]; then
+  src="$stage/rui"
 else
-  die "archive has no config/ directory (not a house-ear backup)" 5
+  die "archive has no config/ directory (not a rui backup)" 5
 fi
 
 manifest_format=""
@@ -160,7 +160,7 @@ printf '  1. cd %s\n' "$home"
 cat <<'NEXT'
   2. docker compose up -d
   3. wait until: docker compose ps  -> healthy
-  4. docker compose exec house-ear house-ear doctor
+  4. docker compose exec rui rui doctor
   5. check: curl -s http://127.0.0.1:8080/health | python3 -m json.tool
   6. if the restore was wrong: move *.pre-restore-<timestamp> back into place.
 NEXT

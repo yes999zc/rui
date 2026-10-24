@@ -5,7 +5,7 @@ filter still keys on "voice peak"; only the cadence changes to one line per 30 s
 """
 from __future__ import annotations
 
-from house_ear.audio.process import LEVEL_LOG_EVERY, METRICS_EVERY_S
+from rui.audio.process import LEVEL_LOG_EVERY, METRICS_EVERY_S
 
 
 def test_the_level_line_is_thirty_seconds_not_every_metrics_tick() -> None:
@@ -17,7 +17,7 @@ def test_httpx_request_urls_are_not_logged_at_info() -> None:
     """Security audit round 2 P1-3: Navidrome's token+salt lives in the request URL."""
     import logging
 
-    from house_ear.log_setup import setup_logging
+    from rui.log_setup import setup_logging
 
     setup_logging("info")
     assert logging.getLogger("httpx").level >= logging.WARNING

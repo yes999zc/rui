@@ -14,7 +14,7 @@ import { computed, ref } from 'vue'
 
 export type Locale = 'zh' | 'en'
 
-const STORAGE_KEY = 'house-ear-language'
+const STORAGE_KEY = 'rui-language'
 
 const zh = {
   // — common ————————————————————————————————————————————————
@@ -342,9 +342,9 @@ const zh = {
   'setup.connect.configured': '已配置',
   'setup.connect.notConfigured': '未配置',
   'setup.connect.missingTitle': '服务端还没有可用的 Device Token',
-  'setup.connect.missingBody': '在部署环境的 .env / secrets 里设置 {env}，或用下面的命令生成一个随机值写进去；然后重启 house-ear 并刷新本页。',
+  'setup.connect.missingBody': '在部署环境的 .env / secrets 里设置 {env}，或用下面的命令生成一个随机值写进去；然后重启 rui 并刷新本页。',
   'setup.connect.rotate': 'openssl rand -hex 24',
-  'setup.connect.missingReload': '改完 .env 后重启 house-ear，再点上面的「重试」。',
+  'setup.connect.missingReload': '改完 .env 后重启 rui，再点上面的「重试」。',
   'setup.connect.allowNoToken': '允许无 Token（仅开发）',
   'setup.connect.allowNoTokenHint': '服务端当前允许未带 token 的连接；生产环境请关闭 web.allow_no_token 并重新生成 token。',
   'setup.connect.openXiaoai': 'open-xiaoai 客户端',
@@ -1003,7 +1003,7 @@ const zh = {
   'channels.weixin.qrStep1': '在通道主机执行下面的命令：',
   'channels.weixin.qrStep2': '终端会打印一个二维码链接；用微信扫码确认。',
   'channels.weixin.qrStep3': '登录账号会保存在数据目录，网关重启后沿用。',
-  'channels.weixin.loginCommand': 'house-ear-channels --login-weixin',
+  'channels.weixin.loginCommand': 'rui-channels --login-weixin',
   'channels.weixin.dataDir': '数据目录',
   'channels.gateway.title': '通道网关',
   'channels.gateway.desc': '网关是独立进程；它读取通道配置，把微信 / Telegram 消息送进同一条对话链路。',
@@ -1599,9 +1599,9 @@ const en: Record<MsgKey, string> = {
   'setup.connect.configured': 'Configured',
   'setup.connect.notConfigured': 'Not configured',
   'setup.connect.missingTitle': 'No device token on the server yet',
-  'setup.connect.missingBody': 'Set {env} in the deployment .env / secrets, or generate a random value with the command below and write it there; then restart house-ear and refresh this page.',
+  'setup.connect.missingBody': 'Set {env} in the deployment .env / secrets, or generate a random value with the command below and write it there; then restart rui and refresh this page.',
   'setup.connect.rotate': 'openssl rand -hex 24',
-  'setup.connect.missingReload': 'After editing .env, restart house-ear and press Retry above.',
+  'setup.connect.missingReload': 'After editing .env, restart rui and press Retry above.',
   'setup.connect.allowNoToken': 'No-token mode (dev only)',
   'setup.connect.allowNoTokenHint': 'The server currently accepts connections without a token; disable web.allow_no_token and rotate the token for production.',
   'setup.connect.openXiaoai': 'open-xiaoai client',
@@ -2256,7 +2256,7 @@ const en: Record<MsgKey, string> = {
   'channels.weixin.qrStep1': 'On the channel host, run:',
   'channels.weixin.qrStep2': 'The terminal prints a QR link; scan it with WeChat to confirm.',
   'channels.weixin.qrStep3': 'The account is saved in the data directory and survives a gateway restart.',
-  'channels.weixin.loginCommand': 'house-ear-channels --login-weixin',
+  'channels.weixin.loginCommand': 'rui-channels --login-weixin',
   'channels.weixin.dataDir': 'Data directory',
   'channels.gateway.title': 'Channel gateway',
   'channels.gateway.desc': 'The gateway is a separate process; it reads the channel config and feeds WeChat / Telegram messages into the same conversation pipeline.',

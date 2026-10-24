@@ -4,7 +4,7 @@
  *
  * GET/PUT /api/v1/channels is the only data source: Telegram is a bot token +
  * allowlisted chat ids, WeChat is a logged-in iLink account + allowlisted user
- * ids. The gateway itself is a separate process (`house-ear-channels`), so the
+ * ids. The gateway itself is a separate process (`rui-channels`), so the
  * page saves `channels.json` and tells the operator to restart the gateway; it
  * never claims the change is live.
  *
@@ -66,7 +66,7 @@ const tokenBusy = ref(false)
 const tokenError = ref('')
 const tokenNotice = ref('')
 const telegramUsername = ref('')
-const TG_USERNAME_KEY = 'house-ear-telegram-username'
+const TG_USERNAME_KEY = 'rui-telegram-username'
 const login = ref<WeixinLoginState | null>(null)
 const loginBusy = ref(false)
 const gatewayBusy = ref<'' | 'start' | 'stop' | 'restart'>('')
@@ -305,7 +305,7 @@ const channelsPath = computed(() => {
 })
 
 const gatewayCommand = computed(() => {
-  const command = state.value?.gateway.command || 'house-ear-channels'
+  const command = state.value?.gateway.command || 'rui-channels'
   return `${command} --channels-config ${channelsPath.value}`
 })
 

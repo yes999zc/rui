@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from house_ear.session import rules
-from house_ear.session.state import InvalidTransition, SessionState, SessionStateMachine
+from rui.session import rules
+from rui.session.state import InvalidTransition, SessionState, SessionStateMachine
 
 
 def test_happy_path() -> None:
@@ -30,7 +30,7 @@ def test_cannot_barge_in_when_idle() -> None:
 
 
 def test_stop_intent_uses_the_configured_words() -> None:
-    from house_ear.session import rules
+    from rui.session import rules
 
     assert rules.stop_intent("下课", ["下课"]) is True
     # A default stop word absent from the configured list must not dismiss.
@@ -39,7 +39,7 @@ def test_stop_intent_uses_the_configured_words() -> None:
 
 def test_stop_scope_is_media_stop_only_while_a_song_plays() -> None:
     """D1c ③: the same stop word means "stop the song" or "end the conversation"."""
-    from house_ear.session import rules
+    from rui.session import rules
 
     # The stated rule: 「停止播放」 with nothing playing = 散场.
     assert rules.stop_scope("停止播放", music_playing=False) == rules.BARE_STOP
@@ -52,7 +52,7 @@ def test_stop_scope_is_media_stop_only_while_a_song_plays() -> None:
 
 def test_stop_scope_keeps_dismissals_ending_the_conversation() -> None:
     """「退下吧」 names the conversation, not the speaker - even mid-song."""
-    from house_ear.session import rules
+    from rui.session import rules
 
     for word in ("退下吧", "退下", "不聊了", "对一下吧"):
         assert rules.stop_scope(word, music_playing=True) == rules.BARE_STOP, word
@@ -71,7 +71,7 @@ def test_stop_intent_is_whole_request_only() -> None:
     「关掉客厅灯」「关闭窗帘」 were True with the old default list; the two-char tail rule
     keeps 「停止播放」 and 「别说了吧」 but not a five-character device command.
     """
-    from house_ear.session import rules
+    from rui.session import rules
 
     for command in ("关掉客厅灯", "关闭窗帘", "关空调", "打开客厅灯"):
         assert rules.stop_intent(command) is False, command
@@ -84,7 +84,7 @@ def test_stop_intent_is_whole_request_only() -> None:
 
 
 def test_stop_scope_returns_empty_for_non_stop_requests() -> None:
-    from house_ear.session import rules
+    from rui.session import rules
 
     assert rules.stop_scope("现在几点了", music_playing=True) == ""
     assert rules.stop_scope("把灯关掉以后告诉我天气怎么样", music_playing=True) == ""
@@ -151,8 +151,8 @@ class _StopTraces:
 
 
 def _stop_env(monkeypatch, state: str | None):
-    import house_ear.web.api.app as app_module
-    from house_ear.config import Config
+    import rui.web.api.app as app_module
+    from rui.config import Config
 
     monkeypatch.setattr(app_module, "_light_after_audio", lambda *a, **k: None)
     service = _StopMusic(state) if state else None
@@ -165,8 +165,8 @@ def test_media_stop_stops_the_song_and_keeps_the_session(monkeypatch) -> None:
     """D1c ③: with a song playing, 「停止播放」 stops the media, not the talk."""
     import asyncio
 
-    from house_ear.session import phrases
-    from house_ear.trace import TurnTrace
+    from rui.session import phrases
+    from rui.trace import TurnTrace
 
     app_module, app, service, runner, client, traces = _stop_env(monkeypatch, "playing")
     handled = asyncio.run(app_module._stop_command(
@@ -184,7 +184,7 @@ def test_bare_stop_without_music_ends_the_session(monkeypatch) -> None:
     """The measured old rule: 「停止播放」 with nothing playing = 散场."""
     import asyncio
 
-    from house_ear.trace import TurnTrace
+    from rui.trace import TurnTrace
 
     app_module, app, service, runner, client, traces = _stop_env(monkeypatch, "idle")
     handled = asyncio.run(app_module._stop_command(
@@ -202,7 +202,7 @@ def test_a_dismissal_mid_song_stops_the_music_then_ends_the_session(monkeypatch)
     """Measured 09:17: the song came back 12 s after 「退下吧」 - it must be stopped."""
     import asyncio
 
-    from house_ear.trace import TurnTrace
+    from rui.trace import TurnTrace
 
     app_module, app, service, runner, client, traces = _stop_env(monkeypatch, "playing")
     handled = asyncio.run(app_module._stop_command(
@@ -217,8 +217,8 @@ def test_a_dismissal_mid_song_stops_the_music_then_ends_the_session(monkeypatch)
 def test_bare_stop_silences_a_stale_music_owner_without_the_service(monkeypatch) -> None:
     import asyncio
 
-    from house_ear.audio.protocol import StopAudio
-    from house_ear.trace import TurnTrace
+    from rui.audio.protocol import StopAudio
+    from rui.trace import TurnTrace
 
     app_module, app, _service, runner, client, traces = _stop_env(monkeypatch, None)
     client.metrics.output_owner = "music"
@@ -233,7 +233,7 @@ def test_bare_stop_silences_a_stale_music_owner_without_the_service(monkeypatch)
 def test_a_non_stop_request_is_left_to_the_turn(monkeypatch) -> None:
     import asyncio
 
-    from house_ear.trace import TurnTrace
+    from rui.trace import TurnTrace
 
     app_module, app, _service, runner, client, traces = _stop_env(monkeypatch, "playing")
     handled = asyncio.run(app_module._stop_command(

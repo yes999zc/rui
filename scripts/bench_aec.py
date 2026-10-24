@@ -12,7 +12,7 @@ then runs the same AecChain the plane runs and reports:
   * CPU time and real-time factor for six filters at 4096 taps
 
 This is the offline number. The hardware number needs the speaker playing, which is
-`house-ear debug-play` plus a device window.
+`rui debug-play` plus a device window.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from house_ear.audio.aec import AecChain, speex_available  # noqa: E402
+from rui.audio.aec import AecChain, speex_available  # noqa: E402
 
 RATE = 16000
 BLOCK = 320

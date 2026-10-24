@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from house_ear.device.xiaoai.led import (
+from rui.device.xiaoai.led import (
     FADE_IN_MS,
     FADE_OUT_MS,
     LED_COUNT,
@@ -298,7 +298,7 @@ def test_the_chain_thinking_speaking_listening_still_ends_green(monkeypatch) -> 
     import asyncio
     import time
 
-    import house_ear.device.xiaoai.led as led_mod
+    import rui.device.xiaoai.led as led_mod
 
     scripts: list[str] = []
 
@@ -339,7 +339,7 @@ def test_a_repaint_only_touches_the_state_it_names() -> None:
         scripts.append(script)
         return ""
 
-    from house_ear.device.xiaoai.led import LedRing
+    from rui.device.xiaoai.led import LedRing
 
     ring = LedRing(fake_shell, enabled=True, clock=lambda: 12)
 
@@ -365,7 +365,7 @@ def test_the_thinking_animation_finishes_before_an_answer_can_start() -> None:
     """The answer starts ~1.2 s after thinking; a longer animation paints blue over cyan."""
     import asyncio
 
-    import house_ear.device.xiaoai.led as led_mod
+    import rui.device.xiaoai.led as led_mod
 
     scripts: list[str] = []
 

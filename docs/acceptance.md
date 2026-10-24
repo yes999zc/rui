@@ -25,11 +25,11 @@
 安装后 `scripts/` 会随 install.sh 一起到位，没有则按 runbook §9 的手工 fetch 补齐）：
 
 ```bash
-cd ~/house-ear
-scripts/backup.sh --out ~/house-ear-backups      # 打印 archive/sha256/版本；不打印密钥
+cd ~/rui
+scripts/backup.sh --out ~/rui-backups      # 打印 archive/sha256/版本；不打印密钥
 ```
 
-> 占位符：`<repo>` = GitHub 仓库（如 `owner/house-ear`），`<tag>` = 镜像版本，
+> 占位符：`<repo>` = GitHub 仓库（如 `owner/rui`），`<tag>` = 镜像版本，
 > `<NAS-IP>` = NAS 局域网地址，`<speaker-ip>` = 音箱地址。文档不写真实 IP/密钥。
 
 ## 1. 前置检查（5–10 min）
@@ -40,7 +40,7 @@ scripts/backup.sh --out ~/house-ear-backups      # 打印 archive/sha256/版本�
 | 镜像可取 | `docker pull ghcr.io/<repo>:<tag>` | 成功；记 digest | ✅ GHCR 匿名可读；冷装拉到 revision f0dde20（amd64 digest 见 RUNLOG） |
 | NAS 环境 | `docker version`、`docker compose version`、空闲内存 ≥2 GB、磁盘 ≥2 GB | 正常 | ✅ Docker 28.5.2 / Compose v2.40.3；可用内存 8.0 GiB；/vol1 可用 8.6 T |
 | 音箱 client | 按 `docs/open-xiaoai-client.md` 填 `ws://<NAS-IP>:4412/?token=<device-token>` | 音箱日志 connected；`/health` `speaker_connected=true` | ✅ connected=true（期间被另一台调试设备抢占同一入口，已停） |
-| 密钥 | `.env`：LLM/ASR/TTS key、device token；可选 `XFYUN_*`/`VOLC_API_KEY`/HA | `house-ear doctor` 无缺 key 警告 | ⚠️ 生产 key 在 `data/secrets.yaml`（非 `.env`）；冷装测试需随配置带入 |
+| 密钥 | `.env`：LLM/ASR/TTS key、device token；可选 `XFYUN_*`/`VOLC_API_KEY`/HA | `rui doctor` 无缺 key 警告 | ⚠️ 生产 key 在 `data/secrets.yaml`（非 `.env`）；冷装测试需随配置带入 |
 | 控制台 | `http://<NAS-IP>:8080/` + console token | 能登录，概览数字在动 | ✅ |
 | 通道 | `GET /api/v1/channels`（带 token） | Telegram 已配置；微信 `enabled=false` | ✅ telegram enabled=true / token_configured=true / allowlist=1；weixin enabled=false |
 
@@ -49,19 +49,19 @@ scripts/backup.sh --out ~/house-ear-backups      # 打印 archive/sha256/版本�
 **先记开始时间：** `date +%s`。用全新目录/新 NAS 路径，不复用旧配置：
 
 ```bash
-export HOUSE_EAR_HOME=~/house-ear-verify
+export RUI_HOME=~/rui-verify
 curl -fsSL https://raw.githubusercontent.com/<repo>/main/deploy/install.sh | sh
 # 或本机排练方式（本地镜像）：
-# HOUSE_EAR_IMAGE=ghcr.io/<repo>:<tag> sh deploy/install.sh
+# RUI_IMAGE=ghcr.io/<repo>:<tag> sh deploy/install.sh
 ```
 
 随后按 install.sh 的提示：
 
-1. 编辑 `$HOUSE_EAR_HOME/config/config.yaml` 的 `devices[]`（host/room/wake_words）。
-2. 编辑 `$HOUSE_EAR_HOME/.env` 填 provider key 和 device token。
-3. `cd "$HOUSE_EAR_HOME" && docker compose up -d` → `docker compose ps` 到 healthy
+1. 编辑 `$RUI_HOME/config/config.yaml` 的 `devices[]`（host/room/wake_words）。
+2. 编辑 `$RUI_HOME/.env` 填 provider key 和 device token。
+3. `cd "$RUI_HOME" && docker compose up -d` → `docker compose ps` 到 healthy
    （install.sh 也会把 `scripts/backup.sh`、`restore.sh`、`acceptance-v1.py` 拉到安装目录）。
-4. `docker compose exec house-ear house-ear doctor`，记录 verdict 与警告。
+4. `docker compose exec rui rui doctor`，记录 verdict 与警告。
 5. **对音箱说「你好小瑞，现在几秒」**，听到回答时结束计时。
 
 | 里程碑 | 墙钟 | 命令/证据 |
@@ -79,8 +79,8 @@ curl -fsSL https://raw.githubusercontent.com/<repo>/main/deploy/install.sh | sh
 音乐持续播放。用脚本记录**人工命中/未命中**，脚本只读服务端数字，不替耳朵判断：
 
 ```bash
-export HOUSE_EAR_TOKEN="$(docker compose exec -T house-ear house-ear token)"
-cd ~/house-ear
+export RUI_TOKEN="$(docker compose exec -T rui rui token)"
+cd ~/rui
 python3 scripts/acceptance-v1.py wake --url http://<NAS-IP>:8080 --trials 20 --label near-field
 # 远场补充（不进门槛）：--trials 10 --label far-field --no-gate
 # NAS 没装 python3：在 Mac 上跑同样的命令，--url 指向 NAS 即可（token 仍只走环境变量）。
@@ -89,9 +89,9 @@ python3 scripts/acceptance-v1.py wake --url http://<NAS-IP>:8080 --trials 20 --l
 脚本会逐轮提示：`y` 听到回答 / `n` 没回答 / `s` 跳过 / `q` 退出；同时读
 `/api/v1/audio` 的 `wake_count`、`voice_peak_db`、`aec_erle_db`、`ack_mode`。
 输出在 `acceptance-runs/acceptance-wake-*.json/.md`（0600）。
-> **输出路径**：在容器里跑时加 `--out /var/lib/house-ear/acceptance-runs`（宿主是
-> `~/house-ear/data/acceptance-runs/`），别放 `/data` 或容器层——容器重建会丢；也可设
-> `HOUSE_EAR_ACCEPTANCE_OUT`。
+> **输出路径**：在容器里跑时加 `--out /var/lib/rui/acceptance-runs`（宿主是
+> `~/rui/data/acceptance-runs/`），别放 `/data` 或容器层——容器重建会丢；也可设
+> `RUI_ACCEPTANCE_OUT`。
 
 | 位置 | 音量档 | 命中/总数 | 失败轮现象 | 服务端字段异常 | 结论 |
 |---|---|---|---|---|---|
@@ -130,10 +130,10 @@ python3 scripts/acceptance-v1.py barge --url http://<NAS-IP>:8080 --trials 3
 
 1. 控制台 `/channels`（或 `GET /api/v1/channels`）确认 `telegram.enabled=true`、
    `token_configured=true`、allowlist 含你的 chat id；改动后重启服务让 gateway 重读。
-2. 保存通道配置后 `docker compose restart house-ear`（gateway 在启动时重读 channels.json），
+2. 保存通道配置后 `docker compose restart rui`（gateway 在启动时重读 channels.json），
    等 healthy；然后手机私聊 bot：发 **2 条文字**（如「现在几点」「放一首周杰伦」）+ **2 条语音**；
    每条应有文字/语音回复（按 reply_mode），且不触发客厅音箱的 idle 告别。
-3. 证据：`GET /api/v1/channels` 的 gateway 状态；`docker compose logs --since 10m house-ear |
+3. 证据：`GET /api/v1/channels` 的 gateway 状态；`docker compose logs --since 10m rui |
    grep -iE "channel|telegram"`；**确认日志没有 bot token / chat id 全文**。
 
 | 通道 | 类型 | 发了 | 收到回复 | 备注 |
@@ -147,16 +147,16 @@ python3 scripts/acceptance-v1.py barge --url http://<NAS-IP>:8080 --trials 3
 ## 6. 配置恢复 smoke（先备份！）
 
 ```bash
-cd ~/house-ear
+cd ~/rui
 cp config/config.yaml "config/config.yaml.acceptance-bak-$(date +%Y%m%d-%H%M%S)"
 printf 'version: [ deliberately broken\n' > config/config.yaml   # 模拟手改坏
-docker compose restart house-ear
+docker compose restart rui
 # 期望：进程起来（fallback 到 last-good 或 schema defaults），不是崩溃循环
-docker compose logs --tail=100 house-ear | grep -iE "recover|last.good|config"
+docker compose logs --tail=100 rui | grep -iE "recover|last.good|config"
 ls -l data/config-recovery.json config/*.failed-* 2>/dev/null
-docker compose exec -T house-ear house-ear config restore --last-good
-docker compose restart house-ear
-docker compose ps && docker compose exec -T house-ear house-ear doctor
+docker compose exec -T rui rui config restore --last-good
+docker compose restart rui
+docker compose ps && docker compose exec -T rui rui doctor
 ```
 
 | 检查 | 期望 | 结果 |
@@ -167,15 +167,15 @@ docker compose ps && docker compose exec -T house-ear house-ear doctor
 | 与备份对比 | `cmp` 关键字段（devices/providers 链）一致 | ☐ |
 
 如果 last-good 不存在或也坏了，用 §7 的备份归档恢复，不要手改回半坏文件。
-`house-ear config restore --defaults` 只用于“回到全新模板”，会丢设备/provider 配置，慎用。
+`rui config restore --defaults` 只用于“回到全新模板”，会丢设备/provider 配置，慎用。
 
 ## 7. 备份 / 恢复（含换机）
 
 备份（归档 0600，含 `.env` 时尤其注意保管）：
 
 ```bash
-cd ~/house-ear
-scripts/backup.sh --out ~/house-ear-backups
+cd ~/rui
+scripts/backup.sh --out ~/rui-backups
 # 默认排除 data/models（可重下）；需要连模型一起：--with-models
 # 查看：archive、size、sha256、config_version、image_version、manifest
 ```
@@ -183,19 +183,19 @@ scripts/backup.sh --out ~/house-ear-backups
 恢复 smoke（**不要**直接往生产目录写，先用临时目录）：
 
 ```bash
-scripts/restore.sh ~/house-ear-backups/<archive>.tar.gz --home /tmp/house-ear-restore-smoke
-ls -la /tmp/house-ear-restore-smoke/config /tmp/house-ear-restore-smoke/data
-diff -r ~/house-ear/config /tmp/house-ear-restore-smoke/config   # 允许 .bak 差异
+scripts/restore.sh ~/rui-backups/<archive>.tar.gz --home /tmp/rui-restore-smoke
+ls -la /tmp/rui-restore-smoke/config /tmp/rui-restore-smoke/data
+diff -r ~/rui/config /tmp/rui-restore-smoke/config   # 允许 .bak 差异
 ```
 
 真恢复（仅当需要时；会先移走旧树）：
 
 ```bash
-cd ~/house-ear
+cd ~/rui
 docker compose stop
-scripts/restore.sh ~/house-ear-backups/<archive>.tar.gz --home ~/house-ear --force
+scripts/restore.sh ~/rui-backups/<archive>.tar.gz --home ~/rui --force
 docker compose up -d
-docker compose ps && docker compose exec -T house-ear house-ear doctor
+docker compose ps && docker compose exec -T rui rui doctor
 # 恢复错了：把 config.pre-restore-<ts>/data.pre-restore-<ts> 移回去
 ```
 
@@ -203,7 +203,7 @@ docker compose ps && docker compose exec -T house-ear house-ear doctor
 |---|---|---|
 | 归档权限 | 归档/sha256/manifest 均 0600 | ✅ 2026-10-24 10:47 生成，31,160 KiB，sha256 `35d5061d…`，均 0600 |
 | 归档校验 | 默认生成 `.sha256`；restore 校验通过 | ✅ restore 校验通过（`checksum ok`） |
-| 临时恢复 | config/data/.env 齐全；models 默认不恢复 | ✅ 恢复到 `/tmp/house-ear-restore-smoke` 成功，config/data/.env 齐全、权限 600 |
+| 临时恢复 | config/data/.env 齐全；models 默认不恢复 | ✅ 恢复到 `/tmp/rui-restore-smoke` 成功，config/data/.env 齐全、权限 600 |
 | 真恢复 | healthy + doctor + 设备在线；旧树留 `.pre-restore-*` | ☐ |
 | 换机 | 新机器 install → restore → `fetch-models` 补模型 | ☐ |
 
@@ -259,8 +259,8 @@ docker compose ps && docker compose exec -T house-ear house-ear doctor
 
 5. **install.sh 卡死（已修）**：`raw.githubusercontent.com` 在 NAS 上会出现“TCP 连上但 TLS 不返回”的 stall，
    install.sh 的 curl 没有超时 → 卡 8 分钟无输出。已加 `--connect-timeout/--max-time/--retry`、强制 IPv4、
-   支持 `HOUSE_EAR_RAW` 换镜像源（`39af43f`/`4aa8f9e`）。
-6. **模板与旧 secrets 的 key 命名差异**：新模板 LLM 读 `HOUSE_EAR_LLM_KEY`，老生产 `secrets.yaml` 是
+   支持 `RUI_RAW` 换镜像源（`39af43f`/`4aa8f9e`）。
+6. **模板与旧 secrets 的 key 命名差异**：新模板 LLM 读 `RUI_LLM_KEY`，老生产 `secrets.yaml` 是
    `DEEPSEEK_API_KEY`；冷装测试复制旧 secrets 时会“唤醒后不回答”。真实用户走 Setup 向导不受影响；
    迁移/复用旧 secrets 时的提示已在 remaining-work 记录。
 7. **空 config 的 recovery 缺口**：config 为 0 字节时静默使用 schema defaults → `insecure_bind` 拒绝 → crash loop，
@@ -273,5 +273,5 @@ docker compose ps && docker compose exec -T house-ear house-ear doctor
   （digest `sha256:694fc924…`，revision `1966db6`；回滚 tag `acceptance-f2abcef` 保留）
 - 冷装验证：`e3ea158`（含 VAD/KWS 镜像 fallback）
 - GHCR `:latest`：`afaabe7`（docs commit；运行代码与 `e3ea158` 相同；amd64 digest `sha256:03bdc1f3…`）
-- 代码：`main@afaabe7`，748 passed / 17 skipped（无模型环境；`HOUSE_EAR_TEST_MODELS` 时 764/1），ruff clean，
+- 代码：`main@afaabe7`，748 passed / 17 skipped（无模型环境；`RUI_TEST_MODELS` 时 764/1），ruff clean，
   web typecheck/build 绿

@@ -4,16 +4,16 @@ install:
 	uv sync --extra dev
 
 doctor:
-	uv run house-ear doctor
+	uv run rui doctor
 
 serve:
-	uv run house-ear serve
+	uv run rui serve
 
 audio:
-	uv run house-ear audio --config $${HOUSE_EAR_CONFIG:-$$HOME/.config/house-ear/config.yaml} --device $${DEVICE:-living}
+	uv run rui audio --config $${RUI_CONFIG:-$$HOME/.config/rui/config.yaml} --device $${DEVICE:-living}
 
 measure:
-	uv run python scripts/measure_plane.py --config $${HOUSE_EAR_CONFIG:-$$HOME/.config/house-ear/config.yaml} --device $${DEVICE:-living} --seconds $${SECONDS:-300}
+	uv run python scripts/measure_plane.py --config $${RUI_CONFIG:-$$HOME/.config/rui/config.yaml} --device $${DEVICE:-living} --seconds $${SECONDS:-300}
 
 test:
 	uv run pytest
@@ -25,4 +25,4 @@ web:
 	cd web && npm install && npm run build
 
 docker:
-	docker build -t house-ear:dev .
+	docker build -t rui:dev .

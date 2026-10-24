@@ -136,11 +136,11 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 `SetupState`（顶层字段只加不改；`steps` 的 id/顺序替换为 8 步，旧 5 步测试同步更新；保留 `done` 布尔给旧组件）：
 
 ```json
-{"plug":{"id":"xiaoai","version":"0.1.0","class":"A","adapter":"xiaoai","transport":"inbound","source":"builtin","available":true,"verified":true},
+{"plug":{"id":"xiaoai","version":"0.2.0","class":"A","adapter":"xiaoai","transport":"inbound","source":"builtin","available":true,"verified":true},
  "blocked":null,"next_step":"params","complete":false,"plane_error":"",
  "steps":[{"id":"keys","kind":"generic","required":true,"status":"done","done":true,"title_key":"setup.step.keys","detail":{},"last_error":null}],
  "device":{"id":"living","adapter":"xiaoai","host":"<speaker-ip>","room":"客厅","wake_words":["你好小瑞"],"enabled":true,"params":{}},
- "connect":{"configured":true,"token_env":"HOUSE_EAR_DEVICE_TOKEN","listen_port":4412},
+ "connect":{"configured":true,"token_env":"RUI_DEVICE_TOKEN","listen_port":4412},
  "keywords_file":"<data-dir>/keywords.txt","keywords_exists":true,"config_path":"<config-dir>/config.yaml","config_exists":true}
 ```
 
@@ -271,7 +271,7 @@ devices:
     enabled: true
     wake_words: [你好小瑞]
     listen_port: 4412           # manifest/默认；表单不显示时必须保留
-    token_env: HOUSE_EAR_DEVICE_TOKEN
+    token_env: RUI_DEVICE_TOKEN
     allow_no_token: false
     params:                     # 新增：只放 manifest 声明的非 secret 值
       volume_max: 100
@@ -290,7 +290,7 @@ devices:
 | `<data-dir>/secrets.yaml` | key 值、`type: secret` 参数、device token | **0600**，原子替换 | `secrets.put`（`secrets.py` L64-93） |
 | `<config-dir>/keywords.txt` | `<pinyin> :2.00 #0.15 @<word>` | 0644（非 secret；实际按 umask） | `write_keywords_file`（`audio/kws.py` L71-90） |
 | `.env` | 部署方写入的 key / device token | 0600（`install.sh` chmod） | **向导不写**；环境变量优先于 secrets（`secrets.py` L52-57） |
-| `src/house_ear/device/plugs/*.yaml` / `data/plugs/<id>/...` | 内置/外部 manifest | 0644 只读；目录 0755；拒绝 symlink | 随镜像 / 运维、插件作者 |
+| `src/rui/device/plugs/*.yaml` / `data/plugs/<id>/...` | 内置/外部 manifest | 0644 只读；目录 0755；拒绝 symlink | 随镜像 / 运维、插件作者 |
 | 诊断包 | 只在浏览器内存，复制到剪贴板 | — | 不落盘 |
 
 ## 8. 测试计划

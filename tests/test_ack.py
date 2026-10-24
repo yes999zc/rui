@@ -16,19 +16,19 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from house_ear.audio import ack, chime
-from house_ear.audio.kws import WakeHit
-from house_ear.audio.process import AudioPlane
-from house_ear.config import Config
+from rui.audio import ack, chime
+from rui.audio.kws import WakeHit
+from rui.audio.process import AudioPlane
+from rui.config import Config
 
-# Optional model for the gate tests. Point HOUSE_EAR_TEST_MODELS at a directory that
+# Optional model for the gate tests. Point RUI_TEST_MODELS at a directory that
 # holds silero_vad.onnx (and kws/, sensevoice/ for the other suites); without it these
 # tests skip instead of depending on one developer's home directory.
-_TEST_MODELS = os.environ.get("HOUSE_EAR_TEST_MODELS", "").strip()
+_TEST_MODELS = os.environ.get("RUI_TEST_MODELS", "").strip()
 MODEL = Path(_TEST_MODELS) / "silero_vad.onnx" if _TEST_MODELS else Path("/nonexistent/silero_vad.onnx")
 needs_vad = pytest.mark.skipif(
     not MODEL.exists(),
-    reason="optional model suite: set HOUSE_EAR_TEST_MODELS to a dir with silero_vad.onnx",
+    reason="optional model suite: set RUI_TEST_MODELS to a dir with silero_vad.onnx",
 )
 
 
@@ -143,7 +143,7 @@ def test_a_request_spoken_during_the_cue_is_buffered_not_dropped() -> None:
     a person answers the moment the cue ends, which is inside the window. What the hold is
     allowed to do is delay the *turn*, not throw the words away.
     """
-    from house_ear.audio.vad import GateConfig, UtteranceGate
+    from rui.audio.vad import GateConfig, UtteranceGate
 
     gate = UtteranceGate(GateConfig(), MODEL)
     gate.arm()
@@ -164,7 +164,7 @@ def test_a_request_spoken_during_the_cue_is_buffered_not_dropped() -> None:
 @needs_vad
 def test_preroll_replayed_into_the_gate_survives_the_hold() -> None:
     """Replay must come before the hold: those blocks are the person, not the speaker."""
-    from house_ear.audio.vad import GateConfig, UtteranceGate
+    from rui.audio.vad import GateConfig, UtteranceGate
 
     gate = UtteranceGate(GateConfig(), MODEL)
     gate.arm()
@@ -194,7 +194,7 @@ def test_the_cue_echo_is_skipped_and_the_request_after_it_is_kept() -> None:
     request starting right after the cue lost its first ~1.1 s (13:47 放一首告白气球 ->
     告白气球). So the cue's own playing time is dropped and the echo window is kept.
     """
-    from house_ear.audio.vad import GateConfig, UtteranceGate
+    from rui.audio.vad import GateConfig, UtteranceGate
 
     gate = UtteranceGate(GateConfig(), MODEL)
     gate.arm()
@@ -224,7 +224,7 @@ def test_the_cue_echo_is_skipped_and_the_request_after_it_is_kept() -> None:
 def test_our_own_cue_alone_never_opens_a_turn() -> None:
     """15:49:07 regression: the ack audio was replayed, transcribed as 「在呢」, and the
     assistant answered its own greeting. Skipping the cue must leave no utterance at all."""
-    from house_ear.audio.vad import GateConfig, UtteranceGate
+    from rui.audio.vad import GateConfig, UtteranceGate
 
     gate = UtteranceGate(GateConfig(), MODEL)
     gate.arm()
@@ -425,7 +425,7 @@ class FakeTts:
 
 
 def _wire_fake_tts(monkeypatch, seconds: float) -> FakeTts:
-    from house_ear.session import ack as ack_module
+    from rui.session import ack as ack_module
 
     fake = FakeTts(seconds)
     monkeypatch.setattr(ack_module, "tts_chain", lambda _providers, _rate: [("fake", fake)])
@@ -433,7 +433,7 @@ def _wire_fake_tts(monkeypatch, seconds: float) -> FakeTts:
 
 
 def test_ensure_ack_wav_writes_a_file_within_the_cap(tmp_path: Path, monkeypatch) -> None:
-    from house_ear.session.ack import ensure_ack_wav
+    from rui.session.ack import ensure_ack_wav
 
     cfg = Config()
     cfg.system.data_dir = str(tmp_path)
@@ -447,12 +447,12 @@ def test_ensure_ack_wav_writes_a_file_within_the_cap(tmp_path: Path, monkeypatch
     assert path.exists(), note
     assert "400 ms" in note and "fake" in note
     assert fake.calls == 1
-    audio, rate = __import__("house_ear.audio.wav", fromlist=["read_wav_mono"]).read_wav_mono(path)
+    audio, rate = __import__("rui.audio.wav", fromlist=["read_wav_mono"]).read_wav_mono(path)
     assert audio.size / rate == pytest.approx(0.4, abs=0.05)
 
 
 def test_ensure_ack_wav_refuses_text_over_the_cap(tmp_path: Path, monkeypatch) -> None:
-    from house_ear.session.ack import ensure_ack_wav
+    from rui.session.ack import ensure_ack_wav
 
     cfg = Config()
     cfg.system.data_dir = str(tmp_path)
@@ -467,7 +467,7 @@ def test_ensure_ack_wav_refuses_text_over_the_cap(tmp_path: Path, monkeypatch) -
 
 
 def test_ensure_ack_wav_does_nothing_for_the_tone_modes(tmp_path: Path, monkeypatch) -> None:
-    from house_ear.session.ack import ensure_ack_wav
+    from rui.session.ack import ensure_ack_wav
 
     cfg = Config()
     cfg.system.data_dir = str(tmp_path)
@@ -481,8 +481,8 @@ def test_ensure_ack_wav_does_nothing_for_the_tone_modes(tmp_path: Path, monkeypa
 
 def test_the_written_cue_contains_the_audio_the_provider_sent(tmp_path: Path, monkeypatch) -> None:
     """A byte-swapped or wrong-rate file would pass a duration-only assertion."""
-    from house_ear.audio.wav import read_wav_mono
-    from house_ear.session.ack import ensure_ack_wav
+    from rui.audio.wav import read_wav_mono
+    from rui.session.ack import ensure_ack_wav
 
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "nested" / "data")  # must be created
@@ -503,7 +503,7 @@ def test_the_written_cue_contains_the_audio_the_provider_sent(tmp_path: Path, mo
 
 def test_an_unwritable_data_dir_is_a_downgrade_not_an_outage(tmp_path: Path, monkeypatch) -> None:
     """A read-only volume on the NAS must not take the control plane down at startup."""
-    from house_ear.session.ack import ensure_ack_wav
+    from rui.session.ack import ensure_ack_wav
 
     blocker = tmp_path / "not-a-dir"
     blocker.write_text("x")
@@ -518,7 +518,7 @@ def test_an_unwritable_data_dir_is_a_downgrade_not_an_outage(tmp_path: Path, mon
 
 
 def test_a_stale_overlong_cue_is_removed(tmp_path: Path, monkeypatch) -> None:
-    from house_ear.session.ack import ensure_ack_wav
+    from rui.session.ack import ensure_ack_wav
 
     cfg = Config()
     cfg.system.data_dir = str(tmp_path)
@@ -574,7 +574,7 @@ def test_stop_audio_also_silences_the_cue() -> None:
 
 def test_the_wake_event_survives_the_wire_with_its_levels() -> None:
     """These fields were silently dropped by pydantic until they existed on the model."""
-    from house_ear.audio.protocol import CONTROL, Wake, encode_json
+    from rui.audio.protocol import CONTROL, Wake, encode_json
 
     payload = encode_json(
         Wake(ts_ms=1234.0, keyword="你好小瑞", voice_rms_db=-33.5, ref_rms_db=-12.0,
@@ -607,7 +607,7 @@ def test_a_silent_wake_is_reported_so_the_session_can_close() -> None:
     The plane closes its own gate after max_wait_ms; the control plane needs to know so
     it can end the session (silently - the old 15 s goodbye was explicitly rejected).
     """
-    from house_ear.audio.vad import GateConfig, UtteranceGate
+    from rui.audio.vad import GateConfig, UtteranceGate
 
     cfg = GateConfig(max_wait_ms=1000)
     gate = UtteranceGate(cfg, MODEL)
@@ -620,7 +620,7 @@ def test_a_silent_wake_is_reported_so_the_session_can_close() -> None:
 
 
 def test_wake_idle_is_a_control_message() -> None:
-    from house_ear.audio.protocol import CONTROL, WakeIdle
+    from rui.audio.protocol import CONTROL, WakeIdle
 
     msg = CONTROL.validate_json('{"type":"wake_idle","waited_ms":6000}')
     assert isinstance(msg, WakeIdle)

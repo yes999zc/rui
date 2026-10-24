@@ -3,8 +3,8 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from house_ear.session.memory import MemoryStore
-from house_ear.tools.reminders import ReminderStore
+from rui.session.memory import MemoryStore
+from rui.tools.reminders import ReminderStore
 
 
 def _mode(path: Path) -> int:

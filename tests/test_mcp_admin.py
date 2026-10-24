@@ -10,9 +10,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config, load_config, save_config
-from house_ear.web.api import app as app_module
-from house_ear.web.api.app import create_app
+from rui.config import Config, load_config, save_config
+from rui.web.api import app as app_module
+from rui.web.api.app import create_app
 
 
 class FakeBridge:
@@ -45,7 +45,7 @@ class FakeBridge:
 
 @pytest.fixture()
 def console(tmp_path, monkeypatch):
-    for name in ("HOUSE_EAR_HA_TOKEN",):
+    for name in ("RUI_HA_TOKEN",):
         monkeypatch.delenv(name, raising=False)
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")

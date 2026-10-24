@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from house_ear.session import briefing
-from house_ear.session.briefing import BRIEFING_STATUS, Briefing, from_news
+from rui.session import briefing
+from rui.session.briefing import BRIEFING_STATUS, Briefing, from_news
 
 
 def test_the_script_keeps_the_old_build_shape() -> None:
@@ -116,7 +116,7 @@ class _DirectAsr:
         self.text = text
 
     async def transcribe(self, pcm: bytes, sample_rate: int):
-        from house_ear.providers.base import Transcript
+        from rui.providers.base import Transcript
 
         return Transcript(text=self.text)
 
@@ -142,7 +142,7 @@ class _DirectTts:
 
 
 def _patch_direct(monkeypatch, llm: _DirectLlm, tts: _DirectTts) -> None:
-    import house_ear.session.turn as turn
+    import rui.session.turn as turn
 
     monkeypatch.setattr(turn, "asr_chain", lambda providers: [("a", _DirectAsr())])
     monkeypatch.setattr(turn, "llm_chain", lambda providers: [("l0", llm)])
@@ -150,13 +150,13 @@ def _patch_direct(monkeypatch, llm: _DirectLlm, tts: _DirectTts) -> None:
 
 
 def _news_spec():
-    from house_ear.tools.contract import Permission, ToolSpec
+    from rui.tools.contract import Permission, ToolSpec
 
     return ToolSpec(name="local.news", description="新闻", permission=Permission.READ)
 
 
 def _tool_call(name: str = "news") -> object:
-    from house_ear.providers.base import ChatChunk
+    from rui.providers.base import ChatChunk
 
     return ChatChunk(delta="", finish_reason="tool_calls",
                      tool_calls=[{"id": "t1", "name": name, "arguments": "{}"}])
@@ -166,11 +166,11 @@ def test_a_direct_hook_reads_the_briefing_without_a_second_model_round(monkeypat
     """Old @@BRIEF behaviour: the script is the answer, the model is not asked again."""
     import asyncio
 
-    from house_ear.config.schema import Config
-    from house_ear.providers.base import ChatChunk
-    from house_ear.session.turn import TurnRunner, speech_pieces
-    from house_ear.trace import TurnTrace
-    from house_ear.web.api.app import _direct_speech
+    from rui.config.schema import Config
+    from rui.providers.base import ChatChunk
+    from rui.session.turn import TurnRunner, speech_pieces
+    from rui.trace import TurnTrace
+    from rui.web.api.app import _direct_speech
 
     brief = from_news(["今天下雨", "明天转晴"], date="2026-10-23")
     assert brief is not None
@@ -205,9 +205,9 @@ def test_a_direct_hook_reads_the_briefing_without_a_second_model_round(monkeypat
 def test_the_model_only_sees_the_notice_never_the_script(monkeypatch) -> None:
     import asyncio
 
-    from house_ear.config.schema import Config
-    from house_ear.session.turn import TurnRunner
-    from house_ear.web.api.app import _direct_speech
+    from rui.config.schema import Config
+    from rui.session.turn import TurnRunner
+    from rui.web.api.app import _direct_speech
 
     brief = from_news(["今天下雨"], date="2026-10-23")
     assert brief is not None
@@ -230,10 +230,10 @@ def test_without_the_hook_the_tool_round_behaves_as_before(monkeypatch) -> None:
     """The hook is opt-in: no hook -> the historical two-round tool path."""
     import asyncio
 
-    from house_ear.config.schema import Config
-    from house_ear.providers.base import ChatChunk
-    from house_ear.session.turn import TurnRunner
-    from house_ear.trace import TurnTrace
+    from rui.config.schema import Config
+    from rui.providers.base import ChatChunk
+    from rui.session.turn import TurnRunner
+    from rui.trace import TurnTrace
 
     async def handler(_args: dict) -> str:
         return "新闻：今天下雨。第二，明天转晴。"
@@ -257,10 +257,10 @@ def test_without_the_hook_the_tool_round_behaves_as_before(monkeypatch) -> None:
 def test_a_non_briefing_result_is_not_direct(monkeypatch) -> None:
     import asyncio
 
-    from house_ear.config.schema import Config
-    from house_ear.session.turn import TurnRunner
-    from house_ear.tools.contract import ToolResult
-    from house_ear.web.api.app import _direct_speech
+    from rui.config.schema import Config
+    from rui.session.turn import TurnRunner
+    from rui.tools.contract import ToolResult
+    from rui.web.api.app import _direct_speech
 
     async def handler(_args: dict) -> ToolResult:
         return ToolResult(status="ok").slot(title="晴天")
@@ -277,8 +277,8 @@ def test_a_non_briefing_result_is_not_direct(monkeypatch) -> None:
 def test_the_news_tool_builds_a_briefing_from_the_digest(monkeypatch) -> None:
     import asyncio
 
-    from house_ear.config.schema import Config
-    from house_ear.tools import info
+    from rui.config.schema import Config
+    from rui.tools import info
 
     async def fake_get(url: str, timeout: float, params: dict | None = None):
         return {"news": ["今天下雨", "明天转晴"], "tip": "晚安"}
@@ -297,9 +297,9 @@ def test_debug_say_reads_a_briefing_end_to_end(monkeypatch, tmp_path) -> None:
 
     from fastapi.testclient import TestClient
 
-    import house_ear.web.api.app as app_mod
-    from house_ear.config.schema import Config
-    from house_ear.tools import info
+    import rui.web.api.app as app_mod
+    from rui.config.schema import Config
+    from rui.tools import info
 
     brief = from_news(["今天下雨", "明天转晴"], date="2026-10-23")
     assert brief is not None

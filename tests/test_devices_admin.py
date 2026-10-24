@@ -11,8 +11,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config, DeviceConfig, load_config, save_config
-from house_ear.web.api.app import create_app
+from rui.config import Config, DeviceConfig, load_config, save_config
+from rui.web.api.app import create_app
 
 
 @pytest.fixture()

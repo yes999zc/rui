@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import asyncio
 
-from house_ear.config.schema import Config
-from house_ear.providers.base import ChatChunk, Transcript
-from house_ear.session.speech_text import gap_after, prepare_for_speech
-from house_ear.session.turn import TurnRunner
-from house_ear.trace import TurnTrace
+from rui.config.schema import Config
+from rui.providers.base import ChatChunk, Transcript
+from rui.session.speech_text import gap_after, prepare_for_speech
+from rui.session.turn import TurnRunner
+from rui.trace import TurnTrace
 
 
 class FakeAsr:
@@ -44,7 +44,7 @@ class FakeTts:
 
 
 def patch_chains(monkeypatch, *, asr, llms, ttss) -> None:
-    import house_ear.session.turn as turn
+    import rui.session.turn as turn
 
     monkeypatch.setattr(turn, "asr_chain", lambda providers: [("a", asr)])
     monkeypatch.setattr(turn, "llm_chain", lambda providers: [(f"l{i}", p) for i, p in enumerate(llms)])

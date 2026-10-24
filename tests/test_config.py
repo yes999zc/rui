@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from house_ear.config import Config, DeviceConfig, load_config, save_config
-from house_ear.config.schema import (
+from rui.config import Config, DeviceConfig, load_config, save_config
+from rui.config.schema import (
     CaptureConfig,
     ProviderConfig,
     ProvidersConfig,
@@ -123,7 +123,7 @@ providers:
     kind: openai_compat
     base_url: http://asr
     model: sensevoice
-    api_key_env: HOUSE_EAR_ASR_KEY
+    api_key_env: RUI_ASR_KEY
   tts:
     base_url: http://tts
     model: cosyvoice
@@ -156,7 +156,7 @@ def test_v1_config_is_migrated_in_memory(tmp_path) -> None:
 
 
 def test_led_defaults_match_the_old_build() -> None:
-    from house_ear.config.schema import LedConfig
+    from rui.config.schema import LedConfig
 
     led = LedConfig()
     assert led.enabled is False
@@ -170,7 +170,7 @@ def test_led_defaults_match_the_old_build() -> None:
 def test_led_night_window_must_not_be_empty() -> None:
     from pydantic import ValidationError
 
-    from house_ear.config.schema import LedConfig
+    from rui.config.schema import LedConfig
 
     with pytest.raises(ValidationError):
         LedConfig(night_start=7, night_end=7)
@@ -178,7 +178,7 @@ def test_led_night_window_must_not_be_empty() -> None:
 
 def test_led_yaml_off_key_is_accepted() -> None:
     """PyYAML reads a bare `off:` as False; a hand-written config must still load."""
-    from house_ear.config.schema import LedConfig
+    from rui.config.schema import LedConfig
 
     led = LedConfig.model_validate({"colors": {False: "#000000", "thinking": "#000060"}})
     assert led.colors["off"] == "#000000"
@@ -193,14 +193,14 @@ def test_exit_words_cover_the_old_build_set() -> None:
 
 def test_music_resume_hold_is_short_and_configurable() -> None:
     """6 s of silence after an answer was heard as a long gap (9哥, 16:10)."""
-    from house_ear.config import Config
+    from rui.config import Config
 
     assert Config().music.resume_hold_ms == 2500
 
 
 def test_the_catalog_exposes_the_music_resume_delay() -> None:
-    from house_ear.config import Config
-    from house_ear.config.catalog import document
+    from rui.config import Config
+    from rui.config.catalog import document
 
     fields = {field["path"]: field for field in document(Config())["fields"]}
     field = fields["music.resume_hold_ms"]

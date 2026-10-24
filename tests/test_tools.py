@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from house_ear.tools.contract import Permission, ToolSpec
-from house_ear.tools.registry import ToolError, ToolRegistry
+from rui.tools.contract import Permission, ToolSpec
+from rui.tools.registry import ToolError, ToolRegistry
 
 
 def spec(name: str, perm: Permission = Permission.READ) -> ToolSpec:

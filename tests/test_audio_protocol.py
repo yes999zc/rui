@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from house_ear.audio.protocol import (
+from rui.audio.protocol import (
     HEADER,
     MAX_JSON,
     FrameType,
@@ -59,7 +59,7 @@ def test_reply_finished_carries_the_music_hold() -> None:
     crashed the audio plane on the first volume confirmation (measured 09:13)."""
     import json
 
-    from house_ear.audio.protocol import CONTROL
+    from rui.audio.protocol import CONTROL
 
     msg = CONTROL.validate_json(json.dumps({"type": "reply_finished", "hold_music_s": 0}))
     assert msg.hold_music_s == 0

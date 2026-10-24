@@ -6,12 +6,12 @@ import asyncio
 import json
 from pathlib import Path
 
-from house_ear.audio.protocol import LedState, PauseMusic, PlayFile, StopAudio
-from house_ear.config.schema import MusicConfig
-from house_ear.music.history import PlayHistory
-from house_ear.music.model import Track
-from house_ear.music.service import MusicService
-from house_ear.music.source import SourceError
+from rui.audio.protocol import LedState, PauseMusic, PlayFile, StopAudio
+from rui.config.schema import MusicConfig
+from rui.music.history import PlayHistory
+from rui.music.model import Track
+from rui.music.service import MusicService
+from rui.music.source import SourceError
 
 
 class FakeSource:

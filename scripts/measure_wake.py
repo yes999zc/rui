@@ -26,9 +26,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from house_ear.audio.client import AudioPlaneError, AudioPlaneSupervisor  # noqa: E402
-from house_ear.audio.protocol import PlayFile, StopAudio  # noqa: E402
-from house_ear.config import load_config  # noqa: E402
+from rui.audio.client import AudioPlaneError, AudioPlaneSupervisor  # noqa: E402
+from rui.audio.protocol import PlayFile, StopAudio  # noqa: E402
+from rui.config import load_config  # noqa: E402
 
 
 async def run(config: Path, device: str, seconds: float, music: Path | None, gain: float,

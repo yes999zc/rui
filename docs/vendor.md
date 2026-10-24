@@ -3,7 +3,7 @@
 The speaker still runs its own assistant. "小爱同学" wakes the vendor, it answers, and our
 KWS can fire on the same audio - two assistants, one sentence. The old project hit this on
 2026-10-21 (`[dev] vendor wake (RecognizeResult) -> barge` followed by our own `[asr]` turn)
-and fixed it by yielding; house-ear keeps that rule.
+and fixed it by yielding; rui keeps that rule.
 
 ## The rule
 
@@ -37,7 +37,7 @@ layer that knows whether a turn is open.
 The offline half is covered by `tests/test_vendor.py` (four frame shapes, partial vs final,
 StopCapture, the window and the counters). The device half needs the real window:
 
-1. switch the speaker to house-ear per `docs/archive/HANDOFF-history-to-2026-10-24.md` §8 (port 4412, restore to 4399 after);
+1. switch the speaker to rui per `docs/archive/HANDOFF-history-to-2026-10-24.md` §8 (port 4412, restore to 4399 after);
 2. say **小爱同学，今天天气怎么样** once;
 3. expected: one answer (the vendor's), a `xiaoai: vendor wake (...), we yield` line, and
    **no** `[asr]` / `turn:` line of ours;
@@ -108,7 +108,7 @@ device log → vendor `Playing` then `Idle`, and **no** `turn:` of ours in betwe
 |---|---|---|---|
 | V1 | ~~We do not actively stop 小爱 when 你好小瑞 fires~~ **Implemented `3b4648e`, device re-verify pending**: the adapter tracks the vendor player from `playing` events; a wake while it plays fires the guarded mphelper ubus pause (`vendor pause (wake takeover): before=1 after=2` is the log line to look for). The 20:09 re-test was voided by an ops outage (server relaunched without keys), not by this code | 19:30 log: vendor `Idle` 1.5 s after our wake; 19:54: it talked 11 s more | `vendor_stop_player()` `assistant_v3.py:2248`: `ubus call mediaplayer player_play_operation '{"action":"pause","media":"common"}'`, only when `mphelper mute_stat` is 1/3 (`player_stop` does not exist, rc=3). The heavier route is `abort_xiaoai()` (client `speaker.rs:143`, `/etc/init.d/mico_aivs_lab restart`) |
 | V2 | The vendor's recognizer sometimes transcribes **our** wake word. `RecognizeResult('你好小瑞')` then opens the window and drops our own turn | 19:03:40 `vendor wake ('你好小瑞')` → 19:03:46 `dropping our turn` | Ignore a vendor final text that contains one of `runner.wake_words` |
-| V3 | While the vendor player is playing, our gate still listens and can transcribe 小爱's voice as a request | 18:56:55 our turn transcribed `到17摄氏度，南方向。` (the vendor's weather answer); 19:54:06 again (`摄氏度到17摄氏度。`), and it became a phantom turn while 小爱 was still talking | Old build gated the mic for the whole vendor playback: `assistant_v3.py:3113-3116` (90 s freshness). house-ear keeps its KWS live there on purpose (better takeover); V1's pause plus the cue hold is expected to cover it - verify with the V1 re-test, keep the full gate as fallback if a leak shows |
+| V3 | While the vendor player is playing, our gate still listens and can transcribe 小爱's voice as a request | 18:56:55 our turn transcribed `到17摄氏度，南方向。` (the vendor's weather answer); 19:54:06 again (`摄氏度到17摄氏度。`), and it became a phantom turn while 小爱 was still talking | Old build gated the mic for the whole vendor playback: `assistant_v3.py:3113-3116` (90 s freshness). rui keeps its KWS live there on purpose (better takeover); V1's pause plus the cue hold is expected to cover it - verify with the V1 re-test, keep the full gate as fallback if a leak shows |
 | V4 | Music handoff. A vendor wake does not pause our song; nothing gives it back | No music path yet (D1) | `vendor_take_music()` `:2171` (pause + `resume=True`), `resume_music_after_vendor()` `:2154` on Playing→Idle, `vendor_silence_watchdog()` `:2187` 4 s for a mis-wake; pause/resume/stop words in the vendor text; `test_vendor_handoff.py`, `test_vendor_stop.py` |
 | V5 | Hardware play key (114) starts the vendor's Mi Music list on top of ours | Old-build measurement 2026-10-19 | `vendor_stop_player()` before and just after our play starts |
 

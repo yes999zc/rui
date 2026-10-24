@@ -9,11 +9,11 @@ import numpy as np
 import pytest
 from websockets.asyncio.client import connect
 
-from house_ear.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
-from house_ear.device.xiaoai import protocol
-from house_ear.device.xiaoai.adapter import XiaoaiAdapter
+from rui.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
+from rui.device.xiaoai import protocol
+from rui.device.xiaoai.adapter import XiaoaiAdapter
 
-TOKEN_ENV = "HOUSE_EAR_TEST_DEVICE_TOKEN"
+TOKEN_ENV = "RUI_TEST_DEVICE_TOKEN"
 TOKEN = "test-token"
 
 

@@ -4,10 +4,10 @@ import base64
 
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config
-from house_ear.session.turn import TurnResult
-from house_ear.trace import TurnTrace
-from house_ear.web.api.app import create_app
+from rui.config import Config
+from rui.session.turn import TurnResult
+from rui.trace import TurnTrace
+from rui.web.api.app import create_app
 
 
 class FakeRunner:

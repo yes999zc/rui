@@ -118,7 +118,7 @@ FROM python:3.12-slim
 ARG VERSION=dev
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=
-LABEL org.opencontainers.image.title="house-ear" \
+LABEL org.opencontainers.image.title="rui" \
       org.opencontainers.image.description="Self-hosted voice endpoint for smart speakers" \
       org.opencontainers.image.source="https://github.com/yes999zc/rui" \
       org.opencontainers.image.licenses="MIT" \
@@ -144,10 +144,10 @@ RUN license="$(ffmpeg -L 2>&1)" \
     && ! printf '%s\n' "$version" | grep -Eq -- '--enable-(gpl|nonfree|version3)'
 # License texts for the statically linked LGPL binary, so the image carries its own
 # notices: FFmpeg's LGPL-2.1 text plus the Debian copyright files for libopus/libmp3lame.
-COPY --from=ffmpeg /usr/src/ffmpeg/COPYING.LGPLv2.1 /usr/share/doc/house-ear/ffmpeg/COPYING.LGPLv2.1
-COPY --from=ffmpeg /usr/src/ffmpeg/LICENSE.md /usr/share/doc/house-ear/ffmpeg/LICENSE.md
-COPY --from=ffmpeg /usr/share/doc/libopus-dev/copyright /usr/share/doc/house-ear/ffmpeg/libopus.copyright
-COPY --from=ffmpeg /usr/share/doc/libmp3lame-dev/copyright /usr/share/doc/house-ear/ffmpeg/libmp3lame.copyright
+COPY --from=ffmpeg /usr/src/ffmpeg/COPYING.LGPLv2.1 /usr/share/doc/rui/ffmpeg/COPYING.LGPLv2.1
+COPY --from=ffmpeg /usr/src/ffmpeg/LICENSE.md /usr/share/doc/rui/ffmpeg/LICENSE.md
+COPY --from=ffmpeg /usr/share/doc/libopus-dev/copyright /usr/share/doc/rui/ffmpeg/libopus.copyright
+COPY --from=ffmpeg /usr/share/doc/libmp3lame-dev/copyright /usr/share/doc/rui/ffmpeg/libmp3lame.copyright
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
@@ -159,13 +159,13 @@ COPY --from=web /web/dist /app/web/dist
 # request. An older image without this directory keeps the old download behavior.
 COPY --from=models /seed/ /opt/seed-models/
 # Health probe: reads the port and the device list from config, and treats a configured
-# device with a dead audio plane as unhealthy. See deploy/healthcheck.py.
-COPY deploy/healthcheck.py /usr/local/bin/house-ear-healthcheck
-RUN chmod +x /usr/local/bin/house-ear-healthcheck
-ENV HOUSE_EAR_WEB_DIR=/app/web/dist
+# device with a dead audio plane as unhealthy. See deploy/rui-healthcheck.py.
+COPY deploy/rui-healthcheck.py /usr/local/bin/rui-healthcheck
+RUN chmod +x /usr/local/bin/rui-healthcheck
+ENV RUI_WEB_DIR=/app/web/dist
 EXPOSE 8080
-VOLUME ["/var/lib/house-ear"]
+VOLUME ["/var/lib/rui"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD ["python", "/usr/local/bin/house-ear-healthcheck"]
-ENTRYPOINT ["house-ear"]
+    CMD ["python", "/usr/local/bin/rui-healthcheck"]
+ENTRYPOINT ["rui"]
 CMD ["serve"]

@@ -7,7 +7,7 @@ server it was written for — not inferred from the vendor docs.
 ## Shape
 
 ```
-speaker client  ──ws://<server>:<listen_port>/?token=***──▶  house-ear
+speaker client  ──ws://<server>:<listen_port>/?token=***──▶  rui
                 ◀── {"Request": {...start_recording...}} ────
                 ──▶ {"tag":"record","bytes":[...]} (int16, 20 ms) ──
                 ◀── {"tag":"play","bytes":[...]}   (int16, mono) ───
@@ -38,7 +38,7 @@ Two pairs are in use, and they are the same trick with different headroom:
 | `8 / 13` | mics: 2²³ → int16 full scale. reference: 2²⁸ → 2¹⁵, i.e. the same level. The minimum that stops the reference clipping. |
 | `12 / 16` | four bits of headroom on top (mics leave at −24 dBFS), reference ends up 6 dB hotter than the mics. What the old production deployment actually ran, with 24–30 dB ERLE. |
 
-house-ear defaults to `8 / 13` because it is the level-matched, no-clipping baseline and
+rui defaults to `8 / 13` because it is the level-matched, no-clipping baseline and
 its arithmetic is easy to reason about; S3 measures both and picks on hardware. Changing
 them is a config edit, not a code change.
 
@@ -83,7 +83,7 @@ Two things to keep in mind when reading that table:
 - The device's client holds one connection. A second connection replaces the first
   (code 1012) instead of being silently ignored.
 - A wrong or missing `?token=` is refused with code 1008, and an empty
-  `HOUSE_EAR_DEVICE_TOKEN` makes `open()` fail closed rather than accept everyone.
+  `RUI_DEVICE_TOKEN` makes `open()` fail closed rather than accept everyone.
 - A disconnect never kills the plane: `frames()` keeps waiting for the client to return,
   which it does on its own every few seconds after a wifi blip.
 - Malformed stream frames are counted (`bad_frames`), not raised.

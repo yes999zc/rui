@@ -10,16 +10,16 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear import secrets as secrets_module
-from house_ear.config import Config, DeviceConfig, load_config, save_config
-from house_ear.web.api import app as app_module
-from house_ear.web.api.app import DEVICE_DEFAULT_LISTEN_PORT, create_app
+from rui import secrets as secrets_module
+from rui.config import Config, DeviceConfig, load_config, save_config
+from rui.web.api import app as app_module
+from rui.web.api.app import DEVICE_DEFAULT_LISTEN_PORT, create_app
 
 
 @pytest.fixture()
 def wizard(tmp_path, monkeypatch):
     """A console with a config file on disk and no keys in the environment."""
-    for name in ("HOUSE_EAR_LLM_KEY", "HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY",
+    for name in ("RUI_LLM_KEY", "RUI_ASR_KEY", "RUI_TTS_KEY",
                  "DEEPSEEK_API_KEY", "XFYUN_API_KEY", "XFYUN_APPID", "XFYUN_API_SECRET"):
         monkeypatch.delenv(name, raising=False)
     cfg = Config()
@@ -34,7 +34,7 @@ def test_state_asks_for_the_keys_first(wizard) -> None:
     body = client.get("/api/v1/setup").json()
     assert body["next_step"] == "keys"
     assert set(body["steps"][0]["detail"]["missing"]) == {
-        "HOUSE_EAR_LLM_KEY", "HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY",}
+        "RUI_LLM_KEY", "RUI_ASR_KEY", "RUI_TTS_KEY",}
     assert body["complete"] is False
     assert [step["id"] for step in body["steps"]] == [
         "keys", "models", "device", "wake", "verify"]
@@ -45,9 +45,9 @@ def test_state_asks_for_the_keys_first(wizard) -> None:
 def test_keys_are_stored_but_never_echoed(wizard) -> None:
     client, path = wizard
     response = client.post("/api/v1/setup/keys", json={"values": {
-        "HOUSE_EAR_LLM_KEY": "sk-test-should-not-echo",
-        "HOUSE_EAR_ASR_KEY": "sk-test-2",
-        "HOUSE_EAR_TTS_KEY": "sk-test-3",
+        "RUI_LLM_KEY": "sk-test-should-not-echo",
+        "RUI_ASR_KEY": "sk-test-2",
+        "RUI_TTS_KEY": "sk-test-3",
     }})
     assert response.status_code == 200
     assert "sk-test-should-not-echo" not in response.text
@@ -132,7 +132,7 @@ def test_invalid_device_fields_answer_422_not_500(wizard) -> None:
 
 def test_key_values_must_be_strings(wizard) -> None:
     client, _path = wizard
-    for values in ({"HOUSE_EAR_LLM_KEY": None}, {"HOUSE_EAR_TTS_KEY": 123}):
+    for values in ({"RUI_LLM_KEY": None}, {"RUI_TTS_KEY": 123}):
         response = client.post("/api/v1/setup/keys", json={"values": values})
         assert response.status_code == 422, response.text
 
@@ -189,10 +189,10 @@ def test_probe_requires_an_ssh_banner(monkeypatch, wizard) -> None:
 
 def test_the_wake_model_check_needs_all_four_files(tmp_path, monkeypatch) -> None:
     """tokens.txt alone is not a wake model: the spotter loads encoder/decoder/joiner too."""
-    from house_ear.config import Config
-    from house_ear.web.api.app import create_app
+    from rui.config import Config
+    from rui.web.api.app import create_app
 
-    for name in ("HOUSE_EAR_LLM_KEY", "HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY"):
+    for name in ("RUI_LLM_KEY", "RUI_ASR_KEY", "RUI_TTS_KEY"):
         monkeypatch.delenv(name, raising=False)
     model = tmp_path / "kws"
     model.mkdir()
@@ -223,7 +223,7 @@ def test_builtin_endpoint_providers_do_not_need_a_base_url(tmp_path, monkeypatch
     Requiring a non-empty base_url marked them permanently unusable: the wizard asked
     for keys forever and a fresh console stayed on /setup (found 2026-10-23 17:46).
     """
-    from house_ear.config.schema import ProviderConfig
+    from rui.config.schema import ProviderConfig
 
     monkeypatch.setenv("VOLC_API_KEY", "test-key")
     cfg = Config()
@@ -350,7 +350,7 @@ def test_device_admin_endpoints_surface_plane_errors(wizard) -> None:
 @pytest.fixture()
 def connect(tmp_path, monkeypatch):
     """One configured inbound speaker, no token in the environment."""
-    monkeypatch.delenv("HOUSE_EAR_DEVICE_TOKEN", raising=False)
+    monkeypatch.delenv("RUI_DEVICE_TOKEN", raising=False)
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")
     cfg.devices = [DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10",
@@ -364,7 +364,7 @@ def test_connect_info_returns_the_token_and_redacts_it_elsewhere(connect, monkey
                                                                  caplog) -> None:
     client, _cfg, _path = connect
     token = "tok-abc-123"
-    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", token)
+    monkeypatch.setenv("RUI_DEVICE_TOKEN", token)
     with caplog.at_level("INFO"):
         response = client.get("/api/v1/devices/living/connect")
     assert response.status_code == 200, response.text
@@ -375,7 +375,7 @@ def test_connect_info_returns_the_token_and_redacts_it_elsewhere(connect, monkey
     assert body["room"] == "客厅"
     assert body["host"] == "192.0.2.10"          # the speaker's address, not the console's
     assert body["token"] == token
-    assert body["token_env"] == "HOUSE_EAR_DEVICE_TOKEN"
+    assert body["token_env"] == "RUI_DEVICE_TOKEN"
     assert body["configured"] is True
     assert body["allow_no_token"] is False
     assert body["ws_url"] == f"ws://testserver:4412/?token={token}"
@@ -396,7 +396,7 @@ def test_connect_info_missing_token_is_not_configured(connect) -> None:
     assert body["configured"] is False
     assert body["allow_no_token"] is False
     assert body["ws_url"] == "ws://testserver:4412/?token="
-    assert "HOUSE_EAR_DEVICE_TOKEN" in body["hint"]
+    assert "RUI_DEVICE_TOKEN" in body["hint"]
     assert client.get("/api/v1/config").json()["devices"][0]["has_device_token"] is False
 
 
@@ -417,7 +417,7 @@ def test_connect_info_allow_no_token_is_configured_with_a_warning(connect) -> No
 def test_connect_info_swaps_the_console_port_and_keeps_proxy_hosts(connect,
                                                                   monkeypatch) -> None:
     _client, cfg, path = connect
-    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", "tok-xyz")
+    monkeypatch.setenv("RUI_DEVICE_TOKEN", "tok-xyz")
     for listen_port, expected in ((5000, "5000"), (None, str(DEVICE_DEFAULT_LISTEN_PORT))):
         updated = cfg.model_copy(update={"devices": [
             cfg.devices[0].model_copy(update={"listen_port": listen_port})]})
@@ -436,7 +436,7 @@ def test_connect_info_swaps_the_console_port_and_keeps_proxy_hosts(connect,
 
 def test_connect_info_url_quotes_the_token(connect, monkeypatch) -> None:
     client, _cfg, _path = connect
-    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", "a b&c")
+    monkeypatch.setenv("RUI_DEVICE_TOKEN", "a b&c")
     body = client.get("/api/v1/devices/living/connect").json()
     assert body["token"] == "a b&c"                  # raw value in the JSON field
     assert body["ws_url"].endswith("?token=a%20b%26c")
@@ -444,14 +444,14 @@ def test_connect_info_url_quotes_the_token(connect, monkeypatch) -> None:
 
 def test_connect_info_reads_secrets_yaml_and_env_wins(connect, monkeypatch) -> None:
     client, _cfg, _path = connect
-    secrets_module.put("HOUSE_EAR_DEVICE_TOKEN", "file-token")
+    secrets_module.put("RUI_DEVICE_TOKEN", "file-token")
     assert client.get("/api/v1/devices/living/connect").json()["token"] == "file-token"
-    monkeypatch.setenv("HOUSE_EAR_DEVICE_TOKEN", "env-token")
+    monkeypatch.setenv("RUI_DEVICE_TOKEN", "env-token")
     assert client.get("/api/v1/devices/living/connect").json()["token"] == "env-token"
 
 
 def test_connect_info_needs_auth_when_configured(tmp_path, monkeypatch) -> None:
-    monkeypatch.delenv("HOUSE_EAR_DEVICE_TOKEN", raising=False)
+    monkeypatch.delenv("RUI_DEVICE_TOKEN", raising=False)
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")
     cfg.web.auth_token = "console-token"
@@ -472,7 +472,7 @@ def test_connect_info_unknown_device_is_404(connect) -> None:
 
 
 def test_the_connect_info_default_port_matches_the_adapter() -> None:
-    from house_ear.device.xiaoai import DEFAULT_LISTEN_PORT
+    from rui.device.xiaoai import DEFAULT_LISTEN_PORT
 
     assert app_module.DEVICE_DEFAULT_LISTEN_PORT == DEFAULT_LISTEN_PORT == 4412
 

@@ -15,8 +15,8 @@ import json
 
 import pytest
 
-from house_ear.config import Config
-from house_ear.tools.reminders import (
+from rui.config import Config
+from rui.tools.reminders import (
     CANCEL_SPEC,
     LIST_SPEC,
     SET_SPEC,
@@ -388,7 +388,7 @@ def test_llm_names_and_schemas_are_what_the_model_calls() -> None:
 
 
 def test_build_local_tools_keeps_the_information_tools_and_adds_reminders(tmp_path) -> None:
-    from house_ear.tools import build_local_tools
+    from rui.tools import build_local_tools
 
     names = {spec.llm_name for spec, _ in build_local_tools(config_for(tmp_path))}
     assert {"weather", "news", "set_reminder", "list_reminders", "cancel_reminder"} <= names

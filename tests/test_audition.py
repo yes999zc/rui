@@ -16,10 +16,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear.audio.protocol import PlayFile
-from house_ear.config import Config
-from house_ear.web.api import app as app_module
-from house_ear.web.api.app import (
+from rui.audio.protocol import PlayFile
+from rui.config import Config
+from rui.web.api import app as app_module
+from rui.web.api.app import (
     AUDITION_MAX_FILES,
     AUDITION_PREFIX,
     audition_cache_dir,

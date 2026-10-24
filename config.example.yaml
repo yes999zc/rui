@@ -1,9 +1,9 @@
 # The annotated production config. A real install gets this file from
-# `house-ear setup` (see src/house_ear/config/template.yaml - same values, written
+# `rui setup` (see src/rui/config/template.yaml - same values, written
 # with the host's paths); this copy is for reading and for a manual install.
 version: 2
 system:
-  data_dir: /var/lib/house-ear
+  data_dir: /var/lib/rui
   log_level: info
 web:
   host: 0.0.0.0
@@ -18,7 +18,7 @@ devices:
     wake_words: ["你好小瑞"]
     volume: 60
     listen_port: 4412      # the speaker's client dials us here; None = adapter default
-    token_env: HOUSE_EAR_DEVICE_TOKEN
+    token_env: RUI_DEVICE_TOKEN
     # The 18-LED ring. Off until you turn it on; colours are peak values, brightness is
     # applied when a frame is built. The rings are driven by writing sysfs through the
     # client's shell channel, never by blocking the audio stream.
@@ -57,8 +57,8 @@ audio:
     rate: 16000            # AEC / KWS / VAD run here, not at 48 kHz
     frame_ms: 20
     # Wake word. The real threshold is in the keywords file, not in this config
-    # (`house-ear setup` generates it; `house-ear keywords` regenerates it when the
-    # wake words change). Model comes from `house-ear fetch-models`.
+    # (`rui setup` generates it; `rui keywords` regenerates it when the
+    # wake words change). Model comes from `rui fetch-models`.
     kws_enabled: true
     kws_model_dir: /data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
     kws_keywords_file: /config/keywords.txt
@@ -71,7 +71,7 @@ audio:
     # request spoken in one breath ("你好小瑞，现在几点") never reaches the transcriber.
     wake_preroll_ms: 500
     # The turn gate. Empty = the gate never starts: the wake cue, the pre-wake replay and
-    # every gate metric are then inert. `house-ear fetch-models` downloads it.
+    # every gate metric are then inert. `rui fetch-models` downloads it.
     vad_model_path: /data/models/silero_vad.onnx
     vad_preroll_ms: 350     # measured: 200 ms clips the first syllable, 350 does not
     wake_skip_ms: 300       # the wake phrase's own tail, dropped after the KWS fires
@@ -116,7 +116,7 @@ session:
 providers:
   # One catalog of named providers; each stage picks an ordered chain (primary first).
   catalog:
-    # Local ASR: `house-ear fetch-models` writes the model here (239 MB int8). First in the
+    # Local ASR: `rui fetch-models` writes the model here (239 MB int8). First in the
     # chain because it answers in ~50 ms warm; when the model is absent the chain falls
     # through to the cloud entry and nothing else changes.
     local_asr:
@@ -132,7 +132,7 @@ providers:
       kind: openai_compat
       base_url: https://api.siliconflow.cn/v1
       model: FunAudioLLM/SenseVoiceSmall
-      api_key_env: HOUSE_EAR_ASR_KEY
+      api_key_env: RUI_ASR_KEY
       timeout_s: 8.0
       retries: 1
     # Spoken TTS: 讯飞 primary (180-600 ms whole sentence). SiliconFlow TTS is defined
@@ -158,7 +158,7 @@ providers:
       kind: openai_compat
       base_url: https://api.deepseek.com
       model: deepseek-flash
-      api_key_env: HOUSE_EAR_LLM_KEY
+      api_key_env: RUI_LLM_KEY
       timeout_s: 30.0
       max_tokens: 3000
       temperature: 0.4
@@ -188,14 +188,14 @@ tools:
   mcp_servers: []
   ha:
     base_url: ""
-    token_env: HOUSE_EAR_HA_TOKEN
+    token_env: RUI_HA_TOKEN
 music:
   # Off until a Navidrome/Subsonic server is provisioned: point secrets_path at a
   # json with url/user/password (never in this file), then set enabled: true.
   enabled: false
   source: navidrome
-  secrets_path: /var/lib/house-ear/lan_media.json
-  cache_dir: /var/lib/house-ear/music_cache
+  secrets_path: /var/lib/rui/lan_media.json
+  cache_dir: /var/lib/rui/music_cache
   cache_tracks: 8
   queue_min_tracks: 2
   queue_batch: 20

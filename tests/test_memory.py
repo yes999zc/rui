@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from house_ear.session.memory import MemoryStore
+from rui.session.memory import MemoryStore
 
 
 def make(tmp_path: Path) -> MemoryStore:

@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config
-from house_ear.web.api.app import create_app
+from rui.config import Config
+from rui.web.api.app import create_app
 
 BLOCK_TYPES = {
     "stats", "now", "actions", "list", "form", "table", "log", "memory", "say", "volume",
@@ -77,12 +77,12 @@ def test_api_paths_never_fall_into_the_spa_shell() -> None:
 
 def test_the_console_still_opens_without_a_built_frontend(monkeypatch) -> None:
     """A fresh checkout (or a container before `npm run build`) has no dist."""
-    from house_ear.web.api import app as app_module
+    from rui.web.api import app as app_module
 
     monkeypatch.setattr(app_module, "WEB_DIST", app_module.Path("/nonexistent-web-dist"))
     response = TestClient(create_app(Config())).get("/panel/music")
     assert response.status_code == 200
-    assert "house-ear" in response.text
+    assert "rui" in response.text
 
 
 def test_panels_have_ids_groups_and_known_block_types() -> None:

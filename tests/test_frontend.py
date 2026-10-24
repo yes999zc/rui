@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from house_ear.audio.frontend import ChannelMixer
+from rui.audio.frontend import ChannelMixer
 
 RATE = 16000
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pathlib
 import tomllib
 
-from house_ear import __version__
+from rui import __version__
 
 
 def test_version_matches_pyproject() -> None:

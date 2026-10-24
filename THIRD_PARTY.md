@@ -57,7 +57,7 @@ How each component reaches a user:
 
 ### SenseVoice (model)
 
-- **Role:** local ASR model. `house-ear fetch-models` downloads `model.int8.onnx` and
+- **Role:** local ASR model. `rui fetch-models` downloads `model.int8.onnx` and
   `tokens.txt` into the data volume; the model is **not** in the image.
 - **Exact source used:** <https://hf-mirror.com/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17>
   (a sherpa-onnx conversion of SenseVoiceSmall, mirrored from Hugging Face).
@@ -76,7 +76,7 @@ How each component reaches a user:
 ### Silero VAD
 
 - **Role:** voice-activity detection. New images ship `silero_vad.onnx` at
-  `/opt/seed-models/silero_vad.onnx`; `house-ear fetch-models` copies it into the data volume
+  `/opt/seed-models/silero_vad.onnx`; `rui fetch-models` copies it into the data volume
   before any network access, so the file is **redistributed inside the image**. Older images
   and source installs download it from the sherpa-onnx release (with hf-mirror / proxy
   fallbacks) instead.
@@ -164,7 +164,7 @@ How each component reaches a user:
   ```bash
   docker run --rm ghcr.io/yes999zc/rui:latest ffmpeg -L      # expect GNU Lesser General Public ... 2.1
   docker run --rm ghcr.io/yes999zc/rui:latest ffmpeg -version # configuration: no --enable-gpl/nonfree/version3
-  docker run --rm ghcr.io/yes999zc/rui:latest ls /usr/share/doc/house-ear/ffmpeg
+  docker run --rm ghcr.io/yes999zc/rui:latest ls /usr/share/doc/rui/ffmpeg
   # COPYING.LGPLv2.1, LICENSE.md, libopus.copyright, libmp3lame.copyright
   ```
 - **Source offer (LGPL compliance):** the image is built entirely from the pinned FFmpeg

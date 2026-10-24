@@ -13,10 +13,10 @@ from pathlib import Path
 
 import numpy as np
 
-from house_ear.audio.ack import tone
-from house_ear.audio.process import AudioPlane
-from house_ear.audio.protocol import PlayFile
-from house_ear.config import Config
+from rui.audio.ack import tone
+from rui.audio.process import AudioPlane
+from rui.audio.protocol import PlayFile
+from rui.config import Config
 
 
 class StubAdapter:
@@ -327,7 +327,7 @@ def test_a_natural_end_emits_play_finished_but_a_cancel_never_does(tmp_path: Pat
     """The music queue advances on play_finished only: a pause or barge cancels the
     task, and a cancelled file must not look finished (service would skip a track)."""
 
-    from house_ear.audio.protocol import parse_control
+    from rui.audio.protocol import parse_control
 
     async def run() -> None:
         plane, _ = make_plane(tmp_path)
@@ -441,7 +441,7 @@ def test_volume_reconciles_to_the_configured_target(tmp_path: Path) -> None:
     metrics cadence instead of the old build's three call sites. 0 = hands off."""
     async def run() -> None:
         plane, _ = make_plane(tmp_path)
-        from house_ear.config.schema import DeviceConfig
+        from rui.config.schema import DeviceConfig
         plane.cfg.devices.append(DeviceConfig(id="living", adapter="xiaoai",
                                               host="192.0.2.10", volume=86))
         writes: list[int] = []

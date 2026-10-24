@@ -10,13 +10,13 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from house_ear.config.schema import AssistantConfig, Config, SessionConfig
-from house_ear.providers.base import ChatChunk, Transcript
-from house_ear.session.filler import is_music_tool, is_music_turn, should_speak_filler
-from house_ear.session.idle import IdleWatch, farewell_line
-from house_ear.session.turn import TurnRunner
-from house_ear.tools.contract import Permission, ToolSpec
-from house_ear.trace import TurnTrace
+from rui.config.schema import AssistantConfig, Config, SessionConfig
+from rui.providers.base import ChatChunk, Transcript
+from rui.session.filler import is_music_tool, is_music_turn, should_speak_filler
+from rui.session.idle import IdleWatch, farewell_line
+from rui.session.turn import TurnRunner
+from rui.tools.contract import Permission, ToolSpec
+from rui.trace import TurnTrace
 
 
 class FakeClock:
@@ -154,7 +154,7 @@ class FakeTts:
 
 
 def patch_chains(monkeypatch, *, asr, llms, ttss) -> None:
-    import house_ear.session.turn as turn
+    import rui.session.turn as turn
 
     monkeypatch.setattr(turn, "asr_chain", lambda providers: [("a", asr)])
     monkeypatch.setattr(turn, "llm_chain", lambda providers: [(f"l{i}", p) for i, p in enumerate(llms)])

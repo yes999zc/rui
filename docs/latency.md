@@ -125,7 +125,7 @@ Mac's default output (VX2762-4K over DDC) went silent mid-session, `afplay` bega
 `AudioQueueStart failed (0xe00002ec)`, and switching output devices did not bring it back.
 Recovering it needs `coreaudiod` restarted with sudo, which this session does not have. The
 mic-side evidence is in the plane: `voice_rms_db` sat at -53 dBFS while `afplay` reported
-success, i.e. nothing reached the room. That is a host audio fault, not a house-ear fault,
+success, i.e. nothing reached the room. That is a host audio fault, not a rui fault,
 and the 18/18 wake measurement from the hardware window stands as the acoustic data point.
 
 ## 20 rounds with the old project's actual parameters (讯飞 TTS + DeepSeek flash)
@@ -155,5 +155,5 @@ Against the SiliconFlow-TTS run on the same harness: p50 8713 → **3563 ms**, m
 
 Where the remaining 3.5 s goes: ASR 0.46 + first token 1.07 + waiting for a first clause
 (~0.3) + TTS ~0.5. The old project hides most of that behind an immediate "在呢" (0.52 s of
-audio) fired on wake, before ASR even starts. house-ear has no wake acknowledgement yet,
+audio) fired on wake, before ASR even starts. rui has no wake acknowledgement yet,
 which is the single biggest perceived-latency gap left.

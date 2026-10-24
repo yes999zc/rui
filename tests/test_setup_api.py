@@ -11,16 +11,16 @@ import stat
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear import secrets as secrets_module
-from house_ear.config import Config, DeviceConfig, load_config, save_config
-from house_ear.config.schema import ProviderConfig
-from house_ear.web.api import app as app_module
-from house_ear.web.api.app import create_app
+from rui import secrets as secrets_module
+from rui.config import Config, DeviceConfig, load_config, save_config
+from rui.config.schema import ProviderConfig
+from rui.web.api import app as app_module
+from rui.web.api.app import create_app
 
 KEYS = {
-    "HOUSE_EAR_LLM_KEY": "sk-llm-should-not-echo",
-    "HOUSE_EAR_ASR_KEY": "sk-asr-should-not-echo",
-    "HOUSE_EAR_TTS_KEY": "sk-tts-should-not-echo",
+    "RUI_LLM_KEY": "sk-llm-should-not-echo",
+    "RUI_ASR_KEY": "sk-asr-should-not-echo",
+    "RUI_TTS_KEY": "sk-tts-should-not-echo",
 }
 
 KWS_FILES = (
@@ -61,7 +61,7 @@ class _Plane:
 @pytest.fixture()
 def wizard(tmp_path, monkeypatch):
     """A config with a sherpa ASR dir, but no model files, keys or devices yet."""
-    for name in (*KEYS, "HOUSE_EAR_DEVICE_TOKEN", "DEEPSEEK_API_KEY"):
+    for name in (*KEYS, "RUI_DEVICE_TOKEN", "DEEPSEEK_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     asr = tmp_path / "asr"
     vad = tmp_path / "silero_vad.onnx"
@@ -164,11 +164,11 @@ def test_plug_detail_includes_device_manifests_and_unknown_is_404(wizard) -> Non
     assert body["manifest"]["id"] == "xiaoai-lx06"
     assert body["manifest"]["devices"][0]["device_side"]["artifact"] == "client"
     assert body["manifest"]["devices"][0]["runtime"]["entrypoint"] == \
-        "house_ear.device.xiaoai:build"
+        "rui.device.xiaoai:build"
     assert {param["key"] for param in body["manifest"]["devices"][0]["params"]} == {
         "host", "room", "wake_words"}
     assert body["resolved"]["devices"][0]["listen_port"] == 4412
-    assert body["resolved"]["devices"][0]["token_env"] == "HOUSE_EAR_DEVICE_TOKEN"
+    assert body["resolved"]["devices"][0]["token_env"] == "RUI_DEVICE_TOKEN"
 
     missing = client.get("/api/v1/plugs/not-a-plug")
     assert missing.status_code == 404
@@ -405,7 +405,7 @@ def test_keys_save_is_write_only_and_idempotent(wizard) -> None:
     assert not any(value in response.text for value in KEYS.values())
     secrets_file = tmp_path / "data" / "secrets.yaml"
     assert stat.S_IMODE(secrets_file.stat().st_mode) == 0o600
-    assert secrets_module.resolve("HOUSE_EAR_LLM_KEY").value == KEYS["HOUSE_EAR_LLM_KEY"]
+    assert secrets_module.resolve("RUI_LLM_KEY").value == KEYS["RUI_LLM_KEY"]
     before = secrets_file.read_bytes()
     stamp = secrets_file.stat().st_mtime_ns
     assert client.post("/api/v1/setup/step", json={

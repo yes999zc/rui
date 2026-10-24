@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 import pytest
 
-from house_ear.providers.sherpa_asr import normalise
+from rui.providers.sherpa_asr import normalise
 
 
 def _tone(peak: float, n: int = 1601) -> np.ndarray:

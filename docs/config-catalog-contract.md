@@ -34,7 +34,7 @@
      "min": 10, "max": 300, "options": null, "advanced": false, "writable": true}
   ],
   "values": {"assistant.reply_max_chars": 120},
-  "secrets": {"HOUSE_EAR_LLM_KEY": {"has_value": true}},
+  "secrets": {"RUI_LLM_KEY": {"has_value": true}},
   "restart_command": "docker compose restart",
   "writable_root": ["assistant", "session", "audio", "ack", "system", "web",
                     "devices", "providers", "tools", "music"]

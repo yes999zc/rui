@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 
-from house_ear.__main__ import main
-from house_ear.config import load_config
+from rui.__main__ import main
+from rui.config import load_config
 
 
 def test_config_can_follow_the_subcommand(tmp_path, capsys) -> None:
-    """This is how the container entrypoint calls it: `house-ear setup --config /c/x.yaml`."""
+    """This is how the container entrypoint calls it: `rui setup --config /c/x.yaml`."""
     path = tmp_path / "config.yaml"
     assert main(["setup", "--config", str(path)]) == 0
     assert path.exists()

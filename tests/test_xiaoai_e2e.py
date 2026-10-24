@@ -10,11 +10,11 @@ import numpy as np
 import pytest
 from websockets.asyncio.client import connect
 
-from house_ear.audio.client import AudioPlaneSupervisor
-from house_ear.config import load_config
-from house_ear.device.xiaoai import protocol
+from rui.audio.client import AudioPlaneSupervisor
+from rui.config import load_config
+from rui.device.xiaoai import protocol
 
-TOKEN_ENV = "HOUSE_EAR_E2E_TOKEN"
+TOKEN_ENV = "RUI_E2E_TOKEN"
 TOKEN = "e2e-token"
 
 
@@ -64,7 +64,7 @@ def frames_of_tone(count: int, rate: int = 16000, channels: int = 8) -> list[byt
 
 def test_fake_speaker_feeds_the_audio_plane(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv(TOKEN_ENV, TOKEN)
-    monkeypatch.setenv("HOUSE_EAR_AUDIO_SOCK", str(tmp_path / "audio.sock"))
+    monkeypatch.setenv("RUI_AUDIO_SOCK", str(tmp_path / "audio.sock"))
     port = free_port()
     config_path = tmp_path / "config.yaml"
     config_path.write_text(config_text(port), encoding="utf-8")

@@ -14,16 +14,16 @@ from pathlib import Path
 import pytest
 from ruamel.yaml import YAML
 
-from house_ear.config.schema import Config
-from house_ear.music.history import PlayHistory
-from house_ear.music.model import Track
-from house_ear.music.service import MusicService
-from house_ear.music.tools import build_music_tools
-from house_ear.providers.base import ChatChunk, Transcript
-from house_ear.session import briefing, phrasebook, phrases
-from house_ear.session.turn import DirectSpeech, TurnRunner
-from house_ear.tools.contract import Permission, ToolSpec
-from house_ear.trace import TurnTrace
+from rui.config.schema import Config
+from rui.music.history import PlayHistory
+from rui.music.model import Track
+from rui.music.service import MusicService
+from rui.music.tools import build_music_tools
+from rui.providers.base import ChatChunk, Transcript
+from rui.session import briefing, phrasebook, phrases
+from rui.session.turn import DirectSpeech, TurnRunner
+from rui.tools.contract import Permission, ToolSpec
+from rui.trace import TurnTrace
 
 _yaml = YAML(typ="safe")
 
@@ -368,7 +368,7 @@ def _direct_hook(name: str, transcript: str, output: object) -> DirectSpeech | N
 
 
 def _run_turn_scenario(scenario: dict, monkeypatch, tmp_path: Path) -> None:
-    import house_ear.session.turn as turn
+    import rui.session.turn as turn
 
     brief = briefing.from_news(["今天下雨", "明天转晴", "第三条是这条"], date="2026-10-23")
     assert brief is not None

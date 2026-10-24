@@ -17,7 +17,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from house_ear.__main__ import (
+from rui.__main__ import (
     ASR_URL_ENV,
     KWS_REPO,
     KWS_URL_ENV,
@@ -33,9 +33,9 @@ from house_ear.__main__ import (
     cmd_fetch_models,
     main,
 )
-from house_ear.audio.kws import keyword_lines, write_keywords_file
-from house_ear.config import Config, load_config, save_config
-from house_ear.config.schema import DeviceConfig, MusicConfig
+from rui.audio.kws import keyword_lines, write_keywords_file
+from rui.config import Config, load_config, save_config
+from rui.config.schema import DeviceConfig, MusicConfig
 
 EXPECTED = "n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞"
 
@@ -104,7 +104,7 @@ def test_fetch_models_unpacks_the_wake_model(monkeypatch, tmp_path) -> None:
         target.write_bytes(tarball.read_bytes())
         return target.stat().st_size
 
-    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    monkeypatch.setattr("rui.__main__._download_to", fake_download)
     args = argparse.Namespace(kws_dest=str(tmp_path / "kws"), kws_url="", force=False)
     assert _fetch_kws_model(args) == 0
     model = tmp_path / "kws" / KWS_REPO
@@ -129,7 +129,7 @@ def test_fetch_models_seeds_vad_and_kws_before_downloading(monkeypatch, tmp_path
         target.write_bytes(b"from network")
         return target.stat().st_size
 
-    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    monkeypatch.setattr("rui.__main__._download_to", fake_download)
     args = argparse.Namespace(
         dest=str(tmp_path / "asr"),
         vad_dest=str(tmp_path / "models" / "silero_vad.onnx"),
@@ -168,7 +168,7 @@ def test_fetch_models_without_seed_keeps_the_network_fallbacks(monkeypatch, tmp_
         target.write_bytes(tarball.read_bytes() if url.endswith(".tar.bz2") else b"network")
         return target.stat().st_size
 
-    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    monkeypatch.setattr("rui.__main__._download_to", fake_download)
     args = argparse.Namespace(
         dest=str(tmp_path / "asr"),
         vad_dest=str(tmp_path / "models" / "silero_vad.onnx"),
@@ -218,7 +218,7 @@ def test_url_env_override_falls_through_to_the_builtin_mirror(monkeypatch, tmp_p
         target.write_bytes(b"vad")
         return 3
 
-    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    monkeypatch.setattr("rui.__main__._download_to", fake_download)
     target = tmp_path / "silero_vad.onnx"
     assert _download_first(_url_list(VAD_URL_ENV, VAD_URLS), target) == 3
     assert calls == [override, VAD_URLS[0]]
@@ -247,7 +247,7 @@ def test_vad_download_falls_back_when_the_first_mirror_breaks(monkeypatch, tmp_p
         target.write_bytes(b"vad")
         return 3
 
-    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    monkeypatch.setattr("rui.__main__._download_to", fake_download)
     target = tmp_path / "silero_vad.onnx"
     assert _download_first(VAD_URLS, target) == 3
     assert calls == [VAD_URLS[0], VAD_URLS[1]]
@@ -259,7 +259,7 @@ def test_vad_download_raises_when_every_mirror_fails(monkeypatch, tmp_path) -> N
     def fake_download(url: str, target: Path, *, force: bool = False) -> int:
         raise RuntimeError("down")
 
-    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    monkeypatch.setattr("rui.__main__._download_to", fake_download)
     with pytest.raises(RuntimeError):
         _download_first(("https://a.invalid/x", "https://b.invalid/x"), tmp_path / "x.onnx")
 
@@ -302,7 +302,7 @@ def test_download_uses_bounded_http_timeouts(monkeypatch, tmp_path) -> None:
         client.timeout = timeout
         return client
 
-    monkeypatch.setattr("house_ear.__main__._download_client", fake_client)
+    monkeypatch.setattr("rui.__main__._download_client", fake_client)
     target = tmp_path / "model.int8.onnx"
     assert _download_to("https://example.invalid/model.int8.onnx", target) == 4
     timeout = seen.get("timeout")
@@ -361,7 +361,7 @@ def test_read_timeout_on_the_first_mirror_falls_through_to_the_next(
             calls.append(url)
             return Stream(TimeoutResponse() if url == first else Response())
 
-    monkeypatch.setattr("house_ear.__main__._download_client", lambda timeout: Client())
+    monkeypatch.setattr("rui.__main__._download_client", lambda timeout: Client())
     target = tmp_path / "model.int8.onnx"
     assert _download_first((first, second), target) == 4
     assert calls == [first, second]

@@ -1,4 +1,4 @@
-# HANDOFF — house-ear
+# HANDOFF — rui
 
 > ## 动手之前（强制顺序，别跳）
 >
@@ -72,7 +72,7 @@ MIT，公开仓 `yes999zc/rui`（main）。
 | S5a | 唤醒应答三档、preroll 回放、回声窗口 | ✅ `docs/ack.md` |
 | S5b | 回合质量（复读、抱怨、编造、标记、唤醒词尾巴） | ✅ `docs/turn-quality.md` |
 | S5c | 停止词、短噪声、filler、自听守卫 | 🟡 15 s 超时 + 两档告别 + filler 预渲染已落地（`f200778`/`f814d6f`/`0575b57`）；告别真机已验（2026-10-22 16:05）；**提醒到点已接线并真机响过一次（16:37:48，408 ms 到首块）**；音乐类跳过 filler 待音乐 |
-| S5d | 控制台（六页 Vue + 助手页 + 密钥页） | 🟡 概览页（状态 + 试一试 + 停止）、音量读写、唤醒门限真实值、`playback_lead_ms` 日志已加（`709c9e2`/`c7eba1e`）；**剩灯光（B1）、记忆（D2：house-ear 尚无记忆功能）** |
+| S5d | 控制台（六页 Vue + 助手页 + 密钥页） | 🟡 概览页（状态 + 试一试 + 停止）、音量读写、唤醒门限真实值、`playback_lead_ms` 日志已加（`709c9e2`/`c7eba1e`）；**剩灯光（B1）、记忆（D2：rui 尚无记忆功能）** |
 | S5e | 时间注入、weather/news/web_search、工具循环 | ✅ reminder/timer **已接线**（`1882d8c`：`build_local_tools` + 1 s tick + 到点经 `runner.say`，避开回合与占用）；真机 2026-10-22 16:37:48 到点、408 ms 出声 |
 | S6 | 播报节奏（Pacer）+ 打断（barge-in） | ✅ 真机：队列 0 丢弃、打断丢 7.6 s（`4c4a69b`）；剩余 lead ≈420 ms 未按 300 ms 口径验收 |
 | S7 | ASR 常驻 + filler 预渲染 | ✅ 真机 ASR 51–90 ms（原 500 ms + 每轮 4.7–5.3 s 加载），filler 0.73 s 预渲染（`f814d6f`） |
@@ -100,7 +100,7 @@ AEC/唤醒的数字已补进 `docs/audio-latency.md` §3.5/§3.6。
    不能用在语音回合。
 3. **LLM 纯 API**：`api.deepseek.com` / `deepseek-flash` / temp 0.4 / max_tokens 3000 /
    **thinking 关**（老项目实测：开思考延迟翻 2–3 倍、零准确率收益）。
-4. **模型不进镜像**：`house-ear fetch-models` 从 hf-mirror 拉，失败只警告、ASR 回落云端。
+4. **模型不进镜像**：`rui fetch-models` 从 hf-mirror 拉，失败只警告、ASR 回落云端。
 5. **唤醒冲突先到先得**（200 ms 窗口，平局按 device id）；播放走服务端解码 + PCM 推流。
 6. **唤醒应答默认提示音**（`ack.mode: earcon`）。理由是我们自己的实测：TTS 应答
    （0.55 s 语音 + 1.2 s 压麦）在 S5a 里 0/20 整句被吞。老项目用「在呢」0.52 s 是通的，
@@ -168,7 +168,7 @@ AEC/唤醒的数字已补进 `docs/audio-latency.md` §3.5/§3.6。
 2. **`config.audio.voice.kws_threshold` 是假旋钮**。运行时没人读它，真门限在 keywords 文件里
    （现在是 `keywords-015.txt` 的 `#0.15`）。控制台已把这一项标成「只读来源」，但配置字段还留着，
    改它没有任何效果——下一个人会以为调了门限。要么删掉，要么让它生成 keywords 文件。
-3. **4399 被 `house-ear` 临时接管**。旧项目的 4399 现在跑的是我们（`allow_no_token`，测试期行为），
+3. **4399 被 `rui` 临时接管**。旧项目的 4399 现在跑的是我们（`allow_no_token`，测试期行为），
    与 §2/§8「不占 4399/4400」的契约不一致。发布/重启前必须改回 4412 并关掉 `allow_no_token`；
    两套服务混在一个端口上，出问题分不清是谁。
 4. **打断后的剩余 lead ≈420 ms**。wake 时音频面清队列 + `stop_play`，但已交给设备的部分
@@ -231,38 +231,38 @@ A1 提醒接线是最大的一块「写了没接」：`tools/reminders.py` 与�
 ## 8. 操作手册
 
 ```bash
-cd ~/house-ear
+cd ~/rui
 uv run pytest && uv run ruff check src tests scripts
 cd web && npm run typecheck && npm run build && cd ..
 
 # 一整回合（假音箱，真 KWS/VAD/ASR/LLM/TTS；TTS 不发声）
 uv run python scripts/measure_turn_pipeline.py \
-    --config /tmp/house-ear-scratch/house-ear-s5b/tools.yaml \
-    --command /tmp/house-ear-scratch/house-ear-s4/commands/01-weather.wav --rounds 20
+    --config /tmp/rui-scratch/rui-s5b/tools.yaml \
+    --command /tmp/rui-scratch/rui-s4/commands/01-weather.wav --rounds 20
 
 # 纯文本质量（真 ASR + 真 DeepSeek，20 轮同句）
 uv run python scripts/measure_reply_quality.py --question "今天天气怎么样" --rounds 20
 
 # 起服务（真机；:4412）
-set -a; . $HOUSE_EAR_ENV_FILE; set +a
-export HOUSE_EAR_DEVICE_TOKEN="$(cat /tmp/house-ear-scratch/house-ear-s4/device-token.txt)"
-uv run house-ear serve --config /tmp/house-ear-scratch/house-ear-s5b/tools.yaml   # 控制台 :8091
+set -a; . $RUI_ENV_FILE; set +a
+export RUI_DEVICE_TOKEN="$(cat /tmp/rui-scratch/rui-s4/device-token.txt)"
+uv run rui serve --config /tmp/rui-scratch/rui-s5b/tools.yaml   # 控制台 :8091
 ```
 
 **真机切换**（LX06，`root@$SPEAKER_IP`，密码从 `$SPEAKER_PASSWORD` 读，必须
 `-o HostKeyAlgorithms=+ssh-rsa`；dropbear 限流，被拒等 40–60 s）：
 
-1. 先起 house-ear（`listen_port: 4412`）。**先确认 4399/4400 上是谁**——今天 4399 是我们自己
+1. 先起 rui（`listen_port: 4412`）。**先确认 4399/4400 上是谁**——今天 4399 是我们自己
    临时接管（§9），不是旧服务；按本节流程前先把它停掉/改回 4412。
-2. 备份 `client-run.sh`、`server.txt` 为 `*.bak-houseear`，URL 改成
+2. 备份 `client-run.sh`、`server.txt` 为 `*.bak-rui`，URL 改成
    `ws://$SERVER_IP:4412/?token=<TOKEN>`，kill 客户端，等看门狗 30 s 拉起。
 3. `lsof -nP -iTCP:4412` 看到 `$SPEAKER_IP` ESTABLISHED 才算连上。
-4. **测完立刻还原**两个 `.bak-houseear`，kill 客户端，确认 `:4399` ESTABLISHED。
+4. **测完立刻还原**两个 `.bak-rui`，kill 客户端，确认 `:4399` ESTABLISHED。
 
 **注意**：SSH 命令里不要出现 `pkill -f "/data/open-xiaoai/client"` 这种字面量——它会匹配到
 自己的 ssh 命令行，把会话打断。用 `pkill -f 'open-xiaoai/clien[t]'`。
 
-凭据在 `$HOUSE_EAR_ENV_FILE`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
+凭据在 `$RUI_ENV_FILE`（`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`XFYUN_*`）。
 **只写变量名，不写值。**
 
 ## 9. 现场状态（2026-10-22 22:55 自测收线）
@@ -289,9 +289,9 @@ uv run house-ear serve --config /tmp/house-ear-scratch/house-ear-s5b/tools.yaml 
 - **观察项（不阻塞）**：① 20:38 首轮 ASR 把「现在几点」听成 `'南方3。'`（疑提示音叠话头，后续
   多轮转写全对，单样本）；② **天气工具今晚 1/3**（20:39 ✗、20:42 ✓、20:50 ✗，报「没查到」，
   答句降级正常）——上游问题为主，B2 后值得单查。
-- **起服务（正确方式）**：`nohup /tmp/house-ear-scratch/house-ear-s5b/serve-dev.sh
-  > /tmp/house-ear-scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `$HOUSE_EAR_ENV_FILE` 取 6 个
-  provider key，**`set -a` 是关键行**（20:09–20:12 丢 key 事故根因）；`HOUSE_EAR_DEVICE_TOKEN`
+- **起服务（正确方式）**：`nohup /tmp/rui-scratch/rui-s5b/serve-dev.sh
+  > /tmp/rui-scratch/he-serve-b3t.log 2>&1 &`。脚本自己 grep `$RUI_ENV_FILE` 取 6 个
+  provider key，**`set -a` 是关键行**（20:09–20:12 丢 key 事故根因）；`RUI_DEVICE_TOKEN`
   故意不设（dev 配置走 `allow_no_token`）。重启先按端口杀 4399/8091；带证据的旧日志先轮转。
 - **设备**：`$SPEAKER_IP`，SSH 用老项目 `server/devshell.py`（凭证 `music.secrets_path 指向的凭据 JSON`
   的 `voice.device_host/device_ssh`，自带 ControlMaster 防 dropbear 限流）；客户端日志 `/tmp/client.log`。
@@ -390,10 +390,10 @@ C1 冷装。
 
 **代码**：HEAD 见 git log，**410 passed**，ruff clean，前端 `vue-tsc` + build 通过。
 **部署目标**：**生产是 NAS 上的 Docker**（`docs/deploy.md`：`install.sh` 一条命令、`:8080`、
-`network_mode: host`、配置在 `~/house-ear/config`）；Mac 只是开发机（`:8091`、dev 版 serve-dev.sh）。
+`network_mode: host`、配置在 `~/rui/config`）；Mac 只是开发机（`:8091`、dev 版 serve-dev.sh）。
 C1 冷装验收在 NAS 上做。
 
-**运行（开发机）**：`nohup /tmp/house-ear-scratch/house-ear-s5b/serve-dev.sh >> /tmp/house-ear-scratch/he-serve-b3t.log 2>&1 &`
+**运行（开发机）**：`nohup /tmp/rui-scratch/rui-s5b/serve-dev.sh >> /tmp/rui-scratch/he-serve-b3t.log 2>&1 &`
 （注意 `>>` 追加；重启前先 `mv` 轮转旧日志，用 `>` 截断会让新旧进程交错写同一文件，时序不可信）。
 **acek**：`ack.mode: tts`「在呢。」；`devices[].volume: 86`（≈220 档）。
 
@@ -477,7 +477,7 @@ kana/hangul 直判、汉字日文靠 override 表、7 天 TTL 原子缓存）+ `
 
 **P15 进行中（p15 agent，task-3）**：compose 日志轮转（10m×3）、healthcheck 脚本、
 `./data/models:/data/models` 第三挂载（原来 install.sh 的 fetch-models 写 `/data/models`，
-compose 只挂 `./data:/var/lib/house-ear`，容器里路径根本不存在——真 bug）、`stop_grace_period`、
+compose 只挂 `./data:/var/lib/rui`，容器里路径根本不存在——真 bug）、`stop_grace_period`、
 Dockerfile 加 ffmpeg（Navidrome 转码依赖）与 OCI labels/VERSION、install.sh 用 `--user uid:gid`、
 新增 `.github/workflows/docker-publish.yml`（原来 CI 只 build 不 push，而 install.sh 默认拉
 `ghcr.io/...:latest`——**镜像从来没有发布过**）、docs/deploy.md 重写 + docs/runbook.md 新建。
@@ -511,11 +511,11 @@ local_asr/vad/provider endpoint → 「一条命令到第一句」目前不成�
   **未验**：③ 的媒体分支真机听感（需要真唤醒，9哥嗓子）；④ 真机出声由 d1c 2C 补。
 
 **冷装补齐（`7aacbd5`，P14/C1 的硬缺口）**：
-- `setup` 不再写 schema 空壳，改写生产模板 `src/house_ear/config/template.yaml`
+- `setup` 不再写 schema 空壳，改写生产模板 `src/rui/config/template.yaml`
   （实测音频值、providers 三条链、VAD/KWS 模型路径、`devices: []`、无密钥），并**自动生成
   keywords.txt**（`n ǐ h ǎo x iǎo r uì :2.00 #0.15 @你好小瑞`，与生产文件逐字一致）。
 - `fetch-models` 增加 **KWS 唤醒模型**下载解包（GitHub release 32.9 MB，chunk-8 文件，
-  `--kws-dest /data/models/kws`、`--kws-url`、`--no-kws`）；`house-ear keywords --config`
+  `--kws-dest /data/models/kws`、`--kws-url`、`--no-kws`）；`rui keywords --config`
   从 `devices[].wake_words` 重生成关键词文件（控制台/向导换唤醒词后不会留旧词）。
 - **playback 默认 48000/2ch 是错的**：LX06 客户端只收 mono，adapter 会拒绝 → 默认改成
   16000/1ch（config.example 同步改）；`music.enabled` 无 `secrets_path` 现在校验报错，
@@ -556,7 +556,7 @@ keywords.txt 内容逐字一致、probe 返回不可达原因、无音频面时�
 **未验**：向导里「模型」步只给命令（272 MB 下载不进 HTTP 回调）；真机端到端由冷装排练覆盖。
 **P4.1 修三处诚实性问题（同日晚些）**：① key 步改为按配置里真实 provider 链的
 `api_key_env/app_id_env/api_secret_env` 判断（dev 配置用 DEEPSEEK_*/SILICONFLOW_*/XFYUN_*，
-原先硬编码 HOUSE_EAR_* 会把配好的 dev 判成「没填 key」）；本地 sherpa 条改看模型文件，
+原先硬编码 RUI_* 会把配好的 dev 判成「没填 key」）；本地 sherpa 条改看模型文件，
 且接受 `model.onnx` 与 `model.int8.onnx` 两种命名。② 新增 `complete` 标志（前四步都完成）：
 只有真未装好才强制首装落到向导页；「试一句」只是提示，不会让日常打开控制台永远跳向导。
 ③ 向导保存设备改为按 id 合并到已有设备上，`listen_port`/`led`/`volume` 等不在表单里的字段
@@ -567,21 +567,21 @@ keywords.txt 内容逐字一致、probe 返回不可达原因、无音频面时�
 **HEAD `b259417`。** P15b（p15 agent）把部署面与 `7aacbd5` 对齐，并做了本机容器冷装排练：
 
 - **install.sh**：step1/2 说明改成「setup 写生产模板 + 自动生成 keywords」；step4 一次拉
-  ASR+VAD+KWS（老装缺 KWS 会补），`.env` 增加 `XFYUN_*` 并**写入 `HOUSE_EAR_IMAGE=$IMAGE`**
+  ASR+VAD+KWS（老装缺 KWS 会补），`.env` 增加 `XFYUN_*` 并**写入 `RUI_IMAGE=$IMAGE`**
   （否则后续 `docker compose up -d` 会回落 ghcr:latest，把本地镜像顶掉）。
-- **镜像内模板**：`resources.files('house_ear.config')/template.yaml` = 4804 B，provider 链齐全；
+- **镜像内模板**：`resources.files('rui.config')/template.yaml` = 4804 B，provider 链齐全；
   `setup` 0.49 s（热）/ ~13 s（rebuild 后首次容器冷启），config 4912 B，keywords 50 B 逐字一致；
   `fetch-models --no-kws` 0.53 s 路径布局正确。
 - **冷装排练（本机 install.sh 全流程，预置模型）**：总计 **3 s（热）/ 14 s（冷路径）** →
-  `compose ps` Up(healthy)、`house-ear-healthcheck` ok、`/health` 200、doctor degraded 仅环境项。
-  镜像 `house-ear:rehearsal` = **428,964,012 B（409 MiB，arm64）**，增量构建 40.5 s。
+  `compose ps` Up(healthy)、`rui-healthcheck` ok、`/health` 200、doctor degraded 仅环境项。
+  镜像 `rui:rehearsal` = **428,964,012 B（409 MiB，arm64）**，增量构建 40.5 s。
 - **看门狗容器实测**：假设备 up 后 3 s `audio_plane=true`；kill plane pid → **2.0 s 新 pid、
   restarts=1、/health 全程 200、容器 RestartCount=0**；假音箱 ~1 s 重连；`debug/say` 返回
   `reply=现在三点。 audio_bytes=32000`、假音箱收到 15 帧/43,200 B。
 - **`devices: []` 空转修掉（`5f4bc72`）**：看门狗在无设备时不再空跑退避，`watch()` 直接 idle；
   向导写设备的路径会重新 arm。
 - **公开仓清债（同一个 commit）**：10 个测试文件的私网 IP → TEST-NET；4 个测试的作者模型目录改成
-  `HOUSE_EAR_TEST_MODELS` opt-in（未设 skip）；measure 脚本 `--env`/`$HOUSE_EAR_ENV_FILE`；
+  `RUI_TEST_MODELS` opt-in（未设 skip）；measure 脚本 `--env`/`$RUI_ENV_FILE`；
   docs/scripts 里 `~/AI_Workspace`、`~/.hermes`、私有 checkout 引用全清；HANDOFF 写「公开仓」。
   验证：全量 pytest 绿、ruff clean、`sh -n install.sh` ok、安全 grep 全清。
 
@@ -650,9 +650,9 @@ origin/main 同步。**
   `component` 逃生舱（安装向导是独立路由 + 设备管理/话术/MCP 三块）。
 - **镜像复验（P4–P6 之后重建，本机 arm64）**：`docker build` 增量 **59 s**、镜像 **428,879,612 B
   （409 MiB）**；镜像内 `template.yaml` 4804 B、provider 链齐全；容器 `setup` 写出 config 4912 B +
-  keywords 50 B（逐字一致）；`HOUSE_EAR_CONFIG=/config/config.yaml` 起服务后 `/health` 200、
+  keywords 50 B（逐字一致）；`RUI_CONFIG=/config/config.yaml` 起服务后 `/health` 200、
   `/api/v1/setup` 正确报 `complete=false / next=keys`、`/api/v1/phrases` 49 键、`/api/v1/mcp` 正确、
-  `/api/v1/panels` 10 个面板；`house-ear-healthcheck` 输出 `ok: uptime=9.9s devices=0 audio_plane=False`，
+  `/api/v1/panels` 10 个面板；`rui-healthcheck` 输出 `ok: uptime=9.9s devices=0 audio_plane=False`，
   容器 `healthy`。
 - **新增 `docs/acceptance.md`**：验收日可执行清单——前置条件（仓库公开/镜像发布/NAS/音箱/密钥）、
   C1 冷装计时口径、D3 20 次唤醒测法（170–220 档、2–3 m、失败轮记录）、打断 ≤300 ms 口径、
@@ -704,7 +704,7 @@ origin/main 同步。**
 **本轮分工（Agent Teams）**：
 | 成员 | 任务 | 写作用域 |
 |---|---|---|
-| `console-api` | task-5 配置目录（catalog）+ `GET /api/v1/config/catalog` + `PUT /api/v1/config/values`（dotted path、effect=save/restart）+ `POST /api/v1/system/audio/restart` + 音乐源路径自动更新 + 面板重组（title_en/component_args） | src/house_ear/config/**, web/api/app.py, tests/** |
+| `console-api` | task-5 配置目录（catalog）+ `GET /api/v1/config/catalog` + `PUT /api/v1/config/values`（dotted path、effect=save/restart）+ `POST /api/v1/system/audio/restart` + 音乐源路径自动更新 + 面板重组（title_en/component_args） | src/rui/config/**, web/api/app.py, tests/** |
 | `console-ui` | task-6 i18n（zh/en）+ 现代设计系统（light/dark、token、手机）+ 配置中心 + 导航重组 + deep-design-qa 循环 | web/**, docs/console-redesign.md |
 | `turn-core` | task-7 长回答服务端截断 + 测试 | session/turn.py, tests/** |
 | 审计 workflow | 4 角色并行审计（老项目/新人/运维/安全），只读 + 截图 + 只调 GET | 只读 |
@@ -723,7 +723,7 @@ origin/main 同步。**
   紧接「在呢」说的前 ~1.09 s 丢。这正是 13:47「放一首告白气球」只剩歌名、13:23「怎样？」成轮的根因。
 - **P1 supervisor 盲区**：plane 读端断掉、进程还活着时 `/health` 永远绿、看门狗不重启。
 - P1：设备状态硬编码 ready、healthcheck 用全部设备（禁用唯一设备 → 永久 unhealthy）、
-  密钥页硬编码 dev env 名（生产 HOUSE_EAR_* 填了没用）、门限不是配置字段、记忆与文档不符、
+  密钥页硬编码 dev env 名（生产 RUI_* 填了没用）、门限不是配置字段、记忆与文档不符、
   AEC 无双讲判据、打断无生产度量、repo 私有导致一键装不可用。
 - **审计修复已分两批**：`task-8`（console-api：状态诚实化/healthcheck/secret 派生/门限可写/
   面板按 tier/音乐凭据/记忆去重）；`task-9`（turn-core：停止词整句匹配/唤醒后首句/hold 全量保留/
@@ -765,7 +765,7 @@ origin/main 同步。**
   打断 `silence_after_ms` 生产打点；`[level]` 日志 2 s→30 s；长回答服务端按句截断（default/search/long
   三档，后台可改、保存即下一轮生效）。
 - **安全**（`sec-fix` + Lead）：控制台鉴权 **fail-closed**（非 loopback + 空 token 拒绝启动；
-  `house-ear setup` 生成 token、`house-ear token` 打印/轮换；`hmac.compare_digest` + 每 IP 失败限速）；
+  `rui setup` 生成 token、`rui token` 打印/轮换；`hmac.compare_digest` + 每 IP 失败限速）；
   `web.allow_anonymous` 仅 dev 显式打开（dev 配置已开、catalog 里标危险）；debug/play 只允许
   data_dir/cache 内文件（`/etc/passwd` → 泛化 404）；catalog 的 `*_env` 只读；secret 解析统一
   （providers/xfyun/ha/adapter/music 走 `secrets.get` + 音频面 `secrets.configure`）；
@@ -1028,7 +1028,7 @@ system 附加说明进入模型，**不进** transcript、历史、上限判断�
 4. **控制台 polish**：ConfigCenter 默认隐藏 dotted path（技术详情）、字段行 141→79 px、
    首屏 3→6 行、徽章收敛；导航改名（AI 供应商/语音与音箱/系统与高级）；Logs 默认只看问题
    （httpx INFO 已在后端降 WARNING）；SetupView keys 按链动态渲染（含 VOLC_API_KEY，移除
-   HOUSE_EAR_TTS_KEY）；手机触控 ≥44 px、抽屉 footer sticky。详见 内部审计（未公开）。
+   RUI_TTS_KEY）；手机触控 ≥44 px、抽屉 footer sticky。详见 内部审计（未公开）。
 5. **通用 MCP 服务**：`tools/mcp_manager.py` 多服务器（http/stdio）并发、独立重连、失败隔离、
    热 apply；工具注册为 `mcp.<server>_<tool>`，结果加不可信数据前缀；`/api/v1/mcp` 返回每
    server 状态；控制台 McpManager 支持增删改/测试。**安全闸** `tools.mcp_allow_stdio`
@@ -1076,11 +1076,11 @@ setup plane_error 4 条、MCP env 2 条。剩余：真实 Navidrome 凭据保存
 ### 12.29 2026-10-23 18:xx：品牌升级（小瑞 / Rui）+ 本地字体 + Pantone 配色 + 动效 logo + 音箱试听
 
 **9哥 新任务**（原误发到智能体会话，Lead 接手）：试听出口改音箱、换谷歌字体（本地加载）、
-换年轻配色并调研 2026 Pantone、House-ear 换名、设计左上角 logo（H5/像素/数据连接/动效）、
+换年轻配色并调研 2026 Pantone、Rui 换名、设计左上角 logo（H5/像素/数据连接/动效）、
 并盘点 HANDOFF/ROADMAP 剩余项。详细设计见 `docs/brand.md`，剩余清单见 `docs/remaining-work.md`。
 
 - **改名**：显示名 **小瑞 / Rui**（与唤醒词一致）；title/meta、侧栏、移动端、i18n、favicon。
-  repo/包/CLI/路由/localStorage/内部 ID 暂保持 house-ear，避免升级丢配置。
+  repo/包/CLI/路由/localStorage/内部 ID 暂保持 rui，避免升级丢配置。
 - **字体**：Bricolage Grotesque / Manrope / JetBrains Mono woff2（latin+latin-ext，204 KB，
   OFL）放 `web/public/fonts/`，全部本地 @font-face，中文系统栈；实测第三方字体请求 0。
 - **配色**：Cloud Dancer `#f1efe9` 底 + Alexandrite 深青 primary + Muskmelon 暖橙 live；
@@ -1112,18 +1112,18 @@ Telegram 可行性测试。
   `passwd` 指向的 `/data/console/passwd` 不用于 SSH 认证）——旧默认密码仍有效，建议后续用
   厂商恢复/固件方式或仅在可信 LAN 开放 SSH；不要在公网暴露音箱 22 端口。
 - **NAS 部署**：在 NAS（fnOS，x86_64，Docker 28）用公开源码 `docker build` 生产镜像
-  `house-ear:local`（BuildKit 前端被 fnOS 镜像源 401，改用 classic builder）；模型从本机复制
+  `rui:local`（BuildKit 前端被 fnOS 镜像源 401，改用 classic builder）；模型从本机复制
   SenseVoice/VAD/KWS，HA/Navidrome/provider secrets 独立写入 NAS data 卷；配置 `web.port=8080`、
   设备入口 `4412`，`allow_anonymous=false` + 新 token。容器 health OK，`/health` 200。
-  音箱 client 已从 Mac 开发机切到 NAS（`client-run.sh`/`server.txt` 备份 `.bak-houseear-mac`），
+  音箱 client 已从 Mac 开发机切到 NAS（`client-run.sh`/`server.txt` 备份 `.bak-rui-mac`），
   `/api/v1/audio` 显示 `speaker_connected=true, kws_enabled=true, vad_enabled=true, dropped=0`；
   NAS 上 `debug/say` 与 `audition?output=speaker` 均实测出声，通过局域网与 Tailscale 都能打开。
 - **Telegram**：已用本机 bot 把 Mac 开发机 LAN/Tailscale 地址（可行性测试）和 NAS 后台 LAN/
   Tailscale 地址 + 访问令牌发给 9哥；Telegram 发送链路已验证（proxy 下 message_id 成功）。
 - **GHCR 仍私有**：GitHub REST 只提供个人 package 的 get/delete（无 visibility PATCH；实测
-  `/user/packages/container/house-ear` PATCH 404）。**需要 9哥 在网页 Settings → Change
+  `/user/packages/container/rui` PATCH 404）。**需要 9哥 在网页 Settings → Change
   visibility 点一次**；仓库公开和 raw 安装脚本已可用，镜像公开前一键装仍会 pull 401。
-- **文档**：`docs/brand.md`、`docs/remaining-work.md`；本机 NAS 部署文件在 `/vol1/house-ear/`
+- **文档**：`docs/brand.md`、`docs/remaining-work.md`；本机 NAS 部署文件在 `/vol1/rui/`
   （config 0600、secrets 0600），不在仓库。
 
 ### 12.31 2026-10-23 21:xx：trace 时间戳修复 + 首轮冷启动预热 + NAS 发布
@@ -1144,7 +1144,7 @@ Telegram 可行性测试。
 
 - 控制面新增 `POST /api/v1/chat`（文本回合，`audio=false` 时跳过 TTS）、`POST /api/v1/asr`、
   `GET/PUT /api/v1/channels`；通道 session 按 `channel:peer` 隔离，不覆盖客厅 history。
-- 独立 `src/house_ear/channels/` + `house-ear-channels` CLI：
+- 独立 `src/rui/channels/` + `rui-channels` CLI：
   - Telegram：getUpdates 长轮询、allowlist（默认拒绝未知 chat）、文字/语音、语音回复、分片/typing。
   - 微信 iLink：QR 登录、getupdates 游标、context_token、2000 字、typing、`.silk` 入站 `pilk` 重转写、
     音频文件回复；不信任腾讯 `voice_item.text`。
@@ -1153,7 +1153,7 @@ Telegram 可行性测试。
 - 测试 `tests/test_channels.py`、`tests/test_chat_api.py`；全量 743 passed / 1 skipped；UI typecheck+build 绿。
 - NAS 已更新到包含 channels 的镜像；`/api/v1/channels` 实测 200，Telegram token 已在 NAS `.env` 配置（不回显）。
 - **仍需 9 哥**：给 @dellnas1_bot 发消息并提供 chat_id（或临时 allow-all 配对）；微信手机扫码
-  `house-ear-channels --login-weixin`；两个通道各发 2 条文字 + 1 条语音做真机验收。M7 部署/网关常驻服务尚未做。
+  `rui-channels --login-weixin`；两个通道各发 2 条文字 + 1 条语音做真机验收。M7 部署/网关常驻服务尚未做。
 
 ### 12.33 2026-10-24 v1 freeze + 验收日
 
@@ -1168,7 +1168,7 @@ Telegram 可行性测试。
 
 ### 12.34 2026-10-24 验收日：四道 v1 门槛全部通过
 
-- **门槛 1 冷装**：✅ 全新目录 `~/house-ear-verify`，镜像 `e3ea158`，12:37:13 → 12:44:16 听到第一句
+- **门槛 1 冷装**：✅ 全新目录 `~/rui-verify`，镜像 `e3ea158`，12:37:13 → 12:44:16 听到第一句
   （423 s ≈ 7 min 03 s，≤30 min）；VAD/KWS/ASR 模型本次真实下载；备注：镜像 pull 在此前失败尝试中已完成，
   第一句前有约 3 min 配置注入/密钥对齐（测试手法，真实用户走 Setup 向导）。
 - **门槛 2 唤醒**：✅ 19/20（11:39–11:46，音量 204=80%，音乐《茧人》持续播放，2–3 m，AEC ERLE≈31.6 dB；
@@ -1180,20 +1180,20 @@ Telegram 可行性测试。
   配置恢复 smoke ✅（bad config → last-good + banner/API，CLI restore 后 doctor 正常、sha 一致）；
   备份/恢复 smoke ✅（0600、sha256、临时目录恢复、权限 600）。
 - **验收日修的缺陷**：`f0dde20` VAD 上游 404 的 GitHub fallback；`e3ea158` ghproxy 模型镜像 fallback；
-  `39af43f` / `4aa8f9e` install.sh fetch 超时 + 强制 IPv4 + `HOUSE_EAR_RAW` 换源。
+  `39af43f` / `4aa8f9e` install.sh fetch 超时 + 强制 IPv4 + `RUI_RAW` 换源。
 - **额外发现（待修，不阻塞）**：config 被清空成 0 字节时静默用 schema defaults → insecure_bind → crash loop；
-  冷装测试中新模板 LLM 读 `HOUSE_EAR_LLM_KEY`，老生产 secrets 里是 `DEEPSEEK_API_KEY`（向导不受影响）。
+  冷装测试中新模板 LLM 读 `RUI_LLM_KEY`，老生产 secrets 里是 `DEEPSEEK_API_KEY`（向导不受影响）。
 - NAS 生产仍跑 `f2abcef`（本次只是验收临时 stop/start）；等 9 哥 明确「部署 NAS」后再切 `e3ea158` + tag/Release。
 
 ### 12.35 2026-10-24 v0.1.0 发布与 NAS 部署
 
-- 版本：`pyproject` / `house_ear.__version__` = **0.1.0**；tag `v0.1.0`（release commit `1966db6`）；
+- 版本：`pyproject` / `rui.__version__` = **0.1.0**；tag `v0.1.0`（release commit `1966db6`）；
   GHCR 产出 `0.1.0` / `0.1` / `latest` / `sha-1966db6`（多架构）。
 - 发布前修：`/health` 曾仍报 `0.0.1`（`__init__` 硬编码），已改为 `0.1.0` 并加 `tests/test_version.py`
   防与 pyproject 漂移（749 passed / 17 skipped，ruff clean）。
 - NAS 部署（2026-10-24 12:58–13:05）：
-  - 部署前备份：`house-ear-backup-20261024-125842.tar.gz`，61,492 KiB，sha256 `9c879d60…`
-  - 生产 `.env` → `HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.1.0`；`docker compose up -d --force-recreate`
+  - 部署前备份：`rui-backup-20261024-125842.tar.gz`，61,492 KiB，sha256 `9c879d60…`
+  - 生产 `.env` → `RUI_IMAGE=ghcr.io/yes999zc/rui:0.1.0`；`docker compose up -d --force-recreate`
   - 镜像：`ghcr.io/yes999zc/rui@sha256:694fc92444ff157b59ed22df44e72722edb6fd2fb3cb0fa2166c5805c93f6aba`，
     revision `1966db6`，label version `0.1.0`
   - 验证：container healthy；`/health` → `version 0.1.0`、`audio_plane=true`、`speaker_connected=true`；

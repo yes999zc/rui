@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import types
 
-from house_ear.config import Config
-from house_ear.config.schema import AecConfig, AudioConfig, VoiceConfig, WebConfig
-from house_ear.doctor import probes, run_doctor
-from house_ear.doctor.probes import measure_aec_rtf
+from rui.config import Config
+from rui.config.schema import AecConfig, AudioConfig, VoiceConfig, WebConfig
+from rui.doctor import probes, run_doctor
+from rui.doctor.probes import measure_aec_rtf
 
 
 def _fake_sherpa() -> types.SimpleNamespace:

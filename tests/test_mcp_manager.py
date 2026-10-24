@@ -14,12 +14,12 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config, save_config
-from house_ear.config.catalog import document
-from house_ear.config.schema import McpServerConfig
-from house_ear.tools import mcp_manager as manager_module
-from house_ear.tools.contract import Permission, ToolResult
-from house_ear.tools.mcp_manager import (
+from rui.config import Config, save_config
+from rui.config.catalog import document
+from rui.config.schema import McpServerConfig
+from rui.tools import mcp_manager as manager_module
+from rui.tools.contract import Permission, ToolResult
+from rui.tools.mcp_manager import (
     ManagedServer,
     MCPManager,
     _description,
@@ -28,12 +28,12 @@ from house_ear.tools.mcp_manager import (
     _stdio_parameters,
     tool_name,
 )
-from house_ear.tools.mcp_manager import (
+from rui.tools.mcp_manager import (
     test_server as probe_server,
 )
-from house_ear.tools.registry import ToolRegistry
-from house_ear.web.api import app as app_module
-from house_ear.web.api.app import create_app
+from rui.tools.registry import ToolRegistry
+from rui.web.api import app as app_module
+from rui.web.api.app import create_app
 
 # --------------------------------------------------------------------- fakes
 
@@ -252,7 +252,7 @@ def test_stdio_parameters_never_use_a_shell() -> None:
     assert args == ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
     # The child gets a whitelist environment, never the full service environment.
     assert isinstance(env, dict) and "PATH" in env
-    assert "HOUSE_EAR_LLM_KEY" not in env
+    assert "RUI_LLM_KEY" not in env
 
     class WithEnv(SimpleNamespace):
         pass
@@ -273,7 +273,7 @@ def test_stdio_child_environment_is_minimal(monkeypatch) -> None:
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
     monkeypatch.setenv("HOME", "/home/house")
     monkeypatch.setenv("LANG", "zh_CN.UTF-8")
-    for name in ("HOUSE_EAR_LLM_KEY", "HOUSE_EAR_DEVICE_TOKEN", "VOLC_API_KEY",
+    for name in ("RUI_LLM_KEY", "RUI_DEVICE_TOKEN", "VOLC_API_KEY",
                  "XFYUN_APPID", "DEEPSEEK_API_KEY", "HASS_TOKEN", "GITHUB_TOKEN"):
         monkeypatch.setenv(name, "secret-value")
     cfg = server(name="local", transport="stdio", command=["srv"])

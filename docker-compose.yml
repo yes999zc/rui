@@ -1,11 +1,13 @@
+name: rui
+
 services:
-  house-ear:
-    # Pin a release in production. install.sh passes HOUSE_EAR_IMAGE, and .env can hold it
-    # for good: HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.1
+  rui:
+    # Pin a release in production. install.sh passes RUI_IMAGE, and .env can hold it
+    # for good: RUI_IMAGE=ghcr.io/yes999zc/rui:0.0.1
     # `latest` is the rolling default, not the only recommendation - a tag or a digest is
     # what makes a rollback (and a bug report) reproducible. See docs/runbook.md.
-    image: ${HOUSE_EAR_IMAGE:-ghcr.io/yes999zc/rui:latest}
-    container_name: house-ear
+    image: ${RUI_IMAGE:-${HOUSE_EAR_IMAGE:-ghcr.io/yes999zc/rui:latest}}
+    container_name: rui
     restart: unless-stopped
     network_mode: host          # device audio is a long-lived socket; host avoids NAT surprises
     env_file:
@@ -14,7 +16,7 @@ services:
       # Three volumes, three jobs. Everything that must survive `docker rm` lives on one
       # of them; nothing else in the container is worth keeping.
       - ./config:/config                              # config.yaml (the source of truth)
-      - ./data:/var/lib/house-ear                     # system.data_dir: service.log,
+      - ./data:/var/lib/rui                           # system.data_dir: service.log,
                                                        #   secrets.yaml, memory/history, cache
       # fetch-models writes /data/models/<name> and the example config points providers at
       # /data/models/...; without this mount the model sits in the data volume while the
@@ -22,8 +24,8 @@ services:
       # point, so `./data/models` is both persistent and at the documented path.
       - ./data/models:/data/models
     environment:
-      HOUSE_EAR_CONFIG: /config/config.yaml
-      HOUSE_EAR_WEB_DIR: /app/web/dist
+      RUI_CONFIG: /config/config.yaml
+      RUI_WEB_DIR: /app/web/dist
     # Log rotation belongs to the runtime: the app's own service.log already rotates
     # (2 MB x 3) but stdout/stderr are the container's json-file log and would otherwise
     # grow without bound on a NAS nobody logs into daily.
@@ -35,7 +37,7 @@ services:
     # The image has the same probe as its default HEALTHCHECK; spelling it out here keeps
     # the numbers with the deployment instead of hidden in the image.
     healthcheck:
-      test: ["CMD", "python", "/usr/local/bin/house-ear-healthcheck"]
+      test: ["CMD", "python", "/usr/local/bin/rui-healthcheck"]
       interval: 30s
       timeout: 10s
       start_period: 90s           # ASR/KWS loads and filler rendering happen before serving

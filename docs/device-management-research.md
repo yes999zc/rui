@@ -139,7 +139,7 @@ PCM）、`/shell`（按需打开的 root shell）。设备拨入后第一条 `/c
   会继续服务）→ 设备回来变成 pending（[EM-RD L171-210]）。
 
 **对 RUI 的启示**：approve/pending 成立的前提是「设备能主动带一个未登记的 id 来注册 + 每设备
-token」。RUI 现在是**共享 `HOUSE_EAR_DEVICE_TOKEN` + 单 4412 入口**，没有每设备凭据，也没有
+token」。RUI 现在是**共享 `RUI_DEVICE_TOKEN` + 单 4412 入口**，没有每设备凭据，也没有
 pending 表。所以 §2 建议：**0.2 不做审批队列**；向导里的「添加设备」人工动作就是审批。
 
 ### 1.4 每设备配置模型
@@ -664,9 +664,9 @@ adapter/plug/enabled/listen_port/params 脱敏后）、step 状态与 `detail`�
 
 **Day 1（后端契约 + 只读）**
 
-1. `src/house_ear/device/manifest.py`：`PlugManifest`（pydantic）、loader（内置目录 +
+1. `src/rui/device/manifest.py`：`PlugManifest`（pydantic）、loader（内置目录 +
    `data/plugs/`）、`available()`、`requires_socket` 校验、错误收集（~200 行）。
-2. `src/house_ear/device/plugs/xiaoai.plug.json`、`dot2.plug.json`：两个最小 manifest（~80 行/个）。
+2. `src/rui/device/plugs/xiaoai.plug.json`、`dot2.plug.json`：两个最小 manifest（~80 行/个）。
 3. `app.py`：`GET /api/v1/plugs`、`GET /api/v1/plugs/{id}`；`GET /api/v1/setup?plug=` 并入现有
    `_wizard_state()`（~150 行）。
 4. `tests/test_plug_manifest.py`：合法/非法 manifest、版本不满足、未知字段、坏文件不致命（~6 条）。
@@ -724,7 +724,7 @@ DeviceView = DeviceConfig + DeviceRuntime（API 返回）
 |---|---|---|---|
 | 设备注册表 | `config/config.yaml`（`system.data_dir` 外） | **0600** | 现有 `save_config` 保证（[RUI-STORE L116-141]、[RUI-DEPLOY L121]） |
 | 设备/服务 key | `data/secrets.yaml` | **0600** | 现有 `secrets.put`（[RUI-SECRETS L52-80]） |
-| 内置 manifest | `src/house_ear/device/plugs/*.json` | 0644（镜像内只读） | 随镜像发布 |
+| 内置 manifest | `src/rui/device/plugs/*.json` | 0644（镜像内只读） | 随镜像发布 |
 | 外部 manifest | `data/plugs/<plug-id>/plug.json` | 0644，目录 0755 | 只读加载；拒绝 symlink/路径穿越；单文件 ≤64 KiB |
 | 可选插头代码 | `data/plugs/<plug-id>/` | 0644/0755 | **0.2 不加载**；P3 由 sidecar 读 |
 | 状态/诊断 | 不落盘（诊断按需生成后下载） | — | 无新敏感文件 |
@@ -948,15 +948,15 @@ DeviceView = DeviceConfig + DeviceRuntime（API 返回）
 | RUI-HANDOFF | `docs/HANDOFF.md` | 架构（L22-34）、端口/数据（L41-46）、决策 10/11/12/14/18（L57-72）、P2/P3（L105-116） |
 | RUI-ROADMAP | `docs/ROADMAP.md` | P2.0-P2.4（L64-74）、P3.1-P3.4（L76-85）、in-process vs sidecar（L90-92）、不做多设备（L102-105） |
 | RUI-OX | `docs/open-xiaoai-client.md` | LX06 client 安装、ws URL/token、常见故障（L7-49） |
-| RUI-APP | `src/house_ear/web/api/app.py` | devices（L3011-3062）、wizard state（L3064-3210）、setup 端点（L3298-3428）、device admin（L3430-3589）、auth（L1737-1758）、probe（L182-207） |
+| RUI-APP | `src/rui/web/api/app.py` | devices（L3011-3062）、wizard state（L3064-3210）、setup 端点（L3298-3428）、device admin（L3430-3589）、auth（L1737-1758）、probe（L182-207） |
 | RUI-SETUPVUE | `web/src/views/SetupView.vue` | 现有向导 UI 与 5 步（L1-64） |
 | RUI-DEVMGR | `web/src/components/DeviceManager.vue` | 现有设备管理 UI（L1-15） |
-| RUI-CONTRACT | `src/house_ear/device/contract.py` | Capability/Transport/DeviceInfo（L23-59）、DeviceAdapter（L140-187） |
-| RUI-REG | `src/house_ear/device/registry.py` | `_BUILDERS`、`register()`、`build_adapters()`（L20-40、L90-110） |
-| RUI-SCHEMA | `src/house_ear/config/schema.py` | `DeviceConfig`（L120-147）、`Config.devices`（L578-610） |
-| RUI-CLIENT | `src/house_ear/audio/client.py` | 单设备 `_pick_device()` / 一个平面（L364-418） |
-| RUI-STORE | `src/house_ear/config/store.py` | config 原子写/0600/备份（L116-141） |
-| RUI-SECRETS | `src/house_ear/secrets.py` | 写-only secret、0600（L1-15、L52-80） |
+| RUI-CONTRACT | `src/rui/device/contract.py` | Capability/Transport/DeviceInfo（L23-59）、DeviceAdapter（L140-187） |
+| RUI-REG | `src/rui/device/registry.py` | `_BUILDERS`、`register()`、`build_adapters()`（L20-40、L90-110） |
+| RUI-SCHEMA | `src/rui/config/schema.py` | `DeviceConfig`（L120-147）、`Config.devices`（L578-610） |
+| RUI-CLIENT | `src/rui/audio/client.py` | 单设备 `_pick_device()` / 一个平面（L364-418） |
+| RUI-STORE | `src/rui/config/store.py` | config 原子写/0600/备份（L116-141） |
+| RUI-SECRETS | `src/rui/secrets.py` | 写-only secret、0600（L1-15、L52-80） |
 | RUI-DEPLOY | `docs/deploy.md` | secrets 0600（L121）、data 卷内容（L294） |
 | RUI-REMAIN | `docs/remaining-work.md` | §I A/B 类（L89-102）、§J EchoMuse 参考（L104-114）、§K 插座/插头（L116-132） |
 | DOT2-CONTRACT | `../rui-dot2-bridge/docs/plug-socket-contract.md` | 盲开 manifest、待确认五问（L37-82） |

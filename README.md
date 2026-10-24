@@ -8,13 +8,13 @@
     <a href="https://github.com/yes999zc/rui/actions/workflows/secret-scan.yml"><img src="https://github.com/yes999zc/rui/actions/workflows/secret-scan.yml/badge.svg?branch=main" alt="secret scan"></a>
     <a href="https://github.com/yes999zc/rui/actions/workflows/docker-publish.yml"><img src="https://github.com/yes999zc/rui/actions/workflows/docker-publish.yml/badge.svg?branch=main" alt="docker publish"></a>
     <a href="https://github.com/yes999zc/rui/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-0e6b63?style=flat-square" alt="MIT license"></a>
-    <img src="https://img.shields.io/badge/version-0.1.0-d98a3e?style=flat-square" alt="version 0.1.0">
+    <img src="https://img.shields.io/badge/version-0.2.0-d98a3e?style=flat-square" alt="version 0.2.0">
     <img src="https://img.shields.io/badge/status-v1%20in%20progress-8a4f0a?style=flat-square" alt="v1 in progress">
   </p>
   <p><a href="#中文">中文</a> · <a href="#english">English</a> · <a href="https://github.com/yes999zc/rui">GitHub</a></p>
 </div>
 
-> **项目名 / 旧名**：仓库和镜像是 `rui`，Python 包与 CLI 仍是 `house-ear`（保证旧安装、配置路径和命令兼容）。完整改名要单独迁移，见 [docs/remaining-work.md](docs/remaining-work.md)。
+> **项目名**：仓库、镜像、Python 包、CLI、配置路径和环境变量已统一为 `rui`；从 0.1.x 升级见 [迁移说明](docs/migration-house-ear-to-rui.md)。
 
 ---
 
@@ -91,16 +91,16 @@ flowchart LR
 ```bash
 curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 # 网络不通/卡住时用镜像：
-#   HOUSE_EAR_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main \
-#     curl -4 -fsSL "$HOUSE_EAR_RAW/deploy/install.sh" | sh
+#   RUI_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main \
+#     curl -4 -fsSL "$RUI_RAW/deploy/install.sh" | sh
 ```
 
 安装脚本做五件事：
 
 | 步骤 | 内容 |
 |---|---|
-| 1 | 拉取 `docker-compose.yml` 和 `config.example.yaml` 到 `~/house-ear/` |
-| 2 | `house-ear setup` 写入生产配置模板，并生成默认唤醒词文件 `keywords.txt` |
+| 1 | 拉取 `docker-compose.yml` 和 `config.example.yaml` 到 `~/rui/` |
+| 2 | `rui setup` 写入生产配置模板，并生成默认唤醒词文件 `keywords.txt` |
 | 3 | 生成 `.env`（含随机设备 token，0600） |
 | 4 | 下载本地模型：SenseVoice ASR（约 239 MB，一次）；VAD/KWS 已内置镜像，直接复制 |
 | 5 | `docker compose up -d`，等待 health 通过 |
@@ -116,9 +116,9 @@ docker build -t ghcr.io/yes999zc/rui:latest .
 安装完成后：
 
 ```bash
-cd ~/house-ear
+cd ~/rui
 # 控制台访问令牌（安装时生成；也可以稍后读取）
-docker compose exec house-ear house-ear token
+docker compose exec rui rui token
 ```
 
 打开 `http://<nas-lan-ip>:8080/`，输入控制台 token，按**首次运行向导**完成：密钥 → 模型 → 添加音箱 → 唤醒词 → 试一句。
@@ -128,15 +128,15 @@ docker compose exec house-ear house-ear token
 音箱必须运行 open-xiaoai client 并回连：
 
 ```text
-ws://<nas-lan-ip>:4412/?token=<HOUSE_EAR_DEVICE_TOKEN>
+ws://<nas-lan-ip>:4412/?token=<RUI_DEVICE_TOKEN>
 ```
 
-设备 token 在 `~/house-ear/.env` 的 `HOUSE_EAR_DEVICE_TOKEN`；服务端和 client 必须一致。详细接线、音量/LED 能力、协议说明见 [docs/deploy.md](docs/deploy.md) 和 [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md)。
+设备 token 在 `~/rui/.env` 的 `RUI_DEVICE_TOKEN`；服务端和 client 必须一致。详细接线、音量/LED 能力、协议说明见 [docs/deploy.md](docs/deploy.md) 和 [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md)。
 
 #### 手动 Docker Compose
 
 ```bash
-mkdir -p ~/house-ear && cd ~/house-ear
+mkdir -p ~/rui && cd ~/rui
 curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/docker-compose.yml -O
 curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/config.example.yaml -O
 # 按 docs/deploy.md 填 .env，再：
@@ -160,8 +160,8 @@ docker compose up -d
 - 完整字段/效果/重启规则：[docs/config-catalog-contract.md](docs/config-catalog-contract.md)
 - 部署、密钥、音乐/HA 配置：[docs/deploy.md](docs/deploy.md)
 - 音乐层：[docs/music.md](docs/music.md)；通用 MCP：[docs/mcp-generic.md](docs/mcp-generic.md)
-- 模型自建镜像（可选）：`.env` 设 `HOUSE_EAR_ASR_URL` / `HOUSE_EAR_VAD_URL` /
-  `HOUSE_EAR_KWS_URL`（完整文件 URL，失败回退内置镜像）；VAD/KWS 默认从镜像 seed 复制，
+- 模型自建镜像（可选）：`.env` 设 `RUI_ASR_URL` / `RUI_VAD_URL` /
+  `RUI_KWS_URL`（完整文件 URL，失败回退内置镜像）；VAD/KWS 默认从镜像 seed 复制，
   不再访问 GitHub release。详见 [docs/deploy.md §3.3](docs/deploy.md#33-模型fetch-models-一次装齐)
 - 日常运维（起停、日志、升级、回滚）：[docs/runbook.md](docs/runbook.md)
 
@@ -169,7 +169,7 @@ docker compose up -d
 
 小瑞可以额外通过 Telegram 或微信 iLink/ClawBot 接收文字和语音，不需要音箱在线：
 
-- 独立进程 `house-ear-channels`，复用控制面的 LLM/工具/会话，不依赖音频面；
+- 独立进程 `rui-channels`，复用控制面的 LLM/工具/会话，不依赖音频面；
 - Telegram：长轮询、allowlist、语音输入、语音回复；
 - 微信 iLink：扫码登录、`context_token`、`.silk` 重转写、音频文件回复；
 - 控制台 **通道 / Channels** 页：启用、allowlist、回复模式、绑定/启动指令。
@@ -185,7 +185,7 @@ docker compose up -d
 | 项目 | 结果 | 来源 |
 |---|---|---|
 | 音频面（mock 48 kHz/8ch，5 分钟） | 14,234 帧，0 丢帧，rtf 0.0055 | `scripts/measure_plane.py` |
-| AEC（6ch，doctor） | rtf ≈ 0.004（约单核 0.4%） | `house-ear doctor` |
+| AEC（6ch，doctor） | rtf ≈ 0.004（约单核 0.4%） | `rui doctor` |
 | 本地 ASR（SenseVoice int8，短句） | 开发机 51–90 ms；NAS N100 约 210 ms | [docs/audio-latency.md](docs/audio-latency.md) |
 | 完整回合（讯飞 TTS + deepseek-flash） | 20/20 回复，首响 p50 约 3.6 s | 同上 |
 
@@ -194,7 +194,7 @@ docker compose up -d
 - v1 验收项：80% 音量放歌 20 次唤醒 ≥19、打断 ≤300 ms 口径、完整发布检查；
 - 真机遗留：远场唤醒计数、音量对账、音乐收藏/口味 UI、第二台设备（config v3）；
 - 体验：手机对话卡片化、Providers 阶段标题/手机控件等细节；
-- 完整改名：仓库/镜像已是 rui，Python 包与 CLI 仍是 house-ear（兼容旧安装）。
+- 0.2.0 改名：包名、CLI、路径与环境变量统一为 `rui`，旧变量名仍可回退（见[迁移说明](docs/migration-house-ear-to-rui.md)）。
 
 > README 不承诺未实现的功能；以 `docs/remaining-work.md` 和实际控制台为准。
 
@@ -207,7 +207,7 @@ uv run pytest
 uv run ruff check src tests
 
 # 本地开发服务（默认 :8080；开发脚本也可能用 :8091）
-uv run house-ear serve
+uv run rui serve
 
 # 控制台
 cd web
@@ -250,9 +250,9 @@ MIT 只覆盖本仓库自己的代码；以上第三方组件各自保留其许�
 
 ## English
 
-> **Name note:** the GitHub repo and container image are `rui`; the Python package and CLI
-> remain `house-ear` so existing installs, paths and commands keep working. A full rename is
-> tracked in [docs/remaining-work.md](docs/remaining-work.md).
+> **Name note:** the repo, image, Python package, CLI, config paths and environment
+> variables are all `rui`. Upgrading from 0.1.x is covered by the
+> [migration guide](docs/migration-house-ear-to-rui.md).
 
 ### What it is
 
@@ -270,7 +270,7 @@ Requirements: a Docker host (NAS/Linux, amd64 or arm64), an LX06 with the **open
 curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 ```
 
-The installer writes `~/house-ear/`, generates a `.env` with a random device token, downloads the SenseVoice ASR model (~239 MB, one time; VAD/KWS are baked into the image and copied from `/opt/seed-models`), starts `docker compose`, and waits for health. For a self-hosted model mirror set `HOUSE_EAR_ASR_URL`, `HOUSE_EAR_VAD_URL` and `HOUSE_EAR_KWS_URL` in `.env` (full file URLs; built-in mirrors stay as fallbacks). Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch). If the registry is unreachable, the installer builds the same tag from public source; manual build:
+The installer writes `~/rui/`, generates a `.env` with a random device token, downloads the SenseVoice ASR model (~239 MB, one time; VAD/KWS are baked into the image and copied from `/opt/seed-models`), starts `docker compose`, and waits for health. For a self-hosted model mirror set `RUI_ASR_URL`, `RUI_VAD_URL` and `RUI_KWS_URL` in `.env` (full file URLs; built-in mirrors stay as fallbacks). Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch). If the registry is unreachable, the installer builds the same tag from public source; manual build:
 
 ```bash
 git clone https://github.com/yes999zc/rui.git
@@ -280,7 +280,7 @@ cd rui && docker build -t ghcr.io/yes999zc/rui:latest .
 Open `http://<nas-lan-ip>:8080/`, enter the console token printed at install time, and complete the first-run wizard. The speaker itself is configured separately:
 
 ```text
-ws://<nas-lan-ip>:4412/?token=<HOUSE_EAR_DEVICE_TOKEN>
+ws://<nas-lan-ip>:4412/?token=<RUI_DEVICE_TOKEN>
 ```
 
 See [docs/deploy.md](docs/deploy.md) for volumes, keys, music/HA configuration and the speaker client, [docs/open-xiaoai-client.md](docs/open-xiaoai-client.md) for the step-by-step client hookup, and [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md) for the LX06 wire protocol.
@@ -315,7 +315,7 @@ Provider order and fields live in `config.yaml`: `providers.catalog` plus one or
 uv sync --extra dev
 uv run pytest
 uv run ruff check src tests
-uv run house-ear serve          # :8080
+uv run rui serve          # :8080
 
 cd web
 npm install
@@ -334,8 +334,8 @@ Audio and local recognition stay on your box; only the providers you configure r
 成功启动会把当前配置存为 `config.last-good.yaml`。如果下次启动时 `config.yaml` 校验失败，服务会保留坏文件、回退到 last-good（没有则用 schema 默认值），并在控制台顶部显示恢复 banner，可一键恢复；也可以：
 
 ```bash
-house-ear config restore --last-good
-house-ear config restore --defaults
+rui config restore --last-good
+rui config restore --defaults
 ```
 
 详见 [docs/config-recovery.md](docs/config-recovery.md)。

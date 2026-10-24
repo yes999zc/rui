@@ -62,7 +62,7 @@ return a residual louder than its input; a diverged filter resets instead of lea
 garbage into KWS. While the reference is silent the canceller is bypassed - there is no
 echo to cancel, and adapting a filter to silence only drifts it.
 
-`house-ear doctor` still prices AEC at rtf 0.004 because it measures the filter
+`rui doctor` still prices AEC at rtf 0.004 because it measures the filter
 arithmetic alone; the 0.066 above is what running the real library costs.
 
 ### On the speaker (LX06, 2026-10-21, `scripts/measure_erle.py`)
@@ -123,7 +123,7 @@ Two things the run showed:
 
 ## Latency marks
 
-`house_ear.trace` stamps the boundaries that cost time: `wake`,
+`rui.trace` stamps the boundaries that cost time: `wake`,
 `end_of_speech`, `asr_first`, `asr_done`, `llm_first`, `llm_done`, `tts_first`,
 `play_start`, `barge_in`, `silence`. It computes `first_response_ms`
 (wake → play_start) and `silence_after_ms` (barge_in → silence). A stage without a

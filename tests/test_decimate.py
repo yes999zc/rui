@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from house_ear.audio.decimate import Decimator, lowpass
+from rui.audio.decimate import Decimator, lowpass
 
 RATE_IN = 48000
 RATE_OUT = 16000

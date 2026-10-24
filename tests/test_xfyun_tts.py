@@ -7,8 +7,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from house_ear.config.schema import ProviderConfig
-from house_ear.providers.xfyun_tts import (
+from rui.config.schema import ProviderConfig
+from rui.providers.xfyun_tts import (
     TTS_HOST,
     audio_from_frame,
     build_auth_url,
@@ -56,30 +56,30 @@ def test_frames_yield_pcm_and_finish_on_status_two() -> None:
 
 
 def test_a_vendor_error_is_raised_not_swallowed() -> None:
-    from house_ear.providers.openai_compat import ProviderError
+    from rui.providers.openai_compat import ProviderError
 
     with pytest.raises(ProviderError, match="code=11200"):
         audio_from_frame({"code": 11200, "message": "licc failed"})
 
 
 def test_missing_credentials_name_the_variable(monkeypatch) -> None:
-    from house_ear.providers.openai_compat import MissingKey
-    from house_ear.providers.xfyun_tts import XfyunTts
+    from rui.providers.openai_compat import MissingKey
+    from rui.providers.xfyun_tts import XfyunTts
 
-    monkeypatch.delenv("HOUSE_EAR_TEST_XFYUN_SECRET", raising=False)
+    monkeypatch.delenv("RUI_TEST_XFYUN_SECRET", raising=False)
     tts = XfyunTts(ProviderConfig(kind="xfyun", voice="x4_lingxiaowan_boy",
-                                 app_id_env="HOUSE_EAR_TEST_XFYUN_APP",
-                                 api_key_env="HOUSE_EAR_TEST_XFYUN_KEY",
-                                 api_secret_env="HOUSE_EAR_TEST_XFYUN_SECRET"))
-    monkeypatch.setenv("HOUSE_EAR_TEST_XFYUN_APP", "app")
-    monkeypatch.setenv("HOUSE_EAR_TEST_XFYUN_KEY", "key")
-    with pytest.raises(MissingKey, match="HOUSE_EAR_TEST_XFYUN_SECRET"):
+                                 app_id_env="RUI_TEST_XFYUN_APP",
+                                 api_key_env="RUI_TEST_XFYUN_KEY",
+                                 api_secret_env="RUI_TEST_XFYUN_SECRET"))
+    monkeypatch.setenv("RUI_TEST_XFYUN_APP", "app")
+    monkeypatch.setenv("RUI_TEST_XFYUN_KEY", "key")
+    with pytest.raises(MissingKey, match="RUI_TEST_XFYUN_SECRET"):
         tts._credentials()
 
 
 def test_chain_builds_xfyun_for_the_tts_stage() -> None:
-    from house_ear.config.schema import Config
-    from house_ear.providers.chain import build_stage
+    from rui.config.schema import Config
+    from rui.providers.chain import build_stage
 
     cfg = Config()
     cfg.providers.catalog["xf"] = ProviderConfig(

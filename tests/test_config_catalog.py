@@ -15,11 +15,11 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config, DeviceConfig, load_config, save_config
-from house_ear.config.catalog import coerce, document, field_specs
-from house_ear.config.schema import SystemConfig
-from house_ear.session import prompts
-from house_ear.web.api.app import create_app
+from rui.config import Config, DeviceConfig, load_config, save_config
+from rui.config.catalog import coerce, document, field_specs
+from rui.config.schema import SystemConfig
+from rui.session import prompts
+from rui.web.api.app import create_app
 
 ALLOWED_KINDS = {"text", "textarea", "number", "bool", "select", "list", "secret"}
 ALLOWED_EFFECTS = {"save", "restart"}
@@ -46,7 +46,7 @@ def _app(cfg: Config, path: pathlib.Path) -> TestClient:
 @pytest.fixture()
 def live(tmp_path, monkeypatch):
     """A console with a real config file and no provider keys in the environment."""
-    for name in ("HOUSE_EAR_LLM_KEY", "HOUSE_EAR_ASR_KEY", "HOUSE_EAR_TTS_KEY",
+    for name in ("RUI_LLM_KEY", "RUI_ASR_KEY", "RUI_TTS_KEY",
                  "DEEPSEEK_API_KEY", "XFYUN_API_KEY", "XFYUN_APPID", "XFYUN_API_SECRET"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(prompts, "_TIMEZONE", "")
@@ -465,7 +465,7 @@ def test_the_audio_restart_endpoint_without_a_plane_is_honest(live) -> None:
 # --------------------------------------------------------------------- secrets
 
 def test_secret_values_never_travel(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("HOUSE_EAR_LLM_KEY", "sk-do-not-leak-123")
+    monkeypatch.setenv("RUI_LLM_KEY", "sk-do-not-leak-123")
     cfg, path = _config(tmp_path)
     cfg.web.auth_token = "console-token-do-not-leak"
     save_config(path, cfg)
@@ -477,10 +477,10 @@ def test_secret_values_never_travel(tmp_path, monkeypatch) -> None:
         assert "sk-do-not-leak-123" not in text
         assert "console-token-do-not-leak" not in text
         body = response.json()
-        assert body["secrets"]["HOUSE_EAR_LLM_KEY"]["has_value"] is True
+        assert body["secrets"]["RUI_LLM_KEY"]["has_value"] is True
         assert body["secrets"]["web.auth_token"]["has_value"] is True
         # The provider's api_key_env is a *name*, and no secret path exists in values.
-        assert body["values"]["providers.catalog.llm.api_key_env"] == "HOUSE_EAR_LLM_KEY"
+        assert body["values"]["providers.catalog.llm.api_key_env"] == "RUI_LLM_KEY"
         assert "web.auth_token" not in body["values"]
         assert all("sk-do-not-leak" not in str(value) for value in body["values"].values())
         # GET /api/v1/config stays redacted too.

@@ -21,7 +21,7 @@ export type AuditionOutcome =
   | { played: 'speaker'; duration_ms: number; provider: string; voice: string }
   | { played: 'browser'; blob: Blob; fallback?: string }
 
-const STORAGE_KEY = 'house-ear-audition-output'
+const STORAGE_KEY = 'rui-audition-output'
 
 export function readAuditionOutput(): AuditionOutput {
   try {

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from house_ear.audio.process import CATCHUP, MAX_LEAD_S, PREBUFFER_S, Pacer
+from rui.audio.process import CATCHUP, MAX_LEAD_S, PREBUFFER_S, Pacer
 
 CHUNK = 0.1  # PLAY_CHUNK_MS / 1000
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from house_ear.device import Capability, MockAdapter
-from house_ear.device.contract import AudioFrame
+from rui.device import Capability, MockAdapter
+from rui.device.contract import AudioFrame
 
 FRAME_MS = 20
 

@@ -15,8 +15,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from house_ear.audio.process import AudioPlane
-from house_ear.config import Config
+from rui.audio.process import AudioPlane
+from rui.config import Config
 
 
 class StubAdapter:
@@ -73,7 +73,7 @@ def run_wake(plane: AudioPlane) -> list[dict]:
 def test_a_wake_during_playback_stops_the_speaker(caplog) -> None:
     import logging
 
-    caplog.set_level(logging.INFO, logger="house_ear.audio.process")
+    caplog.set_level(logging.INFO, logger="rui.audio.process")
     plane, adapter = make_plane()
     queue_seconds(plane, 3.0)
 
@@ -141,8 +141,8 @@ def test_the_control_side_exposes_the_barge_instant_for_the_trace() -> None:
     `silence_after_ms=`); the control side keeps the wake instant so app.py can mark
     `barge_in` on the turn trace once it is wired. This test pins the data plumbing.
     """
-    from house_ear.audio.client import AudioPlaneClient
-    from house_ear.audio.protocol import FrameType, Wake
+    from rui.audio.client import AudioPlaneClient
+    from rui.audio.protocol import FrameType, Wake
 
     class Dummy:
         pass
@@ -165,7 +165,7 @@ def test_the_lead_is_bounded_and_the_barge_flushes_the_device() -> None:
     # end). The lead's job is the opposite - the client only opens its player at ~300 ms,
     # and a 200 ms lead stuttered on the first word. So: fill past the start threshold,
     # and keep the cap tight enough that a long answer never runs a second ahead.
-    from house_ear.audio.process import MAX_LEAD_S, PREBUFFER_S
+    from rui.audio.process import MAX_LEAD_S, PREBUFFER_S
 
     assert 0.2 <= PREBUFFER_S <= 0.35
     assert MAX_LEAD_S <= 0.4

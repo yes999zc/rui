@@ -12,7 +12,7 @@
 Telegram / 微信 iLink / 控制台
         │
         ▼
-house-ear channel-gateway（独立进程，可选容器）
+rui channel-gateway（独立进程，可选容器）
   ├─ adapter: telegram
   ├─ adapter: weixin-ilink
   ├─ allowlist / pairing / dedupe / rate limit
@@ -20,7 +20,7 @@ house-ear channel-gateway（独立进程，可选容器）
   └─ outbound: text / TTS voice / 可选音箱播报
         │  HTTP + token（局域网/localhost）
         ▼
-house-ear 控制面
+rui 控制面
   ├─ ConversationService（从 debug/say 抽出的正式文本回合）
   ├─ 现有 LLM / tools / session / memory
   └─ 可选：announce 到客厅音箱
@@ -115,7 +115,7 @@ house-ear 控制面
 
 ### M7 — 部署与验收（1–2 天）
 
-- [ ] 独立进程 `house-ear channel-gateway`；可选 compose profile；不扩大主镜像时可做独立镜像/extra。
+- [ ] 独立进程 `rui channel-gateway`；可选 compose profile；不扩大主镜像时可做独立镜像/extra。
 - [ ] NAS/Mac 配置文档：长轮询无需公网；凭证权限 0600；日志脱敏。
 - [ ] 速率限制、超时、重试、取消、健康检查。
 - [ ] E2E 验收（需 9 哥）：
@@ -170,7 +170,7 @@ house-ear 控制面
 - 控制面：`POST /api/v1/chat`（文本回合，可选 TTS）、`POST /api/v1/asr`（语音转写）、
   `GET/PUT /api/v1/channels`（通道配置，token 只回 `token_configured`）。
 - 文本回合不依赖音频面；`audio=false` 时跳过 TTS，直接返回文字。
-- channel gateway：`src/house_ear/channels/`，独立进程 `house-ear-channels`。
+- channel gateway：`src/rui/channels/`，独立进程 `rui-channels`。
   - Telegram：长轮询、allowlist（默认拒绝未知 chat）、文字/语音输入、语音回复、typing、分片。
   - 微信 iLink：QR 登录、getupdates 游标、context_token、2000 字分片、typing、`.silk` 入站重转写、音频文件回复。
   - 未知 peer 默认拒绝；临时联调可加 `--telegram-allow-all` / `--weixin-allow-all`（不要对公网 bot 用）。
@@ -181,15 +181,15 @@ house-ear 控制面
 
 ```bash
 # 1) 控制面已启动（NAS/Mac），提供 token
-export HOUSE_EAR_CONTROL_URL=http://127.0.0.1:8080
-export HOUSE_EAR_CONSOLE_TOKEN=...
+export RUI_CONTROL_URL=http://127.0.0.1:8080
+export RUI_CONSOLE_TOKEN=...
 # 2) Telegram：独立 bot token；先填 allowlist，或临时 --telegram-allow-all 配对
-export HOUSE_EAR_TELEGRAM_TOKEN=...
-house-ear-channels --telegram-token "$HOUSE_EAR_TELEGRAM_TOKEN" \
+export RUI_TELEGRAM_TOKEN=...
+rui-channels --telegram-token "$RUI_TELEGRAM_TOKEN" \
   --telegram-allow "<your_chat_id>" --channels-config /data/channels.json
 # 3) 微信：手机扫码（二维码 URL 会打印）
-house-ear-channels --login-weixin --weixin-data /data/channels/weixin
-house-ear-channels --weixin-data /data/channels/weixin \
+rui-channels --login-weixin --weixin-data /data/channels/weixin
+rui-channels --weixin-data /data/channels/weixin \
   --weixin-allow "<your_user_id>" --channels-config /data/channels.json
 ```
 
@@ -212,18 +212,18 @@ house-ear-channels --weixin-data /data/channels/weixin \
   - `POST /api/v1/channels/gateway/{start|stop|restart}`；
   - `PUT /api/v1/channels/telegram/token`（写 secrets，永不回显）；
   - `POST/GET /api/v1/channels/weixin/login`（QR 状态）。
-- **注意**：控制台托管模式与 Mac 外部 `house-ear-channels` 只能二选一；同一 bot 不能同时长轮询。
+- **注意**：控制台托管模式与 Mac 外部 `rui-channels` 只能二选一；同一 bot 不能同时长轮询。
 
 
 ## 10. M7：控制面托管的常驻 gateway（2026-10-23）
 
-- `ChannelSupervisor` 在控制面进程里管理 `house-ear-channels` 子进程：
+- `ChannelSupervisor` 在控制面进程里管理 `rui-channels` 子进程：
   - 启动时若 `channels.json` 有已启用通道，自动启动；
   - 5 秒 watchdog：进程异常退出且不是手动 Stop，会自动拉起；
   - 控制台 Start/Stop/Restart 直接操作这个 supervisor；
   - 日志写入 `data/channels-gateway.log`。
 - 当前 NAS 部署策略：**只启用 Telegram**；微信保留 adapter/API/控制台绑定接口，但 `weixin.enabled=false`，不参与长轮询。
-- 同一 bot/账号只能有一个长轮询消费者：切换托管模式前必须停掉外部 `house-ear-channels` 进程。
+- 同一 bot/账号只能有一个长轮询消费者：切换托管模式前必须停掉外部 `rui-channels` 进程。
 
 
 ### 10.1 NAS rollout (2026-10-24)

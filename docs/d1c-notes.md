@@ -32,7 +32,7 @@
 
 ## 3. 改了什么
 
-### 3.1 `src/house_ear/music/library_index.py`（新）
+### 3.1 `src/rui/music/library_index.py`（新）
 
 - 分类器 `classify()` 原样移植老项目规则：artist override → kana → hangul → 其它文字 →
   标题汉字（zh，低置信）→ 拉丁标题（有英文流派标签则高置信）→ unknown。**标题优先于歌手，
@@ -48,7 +48,7 @@
   随机 20 首里 0 首有 BPM（与老项目一致），仍先存着，tag 补齐后情绪过滤自动变准。
 - `stats()`：按语言/来源/流派计数，给后续控制台和运维查缓存用。
 
-### 3.2 `src/house_ear/music/semantic.py`（新）
+### 3.2 `src/rui/music/semantic.py`（新）
 
 - `plan(text) -> SemanticPlan | None`：把描述式中文映射成 **languages / genres / keywords /
   moods / years** 五个过滤条件。识别语言（日/韩/英/粤国华/小语种）、流派（摇滚/民谣/电子/爵士/
@@ -63,7 +63,7 @@
   （老项目 `_fallback` 也只有 9 个词）。若以后要支持开放式描述，可照 `names.NameResolver`
   的方式加可选 planner，不改变本模块的输出形状。
 
-### 3.3 `src/house_ear/music/query.py`（改）
+### 3.3 `src/rui/music/query.py`（改）
 
 - `extract_title()`：描述词剥离改为调 `semantic.strip_descriptors()`，并保留老项目
   “混合请求标题优先”的规则：`播放日文歌曲留在我身边` → 标题 `留在我身边`。
@@ -72,7 +72,7 @@
 - `language_genres()`：实现搬到 `semantic.LANGUAGE_GENRES`，这里只做委托，保证“索引的语言定义”
   和“没索引时的流派兜底”用同一张表。
 
-### 3.4 `src/house_ear/music/tools.py`（改）
+### 3.4 `src/rui/music/tools.py`（改）
 
 - `music_play` 新顺序：收藏/随机 → 引号标题（《》绝对优先）→ 混合请求先搜标题 → 描述式走
   `index.ensure()` + `semantic.pool()` → 旧的语言流派兜底 → 字面 `_search`。
@@ -86,7 +86,7 @@
   同名多版本，也没法说清实际放了谁。
 - `spec` 的 `local.music_play` 描述补了一句：描述式点歌也直接调它、query 传原话。
 
-### 3.5 `src/house_ear/music/sources/navidrome.py`（改）
+### 3.5 `src/rui/music/sources/navidrome.py`（改）
 
 - `Track` 增加可选 `genre`/`bpm`（`music/model.py`），Navidrome 返回的字段直接带上，情绪过滤和
   关键词判断不再需要额外请求。
@@ -233,10 +233,10 @@ on_utterance 只负责调用；判据全部走 2A 的 `rules.stop_scope`：
 
 ### 8.3 改动文件
 
-`src/house_ear/web/api/app.py`（`_direct_speech`、`_stop_command`、runner 构造；未碰 panels 表 /
-console 静态路由 / debug 端点 / audio supervisor）、`src/house_ear/session/turn.py`
+`src/rui/web/api/app.py`（`_direct_speech`、`_stop_command`、runner 构造；未碰 panels 表 /
+console 静态路由 / debug 端点 / audio supervisor）、`src/rui/session/turn.py`
 （`DirectSpeech`/`DirectHook`/`speech_pieces`/hook 分支/`_record_direct_history`）、
-`src/house_ear/tools/info.py`（news 返回 Briefing）、`tests/test_session.py` +5、
+`src/rui/tools/info.py`（news 返回 Briefing）、`tests/test_session.py` +5、
 `tests/test_briefing.py` +6、本文件。
 
 ### 8.4 未验 / 外部问题
@@ -309,11 +309,11 @@ connected=True），声音由本任务独占；全程用 `X-Auth-Token` 调 debu
 # 重建索引（等价于首次描述式点歌触发；7 天 TTL，--force 语义用 force=True）
 cd <repo> && uv run python - <<'PY'
 import asyncio, pathlib
-from house_ear.music.sources.navidrome import NavidromeSource
-from house_ear.music.library_index import LibraryIndex
+from rui.music.sources.navidrome import NavidromeSource
+from rui.music.library_index import LibraryIndex
 secrets = pathlib.Path(cfg.music.secrets_path)
-idx = LibraryIndex(pathlib.Path("/var/lib/house-ear/library_index.json"),
-                   NavidromeSource(secrets, pathlib.Path("/tmp/house-ear-music")))
+idx = LibraryIndex(pathlib.Path("/var/lib/rui/library_index.json"),
+                   NavidromeSource(secrets, pathlib.Path("/tmp/rui-music")))
 print(asyncio.run(idx.build(force=True))["count"], idx.stats()["languages"])
 PY
 ```

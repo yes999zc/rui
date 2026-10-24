@@ -1,0 +1,1872 @@
+"""Audio plane: AEC, KWS, VAD and playback, in their own process.
+
+Everything here is driven by the frames an adapter hands over. The plane never reads
+`audio.capture` to decide a layout - a frame says its own `channels`, `sample_rate` and
+`reference_channels`, so an LX06 (48 kHz / 8 ch / 6 mic + 2 ref) and a future ESP32
+(16 kHz / 1 ch / no reference) run through the same code path with different adapters.
+Config values are expectations the doctor checks, not assumptions the plane bakes in.
+
+Pipeline today: decimate to the voice rate -> echo-cancel each mic against the reference
+-> emit the channel that survived best -> hand one mono stream to the control plane.
+Playback (the debug wav loop, CLI only) travels the other way through the adapter.
+
+Run standalone:
+    python -m rui.audio.process --config config.yaml --device living
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import logging
+import math
+import os
+import signal
+import sys
+import tempfile
+import time
+import wave
+from collections import deque
+from pathlib import Path
+
+import numpy as np
+
+from .. import secrets
+from ..config import Config, load_config
+from ..device import build_adapters
+from ..device.contract import AudioFrame, DeviceAdapter
+from ..env import get as env_get
+from ..log_setup import setup_logging
+from ..trace import now_ms
+from .ack import render_cached as render_ack
+from .aec import AecChain, AecUnavailable
+from .decimate import Decimator
+from .kws import KwsUnavailable, WakeHit, WakeProbe, WakeWord
+from .protocol import (
+    CONTROL,
+    DeviceVolume,
+    DeviceVolumeResult,
+    Error,
+    FrameType,
+    Hello,
+    LedState,
+    Metrics,
+    PauseMusic,
+    PlayFile,
+    PlayFinished,
+    QueryMetrics,
+    Ready,
+    ReplyFinished,
+    ResumeMusic,
+    ShellCommand,
+    ShellResult,
+    SpeakFinished,
+    SpeakStart,
+    StopAudio,
+    VendorSignalMsg,
+    Wake,
+    WakeIdle,
+    decode_pcm,
+    encode_json,
+    encode_pcm,
+    read_frame,
+)
+from .resample import resample
+from .ring import ArrivalStats, PcmRing
+from .vad import GateConfig, UtteranceGate, VadUnavailable
+from .wav import read_wav_mono
+
+METRICS_EVERY_S = 2.0
+# The [level] line used to be logged on every metrics tick, i.e. every 2 s - the audit
+# called it log noise (P2). Keep the measurement (it is how a threshold change is judged)
+# but one line per 30 s: the console's log filter still keys on "voice peak".
+LEVEL_LOG_EVERY = 15
+PLAY_CHUNK_MS = 100
+# Reply pacing. Pushing a block and then waiting exactly its own duration leaves the
+# device's buffer empty the whole time: any scheduler hiccup (1-3 ms per send, GC, a
+# busy VM) and the speaker underruns - heard as stutter, invisible in every counter.
+# So: hand it PREBUFFER_S of audio up front, keep writing CATCHUP faster than real time
+# so the lead can only grow, and clamp so a long answer never runs a second ahead (a
+# barge-in would then take that long to be heard).
+# The device chain is a pipe into `aplay --buffer-size 4800 --period-size 960` (300 ms of
+# ALSA buffer, 60 ms periods). Pushing well past that only fills the pipe: the client's
+# write then blocks, and a write that blocks past its timeout is dropped - measured in
+# /tmp/client.log as "slow write 112 ms (3200 bytes)" repeating through a news read, which
+# is the roughness. So: a lead the device can actually hold, and no creep.
+PREBUFFER_S = 0.25
+CATCHUP = 1.0
+MAX_LEAD_S = 0.32
+# P2.9: how long a reply waits for `audio.playback.prebuffer_ms` of audio before it
+# starts anyway. The wait is the prebuffer itself plus this margin: long enough to let a
+# producer deliver the second batch the issue measured (~400 ms), short enough that a
+# short reply is never held hostage by a prebuffer it cannot fill. A config prebuffer of
+# 0 disables the wait entirely.
+PREBUFFER_TIMEOUT_EXTRA_S = 0.25
+PREBUFFER_POLL_S = 0.01
+# A lead that goes negative by less than this is scheduler jitter (the loop wakes a few
+# ms late, the device still has audio), not an audible underrun. The issue's gap is
+# ~400 ms, an order of magnitude above the floor.
+PLAYBACK_GAP_MIN_MS = 20.0
+# A producer that ignores SpeakFinished cannot grow the queue without bound.
+MAX_SPEAK_QUEUE_S = 120.0
+# 12 ms of ramp at the start of playback. Speech that begins on a hard sample boundary
+# clicks, and on this speaker a click reads as a stray 「叮」 at the front of the answer.
+# 12 ms is short enough to be inaudible as a fade and long enough to remove the step.
+FADE_IN_MS = 12
+# A turn that ends without a reply (a failed LM round, a dead tool) still gives the
+# music back after this long - the old build's silent-wake watchdog used 4 s for the
+# same "do not keep the song down forever" rule. 4 s was too short for a slow tool:
+# measured 08:41:57, a weather lookup ran 9 s and the song came back mid-turn.
+# 12 s covers a slow tool call; a genuinely dead turn gives the music back by then.
+NO_REPLY_RESUME_S = 12.0
+# While a conversation is open the song stays down: a follow-up window is armed
+# right after every reply, and music may only return once that window has closed.
+# Without the hold the reply drained first and the song blipped back in between
+# turns (measured 08:30-08:35, "对话间隙音乐出声音").
+
+
+class Pacer:
+    """Keeps the speaker's buffer full instead of pacing it to empty.
+
+    ``due`` is when the audio already handed to the device finishes playing, so
+    ``due - now`` is the buffer depth. ``target`` is depth we insist on: it starts at
+    the prebuffer and creeps up by ``catchup - 1`` per block, which covers a device
+    clock that runs a hair fast, and is capped so a barge-in is never queued behind a
+    second of speech. The wait is the only thing that ever changed.
+    """
+
+    def __init__(
+        self,
+        prebuffer: float = PREBUFFER_S,
+        catchup: float = CATCHUP,
+        max_lead: float = MAX_LEAD_S,
+    ) -> None:
+        self.prebuffer = prebuffer
+        self.catchup = catchup
+        self.max_lead = max_lead
+        self.due = 0.0
+        self.target = prebuffer
+        self.lead = 0.0
+
+    def sleep_for(self, now: float, seconds: float) -> float:
+        """Record a block of ``seconds`` just sent, return how long to wait."""
+        self.due = max(self.due, now) + seconds
+        self.target = min(self.target + (self.catchup - 1.0) * seconds, self.max_lead)
+        self.lead = self.due - now
+        return max(0.0, self.due - self.target - now)
+
+
+class Credit:
+    """How far ahead of the speaker playback may run, counted in blocks.
+
+    ``sent - acked`` is the queue depth from the device's point of view: the client
+    reports every block it has handed to aplay, so this follows the speaker's own clock
+    instead of ours. The wall-clock Pacer kept a fixed *duration* ahead and ignored the
+    device; when the device's clock ran a little fast that duration became a full pipe,
+    and a write that blocks past its timeout is dropped - heard as roughness. The old
+    deployment paced on exactly this number (window=2) and measured the difference:
+    11 blocked writes in 14 s before, none after.
+    """
+
+    def __init__(self, window: int = 2, timeout: float = 1.5) -> None:
+        self.window = window
+        self.timeout = timeout
+        self.sent = 0
+        self.acked = 0
+        self.dead = False
+        self.lead = 0.0
+
+    def reset(self) -> None:
+        self.sent = 0
+        self.acked = 0
+        self.dead = False
+        self.lead = 0.0
+
+    def ack(self, n: int) -> None:
+        # Clamped to what was sent: a report from the previous player (arriving after a
+        # reset) must not open a window that does not exist.
+        self.acked = max(self.acked, min(int(n), self.sent))
+
+    def note_sent(self, seconds: float) -> None:
+        self.sent += 1
+        self.lead = (self.sent - self.acked) * seconds
+
+    async def wait(self, adapter: DeviceAdapter, seconds: float) -> bool:
+        """Block until one more block may go out. False when the device stopped reporting."""
+        if self.window <= 0:
+            # No leak bound: the clock alone paces, for deployments that want the
+            # shallowest possible device buffer.
+            self.lead = (self.sent - self.acked) * seconds
+            return True
+        while not self.dead and self.sent - self.acked >= self.window:
+            got = await adapter.wait_consumed(self.acked, self.timeout)
+            if got <= self.acked:
+                # One timeout is enough: waiting 1.5 s per block would make playback
+                # fifteen times slower in silence. Fall back to the clock for this
+                # player instead (a device that cannot report does the same from the start).
+                self.dead = True
+                log.info("credit: no play-head report for %.1f s, pacing by the clock",
+                         self.timeout)
+                return False
+            self.ack(got)
+        self.lead = (self.sent - self.acked) * seconds
+        return not self.dead
+
+
+def fade_in(samples: np.ndarray, rate: int, ms: float = FADE_IN_MS) -> np.ndarray:
+    """Ramp the first `ms` of a playback session; a hard onset clicks."""
+    n = min(int(rate * ms / 1000), samples.size)
+    if n <= 1:
+        return samples
+    out = samples.copy()
+    out[:n] *= np.linspace(0.0, 1.0, n, dtype=np.float32)
+    return out
+
+
+# The device buffer keeps sounding after the last frame is sent (~300 ms at 48 kHz), so a
+# tone needs a tail floor before the gate may open. The old build used 250 ms.
+ACK_TAIL_MS = 250
+log = logging.getLogger(__name__)
+
+
+def _dbfs(samples) -> float:
+    """Level of one block in dBFS. Floored at -100 so it survives a JSON round trip."""
+    peak = float(np.sqrt(np.mean(np.square(np.asarray(samples, dtype=np.float64)))))
+    return 20.0 * math.log10(max(peak, 1e-5))
+
+
+class AudioPlane:
+    def __init__(self, cfg: Config, device_id: str, socket_path: Path) -> None:
+        self.cfg = cfg
+        self.device_id = device_id
+        self.socket_path = socket_path
+        self.adapter: DeviceAdapter | None = None
+        self.ring = PcmRing(capacity_ms=cfg.audio.playback.queue_ms, frame_ms=cfg.audio.voice.frame_ms)
+        self.arrivals = ArrivalStats()
+        self.aec: AecChain | None = None
+        self.aec_error = ""
+        self.wake: WakeWord | None = None
+        self.probe: WakeProbe | None = None
+        self.probe_hits = 0
+        self.kws_error = ""
+        self.wake_count = 0
+        self.last_wake: Wake | None = None
+        self.gate: UtteranceGate | None = None
+        self.vad_error = ""
+        self.utterances = 0
+        # Unbounded on purpose. The control plane hands a whole sentence over in a burst
+        # (TTS is much faster than real time), so a chunk-count limit truncates the
+        # sentence: the log said "speak queue full, dropping a chunk" a dozen times a
+        # turn and the listener heard the gaps. The budget below is seconds of audio,
+        # which is the thing that actually has a right answer.
+        self._speak_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+        # Device-reported pacing (0c): the plane never runs more than `window` blocks
+        # ahead of the newest report. Shared by speech and file playback - one speaker,
+        # one owner, so only one of them is writing at a time.
+        self._credit = Credit(window=cfg.audio.playback.credit_window)
+        self._credit_generation = 0
+        # Armed by SpeakStart, consumed by the next PLAY_PCM frame: the one declared
+        # sentence boundary in the current reply. The old source of truth - seq == 0 -
+        # fired on every speak() call, i.e. on every TTS chunk, and faded mid-word.
+        self._segment_pending = False
+        # Set by ReplyFinished: the turn is over, not merely between TTS chunks.
+        self._reply_finished = False
+        self._speak_queued_s = 0.0
+        self.frames_in = 0
+        self.frames_out = 0
+        self.frames_dropped = 0
+        self.no_consumer = 0
+        self.cpu_s = 0.0
+        self.audio_s = 0.0
+        # Levels are the first thing to look at when "it hears nothing": a silent mic and a
+        # mic that hears but does not understand look identical from the counters alone.
+        self.voice_rms_db: float | None = None
+        # Peak of the last 10 s of the KWS input: "how loud is he actually talking" had
+        # no answer anywhere, so every threshold discussion was a guess. Cleared on read
+        # by the metrics snapshot so each window is a fresh measurement.
+        self.voice_peak_db: float | None = None
+        self._peak_hold: float = 0.0
+        self.ref_rms_db: float | None = None
+        self.playback_s = 0.0
+        self.playback_lead_s = 0.0
+        # P2.9: audible gaps, cumulative for metrics and per reply for the turn trace/log.
+        self.playback_gap_count = 0
+        self.playback_max_gap_ms = 0.0
+        self._reply_gap_count = 0
+        self._reply_max_gap_ms = 0.0
+        # When the audio already sent will run out, if the reply queue was empty at the
+        # last send. None = the queue was not starved, or the reply is not active.
+        self._starvation_due: float | None = None
+        # True once a PLAY_PCM burst is enqueued and no SpeakFinished has arrived since:
+        # an empty queue then means "producer still working", not "the answer ended".
+        self._speak_finished = True
+        # Incremented by _flush_speech so a chunk already pulled off the queue cannot
+        # still reach the speaker after a barge (the start gate widens that window).
+        self._speak_generation = 0
+        # Whether any audio has been handed to the device since the last explicit stop.
+        # The pre-start stop exists to restart a drained aplay; when this is False the
+        # device player is already stopped, so the control message is redundant - and on
+        # adapters with split control/data sockets it is also a race with the first PCM.
+        self._device_audio_pending = False
+        # The speaker's own mixer value, read over the shell channel. Loudness on this box
+        # belongs to the vendor's `mysoftvol`; every ERLE or barge number is only
+        # comparable when this value is known.
+        self.device_volume: int | None = None
+        self.barges = 0
+        self.last_barge_s = 0.0
+        # Server-side barge latency: wake handled -> the device was told to stop and the
+        # queued reply was flushed. The trace's `silence_after_ms` had no production
+        # number (audit P1); this is that number, logged on every barge. The device's own
+        # ~300 ms ALSA buffer is not in it - the server cannot see inside the box.
+        self.last_barge_stop_ms: float | None = None
+        self.playback_path = ""
+        self.last_playback_error = ""
+        self._playback_task: asyncio.Task | None = None
+        # Where the current file is, and whether speech paused it. One device stream means
+        # a reply and a song cannot both be written: the old build paused the song for
+        # speech and resumed it after the turn, and the same is needed here because two
+        # writers interleaved their PCM into one player (heard on 2026-10-22).
+        # One device stream, one owner. Measured 2026-10-22: a reply written while a song
+        # was playing interleaved two PCM streams into the same player and the words came
+        # out stuttering. The plane enforces the lock; the coordinator decides what to ask
+        # for by sending speak / play_file / cue.
+        self._owner: str | None = None
+        self._pending_play: PlayFile | None = None
+        self._file_position = 0
+        self._file_cfg: tuple[Path, bool, float] | None = None
+        self._speech_paused = False
+        # The user said 「暂停」: parked by hand, so no automatic resume path may lift
+        # it - only ResumeMusic or a fresh play_file (old build: pause(for_speech=False),
+        # the one pause that survived every hook).
+        self._paused_explicit = False
+        # An utterance fired since the music was paused for a wake, and no reply has
+        # finished since. The turn is alive between end-of-speech and the answer
+        # (ASR + LLM + tools), and the music must stay down through it - the gate is
+        # already disarmed there, so "gate closed" alone cannot tell this window from
+        # the end of a turn (measured 21:07: the song blipped back in for 0.9 s
+        # between the question and 现在是晚上9点07分).
+        self._turn_pending = False
+        self._turn_pending_ts = 0.0
+        # Wall-clock deadline of a follow-up window that is holding the song down
+        # (None = not holding). A deadline, not "gate is closed": the reply's own
+        # first block disarms the gate, so gate state alone would release the song
+        # before the window ever armed.
+        self._music_hold_until: float | None = None
+        # Per-turn override of the music window (ReplyFinished.hold_music_s).
+        self._reply_hold: float | None = None
+        # The control-plane socket, for plane -> control events (PlayFinished).
+        self._ctl_writer: asyncio.StreamWriter | None = None
+        self._ctl_connected: asyncio.Event | None = None
+        self._reply_open = False
+        self.started = time.monotonic()
+        self._stop = asyncio.Event()
+        # Pre-wake audio. The streaming KWS reports a hit ~0.5 s after the wake word ends,
+        # so "你好小瑞，现在几点" said in one breath loses 现在几点 unless the ring is
+        # replayed into the gate. Kept as int16 voice-rate blocks, oldest first.
+        self._preroll: deque[bytes] = deque()
+        self._preroll_samples = 0
+        self.preroll_replayed_ms = 0.0
+        self.preroll_replays = 0
+        # The follow-up gate opens one second after the device finishes the reply; the
+        # old build kept that echo-tail window and replayed it. Without this, an answer
+        # spoken immediately after the reply lost its first syllable ("紧着说明天呢"
+        # heard as nothing).
+        self._followup_tail: deque[tuple[float, bytes]] = deque()
+        self._followup_samples = 0
+        self._followup_capture = False
+        self._followup_start = 0.0
+        self._followup_end = 0.0
+        self._followup_replayed_ms = 0.0
+        self._writer: asyncio.StreamWriter | None = None
+        self._connected: asyncio.Event | None = None
+        # Wake acknowledgement (S5a). Fire-and-forget: awaiting it here would block the
+        # frame consumer for the cue's whole length and drop microphone audio.
+        self._ack_task: asyncio.Task | None = None
+        # Four counters because one number cannot describe four outcomes: a cue that was
+        # asked for, one that started, one that finished and one that was superseded.
+        self.ack_attempts = 0
+        self.ack_plays = 0
+        self.ack_skipped = 0
+        self.ack_failed = 0
+        self.ack_mode_effective = cfg.ack.mode
+        self.ack_error = ""
+
+    # ---------------------------------------------------------------- adapter
+    async def _open_adapter(self) -> DeviceAdapter:
+        adapters = build_adapters(self.cfg)
+        if self.device_id in adapters.errors:
+            raise RuntimeError(adapters.errors[self.device_id])
+        adapter = adapters.adapters.get(self.device_id)
+        if adapter is None:
+            raise RuntimeError(f"no such device: {self.device_id}")
+        await adapter.open()
+        return adapter
+
+    def _build_aec(self, mic_channels: int, ref_channels: int) -> None:
+        if not self.cfg.audio.aec.enabled:
+            return
+        if ref_channels < 1:
+            self.aec_error = "device has no reference channel: AEC and barge-in unavailable"
+            log.warning("aec off: %s", self.aec_error)
+            return
+        try:
+            self.aec = AecChain(
+                channels=mic_channels,
+                rate=self.cfg.audio.voice.rate,
+                taps=self.cfg.audio.aec.filter_len,
+                cancel=self.cfg.audio.aec.cancel,
+            )
+        except AecUnavailable as exc:
+            self.aec_error = str(exc)
+            log.warning("aec off: %s", exc)
+
+    def _build_kws(self) -> None:
+        voice = self.cfg.audio.voice
+        if not voice.kws_enabled:
+            return
+        if not voice.kws_model_dir:
+            self.kws_error = "kws_enabled but kws_model_dir is empty"
+            log.warning("kws off: %s", self.kws_error)
+            return
+        try:
+            self.wake = WakeWord(
+                model_dir=voice.kws_model_dir,
+                keywords_file=voice.kws_keywords_file or None,
+                chunk=voice.kws_chunk,
+                num_threads=voice.kws_num_threads,
+                rate=voice.rate,
+            )
+            if voice.kws_probe_file:
+                # Its own decoder state: one stream cannot be fed to two spotters.
+                self.probe = WakeProbe(
+                    model_dir=voice.kws_model_dir,
+                    keywords_file=voice.kws_probe_file,
+                    chunk=voice.kws_chunk,
+                    num_threads=voice.kws_num_threads,
+                    rate=voice.rate,
+                )
+                log.info("kws probe on: %s", voice.kws_probe_file)
+        except KwsUnavailable as exc:
+            self.kws_error = str(exc)
+            log.warning("kws off: %s", exc)
+
+    def _build_vad(self) -> None:
+        voice = self.cfg.audio.voice
+        if not voice.vad_model_path:
+            self.vad_error = "vad_model_path is empty: wake fires but nothing is transcribed"
+            log.warning("vad off: %s", self.vad_error)
+            return
+        try:
+            self.gate = UtteranceGate(
+                GateConfig(
+                    rate=voice.rate,
+                    min_speech_ms=voice.vad_min_speech_ms,
+                    end_silence_ms=voice.vad_end_silence_ms,
+                    skip_after_wake_ms=voice.wake_skip_ms,
+                    preroll_ms=voice.vad_preroll_ms,
+                ),
+                voice.vad_model_path,
+            )
+        except VadUnavailable as exc:
+            self.vad_error = str(exc)
+            log.warning("vad off: %s", exc)
+
+    # ------------------------------------------------------------- pipeline
+    def _frame_to_voice(self, frame: AudioFrame, decimator: Decimator) -> bytes:
+        """Frame -> one mono voice-rate block, echo-cancelled when a reference exists."""
+        if not frame.pcm or frame.mic_channels < 1:
+            return b""
+        samples = np.frombuffer(frame.pcm, dtype="<i2")
+        usable = frame.frame_samples * frame.channels
+        # Normalise before anything else: the decimator, the canceller and the KWS all
+        # work in [-1, 1]. Feeding them int16 magnitudes and multiplying back at the end
+        # clips every sample of the output - which sounds like noise to a wake word and
+        # is invisible in a byte count.
+        block = decimator.process(
+            samples[:usable].reshape(-1, frame.channels).astype(np.float32) / 32768.0
+        )
+
+        raw_mic = block[:, : frame.mic_channels]
+        if self.aec is not None and frame.reference_channels > 0:
+            ref = block[:, frame.mic_channels]
+            mono = self.aec.process(raw_mic, ref)
+            self.ref_rms_db = _dbfs(ref)
+        else:
+            mono = block[:, 0]
+        self.voice_rms_db = _dbfs(raw_mic.max(axis=1) if raw_mic.ndim > 1 else raw_mic)
+        if mono.size:
+            peak = float(np.abs(mono).max())
+            self._peak_hold = max(self._peak_hold, peak)
+        return np.clip(mono * 32768.0, -32768, 32767).astype("<i2").tobytes()
+
+    async def _capture(self, connected: asyncio.Event, writer: asyncio.StreamWriter) -> None:
+        assert self.adapter is not None
+        info = await self.adapter.probe()
+        self._writer = writer
+        self._connected = connected
+        self._build_aec(info.mic_channels, info.ref_channels)
+        self._build_kws()
+        self._build_vad()
+        decimator = Decimator(
+            factor=max(1, info.sample_rate // self.cfg.audio.voice.rate),
+            channels=info.channels,
+        )
+        last_ts: float | None = None
+        async for frame in self.adapter.frames():
+            if self._stop.is_set():
+                break
+            t0 = time.perf_counter()
+            self.frames_in += 1
+            self.audio_s += frame.duration_ms / 1000.0
+            if last_ts is not None:
+                self.arrivals.add(frame.ts_ms - last_ts)
+            last_ts = frame.ts_ms
+            pcm = self._frame_to_voice(frame, decimator)
+            if self.probe is not None and pcm:
+                for _ in self.probe.accept(pcm, ts_ms=frame.ts_ms, rms_db=self.voice_rms_db):
+                    # Counted so the console can show "the probe heard it, production did
+                    # not" - that gap is what a threshold change fixes; both missing means
+                    # the audio never got there.
+                    self.probe_hits += 1
+            if self.wake is not None and pcm:
+                for hit in self.wake.accept(pcm, ts_ms=frame.ts_ms):
+                    self.wake_count += 1
+                    await self._on_wake(hit, writer, connected)
+            if pcm:
+                # After the wake check: the frame that fired the wake is replayed from the
+                # ring, and feeding it again here would duplicate 20 ms inside the first
+                # word - exactly where the replay exists to protect the onset.
+                self._keep_preroll(pcm, frame.ts_ms)
+            if pcm:
+                self._capture_followup_tail(pcm, frame.ts_ms)
+            if self.gate is not None and pcm:
+                await self._feed_gate(pcm, frame.ts_ms, writer, connected)
+            for vendor in self._drain_signals():
+                if connected.is_set():
+                    try:
+                        writer.write(encode_json(VendorSignalMsg(
+                            kind=vendor.kind, text=vendor.text, ts_ms=float(vendor.ts)
+                        )))
+                        await writer.drain()
+                    except (ConnectionResetError, BrokenPipeError):
+                        connected.clear()
+            if not connected.is_set():
+                self.no_consumer += 1
+            elif not self.ring.push(frame.seq, now_ms(), pcm):
+                self.frames_dropped += 1
+            self.cpu_s += time.perf_counter() - t0
+
+    def _drain_signals(self) -> list:
+        """Vendor events the adapter saw (or none, for adapters that cannot report them)."""
+        drain = getattr(self.adapter, "drain_signals", None)
+        return list(drain()) if callable(drain) else []
+
+    # ---------------------------------------------------- wake, preroll, ack
+    def _keep_preroll(self, pcm: bytes, ts_ms: float) -> None:
+        """Hold the last `wake_preroll_ms` of voice-rate audio for the next wake.
+
+        The frame timestamp travels with the block: a replay that stamps every block with
+        the wake time erases the timeline the trace needs.
+        """
+        limit = int(self.cfg.audio.voice.rate * self.cfg.audio.voice.wake_preroll_ms / 1000)
+        if limit <= 0:
+            return
+        self._preroll.append((ts_ms, pcm))
+        self._preroll_samples += len(pcm) // 2
+        while self._preroll_samples > limit and len(self._preroll) > 1:
+            self._preroll_samples -= len(self._preroll.popleft()[1]) // 2
+
+    async def _on_wake(
+        self, hit: WakeHit, writer: asyncio.StreamWriter, connected: asyncio.Event
+    ) -> None:
+        """One KWS hit: cue the speaker, replay what came before, then listen.
+
+        Order is the whole point. The cue is chosen first because its length decides how
+        long the gate must stay shut; the pre-wake ring is replayed before the hold starts
+        because it is the user's own speech, captured before the microphone went quiet.
+        """
+        # Barge-in first: a wake while the speaker is still talking means "stop".
+        # Everything already handed to the device (up to MAX_LEAD_S) cannot be recalled,
+        # and the client's own ALSA buffer sits behind that - the old build measured the
+        # same lag and hard-coded it as PLAY_LAG_SECONDS = 0.55.
+        # A cue is not an answer. Two wakes 100 ms apart must leave one cue playing, so
+        # only a reply or a file counts as "the speaker is talking" for barge purposes.
+        barged = self._speak_queued_s > 0.0 or (
+            self._playback_task is not None and not self._playback_task.done()
+        )
+        barged_s = self._speak_queued_s
+        if barged:
+            self.barges += 1
+            self.last_barge_s = barged_s
+            log.info("barge: %d wake during playback, dropped %.1f s queued", self.barges, barged_s)
+            # Time the server's own stop: flush the queue, pause the song, tell the
+            # device to drop what it holds. The acceptance number (<=300 ms) had only
+            # ever been measured in tests; this makes every production barge report it.
+            stop_started = time.monotonic()
+            self._flush_speech()
+            # A wake word interrupts speech, not the song: pause it where it is and let
+            # the turn's end bring it back (old build: paused_by_barge + auto-resume).
+            # The device still has up to a buffer of audio in hand, so it is told to drop
+            # it - that is the same stop_play a barge always needed.
+            self._pause_for_speech()
+            if self.adapter is not None:
+                try:
+                    await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                    self._device_audio_pending = False
+                except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+                    log.info("barge: stop failed: %s", exc)
+            self.last_barge_stop_ms = (time.monotonic() - stop_started) * 1000.0
+            log.info(
+                "barge: silence_after_ms=%.0f (server-side: queue flushed, stop_play sent; "
+                "device ALSA buffer ~300 ms not included)",
+                self.last_barge_stop_ms,
+            )
+
+        # Takeover: our wake outranks a running vendor dialog. The old build stayed
+        # deaf while the vendor player ran (mic gated, assistant_v3.py:3115), so its
+        # wake never had to stop 小爱; ours hears 你好小瑞 mid-answer, and taking the
+        # line means the vendor's voice stops - otherwise both assistants talk at
+        # once and the vendor's own answer leaks into our ASR as the next request
+        # (measured 19:54:06 on 2026-10-22). Fire-and-forget: the wake path must not
+        # wait on a shell RPC. The 90 s freshness guard is the old build's, against
+        # a sticky "playing" from a lost idle event.
+        adapter = self.adapter
+        if (adapter is not None
+                and getattr(adapter, "vendor_playing", False)
+                and time.monotonic() - getattr(adapter, "vendor_playing_ts", 0.0) < 90.0):
+            log.info("vendor takeover: pausing the vendor player for our wake")
+            asyncio.create_task(adapter.pause_vendor_player("wake takeover"))
+
+        audio, mode, note = render_ack(self.cfg)
+        self.ack_mode_effective = mode
+        # Cleared on success: an error that sticks forever makes the console report a
+        # problem that was fixed an hour ago.
+        self.ack_error = note
+        cue_ms = audio.size * 1000.0 / self.cfg.audio.playback.rate if audio.size else 0.0
+        # A spoken cue mutes the device microphone; a tone rings out through the device's
+        # own 300 ms buffer. Both need more than their nominal length, so the hold carries
+        # a floor - the old build used 250 ms for exactly this - and anything arriving
+        # meanwhile is buffered, not dropped.
+        hold_ms = cue_ms + (float(self.cfg.ack.echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS)
+
+        event = Wake(
+            ts_ms=hit.ts_ms,
+            keyword=hit.keyword,
+            erle_db=self.aec.erle_db if self.aec is not None else None,
+            ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
+            playback_s=round(self.playback_s, 1),
+            voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
+            ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
+            ack_mode=mode,
+            barge=barged,
+            barged_s=round(barged_s, 2),
+        )
+        self.last_wake = event
+
+        if self.gate is not None:
+            if self.gate.armed:
+                # A second wake while a turn was open: arm() resets the buffer, so count it
+                # instead of letting a whole utterance disappear silently.
+                self.gate.interrupted += 1
+                log.info("wake while a turn was open: %.0f ms discarded", self.gate.speech_ms)
+            self.gate.arm()
+            self._followup_capture = False
+            self._followup_tail.clear()
+            self._followup_samples = 0
+            replayed = 0
+            for ts, block in list(self._preroll):
+                await self._feed_gate(block, ts, writer, connected)
+                replayed += len(block) // 2
+            self._preroll.clear()
+            self._preroll_samples = 0
+            self.preroll_replayed_ms = round(replayed * 1000.0 / self.cfg.audio.voice.rate, 1)
+            self.preroll_replays += 1
+            # From here on it is live audio, and the cue may still be sounding. The cue's
+            # own playing time is skipped rather than replayed: that window is the box's
+            # voice, and keeping it made ASR transcribe 「在呢」 as a user turn.
+            # Skip the cue plus its device-buffer tail (the speaker keeps sounding ~300 ms
+            # after the last frame). What remains is the echo/answer window after the cue:
+            # long enough for a request starting right after 「在呢」, short enough that the
+            # cue itself never reaches ASR.
+            self.gate.hold(hold_ms, skip_ms=min(hold_ms, cue_ms + ACK_TAIL_MS))
+
+        if audio.size:
+            self.ack_attempts += 1
+            self._start_ack(audio)
+
+        if connected.is_set():
+            try:
+                writer.write(encode_json(event))
+                await writer.drain()
+                log.debug("wake event sent to the control plane")
+            except (ConnectionResetError, BrokenPipeError):
+                log.warning("wake event NOT sent: the control plane socket is gone")
+                connected.clear()
+        else:
+            log.warning("wake event NOT sent: no control plane connected")
+
+    async def _feed_gate(
+        self, pcm: bytes, ts_ms: float, writer: asyncio.StreamWriter, connected: asyncio.Event
+    ) -> None:
+        gate = self.gate
+        if gate is None:
+            return
+        before_idle = getattr(gate, "idle_events", 0)
+        finished = gate.feed(pcm, ts_ms=ts_ms)
+        idle_events = getattr(gate, "idle_events", 0)
+        if idle_events != before_idle:
+            # A wake over a song pauses it. If the wake then hears nothing, the song must
+            # come back - a parked song waiting for a reply that will never come is the
+            # "music stopped after I woke it" symptom. An explicit 「暂停」 stays paused.
+            if self._speech_paused and not self._paused_explicit:
+                self._resume_after_speech()
+        if idle_events != before_idle and connected.is_set():
+            # The wake heard nothing: tell the control plane to close the session
+            # silently, otherwise the light/session stay in listening.
+            try:
+                writer.write(encode_json(WakeIdle(waited_ms=float(gate.cfg.max_wait_ms))))
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError):
+                connected.clear()
+        if finished is None or not connected.is_set():
+            return
+        utt, ts = finished
+        self.utterances += 1
+        # The duck now belongs to this turn: the reply (or its failure) ends it.
+        self._turn_pending = True
+        self._turn_pending_ts = time.monotonic()
+        try:
+            writer.write(encode_pcm(FrameType.UTTERANCE_PCM, self.utterances, ts, utt))
+            await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            connected.clear()
+
+    def _start_ack(self, audio: np.ndarray) -> None:
+        """Fire and forget. Awaiting the cue here would block the frame consumer."""
+        self._claim("cue")
+        if self._ack_task is not None and not self._ack_task.done():
+            # The previous cue belongs to a wake we have already moved past; playing it out
+            # would make the hold describe a cue nobody hears.
+            self._ack_task.cancel()
+            self.ack_skipped += 1
+        self._ack_task = asyncio.create_task(self._play_ack(audio), name="ack")
+
+    async def _play_ack(self, audio: np.ndarray) -> None:
+        adapter = self.adapter
+        if adapter is None:
+            return
+        started = time.monotonic()
+        rate = self.cfg.audio.playback.rate
+        step = max(1, rate * PLAY_CHUNK_MS // 1000)
+        try:
+            for start in range(0, audio.size, step):
+                chunk = audio[start : start + step]
+                if self._stop.is_set():
+                    return
+                await adapter.play(
+                    np.round(chunk * 32767.0).astype("<i2").tobytes(),
+                    sample_rate=rate,
+                    channels=1,
+                )
+                self.playback_s += chunk.size / rate
+                self._device_audio_pending = True
+            # No pacing. A cue is 320 ms and exists to be heard *now*: paced at real time
+            # it took 320 ms to arrive, and while the device's buffer was under its 300 ms
+            # start threshold it stayed silent - then came out together with the answer
+            # (2026-10-22). Bursting fills the buffer in milliseconds.
+            self.ack_plays += 1
+            # The cue is the first thing the user hears; if it is sent 300 ms after the
+            # wake but sounds two seconds later, that gap is the device, not us.
+            log.info("cue: %.0f ms of audio handed over in %.0f ms",
+                     audio.size * 1000.0 / rate, (time.monotonic() - started) * 1000)
+            # Hold the speaker for the cue's *duration*: releasing when the last byte was
+            # sent let a fast reply start writing 100 ms later, and the two came out of
+            # the speaker together.
+            played_for = time.monotonic() - started
+            remaining = audio.size / rate - played_for
+            if remaining > 0:
+                await asyncio.sleep(remaining)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a broken cue must not kill the plane
+            self.ack_failed += 1
+            self.ack_error = f"{type(exc).__name__}: {exc}"
+            log.info("ack: %s", self.ack_error)
+        finally:
+            self._release("cue")
+
+    async def _send_audio(self, writer: asyncio.StreamWriter, connected: asyncio.Event) -> None:
+        """Consume the ring at real time and hand each block to the control plane."""
+        period = self.cfg.audio.voice.frame_ms / 1000.0
+        while not self._stop.is_set():
+            await asyncio.sleep(period)
+            if not connected.is_set():
+                continue
+            item = self.ring.pop()
+            if item is None:
+                continue
+            t0 = time.perf_counter()
+            seq, ts_ms, pcm = item
+            writer.write(encode_pcm(FrameType.VOICE_PCM, seq, ts_ms, pcm))
+            self.frames_out += 1
+            self.cpu_s += time.perf_counter() - t0
+            try:
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError) as exc:
+                log.warning("voice pump stopped: %s", exc)
+                connected.clear()
+                return
+
+    # -------------------------------------------------------------- playback
+    def _start_playback(self, msg: PlayFile) -> str:
+        if not self._claim("music"):
+            # A reply or a cue owns the speaker. Hold one request (not a queue): the user
+            # asked for one song, and it starts the moment the answer ends.
+            self._pending_play = msg
+            log.info("playback queued behind %s: %s", self._owner, msg.path)
+            return msg.path
+        if self._playback_task is not None and not self._playback_task.done():
+            self._playback_task.cancel()
+        # Our song outranks a running vendor dialog, same as our wake does (old build:
+        # vendor_stop_player before every audible start). Fire-and-forget: playback
+        # must not wait on a shell RPC.
+        adapter = self.adapter
+        if (adapter is not None
+                and getattr(adapter, "vendor_playing", False)
+                and time.monotonic() - getattr(adapter, "vendor_playing_ts", 0.0) < 90.0):
+            log.info("vendor takeover: pausing the vendor player for our music")
+            asyncio.create_task(adapter.pause_vendor_player("music start"))
+        self.playback_path = msg.path
+        self._file_position = 0
+        self._file_cfg = (Path(msg.path), msg.loop, msg.gain)
+        self._speech_paused = False
+        self._paused_explicit = False
+        self._playback_task = asyncio.create_task(
+            self._play_file(Path(msg.path), msg.loop, msg.gain), name="playback"
+        )
+        return msg.path
+
+    def _credit_sync(self, adapter: DeviceAdapter) -> bool:
+        """True when the device reports its play head and the credit is still usable."""
+        if not getattr(adapter, "reports_consumption", False):
+            return False
+        generation = getattr(adapter, "sink_generation", 0)
+        if generation != self._credit_generation:
+            # A new player restarted the device's chunk count at 1.
+            self._credit_generation = generation
+            self._credit.reset()
+        return not self._credit.dead
+
+    async def _credit_wait(self, adapter: DeviceAdapter, seconds: float) -> bool:
+        """Wait until the device has drained enough for one more block."""
+        if not self._credit_sync(adapter):
+            return False
+        return await self._credit.wait(adapter, seconds)
+
+    def _credit_note(self, adapter: DeviceAdapter, seconds: float) -> bool:
+        """Record one block sent (after play(), which may have opened a new player)."""
+        if not self._credit_sync(adapter):
+            return False
+        self._credit.note_sent(seconds)
+        self.playback_lead_s = self._credit.lead
+        return True
+
+    @staticmethod
+    def playback_reached_end(position: int, offset: int, size: int, step: int) -> bool:
+        """True only when the file was actually streamed to its end.
+
+        Measured 2026-10-23 15:53:28: the speaker's websocket dropped right after a resumed
+        song started; the stream ended within 0.7 s of a 207 s track, yet the plane emitted
+        PlayFinished and the queue advanced to the next song (and 「继续」 then said nothing
+        was paused). A stream that stops short must not look like a finished song.
+        """
+        return position >= offset + size - max(step, 1)
+
+    async def _play_file(self, path: Path, loop: bool, gain: float,
+                         offset: int = 0) -> None:
+        try:
+            pcm, rate = read_wav_mono(path)
+        except (OSError, wave.Error) as exc:
+            log.warning("playback: cannot read %s: %s", path, exc)
+            self.last_playback_error = str(exc)
+            # The claim must die with the task: a file that cannot be read once left
+            # owner=music forever, and every later reply waited on a dead player.
+            self._release("music")
+            return
+        target = self.cfg.audio.playback.rate
+        audio = np.clip(resample(pcm, rate, target) * float(gain), -1.0, 1.0)
+        adapter = self.adapter
+        if adapter is None:
+            return
+        # A song asked for while a follow-up window is open would hand its lyrics to the
+        # gate as the next request - same hole as the farewell, without the race.
+        self._disarm_gate_for_our_audio()
+        if offset:
+            offset = int(min(max(offset, 0), max(audio.size - 1, 0)))
+            audio = audio[offset:]
+            self._file_position = offset
+        else:
+            audio = fade_in(audio, target)
+            self._file_position = 0
+        log.info("playback: %s %.1f s at %s Hz (from %.1f s)", path.name,
+                 audio.size / target, target, offset / target)
+        try:
+            await self._stream_file(audio, target, adapter, loop)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a failed speaker must not kill the plane
+            self.last_playback_error = f"{type(exc).__name__}: {exc}"
+            log.warning("playback failed: %s", self.last_playback_error)
+            return
+        finally:
+            # A finished song stops holding the speaker. Without this the owner stayed
+            # "music" forever: the next reply waited 2 s before taking it, and the idle
+            # timer saw a busy speaker and never said goodbye. A pause for speech keeps
+            # the claim (the dialogue took it; resume claims it back).
+            if not self._speech_paused:
+                self._release("music")
+        if loop:
+            return
+        step = max(1, target * PLAY_CHUNK_MS // 1000)
+        if not self.playback_reached_end(self._file_position, offset, audio.size, step):
+            # The speaker went away mid-song: do not tell the queue the song finished, or
+            # it starts the next one while the device is reconnecting.
+            log.warning(
+                "playback ended early at %.1f s of %.1f s (%s); queue not advanced",
+                max(0, self._file_position - offset) / target,
+                audio.size / target, path.name)
+            return
+        log.info("playback finished: %s", path.name)
+        # Only a natural end of a non-looping file says so: the queue advances on this,
+        # and a pause (which cancels the task above) must not look like a finish.
+        self._emit_control(PlayFinished(path=str(path)))
+
+    def _emit_control(self, msg: object) -> None:
+        """Best-effort plane -> control message; the plane outlives reconnects."""
+        writer, connected = self._ctl_writer, self._ctl_connected
+        if writer is None or connected is None or not connected.is_set():
+            return
+        try:
+            writer.write(encode_json(msg))  # type: ignore[arg-type]
+            asyncio.create_task(writer.drain(), name="ctl-drain")
+        except (ConnectionResetError, BrokenPipeError):
+            connected.clear()
+
+    async def _stream_file(self, audio: np.ndarray, target: int, adapter: DeviceAdapter,
+                           loop: bool) -> None:
+        step = max(1, target * PLAY_CHUNK_MS // 1000)
+        pacer = Pacer()
+        lead_max = 0.0
+        chunks = 0
+        while not self._stop.is_set():
+            for start in range(0, audio.size, step):
+                if self._stop.is_set():
+                    return
+                chunk = audio[start:start + step]
+                seconds = chunk.size / target
+                credited = await self._credit_wait(adapter, seconds)
+                await adapter.play(
+                    np.round(chunk * 32767.0).astype("<i2").tobytes(),
+                    sample_rate=target,
+                    channels=1,
+                )
+                self.playback_s += seconds
+                self._device_audio_pending = True
+                self._file_position += chunk.size
+                if loop and audio.size:
+                    # A looping file's position is measured against the track, not a
+                    # running total: resuming a 20 s snippet "at 37 s" played nothing.
+                    self._file_position %= audio.size
+                if credited:
+                    # The report says "accepted by aplay's pipe", not "played": it bounds
+                    # how far the server may run ahead, but the pipe itself buffers up to
+                    # ~2 s. Pacing by the clock as well keeps that pipe shallow, which is
+                    # what keeps writes instant; measured on the device, credit-only
+                    # playback blocked 228 writes per 30 s vs 17 per 35 s with the clock.
+                    self._credit_note(adapter, seconds)
+                now = time.monotonic()
+                wait = pacer.sleep_for(now, seconds)
+                self.playback_lead_s = pacer.lead
+                chunks += 1
+                lead_max = max(lead_max, self.playback_lead_s)
+                await asyncio.sleep(wait)
+            if not loop:
+                break
+        log.info("playback: %d chunks, lead max %.0f ms", chunks, lead_max * 1000)
+
+    # ------------------------------------------------------- P2.9 reply start gate
+    async def _await_reply_prebuffer(self, prebuffer_s: float) -> bool:
+        """Hold a reply's first block until `prebuffer_s` of audio is queued.
+
+        The issue (#1) measured a transport that delivers the first PCM batch, then the
+        rest ~400 ms later: the device drained the 250-320 ms the Pacer kept in hand and
+        the listener heard a gap mid-reply. Waiting at the *start* needs no change to the
+        steady-state pacing, and it is the only place where there is still a choice - once
+        the first block is on the wire the speaker owns the clock.
+
+        Bounded by design: `prebuffer_s + PREBUFFER_TIMEOUT_EXTRA_S`, so a reply shorter
+        than the prebuffer (or a producer that never sends more) starts anyway. Returns
+        True when the target was actually reached.
+        """
+        if prebuffer_s <= 0.0:
+            return True
+        started = time.monotonic()
+        deadline = started + prebuffer_s + PREBUFFER_TIMEOUT_EXTRA_S
+        while not self._stop.is_set():
+            if self._speak_queued_s >= prebuffer_s:
+                return True
+            now = time.monotonic()
+            if now >= deadline:
+                return False
+            await asyncio.sleep(min(PREBUFFER_POLL_S, deadline - now))
+        return False
+
+    def _record_playback_gap(self, gap_s: float) -> None:
+        """Count an audible underrun (`gap_s` seconds past the last queued audio)."""
+        gap_ms = gap_s * 1000.0
+        if gap_ms < PLAYBACK_GAP_MIN_MS:
+            return
+        self.playback_gap_count += 1
+        self.playback_max_gap_ms = max(self.playback_max_gap_ms, gap_ms)
+        if self._reply_open:
+            self._reply_gap_count += 1
+            self._reply_max_gap_ms = max(self._reply_max_gap_ms, gap_ms)
+
+    async def _prepare_reply_player(self, adapter: DeviceAdapter) -> bool:
+        """Stop the old player before a reply only when it may still hold audio.
+
+        The stop is what makes `play()` issue `start_play` again after a long silence
+        (the aplay underrun fix, docs/playback-path.md §3 A). When the plane has already
+        sent an explicit stop and nothing since, the device player is stopped and the
+        next `play()` opens it anyway: sending another stop buys nothing and, on an
+        adapter whose control and data paths are separate sockets, puts a control frame
+        in the race with the first PCM (issue #1 root cause (a)).
+        """
+        if not self._device_audio_pending:
+            return False
+        try:
+            await adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+        except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+            log.info("reply: pre-start stop failed: %s", exc)
+            return False
+        self._device_audio_pending = False
+        return True
+
+    async def _speak_loop(self) -> None:
+        """Play the reply PCM the control plane pushes.
+
+        PLAY_PCM carries mono PCM at the *voice* rate - every TTS provider is built with
+        `voice.rate`. Handing that straight to a 48 kHz device plays each answer three
+        times too fast: byte counts, pacing stats and tests all look right, and only the
+        ear catches it. Resampled here, once, and paced by the resulting duration.
+        """
+        target = self.cfg.audio.playback.rate
+        source = self.cfg.audio.voice.rate
+        # The configured prebuffer is the *start* gate (below) and, when set, the
+        # steady-state lead too: a reply that must hold 450 ms of audio before it begins
+        # also wants the Pacer to keep ~450 ms in hand, or the device drains to the old
+        # 320 ms cap. With the config at 0 the historical 250/320 ms pacing is unchanged.
+        prebuffer_s = self.cfg.audio.playback.prebuffer_ms / 1000.0
+        pacer = Pacer(
+            prebuffer=max(PREBUFFER_S, prebuffer_s),
+            max_lead=max(MAX_LEAD_S, prebuffer_s),
+        )
+        reply_chunks = 0
+        reply_lead_max = 0.0
+        while not self._stop.is_set():
+            try:
+                chunk = await asyncio.wait_for(self._speak_queue.get(), timeout=0.5)
+            except TimeoutError:
+                # Nothing more is coming: that is the end of the answer, so hand the song
+                # back. Checking only after a send missed the case where the last chunk
+                # was already out and the loop sat waiting.
+                if self._speak_queue.empty():
+                    now = time.monotonic()
+                    if self._starvation_due is not None and not self._speak_finished:
+                        # A producer that stalls for the whole grace window is an
+                        # underrun too, not an end: SpeakFinished has not arrived.
+                        self._record_playback_gap(now - self._starvation_due)
+                    self._starvation_due = None
+                    self._reply_open = False
+                    # The lead is the number to read when a reply sounds rough; without
+                    # this line the only copy of it was the console, 2 s stale. Only when
+                    # something was actually spoken - the idle loop lands here too.
+                    if reply_chunks:
+                        log.info("reply: %d chunks, lead max %.0f ms",
+                                 reply_chunks, reply_lead_max * 1000)
+                        if self._reply_gap_count:
+                            # One line per reply, never per chunk.
+                            log.info("reply: %d gaps, max %.0f ms",
+                                     self._reply_gap_count, self._reply_max_gap_ms)
+                    self._reply_gap_count = 0
+                    self._reply_max_gap_ms = 0.0
+                    finished_reply = self._reply_finished
+                    self._reply_finished = False
+                    reply_hold, self._reply_hold = self._reply_hold, None
+                    reply_chunks = 0
+                    reply_lead_max = 0.0
+                    self._release("dialogue")
+                    # Keep the microphone open for the next sentence, the way the old
+                    # build did inside a session: 0.5 s end point, no wake word. Only
+                    # after a reply that actually spoke - this branch also runs on every
+                    # idle timeout, and re-arming there left the gate open forever
+                    # (measured: a turn 42 s after the last one, with no wake word).
+                    if (finished_reply and self.gate is not None and not self.gate.armed
+                            and not self._speech_paused):
+                        # The last block was *sent*; the device is still playing what is
+                        # in its buffer. Opening the gate now makes the assistant answer
+                        # its own voice - measured 2026-10-22: reply queued at 18:23:13,
+                        # a 1.58 s "segment" at 18:23:15 that became a turn. Wait for the
+                        # pacer to drain, then the old build's 1 s echo tail.
+                        # With a song waiting the block below arms it with the music
+                        # window instead (shorter max_wait, and the song stays down).
+                        delay = max(0.0, pacer.due - time.monotonic()) + 1.0
+                        self._start_followup_capture(
+                            max(0.0, pacer.due - time.monotonic()), delay)
+                        asyncio.create_task(
+                            self._arm_followup_later(delay), name="followup-gate"
+                        )
+                    # The song waits out the whole turn. An empty queue alone once meant
+                    # "speech over", so the music came back 0.4 s after the wake - over
+                    # the user's request, and the resumed music then closed the freshly
+                    # armed gate (measured 20:54:03: wake, cue, resume, deaf). It comes
+                    # back only when the gate has closed AND the turn is over: the reply
+                    # drained (ReplyFinished clears the pending flag), the wake heard no
+                    # speech at all, or the no-reply grace ran out - a turn that died
+                    # without an answer must not keep the music down forever (the old
+                    # build's vendor_silence_watchdog, assistant_v3.py:2185).
+                    if finished_reply:
+                        self._turn_pending = False
+                    if finished_reply and self._speech_paused and self.gate is not None:
+                        # The turn ended with a song waiting: hold it for the follow-up
+                        # window instead of resuming between turns. A turn may shorten
+                        # or cancel its own window (volume confirmations: 0).
+                        delay = max(0.0, pacer.due - time.monotonic()) + 1.0
+                        hold_ms = (int(self.cfg.music.resume_hold_ms)
+                                   if reply_hold is None
+                                   else max(0, int(reply_hold * 1000)))
+                        self._music_hold_until = (
+                            time.monotonic() + delay + hold_ms / 1000.0)
+                        if hold_ms > 0:
+                            self._start_followup_capture(
+                                max(0.0, pacer.due - time.monotonic()), delay)
+                            asyncio.create_task(
+                                self._arm_followup_later(delay, max_wait_ms=hold_ms),
+                                name="followup-gate")
+                        else:
+                            self._music_hold_until = None   # resume on this very tick
+                    now = time.monotonic()
+                    holding = self._music_hold_until is not None and (
+                        now < self._music_hold_until
+                        or (self.gate is not None and self.gate.armed))
+                    if not holding:
+                        self._music_hold_until = None
+                        if self.gate is None or not self.gate.armed:
+                            waiting = (
+                                self._turn_pending
+                                and now - self._turn_pending_ts < NO_REPLY_RESUME_S
+                            )
+                            if not waiting:
+                                self._resume_after_speech()
+                    # The player is deliberately left alone here: the next reply closes
+                    # it and opens a fresh one (see the first-chunk branch below). Closing
+                    # it now would cut the tail still playing out of the device buffer.
+                continue
+            if chunk is None:
+                continue
+            generation = self._speak_generation
+            if self._starvation_due is not None:
+                # The queue was empty at the last send; compare the arrival against the
+                # moment the device ran out, not against the queue-empty moment. A block
+                # that arrives while the lead is still positive is not a gap.
+                self._record_playback_gap(time.monotonic() - self._starvation_due)
+                self._starvation_due = None
+            if isinstance(chunk, tuple):
+                chunk, segment = chunk
+            else:  # a raw block: treat it as a sentence start
+                segment = True
+            if segment and not self._reply_open and prebuffer_s > 0.0:
+                # P2.9: do not put the first block on the wire until the producer has
+                # handed over the configured prebuffer. Bounded; see the helper.
+                await self._await_reply_prebuffer(prebuffer_s)
+                if generation != self._speak_generation or self._stop.is_set():
+                    # A barge/StopAudio flushed the queue while the gate was waiting:
+                    # this already-pulled chunk belongs to the cancelled reply.
+                    continue
+            # A reply owns the device stream while it speaks; the song waits where it is.
+            # A cue in flight is 320 ms: wait for it rather than cut it, but never wait
+            # forever - an owner that is not releasing is a bug, not a reason to go silent.
+            waited = 0.0
+            while not self._claim("dialogue"):
+                await asyncio.sleep(0.02)
+                waited += 0.02
+                if waited > 2.0:
+                    log.warning("output: %s never released in 2 s, taking it", self._owner)
+                    self._owner = "dialogue"
+                    break
+            self._pause_for_speech()
+            self._speak_queued_s = max(
+                0.0, self._speak_queued_s - len(chunk) / 2 / self.cfg.audio.voice.rate
+            )
+            adapter = self.adapter
+            if adapter is None:
+                continue
+            audio = resample(
+                np.frombuffer(chunk, dtype="<i2").astype(np.float32) / 32768.0, source, target
+            )
+            if segment:
+                # Each sentence begins on a hard sample boundary, and the junction between
+                # the cached filler and the answer was one too: that step is the click 9哥
+                # heard as 「像是叮，也可能是吞音」 at the front of the answer.
+                audio = fade_in(audio, target)
+                if not self._reply_open:
+                    self._reply_open = True
+                    # A fresh reply owns its own gap accounting.
+                    self._reply_gap_count = 0
+                    self._reply_max_gap_ms = 0.0
+                    self._starvation_due = None
+                    # Whatever we are about to sound - an answer, the farewell, a reminder -
+                    # must close a gate the previous turn left open (see below).
+                    self._disarm_gate_for_our_audio()
+                    # Open a fresh player for every reply, as the old build does (one Sink
+                    # per speak_stream). A kept-alive aplay underruns during the silence
+                    # before an answer - measured on the device: "underrun!!! (at least
+                    # 5373.550 ms long)" exactly at the cue-to-answer gap - and the first
+                    # block written into a drained device is eaten by its restart, heard
+                    # as a swallowed first syllable plus a click. Closing the player here
+                    # makes the first play() below issue start_play, which respawns aplay
+                    # and settles 80 ms before the first chunk (0b). The stop is skipped
+                    # when the plane already stopped the device and sent nothing since:
+                    # on a split control/data transport that redundant frame raced the
+                    # first PCM (issue #1).
+                    stopped = await self._prepare_reply_player(adapter)
+                    log.info("reply: first chunk at %d Hz%s", target,
+                             "" if stopped else " (player already stopped)")
+            pcm = np.round(np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+            seconds = audio.size / target
+            # Pace by the device's play head when it reports one; the wall clock is only
+            # the fallback (a device that cannot report, or one that stopped reporting).
+            credited = await self._credit_wait(adapter, seconds)
+            try:
+                await adapter.play(pcm, sample_rate=target, channels=1)
+            except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+                log.info("speak: %s", exc)
+                continue
+            self.playback_s += seconds
+            self._device_audio_pending = True
+            if credited:
+                # Bound only. The device's report means "aplay accepted the block into
+                # its pipe", so pacing by it alone keeps that pipe permanently full and
+                # every write waits for a drain (measured: 228 blocked writes / 30 s).
+                # The clock keeps the pipe shallow; the report stops us ever running
+                # more than `window` blocks ahead of the device's own queue.
+                self._credit_note(adapter, seconds)
+            # Pace against a deadline: sending costs 1-3 ms per chunk, and adding that
+            # to every chunk drifts a 20 s answer half a second past what the device
+            # plays. The prebuffer is the lead the device keeps in hand; CATCHUP makes
+            # it grow 2 % per chunk so it cannot drain to zero; MAX_LEAD stops a long
+            # answer from running so far ahead that a barge-in is heard late.
+            now = time.monotonic()
+            wait = pacer.sleep_for(now, seconds)
+            self.playback_lead_s = pacer.lead
+            reply_chunks += 1
+            reply_lead_max = max(reply_lead_max, self.playback_lead_s)
+            # Waiting until the buffer would drop to the target, not until it is
+            # empty: that wait is the whole fix.
+            await asyncio.sleep(wait)
+            # P2.9: remember when the device will run dry if the producer stays silent.
+            # Stamped *before* the sentence-boundary grace: a batch that arrives during
+            # that 0.4 s was already a gap at the speaker, and the grace must not erase
+            # the deadline it is measured against. A block that lands while the lead is
+            # still positive is not counted.
+            if reply_chunks and self._reply_open and self._speak_queue.empty():
+                self._starvation_due = pacer.due
+            else:
+                self._starvation_due = None
+            if self._speak_queued_s <= 0.0 and self._speak_queue.empty():
+                # One short grace period: a sentence boundary is not the end of the answer,
+                # and resuming the song between two sentences would be worse than a pause.
+                await asyncio.sleep(0.4)
+                if self._speak_queue.empty():
+                    self._resume_after_speech()
+        # drain on shutdown
+        while not self._speak_queue.empty():
+            self._speak_queue.get_nowait()
+
+    def _start_followup_capture(self, due_in: float, delay: float) -> None:
+        """Remember microphone frames from the end of device playback until the gate arms."""
+        now = time.monotonic()
+        self._followup_tail.clear()
+        self._followup_samples = 0
+        self._followup_start = now + max(0.0, due_in)
+        self._followup_end = self._followup_start + max(0.0, delay)
+        self._followup_capture = True
+
+    def _capture_followup_tail(self, pcm: bytes, ts_ms: float) -> None:
+        if not self._followup_capture or self.gate is None or self.gate.armed:
+            return
+        now = time.monotonic()
+        if now < self._followup_start:
+            return
+        if now > self._followup_end + 0.25:
+            self._followup_capture = False
+            return
+        # At most 2 s; the delay is 1 s, so this only bounds a delayed task.
+        limit = self.cfg.audio.voice.rate * 2
+        if self._followup_samples + len(pcm) // 2 > limit:
+            while self._followup_tail and self._followup_samples + len(pcm) // 2 > limit:
+                _ts, old = self._followup_tail.popleft()
+                self._followup_samples -= len(old) // 2
+        self._followup_tail.append((ts_ms, pcm))
+        self._followup_samples += len(pcm) // 2
+
+    async def _replay_followup_tail(self) -> None:
+        tail = list(self._followup_tail)
+        self._followup_tail.clear()
+        self._followup_samples = 0
+        self._followup_capture = False
+        if not tail or self._writer is None or self._connected is None:
+            return
+        for ts_ms, pcm in tail:
+            await self._feed_gate(pcm, ts_ms, self._writer, self._connected)
+        self._followup_replayed_ms = round(
+            sum(len(pcm) // 2 for _ts, pcm in tail) * 1000.0
+            / self.cfg.audio.voice.rate, 1)
+        log.info("follow-up gate replayed %.0f ms of gated tail",
+                 self._followup_replayed_ms)
+
+    async def _arm_followup_later(self, delay: float,
+                                  max_wait_ms: int | None = None) -> None:
+        """Open the follow-up gate after the speaker has finished, not after sending."""
+        try:
+            await asyncio.sleep(max(0.0, delay))
+        except asyncio.CancelledError:
+            raise
+        gate = self.gate
+        if self._owner is not None:
+            # A song resumed behind the reply, or a reminder took the line: the follow-up
+            # window must not open over our own audio, or its lyrics become the next
+            # request. The wake word is the way in while anything owns the speaker.
+            log.info("follow-up gate stays shut: %s owns the speaker", self._owner)
+            self._music_hold_until = None   # nothing is held; resume next tick
+            return
+        if gate is not None and not gate.armed and not self._stop.is_set():
+            log.info("follow-up gate open (%.1f s after the last block)", delay)
+            gate.arm(
+                followup=True,
+                max_wait_ms=max_wait_ms or int(self.cfg.session.timeout_s * 1000) or None,
+            )
+            await self._replay_followup_tail()
+
+    def _disarm_gate_for_our_audio(self) -> None:
+        """Our own playback closes an armed follow-up gate.
+
+        The delayed re-arm in `_speak_loop` protects the window a reply *opens*; it says
+        nothing about the window the *previous* reply left open when a farewell or a
+        reminder starts sounding 15 s later. Measured 2026-10-22 20:16: the goodbye's
+        echo survived the AEC residual, VAD closed a segment on it, ASR heard it as
+        「没事的话，我先下吧。」 and the model answered its own farewell. Disarm rather
+        than hold: a held gate replays its buffer when it lifts, and the newest 600 ms of
+        a two-second goodbye is still our voice.
+        """
+        gate = self.gate
+        if gate is not None and gate.armed:
+            gate.disarm()
+            log.info("gate: disarmed, our own audio is about to sound")
+
+    async def _apply_led(self, effect: str, repaint: bool = False) -> None:
+        adapter = self.adapter
+        if adapter is None:
+            return
+        try:
+            await adapter.set_led(effect, repaint=repaint)
+        except Exception as exc:  # noqa: BLE001 - a light is never worth an outage
+            log.info("led: %s", exc)
+
+    def _flush_speech(self) -> None:
+        self._release("dialogue")
+        self._speak_queued_s = 0.0
+        # The producer's burst was cancelled: nothing more is expected, and any pending
+        # "the device will run dry" deadline describes audio the user just silenced.
+        self._speak_finished = True
+        self._starvation_due = None
+        self._speak_generation += 1
+        # The queue is gone; the device's count for the old player is meaningless now.
+        # The next reply opens a fresh player (and resets the credit again by generation).
+        self._credit.reset()
+        while not self._speak_queue.empty():
+            try:
+                self._speak_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    # 0 is the most important. A cue is 320 ms and must be heard over anything; a reply
+    # preempts music; a reminder waits for the reply and preempts music.
+    PRIORITY = {"cue": 0, "dialogue": 1, "reminder": 2, "music": 3}
+
+    def _claim(self, owner: str) -> bool:
+        """Take the speaker. True if this owner now holds it (preempting a lower one)."""
+        current = self._owner
+        if current is not None and self.PRIORITY[owner] > self.PRIORITY[current]:
+            return False
+        if current is not None and current != owner:
+            log.info("output: %s preempts %s", owner, current)
+            if current == "music":
+                self._pause_for_speech()
+        self._owner = owner
+        return True
+
+    def _release(self, owner: str) -> None:
+        if self._owner == owner:
+            self._owner = None
+            if self._pending_play is not None:
+                pending, self._pending_play = self._pending_play, None
+                self._start_playback(pending)
+
+    # A song has hold music on the wire; dropping it loses up to this much audio.
+    PLAY_LAG_SECONDS = 0.55
+
+    def _pause_for_speech(self) -> None:
+        """Stop feeding the device while a reply speaks, remembering where the song is.
+
+        The old build measured what is already in flight as 0.55 s (aplay pipe plus one
+        ALSA buffer); resuming from the last *sent* sample would skip that much, so the
+        position is rewound by it, exactly as `rewind()` did there.
+        """
+        if self._speech_paused:
+            # Already paused: the wake path cancels, then _claim("cue") cancels again
+            # before the first cancel has landed, and a second rewind ate PLAY_LAG
+            # twice (5.5 -> 4.9 s measured 20:54:03).
+            return
+        task = self._playback_task
+        if task is None or task.done() or self._file_cfg is None:
+            return
+        target = self.cfg.audio.playback.rate
+        self._file_position = max(0, self._file_position - int(self.PLAY_LAG_SECONDS * target))
+        task.cancel()
+        self._speech_paused = True
+        log.info("playback paused for speech at %.1f s", self._file_position / target)
+
+    def _resume_after_speech(self) -> None:
+        if self._paused_explicit:
+            # 「暂停」 was the user's own hand, not the dialogue's duck: the song waits
+            # for 「继续」, and an answer ending must not lift it.
+            return
+        if not self._speech_paused or self._file_cfg is None:
+            return
+        path, loop, gain = self._file_cfg
+        # The claim first, the state second: the grace branch (0.4 s after the last
+        # block was *sent*) can race a reply still holding the speaker. Consuming the
+        # pause and starting the task anyway left the music ownerless - audio kept
+        # playing (play_file does not need the claim), no later path retried the
+        # claim, and the follow-up window then opened over the song's "free" speaker
+        # (measured 21:13, reproduced as a test).
+        if not self._claim("music"):
+            return
+        self._speech_paused = False
+        self._turn_pending = False
+        self._playback_task = asyncio.create_task(
+            self._play_file(path, loop, gain, offset=self._file_position),
+            name="playback",
+        )
+        log.info("playback resumed after speech at %.1f s",
+                 self._file_position / self.cfg.audio.playback.rate)
+
+    async def _stop_playback(self) -> None:
+        # A cue is playback too: StopAudio and shutdown must not leave it sounding.
+        if self._ack_task is not None and not self._ack_task.done():
+            self._ack_task.cancel()
+            await asyncio.gather(self._ack_task, return_exceptions=True)
+        self._ack_task = None
+        if self._playback_task is not None and not self._playback_task.done():
+            self._playback_task.cancel()
+            try:
+                await self._playback_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        self._playback_task = None
+        self._music_hold_until = None
+        if self._paused_explicit and self._file_cfg is not None:
+            # A hand-parked song makes no sound. StopAudio here is for the speech
+            # tail and the device (the vendor took the line mid-song and kills our
+            # reply with it); throwing the parked position away would break the
+            # give-back (V4). The cue is gone, the park survives.
+            if self.adapter is not None:
+                try:
+                    await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                    self._device_audio_pending = False
+                except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+                    log.info("playback: stop failed: %s", exc)
+            return
+        self._speech_paused = False
+        self._paused_explicit = False
+        self._file_cfg = None
+        self._turn_pending = False
+        if self.adapter is not None:
+            try:
+                await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                self._device_audio_pending = False
+            except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+                log.info("playback: stop failed: %s", exc)
+
+    def metrics(self) -> Metrics:
+        snapshot = self._build_metrics()
+        self._peak_hold = 0.0
+        return snapshot
+
+    def _build_metrics(self) -> Metrics:
+        return Metrics(
+            uptime_s=round(time.monotonic() - self.started, 1),
+            aec_enabled=self.aec is not None,
+            aec_erle_db=self.aec.erle_db if self.aec is not None else None,
+            aec_channel=self.aec.selected if self.aec is not None else 0,
+            ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
+            wake_count=self.wake_count,
+            kws_enabled=self.wake is not None,
+            kws_error=self.kws_error,
+            vad_enabled=self.gate is not None,
+            utterances=self.utterances,
+            gate_armed=bool(self.gate.armed) if self.gate is not None else False,
+            gate_speaking=bool(self.gate.speaking) if self.gate is not None else False,
+            gate_discarded=self.gate.discarded if self.gate is not None else 0,
+            gate_interrupted=self.gate.interrupted if self.gate is not None else 0,
+            speaker_connected=bool(getattr(self.adapter, "health", lambda: {})().get("connected"))
+            if self.adapter is not None
+            else False,
+            playback_s=round(self.playback_s, 1),
+            playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
+            playback_gap_count=self.playback_gap_count,
+            playback_max_gap_ms=round(self.playback_max_gap_ms, 1),
+            device_volume=self.device_volume,
+            output_owner=self._owner or "",
+            voice_peak_db=(
+                None if self._peak_hold <= 1e-6
+                else round(20.0 * float(np.log10(self._peak_hold)), 1)
+            ),
+            barge_count=self.barges,
+            probe_hits=self.probe_hits,
+            ack_mode=self.ack_mode_effective,
+            ack_attempts=self.ack_attempts,
+            ack_plays=self.ack_plays,
+            ack_skipped=self.ack_skipped,
+            ack_failed=self.ack_failed,
+            ack_error=self.ack_error,
+            preroll_replayed_ms=self.preroll_replayed_ms,
+            preroll_replays=self.preroll_replays,
+            voice_rms_db=None if self.voice_rms_db is None else round(self.voice_rms_db, 1),
+            ref_rms_db=None if self.ref_rms_db is None else round(self.ref_rms_db, 1),
+            frames_in=self.frames_in,
+            frames_out=self.frames_out,
+            frames_dropped=self.frames_dropped,
+            no_consumer=self.no_consumer,
+            jitter_p50_ms=round(self.arrivals.p50(), 2),
+            jitter_p99_ms=round(self.arrivals.p99(), 2),
+            cpu_s=round(self.cpu_s, 3),
+            audio_s=round(self.audio_s, 2),
+            rtf=round(self.cpu_s / self.audio_s, 4) if self.audio_s else 0.0,
+        )
+
+    async def _read_device_volume(self) -> None:
+        adapter = self.adapter
+        read = getattr(adapter, "read_volume", None)
+        if read is None:
+            return
+        try:
+            self.device_volume = await read()
+        except Exception as exc:  # noqa: BLE001 - a shell hiccup must not touch audio
+            log.debug("volume read failed: %s", exc)
+        await self._reconcile_volume()
+
+    async def _reconcile_volume(self) -> None:
+        """The configured target wins over whatever the vendor left in the mixer.
+
+        The vendor's own interactions rewrite mysoftvol at will (the old build
+        measured 255 -> 160 minutes after setting it, and 9哥's 「音量60%」 being
+        undone by the next answer). It reconciled at three call sites; this build
+        already reads the value on the metrics cadence, so the check lives here.
+        `devices[].volume` is a percent (0 = do not manage), mysoftvol is 0-255.
+        """
+        dev = next((d for d in self.cfg.devices if d.id == self.device_id), None)
+        target = dev.volume if dev is not None else 0
+        if target <= 0 or self.adapter is None or self.device_volume is None:
+            return
+        set_vol = getattr(getattr(self.adapter, "services", None), "set_volume", None)
+        if set_vol is None:
+            return
+        want = round(target * 255 / 100)
+        if self.device_volume == want:
+            return
+        try:
+            await set_vol(want)
+            self.device_volume = want
+            log.info("volume: reconciled to %d (config %d%%)", want, target)
+        except Exception as exc:  # noqa: BLE001 - a silent knob must never be loud
+            log.debug("volume reconcile failed: %s", exc)
+
+    async def _metrics_loop(self, writer: asyncio.StreamWriter, connected: asyncio.Event) -> None:
+        ticks = 0
+        level_peak = 0.0
+        while not self._stop.is_set():
+            await asyncio.sleep(METRICS_EVERY_S)
+            ticks += 1
+            if ticks % 8 == 1:  # every ~16 s: cheap RPC, and the vendor can change it
+                await self._read_device_volume()
+            if not connected.is_set():
+                continue
+            try:
+                snapshot = self.metrics()
+                # A number nobody can read is not a measurement: every threshold argument
+                # so far compared hit levels with nothing. The window's peak is reported
+                # once per LEVEL_LOG_EVERY ticks (30 s), not every 2 s - the old cadence
+                # was audit P2 log noise. Aggregate in between so the line still describes
+                # a full 30 s of speech, not one 2 s window.
+                if snapshot.voice_peak_db is not None:
+                    level_peak = max(level_peak, snapshot.voice_peak_db)
+                if ticks % LEVEL_LOG_EVERY == 0:
+                    if level_peak > -55.0:
+                        log.info("[level] voice peak %.1f dBFS over %.0f s",
+                                 level_peak, METRICS_EVERY_S * LEVEL_LOG_EVERY)
+                    level_peak = 0.0
+                writer.write(encode_json(snapshot))
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError):
+                connected.clear()
+                return
+
+    # ---------------------------------------------------------------- server
+    async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connected = asyncio.Event()
+        tasks: list[asyncio.Task] = []
+        try:
+            self.adapter = await self._open_adapter()
+            info = await self.adapter.probe()
+            writer.write(
+                encode_json(
+                    Ready(
+                        pid=os.getpid(),
+                        device_id=info.id,
+                        capture_rate=info.sample_rate,
+                        capture_channels=info.channels,
+                        mic_channels=info.mic_channels,
+                        reference_channels=info.ref_channels,
+                        voice_rate=self.cfg.audio.voice.rate,
+                    )
+                )
+            )
+            await writer.drain()
+            connected.set()
+            self._ctl_writer, self._ctl_connected = writer, connected
+            tasks = [
+                asyncio.create_task(self._capture(connected, writer), name="capture"),
+                asyncio.create_task(self._send_audio(writer, connected), name="send-audio"),
+                asyncio.create_task(self._metrics_loop(writer, connected), name="metrics"),
+                asyncio.create_task(self._speak_loop(), name="speak"),
+            ]
+            while not self._stop.is_set():
+                kind, payload = await read_frame(reader)
+                if kind is FrameType.PLAY_PCM:
+                    seq, _ts, pcm = decode_pcm(payload)
+                    if pcm:
+                        seconds = len(pcm) / 2 / self.cfg.audio.voice.rate
+                        if self._speak_queued_s + seconds > MAX_SPEAK_QUEUE_S:
+                            # Only reachable if a producer ignores SpeakFinished and keeps
+                            # pushing: a leak guard, not pacing.
+                            log.warning(
+                                "speak queue over %.0f s, dropping a chunk", MAX_SPEAK_QUEUE_S
+                            )
+                        else:
+                            self._speak_queued_s += seconds
+                            # More audio is expected: an empty queue from here until
+                            # SpeakFinished is a producer stall, not the end of the reply.
+                            self._speak_finished = False
+                            # The ramp belongs only where the control plane declares a
+                            # sentence start (SpeakStart); everything else is a slice of
+                            # one continuous synthesis and must join untouched.
+                            self._speak_queue.put_nowait((pcm, self._segment_pending))
+                            self._segment_pending = False
+                    continue
+                if kind is not FrameType.CONTROL:
+                    continue
+                msg = CONTROL.validate_json(payload)
+                if msg.type == "shutdown":
+                    break
+                if msg.type == "hello":
+                    assert isinstance(msg, Hello)
+                    # The decimator, the AEC and the gate froze their rate when the adapter
+                    # opened; retuning the live config here used to make the preroll window,
+                    # the replay length and the gate disagree about what a second is.
+                    if msg.voice_rate != self.cfg.audio.voice.rate:
+                        log.warning(
+                            "control plane asked for %s Hz, the plane runs %s Hz: ignored",
+                            msg.voice_rate,
+                            self.cfg.audio.voice.rate,
+                        )
+                elif isinstance(msg, ShellCommand):
+                    stdout, error = "", ""
+                    try:
+                        if self.adapter is None:
+                            raise RuntimeError("no device connected")
+                        stdout = await self.adapter.shell(msg.script)
+                    except Exception as exc:  # noqa: BLE001 - report, never crash the plane
+                        error = f"{type(exc).__name__}: {exc}"
+                    writer.write(encode_json(ShellResult(
+                        request_id=msg.request_id, stdout=stdout, error=error,
+                    )))
+                    await writer.drain()
+                elif isinstance(msg, DeviceVolume):
+                    volume, error = None, ""
+                    try:
+                        if self.adapter is None:
+                            raise RuntimeError("no device connected")
+                        services = self.adapter.services
+                        if msg.action == "set":
+                            if msg.value is None:
+                                raise ValueError("set needs a value")
+                            await services.set_volume(int(msg.value))
+                            # Learn it: the user just chose this level. Without it the
+                            # reconciler (own copy of the config, separate process)
+                            # put the old target back within 16 s - measured 08:57.
+                            for dev in self.cfg.devices:
+                                if dev.id == self.device_id:
+                                    dev.volume = round(int(msg.value) * 100 / 255)
+                        volume = await services.read_volume()
+                        self.device_volume = volume
+                    except Exception as exc:  # noqa: BLE001 - report, never crash
+                        error = f"{type(exc).__name__}: {exc}"
+                    writer.write(encode_json(DeviceVolumeResult(volume=volume, error=error)))
+                    await writer.drain()
+                elif isinstance(msg, QueryMetrics):
+                    writer.write(encode_json(self.metrics()))
+                    await writer.drain()
+                elif isinstance(msg, PlayFile):
+                    path = self._start_playback(msg)
+                    log.info("playback requested: %s loop=%s gain=%.2f", path, msg.loop, msg.gain)
+                elif isinstance(msg, StopAudio):
+                    self._flush_speech()
+                    await self._stop_playback()
+                elif isinstance(msg, PauseMusic):
+                    self._pause_for_speech()
+                    self._paused_explicit = True
+                    log.info("playback parked by hand (pause)")
+                elif isinstance(msg, ResumeMusic):
+                    self._paused_explicit = False
+                    if self._speech_paused:
+                        log.info("playback resumed by hand")
+                    self._resume_after_speech()
+                elif isinstance(msg, LedState):
+                    # Never awaited: the script runs on the device for up to a couple
+                    # of seconds and this loop also carries PLAY_PCM.
+                    asyncio.create_task(self._apply_led(msg.effect, msg.repaint), name="led")
+                elif isinstance(msg, SpeakStart):
+                    self._segment_pending = True
+                elif isinstance(msg, ReplyFinished):
+                    self._reply_finished = True
+                    self._reply_hold = msg.hold_music_s
+                elif isinstance(msg, SpeakFinished):
+                    # No more PLAY_PCM is expected for this burst. An empty queue is now
+                    # the normal end of the reply, not an underrun.
+                    self._speak_finished = True
+                    log.info("speak finished, %s chunks still queued (%.1f s of audio)",
+                             self._speak_queue.qsize(), self._speak_queued_s)
+        except (asyncio.IncompleteReadError, ConnectionResetError):
+            pass
+        except Exception as exc:  # noqa: BLE001 - reported to the client, then the process exits
+            try:
+                writer.write(encode_json(Error(message=str(exc))))
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+            raise
+        finally:
+            self._stop.set()
+            await self._stop_playback()
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+            if self.wake is not None:
+                self.wake.close()
+                self.wake = None
+            if self.aec is not None:
+                self.aec.close()
+                self.aec = None
+            if self.adapter is not None:
+                await self.adapter.close()
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
+
+    async def serve(self) -> None:
+        self.socket_path.parent.mkdir(parents=True, exist_ok=True)
+        self.socket_path.unlink(missing_ok=True)
+        server = await asyncio.start_unix_server(self.handle, path=str(self.socket_path))
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, self._stop.set)
+            except NotImplementedError:  # pragma: no cover - non-POSIX
+                pass
+        async with server:
+            await self._stop.wait()
+        self.socket_path.unlink(missing_ok=True)
+
+
+def default_socket_path() -> Path:
+    env = env_get("RUI_AUDIO_SOCK")
+    if env:
+        return resolve_socket_path(Path(env))
+    return resolve_socket_path(Path.home() / ".local" / "state" / "rui" / "audio.sock")
+
+
+def resolve_socket_path(path: Path) -> Path:
+    """Keep the path inside the platform's AF_UNIX limit (104 bytes on macOS).
+
+    A deep `system.data_dir` would otherwise fail at bind time with a bare
+    "AF_UNIX path too long". The short path is derived from the requested one, so
+    both sides of the boundary resolve the same name without extra configuration.
+    """
+    text = str(path)
+    if len(text.encode()) <= 96:
+        return path
+    digest = hashlib.sha1(text.encode()).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / f"rui-{digest}.sock"
+
+
+def build_plane(cfg: Config, device_id: str, socket_path: Path | None = None) -> AudioPlane:
+    return AudioPlane(cfg, device_id, resolve_socket_path(socket_path or default_socket_path()))
+
+
+def _configure_logging(level: str) -> None:
+    """The plane is a separate process with its own stderr: without this, `system.log_level`
+    does nothing and every gate/playback diagnostic is invisible."""
+    setup_logging(level)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="rui-audio", description="rui audio plane")
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--device", required=True)
+    parser.add_argument("--socket", default=None)
+    args = parser.parse_args(argv)
+
+    cfg = load_config(args.config)
+    # The plane builds the device adapter itself (a second process from the control
+    # plane); without this the adapter reads keys from the environment only and a key
+    # entered in the console never reaches the device token check (security audit).
+    secrets.configure(cfg.system.data_dir)
+    _configure_logging(cfg.system.log_level)
+    plane = build_plane(cfg, args.device, Path(args.socket) if args.socket else None)
+    try:
+        asyncio.run(plane.serve())
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

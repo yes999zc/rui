@@ -6,11 +6,11 @@ from pathlib import Path
 
 import httpx
 
-from house_ear.channels.base import ChannelGateway, ControlClient, Dedupe, Inbound, Reply
-from house_ear.channels.telegram import TelegramAdapter
-from house_ear.channels.telegram import split_text as tg_split
-from house_ear.channels.weixin import AccountStore, parse_aes_key
-from house_ear.channels.weixin import split_text as wx_split
+from rui.channels.base import ChannelGateway, ControlClient, Dedupe, Inbound, Reply
+from rui.channels.telegram import TelegramAdapter
+from rui.channels.telegram import split_text as tg_split
+from rui.channels.weixin import AccountStore, parse_aes_key
+from rui.channels.weixin import split_text as wx_split
 
 
 def test_dedupe_is_bounded_and_time_aware() -> None:
@@ -200,7 +200,7 @@ def test_weixin_qr_login_and_text_roundtrip(tmp_path: Path) -> None:
     async def run() -> None:
         transport = httpx.MockTransport(handler)
         client = httpx.AsyncClient(transport=transport)
-        from house_ear.channels.weixin import WeixinAdapter
+        from rui.channels.weixin import WeixinAdapter
         wx = WeixinAdapter(tmp_path / "wx", allowed_user_ids={"user@im.wechat"},
                            client=client, base_url="https://wx.test")
         account = await wx.qr_login()

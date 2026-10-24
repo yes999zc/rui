@@ -1,6 +1,6 @@
 import type { PanelSpec } from './panels'
 
-const TOKEN_KEY = 'house-ear-token'
+const TOKEN_KEY = 'rui-token'
 
 export const token = {
   get: () => localStorage.getItem(TOKEN_KEY) ?? '',
@@ -66,7 +66,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, { ...init, headers })
   if (res.status === 401) {
     // The console has nowhere else to ask: highlight the token field (App.vue).
-    window.dispatchEvent(new Event('house-ear-401'))
+    window.dispatchEvent(new Event('rui-401'))
   }
   if (!res.ok) {
     let detail: unknown = null
@@ -696,7 +696,7 @@ export interface TelegramChannelState {
   enabled: boolean
   allowed_chat_ids: string[]
   reply_mode: ChannelReplyMode
-  /** Computed from HOUSE_EAR_TELEGRAM_TOKEN; the token itself is never returned. */
+  /** Computed from RUI_TELEGRAM_TOKEN; the token itself is never returned. */
   token_configured: boolean
 }
 
@@ -1089,7 +1089,7 @@ export const api = {
       headers,
       body: JSON.stringify({ voice, ...(text ? { text } : {}), ...(prosody ?? {}) }),
     })
-    if (res.status === 401) window.dispatchEvent(new Event('house-ear-401'))
+    if (res.status === 401) window.dispatchEvent(new Event('rui-401'))
     if (!res.ok) {
       let detail: unknown = null
       const raw = await res.text()

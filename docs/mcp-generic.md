@@ -28,7 +28,7 @@ tools:
       url: http://mcp.example.lan:7001/mcp
       enabled: true
 
-    # --- stdio：由 house-ear 启动一个本地子进程（注意 §5 安全） ---
+    # --- stdio：由 rui 启动一个本地子进程（注意 §5 安全） ---
     - name: notes
       transport: stdio
       command: ["npx", "-y", "@modelcontextprotocol/server-notes"]
@@ -66,7 +66,7 @@ tier 4 / effect=restart）。关闭时：
 > **stdio 子进程只拿到最小环境变量**（安全审计第 2 轮 P0-1）：
 > `PATH`、`HOME`、`LANG`/`LC_*`、`TZ`、`TMPDIR`、`TERM`，加上服务器配置里显式声明的
 > `env`（schema 未来若增加 `env` 字段，`MCPManager` 已用 `getattr` 兼容）。
-> **不会**继承 house-ear 的完整 `os.environ`——容器 `.env` 里的模型/HA/设备/火山密钥
+> **不会**继承 rui 的完整 `os.environ`——容器 `.env` 里的模型/HA/设备/火山密钥
 > 对 stdio 子进程不可见。需要 token 的本地服务器，请在其自身配置/凭据文件里管理，或等
 > schema 增加 `env` 字段后显式声明。http 服务器按 URL 直接连接（当前没有 headers 字段）。
 
@@ -154,7 +154,7 @@ ToolSpec.source              = mcp:filesystem
 
 ## 5. 安全（重要）
 
-1. **stdio = 代码执行，且默认关闭。** `command` 是 house-ear 服务进程直接启动的子进程，
+1. **stdio = 代码执行，且默认关闭。** `command` 是 rui 服务进程直接启动的子进程，
    权限等于服务进程（Docker 里就是容器权限）。必须先把 `tools.mcp_allow_stdio` 设为
    true（catalog 里有警告文案），PUT/测试端点才会接受/启动 stdio。只添加你**完全信任**
    的服务器；不要在 `command` 里拼用户输入。命令用列表、不经过 shell，避免把配置笔误变成

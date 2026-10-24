@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from house_ear.config.schema import AssistantConfig, Config, ProviderConfig
-from house_ear.providers.base import ChatChunk, Transcript
-from house_ear.session.turn import TurnRunner, split_sentences
-from house_ear.trace import TurnTrace
+from rui.config.schema import AssistantConfig, Config, ProviderConfig
+from rui.providers.base import ChatChunk, Transcript
+from rui.session.turn import TurnRunner, split_sentences
+from rui.trace import TurnTrace
 
 
 class FakeAsr:
@@ -54,7 +54,7 @@ class FakeTts:
 
 
 def patch_chains(monkeypatch, *, asr, llms, ttss) -> None:
-    import house_ear.session.turn as turn
+    import rui.session.turn as turn
 
     monkeypatch.setattr(turn, "asr_chain", lambda providers: [("a", asr)])
     monkeypatch.setattr(turn, "llm_chain", lambda providers: [(f"l{i}", p) for i, p in enumerate(llms)])
@@ -255,9 +255,9 @@ def test_history_window_shape_and_the_repeat_drop(monkeypatch) -> None:
 def test_missing_key_fails_the_stage_with_a_reason(monkeypatch) -> None:
     """No key configured must read as a stage failure, not as silence."""
     cfg = Config()
-    cfg.providers.catalog["asr"].api_key_env = "HOUSE_EAR_NOT_SET_ANYWHERE"
+    cfg.providers.catalog["asr"].api_key_env = "RUI_NOT_SET_ANYWHERE"
     cfg.providers.catalog["asr"].base_url = "http://127.0.0.1:9/v1"
-    monkeypatch.delenv("HOUSE_EAR_NOT_SET_ANYWHERE", raising=False)
+    monkeypatch.delenv("RUI_NOT_SET_ANYWHERE", raising=False)
 
     async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
         return None
@@ -270,8 +270,8 @@ def test_missing_key_fails_the_stage_with_a_reason(monkeypatch) -> None:
 
 def test_a_flaky_provider_is_retried_before_the_next_one(monkeypatch) -> None:
     """SiliconFlow ASR returns 400 ms or a 20 s stall for the same clip; one retry is cheaper."""
-    from house_ear.config.schema import ProviderConfig
-    from house_ear.providers.chain import call_stage
+    from rui.config.schema import ProviderConfig
+    from rui.providers.chain import call_stage
 
     class Flaky(FakeAsr):
         def __init__(self) -> None:
@@ -298,8 +298,8 @@ def test_a_flaky_provider_is_retried_before_the_next_one(monkeypatch) -> None:
 
 
 LOCAL_MODEL = Path("/data/models/sensevoice")   # where the container / fetch-models puts it
-# Optional local checkout: HOUSE_EAR_TEST_MODELS points at a dir holding sensevoice/.
-_TEST_MODELS = os.environ.get("HOUSE_EAR_TEST_MODELS", "").strip()
+# Optional local checkout: RUI_TEST_MODELS points at a dir holding sensevoice/.
+_TEST_MODELS = os.environ.get("RUI_TEST_MODELS", "").strip()
 TEST_MODEL = (Path(_TEST_MODELS) / "sensevoice") if _TEST_MODELS else None
 
 
@@ -312,10 +312,10 @@ def sample_model_dir() -> Path | None:
 
 @pytest.mark.skipif(
     sample_model_dir() is None,
-    reason="local ASR model not installed: set HOUSE_EAR_TEST_MODELS to the dir holding sensevoice/",
+    reason="local ASR model not installed: set RUI_TEST_MODELS to the dir holding sensevoice/",
 )
 def test_local_asr_reads_the_command_fixture() -> None:
-    from house_ear.providers.sherpa_asr import SherpaAsr
+    from rui.providers.sherpa_asr import SherpaAsr
 
     model = sample_model_dir()
     assert model is not None
@@ -330,11 +330,11 @@ def test_local_asr_reads_the_command_fixture() -> None:
 
 def test_a_missing_local_model_falls_back_to_the_cloud(monkeypatch) -> None:
     """No model on disk must mean a cloud answer, not a dead assistant."""
-    from house_ear.providers.chain import call_stage
-    from house_ear.providers.sherpa_asr import SherpaAsr
+    from rui.providers.chain import call_stage
+    from rui.providers.sherpa_asr import SherpaAsr
 
     monkeypatch.setattr(
-        "house_ear.providers.sherpa_asr.model_paths",
+        "rui.providers.sherpa_asr.model_paths",
         lambda _dir: (Path("/nonexistent/model.int8.onnx"), Path("/nonexistent/tokens.txt")),
     )
     local = SherpaAsr(ProviderConfig(kind="sherpa", model="/nonexistent"))
@@ -349,7 +349,7 @@ def test_a_missing_local_model_falls_back_to_the_cloud(monkeypatch) -> None:
 
 
 def test_chat_payload_carries_the_latency_knobs() -> None:
-    from house_ear.providers.openai_compat import chat_payload
+    from rui.providers.openai_compat import chat_payload
 
     cfg = ProviderConfig(model="deepseek-flash", max_tokens=3000, temperature=0.4,
                          thinking="disabled")
@@ -380,7 +380,7 @@ class ScriptedLlm:
 
 def test_a_tool_round_runs_the_tool_then_answers(monkeypatch) -> None:
     """Model asks for weather -> handler runs -> the second round gets the result."""
-    from house_ear.tools.contract import Permission, ToolSpec
+    from rui.tools.contract import Permission, ToolSpec
 
     spec = ToolSpec(name="local.weather", description="查天气", permission=Permission.READ)
     calls: list[dict] = []
@@ -415,7 +415,7 @@ def test_a_tool_round_runs_the_tool_then_answers(monkeypatch) -> None:
 
 
 def test_a_model_that_keeps_asking_for_tools_still_answers(monkeypatch) -> None:
-    from house_ear.tools.contract import Permission, ToolSpec
+    from rui.tools.contract import Permission, ToolSpec
 
     spec = ToolSpec(name="local.web_search", description="搜索", permission=Permission.READ)
 
@@ -440,7 +440,7 @@ def test_a_model_that_keeps_asking_for_tools_still_answers(monkeypatch) -> None:
 
 
 def test_a_failing_tool_becomes_a_sentence_not_an_exception(monkeypatch) -> None:
-    from house_ear.tools.contract import Permission, ToolSpec
+    from rui.tools.contract import Permission, ToolSpec
 
     spec = ToolSpec(name="local.weather", description="查天气", permission=Permission.READ)
 
@@ -496,8 +496,8 @@ def test_a_slow_turn_says_something_small_first(monkeypatch) -> None:
 def test_a_structured_tool_result_renders_from_the_phrase_book() -> None:
     """V1's core rule at the runner level: the handler returns slots, the system
     layer speaks (docs/interaction.md §3). A str return still passes through."""
-    from house_ear.session import phrases
-    from house_ear.tools.contract import InteractionSpec, ToolResult, ToolSpec
+    from rui.session import phrases
+    from rui.tools.contract import InteractionSpec, ToolResult, ToolSpec
 
     async def handler(_args: dict) -> ToolResult:
         return ToolResult(status="ok").slot(title="晴天", artist="周杰伦", count=20)
@@ -541,7 +541,7 @@ def test_a_silent_tool_skips_the_spoken_confirmation(monkeypatch) -> None:
     """A song that started IS the answer (old build: "@@PLAY -> the song is the
     answer"). A tool declaring answer="silent" ends the turn with no speech, so
     the music starts ~5 s sooner."""
-    from house_ear.tools.contract import InteractionSpec, ToolResult, ToolSpec
+    from rui.tools.contract import InteractionSpec, ToolResult, ToolSpec
 
     calls: list[str] = []
 
@@ -584,7 +584,7 @@ def test_a_hallucinated_music_call_beside_weather_keeps_the_answer(monkeypatch) 
     (repeating the previous turn) and weather - and the silent rule swallowed the
     weather answer. Two guards: music_play refused when the user did not ask for
     music, and the silent skip only when every call is silent."""
-    from house_ear.tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
+    from rui.tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
 
     def spec(name: str, **kw: object) -> ToolSpec:
         return ToolSpec(name=name, description=name, permission=Permission.READ,
@@ -625,7 +625,7 @@ def test_the_music_query_is_always_the_users_words(monkeypatch) -> None:
     """Measured twice: music_play({}) played a random batch (10:13:04), and a
     stale {"query": "播放战车乐队的歌"} played Rammstein when the user asked for
     周杰伦 (10:15:57)."""
-    from house_ear.tools.contract import InteractionSpec, ToolResult, ToolSpec
+    from rui.tools.contract import InteractionSpec, ToolResult, ToolSpec
 
     seen: list[dict] = []
 

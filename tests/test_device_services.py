@@ -10,8 +10,8 @@ import asyncio
 
 import pytest
 
-from house_ear.device.mock import MockAdapter
-from house_ear.device.xiaoai.services import XiaoaiServices
+from rui.device.mock import MockAdapter
+from rui.device.xiaoai.services import XiaoaiServices
 
 
 class Shell:

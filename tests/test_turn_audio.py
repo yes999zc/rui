@@ -11,10 +11,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from house_ear.audio.vad import GateConfig, UtteranceGate
+from rui.audio.vad import GateConfig, UtteranceGate
 
-# Optional models: see tests/test_ack.py. Without HOUSE_EAR_TEST_MODELS these skip.
-_TEST_MODELS = os.environ.get("HOUSE_EAR_TEST_MODELS", "").strip()
+# Optional models: see tests/test_ack.py. Without RUI_TEST_MODELS these skip.
+_TEST_MODELS = os.environ.get("RUI_TEST_MODELS", "").strip()
 _KWS_REL = Path("kws") / "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 MODEL = Path(_TEST_MODELS) / "silero_vad.onnx" if _TEST_MODELS else Path("/nonexistent/silero_vad.onnx")
 KWS_MODEL = Path(_TEST_MODELS) / _KWS_REL if _TEST_MODELS else Path("/nonexistent") / _KWS_REL
@@ -23,11 +23,11 @@ COMMAND = Path(__file__).parent / "fixtures" / "command-weather.wav"
 
 needs_vad = pytest.mark.skipif(
     not MODEL.exists(),
-    reason="optional model suite: set HOUSE_EAR_TEST_MODELS to a dir with silero_vad.onnx",
+    reason="optional model suite: set RUI_TEST_MODELS to a dir with silero_vad.onnx",
 )
 needs_kws = pytest.mark.skipif(
     not KWS_MODEL.exists(),
-    reason="optional wake model: set HOUSE_EAR_TEST_MODELS to the dir holding kws/",
+    reason="optional wake model: set RUI_TEST_MODELS to the dir holding kws/",
 )
 
 
@@ -84,7 +84,7 @@ devices:
     adapter: xiaoai
     host: 192.0.2.10
     listen_port: {port}
-    token_env: HOUSE_EAR_TURN_TOKEN
+    token_env: RUI_TURN_TOKEN
 audio:
   capture: {{rate: 16000, channels: 8, mic_channels: 6, ref_channels: 2,
             mic_shift: 12, ref_shift: 16}}
@@ -112,12 +112,12 @@ def free_port() -> int:
 def test_wake_then_speech_becomes_an_utterance_and_a_reply_is_played(tmp_path, monkeypatch) -> None:
     from websockets.asyncio.client import connect
 
-    from house_ear.audio.client import AudioPlaneSupervisor
-    from house_ear.config import load_config
-    from house_ear.device.xiaoai import protocol
+    from rui.audio.client import AudioPlaneSupervisor
+    from rui.config import load_config
+    from rui.device.xiaoai import protocol
 
-    monkeypatch.setenv("HOUSE_EAR_TURN_TOKEN", "turn-token")
-    monkeypatch.setenv("HOUSE_EAR_AUDIO_SOCK", str(tmp_path / "audio.sock"))
+    monkeypatch.setenv("RUI_TURN_TOKEN", "turn-token")
+    monkeypatch.setenv("RUI_AUDIO_SOCK", str(tmp_path / "audio.sock"))
     port = free_port()
     config_path = tmp_path / "config.yaml"
     config_path.write_text(CONFIG.format(port=port, kws=KWS_MODEL, vad=MODEL), encoding="utf-8")

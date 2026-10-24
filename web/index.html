@@ -10,11 +10,11 @@
       // Apply theme + language before first paint (no flash of the wrong mode).
       (function () {
         try {
-          var theme = localStorage.getItem('house-ear-theme') || 'auto'
+          var theme = localStorage.getItem('rui-theme') || 'auto'
           var dark = theme === 'dark' ||
             (theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
           document.documentElement.dataset.theme = dark ? 'dark' : 'light'
-          var lang = localStorage.getItem('house-ear-language')
+          var lang = localStorage.getItem('rui-language')
           if (!lang) lang = (navigator.language || 'zh').toLowerCase().indexOf('zh') === 0 ? 'zh' : 'en'
           document.documentElement.lang = lang === 'zh' ? 'zh-Hans' : 'en'
         } catch (e) {

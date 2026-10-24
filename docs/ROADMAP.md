@@ -1,4 +1,4 @@
-# ROADMAP — house-ear / 小瑞
+# ROADMAP — rui / 小瑞
 
 > 目标载体：**NAS**。一句话现状：**v0.1.0 已发布并部署，四道 v1 门槛通过**；下一步按 P1 → P2 → P3。
 > 每条都要有可复现判据；过程数字在 `HANDOFF` 与验收工作区，详细历史在
@@ -54,7 +54,7 @@
 | # | 任务 | 判据 |
 |---|---|---|
 | P1.1 ✅ | 空 config 走 ConfigError/last-good，不再 defaults→crash loop + 回归测试（`f71958a`） | 清空 config 重启仍 healthy + banner；无 last-good 时给可读错误 |
-| P1.2 ✅ | 旧 secrets 兼容：`HOUSE_EAR_LLM_KEY` 缺失时映射 `DEEPSEEK_API_KEY`；doctor 明确提示（`ae2105c`） | 复用旧 secrets 冷装不再“唤醒后不回答” |
+| P1.2 ✅ | 旧 secrets 兼容：`RUI_LLM_KEY` 缺失时映射 `DEEPSEEK_API_KEY`；doctor 明确提示（`ae2105c`） | 复用旧 secrets 冷装不再“唤醒后不回答” |
 | P1.3 ✅ | `fetch-models` httpx 超时（connect 10 s / read 60 s），失败快速切镜像（`ae2105c`） | 断网/直连失败 ≤30 s 内切源或明确失败 |
 | P1.4 ✅ | 验收脚本输出默认落到宿主可见目录（`bfee677`） | 一次 barge/wake 后产物在工作区可读 |
 | P1.5 ✅ | GHCR 发布前跑测试（`3ee86cc`） | 测试失败则镜像不发布 |

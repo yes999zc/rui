@@ -6,8 +6,8 @@ import time
 import psutil
 from fastapi.testclient import TestClient
 
-from house_ear.config import load_config
-from house_ear.web.api.app import create_app
+from rui.config import load_config
+from rui.web.api.app import create_app
 
 CONFIG = """\
 version: 2
@@ -24,7 +24,7 @@ devices:
 def test_api_reports_plane_metrics_and_shuts_it_down(tmp_path, monkeypatch) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(CONFIG, encoding="utf-8")
-    monkeypatch.setenv("HOUSE_EAR_AUDIO_SOCK", str(tmp_path / "audio.sock"))
+    monkeypatch.setenv("RUI_AUDIO_SOCK", str(tmp_path / "audio.sock"))
 
     app = create_app(load_config(config_path), config_path=config_path, start_audio=True)
     with TestClient(app) as client:
@@ -67,11 +67,11 @@ def test_plane_failure_is_reported_with_its_reason(tmp_path, monkeypatch) -> Non
         "    adapter: xiaoai\n"
         "    host: 192.0.2.10\n"
         "    listen_port: 4599\n"
-        "    token_env: HOUSE_EAR_MISSING_TOKEN\n",
+        "    token_env: RUI_MISSING_TOKEN\n",
         encoding="utf-8",
     )
-    monkeypatch.delenv("HOUSE_EAR_MISSING_TOKEN", raising=False)
-    monkeypatch.setenv("HOUSE_EAR_AUDIO_SOCK", str(tmp_path / "audio.sock"))
+    monkeypatch.delenv("RUI_MISSING_TOKEN", raising=False)
+    monkeypatch.setenv("RUI_AUDIO_SOCK", str(tmp_path / "audio.sock"))
 
     app = create_app(load_config(config_path), config_path=config_path, start_audio=True)
     with TestClient(app) as client:

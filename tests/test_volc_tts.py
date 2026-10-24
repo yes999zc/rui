@@ -14,14 +14,14 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from house_ear import billing
-from house_ear.config import Config
-from house_ear.config.catalog import document
-from house_ear.config.schema import ProviderConfig
-from house_ear.providers.chain import build_stage
-from house_ear.providers.volc_tts import VolcTts
-from house_ear.providers.volc_voices import VOLC_TTS_VOICES, voices_for
-from house_ear.web.api.app import create_app
+from rui import billing
+from rui.config import Config
+from rui.config.catalog import document
+from rui.config.schema import ProviderConfig
+from rui.providers.chain import build_stage
+from rui.providers.volc_tts import VolcTts
+from rui.providers.volc_voices import VOLC_TTS_VOICES, voices_for
+from rui.web.api.app import create_app
 
 
 def _frame(payload: bytes | None, code: int = 20000000) -> str:
@@ -82,7 +82,7 @@ def _cfg(**kwargs) -> ProviderConfig:
 def test_the_stream_is_decoded_pcm_and_voice_can_override(monkeypatch) -> None:
     captured: dict = {}
     lines = [_frame(b"\x01\x00\x02\x00"), _frame(None)]
-    monkeypatch.setattr("house_ear.providers.volc_tts.secrets.get",
+    monkeypatch.setattr("rui.providers.volc_tts.secrets.get",
                         lambda name: "test-key")
     monkeypatch.setattr("httpx.AsyncClient", lambda **kw: FakeClient(lines, captured))
 
@@ -99,22 +99,22 @@ def test_the_stream_is_decoded_pcm_and_voice_can_override(monkeypatch) -> None:
 
 def test_vendor_error_code_raises(monkeypatch) -> None:
     lines = [json.dumps({"code": 55000000, "message": "resource ID mismatched"})]
-    monkeypatch.setattr("house_ear.providers.volc_tts.secrets.get", lambda name: "k")
+    monkeypatch.setattr("rui.providers.volc_tts.secrets.get", lambda name: "k")
     monkeypatch.setattr("httpx.AsyncClient", lambda **kw: FakeClient(lines))
 
     async def collect():
         async for _ in VolcTts(_cfg(), 16000).synthesize("你好"):
             pass
 
-    from house_ear.providers.openai_compat import ProviderError
+    from rui.providers.openai_compat import ProviderError
 
     with pytest.raises(ProviderError):
         __import__("asyncio").run(collect())
 
 
 def test_a_missing_api_key_is_a_clear_error(monkeypatch) -> None:
-    monkeypatch.setattr("house_ear.providers.volc_tts.secrets.get", lambda name: "")
-    from house_ear.providers.openai_compat import MissingKey
+    monkeypatch.setattr("rui.providers.volc_tts.secrets.get", lambda name: "")
+    from rui.providers.openai_compat import MissingKey
 
     async def collect():
         async for _ in VolcTts(_cfg(), 16000).synthesize("你好"):
@@ -162,7 +162,7 @@ def test_audition_returns_a_wav_and_does_not_save(monkeypatch) -> None:
         async def synthesize(self, text: str, voice: str = ""):
             yield b"\x01\x00" * 1600
 
-    monkeypatch.setattr("house_ear.web.api.app.build_stage",
+    monkeypatch.setattr("rui.web.api.app.build_stage",
                         lambda providers, stage, sample_rate: [("volc-tts", FakeProvider())])
     client = TestClient(create_app(cfg))
     response = client.post("/api/v1/providers/tts/volc-tts/audition",
@@ -176,7 +176,7 @@ def test_audition_returns_a_wav_and_does_not_save(monkeypatch) -> None:
 
 
 def test_audition_rejects_an_unknown_provider(monkeypatch) -> None:
-    monkeypatch.setattr("house_ear.web.api.app.build_stage",
+    monkeypatch.setattr("rui.web.api.app.build_stage",
                         lambda providers, stage, sample_rate: [])
     client = TestClient(create_app(Config()))
     response = client.post("/api/v1/providers/tts/ghost/audition", json={})
@@ -246,7 +246,7 @@ def test_quota_summary_parses_balance_usage_and_packs(monkeypatch) -> None:
 def test_prosody_is_forwarded_only_when_configured(monkeypatch) -> None:
     captured: dict = {}
     lines = [_frame(b"\x00\x00"), _frame(None)]
-    monkeypatch.setattr("house_ear.providers.volc_tts.secrets.get", lambda name: "k")
+    monkeypatch.setattr("rui.providers.volc_tts.secrets.get", lambda name: "k")
     monkeypatch.setattr("httpx.AsyncClient", lambda **kw: FakeClient(lines, captured))
 
     async def collect(cfg):
@@ -281,7 +281,7 @@ def test_catalog_exposes_speech_rate_emotion_and_strength() -> None:
 
 
 def test_xfyun_speed_maps_the_shared_rate() -> None:
-    from house_ear.providers.xfyun_tts import request_payload
+    from rui.providers.xfyun_tts import request_payload
 
     # xfyun's own scale is 0..100 with 50 = normal; the shared speech_rate is -50..100.
     payload = request_payload("app", "你好", "voice", 16000, speed=75)

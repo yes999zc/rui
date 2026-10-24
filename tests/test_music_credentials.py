@@ -12,8 +12,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from house_ear.config import Config, save_config
-from house_ear.web.api.app import create_app
+from rui.config import Config, save_config
+from rui.web.api.app import create_app
 
 
 def _client(tmp_path: Path, *, enabled: bool = False) -> tuple[TestClient, Config, Path]:

@@ -7,10 +7,10 @@ import struct
 
 import pytest
 
-from house_ear.config import Config
-from house_ear.config.schema import ProviderConfig
-from house_ear.providers import volc_asr
-from house_ear.providers.chain import build_stage
+from rui.config import Config
+from rui.config.schema import ProviderConfig
+from rui.providers import volc_asr
+from rui.providers.chain import build_stage
 
 
 def test_header_layout() -> None:
@@ -68,7 +68,7 @@ def _cfg(**kw) -> ProviderConfig:
 
 def test_transcribe_sends_packets_and_returns_the_text(monkeypatch) -> None:
     ws = FakeWs()
-    monkeypatch.setattr("house_ear.providers.volc_asr.secrets.get", lambda name: "test-key")
+    monkeypatch.setattr("rui.providers.volc_asr.secrets.get", lambda name: "test-key")
     import websockets
 
     monkeypatch.setattr(websockets, "connect", lambda *a, **kw: FakeConnect(ws))
@@ -83,7 +83,7 @@ def test_transcribe_sends_packets_and_returns_the_text(monkeypatch) -> None:
 
 
 def test_a_bad_sample_rate_is_a_clear_error() -> None:
-    from house_ear.providers.openai_compat import ProviderError
+    from rui.providers.openai_compat import ProviderError
 
     with pytest.raises(ProviderError):
         asyncio.run(volc_asr.VolcAsr(_cfg(), 16000).transcribe(b"\x00\x00" * 100, 8000))

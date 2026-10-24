@@ -11,11 +11,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from house_ear.audio.kws import KwsUnavailable, WakeWord, model_files
+from rui.audio.kws import KwsUnavailable, WakeWord, model_files
 
-# Optional wake model. HOUSE_EAR_TEST_MODELS must point at the parent of kws/, e.g. the
+# Optional wake model. RUI_TEST_MODELS must point at the parent of kws/, e.g. the
 # directory `fetch-models --kws-dest` fills; otherwise these tests skip.
-_TEST_MODELS = os.environ.get("HOUSE_EAR_TEST_MODELS", "").strip()
+_TEST_MODELS = os.environ.get("RUI_TEST_MODELS", "").strip()
 _KWS_REL = Path("kws") / "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 MODEL = Path(_TEST_MODELS) / _KWS_REL if _TEST_MODELS else Path("/nonexistent") / _KWS_REL
 FIXTURE = Path(__file__).parent / "fixtures" / "wake-nihao-xiaorui.wav"
@@ -23,7 +23,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "wake-nihao-xiaorui.wav"
 pytestmark = [
     pytest.mark.skipif(
         not MODEL.exists(),
-        reason="optional wake model: set HOUSE_EAR_TEST_MODELS to the dir holding kws/",
+        reason="optional wake model: set RUI_TEST_MODELS to the dir holding kws/",
     ),
     pytest.mark.skipif(not FIXTURE.exists(), reason="wake fixture missing"),
 ]
@@ -77,7 +77,7 @@ devices:
     adapter: xiaoai
     host: 192.0.2.10
     listen_port: {port}
-    token_env: HOUSE_EAR_KWS_TOKEN
+    token_env: RUI_KWS_TOKEN
 audio:
   capture: {{rate: 16000, channels: 8, mic_channels: 6, ref_channels: 2,
             mic_shift: 12, ref_shift: 16}}
@@ -100,12 +100,12 @@ def free_port() -> int:
 def test_wake_event_reaches_the_control_plane(tmp_path, monkeypatch) -> None:
     from websockets.asyncio.client import connect
 
-    from house_ear.audio.client import AudioPlaneSupervisor
-    from house_ear.config import load_config
-    from house_ear.device.xiaoai import protocol
+    from rui.audio.client import AudioPlaneSupervisor
+    from rui.config import load_config
+    from rui.device.xiaoai import protocol
 
-    monkeypatch.setenv("HOUSE_EAR_KWS_TOKEN", "kws-token")
-    monkeypatch.setenv("HOUSE_EAR_AUDIO_SOCK", str(tmp_path / "audio.sock"))
+    monkeypatch.setenv("RUI_KWS_TOKEN", "kws-token")
+    monkeypatch.setenv("RUI_AUDIO_SOCK", str(tmp_path / "audio.sock"))
     port = free_port()
     config_path = tmp_path / "config.yaml"
     config_path.write_text(CONFIG.format(port=port, model=MODEL), encoding="utf-8")

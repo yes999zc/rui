@@ -42,7 +42,7 @@ it exists. Options considered:
 
 - A Rust/C++ plane reimplements `audio/protocol.py` (about 20 lines of framing plus
   the message models) and nothing else in the repo changes.
-- Debugging a plane in isolation works: `house-ear audio --config ... --device ...`
+- Debugging a plane in isolation works: `rui audio --config ... --device ...`
   and any client that speaks the framing.
 - The seam costs one hop of copying per frame (~32 KB/s), which is noise next to the
   1.5 MB/s the device already sends.
