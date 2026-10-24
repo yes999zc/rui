@@ -108,7 +108,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print("console token: " + cfg.web.auth_token)
         print("  (the console asks for it as X-Auth-Token; `rui token` prints it later)")
     print(f"wrote {path}")
-    print("next: put your speaker under devices[], fill .env, run `rui fetch-models`")
+    if env_get("RUI_INSTALLER") == "1":
+        # Called by deploy/install.sh: that script writes .env and runs fetch-models
+        # immediately after this step, so do not tell the user to do them again.
+        print("next: add your speaker under devices[]")
+        print("      (install.sh writes .env and fetches models next; "
+              "then start with: docker compose up -d)")
+    else:
+        print("next: add your speaker under devices[], fill .env, run `rui fetch-models`")
+        print("      (or use deploy/install.sh, which performs these steps for you)")
     return 0
 
 

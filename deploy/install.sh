@@ -18,14 +18,39 @@ CURL="curl -4 -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-er
 # The service container itself still runs as root (it writes its own data volume).
 RUN_AS="$(id -u):$(id -g)"
 
-mkdir -p "$DIR/config" "$DIR/data/models"
+# Fail before any work: the usual cold-install failures are about the shell running this
+# script, not about the project. Catching them here beats a cryptic permission error
+# halfway through a model download.
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: 'docker' is not installed or not in PATH." >&2
+  echo "       install Docker Engine + the compose plugin first, then re-run this script." >&2
+  exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+  echo "ERROR: cannot talk to the Docker daemon (docker info failed)." >&2
+  echo "       make sure Docker is running; run as root, or add this user to the docker" >&2
+  echo "       group and log in again:" >&2
+  echo '         sudo usermod -aG docker "$USER"' >&2
+  exit 1
+fi
+
+# The installer writes as the invoking user. NAS mounts such as /vol1 are often root-only;
+# fail with a readable message instead of leaving a half-created install directory.
+if ! mkdir -p "$DIR/config" "$DIR/data/models"; then
+  echo "ERROR: cannot create $DIR." >&2
+  echo "       use a writable RUI_HOME, run the installer as root, or create the directory" >&2
+  echo "       first and chown it to this user." >&2
+  exit 1
+fi
 
 # A private GHCR package (or an offline registry) must not make the one-command install
 # fail forever. If the image cannot be pulled, build the same tag from the public source;
 # a later re-run reuses the image, and once the package is public the fast path returns.
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  if ! docker pull "$IMAGE" >/dev/null 2>&1; then
-    echo "[0/5] image not pullable; building it from the public source (first run only)"
+  if ! PULL_OUTPUT="$(docker pull "$IMAGE" 2>&1)"; then
+    echo "WARNING: could not pull $IMAGE; falling back to a source build." >&2
+    printf '%s\n' "$PULL_OUTPUT" | sed 's/^/         /' >&2
+    echo "[0/5] building the image from the public source (first run only)"
     SRC="$DIR/src"
     if [ ! -d "$SRC/.git" ]; then
       git clone --depth 1 "https://github.com/$REPO.git" "$SRC"
@@ -65,7 +90,7 @@ if [ ! -f "$DIR/config/config.yaml" ]; then
   # generates keywords.txt from the default wake word, so the only things left by hand
   # are devices[] and the keys in .env. It still writes no devices: a fresh install must
   # not show a speaker that does not exist.
-  docker run --rm --user "$RUN_AS" -v "$DIR/config:/config" "$IMAGE" setup --config /config/config.yaml
+  docker run --rm -e RUI_INSTALLER=1 --user "$RUN_AS" -v "$DIR/config:/config" "$IMAGE" setup --config /config/config.yaml
   echo "      next: add devices[] and set audio.voice.kws_keywords_file/wake_words to match"
   echo "      after changing wake words: docker run --rm -v $DIR/config:/config $IMAGE keywords --config /config/config.yaml"
   echo "      reference: $DIR/config.example.yaml and docs/deploy.md"
@@ -131,15 +156,32 @@ if [ ! -f "$DIR/config/keywords.txt" ]; then
 fi
 
 echo "[5/5] starting"
-# A second install on the same host would collide on the fixed container name. Fail with
-# an actionable message instead of a raw Docker "Conflict" (seen while testing a cold
-# install next to a running production instance on 2026-10-24).
-if docker ps -a --format '{{.Names}}' | grep -qx rui; then
-  echo "ERROR: a container named 'rui' already exists."
-  echo "       stop the other install first, e.g. (cd /path/to/other/install && docker compose down)"
-  exit 1
-fi
+# A second install on the same host would collide on the fixed container name. 0.1.x used
+# `house-ear`, 0.2.0 uses `rui`, and either container with --network host keeps :8080/:4412
+# after its compose project is gone - so check both names instead of only `rui`. Fail with
+# an actionable message rather than a raw Docker "Conflict" (seen 2026-10-24 while testing
+# a cold install next to a running production instance).
+for name in rui house-ear; do
+  if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
+    echo "ERROR: a container named '$name' already exists (another Rui/house-ear install)."
+    echo "       stop and remove it before installing here:"
+    echo "         docker stop $name && docker rm $name"
+    echo "       or, from that install's directory: docker compose down"
+    exit 1
+  fi
+done
 cd "$DIR"
+# --network host publishes no port mapping, so the name check above is the owner signal.
+# If the port is still taken (an unrelated service or a manually run container), say so
+# now instead of letting uvicorn fail during startup.
+PORT="$(grep -E '^[[:space:]]*port:' "$DIR/config/config.yaml" 2>/dev/null | head -1 | awk '{print $2}')"
+PORT="${PORT:-8080}"
+if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE "[:.]$PORT[[:space:]]"; then
+  OWNER="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | awk -v p=":$PORT->" 'index($0, p) {print $1; exit}')"
+  echo "WARNING: port $PORT is already in use${OWNER:+ by container '$OWNER'}."
+  ss -ltnp 2>/dev/null | grep -E "[:.]$PORT[[:space:]]" | sed 's/^/         /' || true
+  echo "         free it, or change web.port in $DIR/config/config.yaml, before starting."
+fi
 # Pass the compose file explicitly: it also pins the project directory, so a stray cwd
 # can never make compose start the *other* install's project.
 RUI_IMAGE="$IMAGE" docker compose -f "$DIR/docker-compose.yml" --project-directory "$DIR" up -d
@@ -163,9 +205,8 @@ if [ "$i" -ge 120 ]; then
 fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-PORT="$(grep -E '^[[:space:]]*port:' "$DIR/config/config.yaml" 2>/dev/null | head -1 | awk '{print $2}')"
 echo
-echo "done. open http://${IP:-127.0.0.1}:${PORT:-8080}/"
+echo "done. open http://${IP:-127.0.0.1}:${PORT}/"
 echo "  doctor:  docker compose exec rui rui doctor"
 echo "  logs:    docker compose logs -f rui"
 echo "  keys:    fill in $DIR/.env, then: docker compose up -d"

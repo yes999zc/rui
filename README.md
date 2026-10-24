@@ -82,11 +82,15 @@ flowchart LR
 | 需要 | 说明 |
 |---|---|
 | 一台 Docker 主机 | NAS / Linux，x86_64 或 arm64，建议 4 核 / 4 GB / 2 GB 可用磁盘 |
+| Docker 权限 | 安装用户需为 root，或已加入 `docker` 组并重新登录（`docker info` 必须能通） |
+| 可写安装目录 | 默认 `~/rui`；`/vol1` 这类 root-only 挂载点需用 root 安装或先 `chown` 给安装用户 |
 | 小爱音箱 Pro（LX06） | 已刷/已装 **open-xiaoai client**，与主机在同一 LAN |
 | LLM 与 TTS 密钥 | 至少一组；ASR 可以先用本地模型 |
 | 可选 | Home Assistant、Navidrome、火山/讯飞语音账号 |
 
 #### 一条命令（推荐）
+
+滚动版本（`main` + `:latest`，先试最省事）：
 
 ```bash
 curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
@@ -94,6 +98,16 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 #   RUI_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main \
 #     curl -4 -fsSL "$RUI_RAW/deploy/install.sh" | sh
 ```
+
+生产建议固定发布版本（脚本、compose 文件和镜像都锁到同一个 tag）：
+
+```bash
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/install.sh \
+  | RUI_REF=v0.2.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0 sh
+```
+
+`RUI_REF` 决定拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，`RUI_IMAGE`
+决定运行哪个镜像；只固定一个，重装或回滚时仍可能换版本。
 
 安装脚本做五件事：
 
@@ -105,7 +119,7 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 | 4 | 下载本地模型：SenseVoice ASR（约 239 MB，一次）；VAD/KWS 已内置镜像，直接复制 |
 | 5 | `docker compose up -d`，等待 health 通过 |
 
-镜像：`ghcr.io/yes999zc/rui:latest`（公开，多架构 amd64/arm64）。如果镜像拉取失败，脚本会**从公开源码自动构建**同一 tag；也可以手动：
+镜像：默认 `ghcr.io/yes999zc/rui:latest`（公开，多架构 amd64/arm64，滚动更新；生产用上面的固定 tag 示例）。如果镜像拉取失败，脚本会**从公开源码自动构建**同一 tag；也可以手动：
 
 ```bash
 git clone https://github.com/yes999zc/rui.git
@@ -264,13 +278,24 @@ ASR prefers local SenseVoice, with Volc streaming ASR 2.0 and a cloud fallback a
 
 ### Quick start
 
-Requirements: a Docker host (NAS/Linux, amd64 or arm64), an LX06 with the **open-xiaoai client**, and at least one LLM/TTS key. The local SenseVoice ASR does not need a cloud key.
+Requirements: a Docker host (NAS/Linux, amd64 or arm64), an LX06 with the **open-xiaoai client**, and at least one LLM/TTS key. The local SenseVoice ASR does not need a cloud key. The install user must be able to reach the Docker daemon (root or the `docker` group, verified by `docker info`) and write the install directory (`~/rui` by default; root-only mounts such as `/vol1` need root or a prior `chown`).
+
+Rolling release (`main` + `:latest`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 ```
 
-The installer writes `~/rui/`, generates a `.env` with a random device token, downloads the SenseVoice ASR model (~239 MB, one time; VAD/KWS are baked into the image and copied from `/opt/seed-models`), starts `docker compose`, and waits for health. For a self-hosted model mirror set `RUI_ASR_URL`, `RUI_VAD_URL` and `RUI_KWS_URL` in `.env` (full file URLs; built-in mirrors stay as fallbacks). Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch). If the registry is unreachable, the installer builds the same tag from public source; manual build:
+For production, pin a release (script, compose files and image all come from the same tag):
+
+```bash
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/install.sh \
+  | RUI_REF=v0.2.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0 sh
+```
+
+`RUI_REF` selects the ref for `docker-compose.yml` / `config.example.yaml`; `RUI_IMAGE` selects the image. Pinning only one can still change versions on a reinstall or rollback.
+
+The installer writes `~/rui/`, generates a `.env` with a random device token, downloads the SenseVoice ASR model (~239 MB, one time; VAD/KWS are baked into the image and copied from `/opt/seed-models`), starts `docker compose`, and waits for health. For a self-hosted model mirror set `RUI_ASR_URL`, `RUI_VAD_URL` and `RUI_KWS_URL` in `.env` (full file URLs; built-in mirrors stay as fallbacks). Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch, rolling; pin a tag as shown above for production). If the registry is unreachable, the installer builds the same tag from public source; manual build:
 
 ```bash
 git clone https://github.com/yes999zc/rui.git

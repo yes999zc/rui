@@ -55,6 +55,20 @@ def test_setup_writes_the_production_template(tmp_path) -> None:
     assert cfg.music.enabled is False
 
 
+def test_setup_output_distinguishes_the_installer_path(monkeypatch, capsys, tmp_path) -> None:
+    """install.sh already writes .env and fetches models; do not ask for them again."""
+    assert main(["setup", "--config", str(tmp_path / "manual.yaml")]) == 0
+    manual = capsys.readouterr().out
+    assert "fill .env" in manual
+    assert "deploy/install.sh" in manual
+
+    monkeypatch.setenv("RUI_INSTALLER", "1")
+    assert main(["setup", "--config", str(tmp_path / "installer.yaml")]) == 0
+    installer = capsys.readouterr().out
+    assert "fill .env" not in installer
+    assert "install.sh writes .env" in installer
+
+
 def test_setup_generates_the_keywords_file_with_the_measured_gate(tmp_path) -> None:
     path = tmp_path / "config.yaml"
     main(["setup", "--config", str(path)])

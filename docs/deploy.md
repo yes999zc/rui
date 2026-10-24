@@ -12,6 +12,11 @@
 - x86_64 或 arm64，4 核 / 4 GB 内存 / 2 GB 可用磁盘（首次还要留 ~250 MB：镜像自带
   VAD/KWS，只需下 239 MB 的 SenseVoice ASR）
 - Docker + `docker compose`，允许 `--network host`（设备音频是长连接 socket）
+- **Docker 权限**：运行安装脚本的用户要能访问 Docker daemon——root，或已加入 `docker` 组
+  并重新登录（`sudo usermod -aG docker "$USER"`）。`docker` 不存在或 `docker info` 失败时，
+  `install.sh` 会在做任何事之前退出并给出提示。
+- **可写安装目录**：默认 `~/rui`（`RUI_HOME` 可改）。NAS 上 `/vol1` 这类挂载点常是
+  root-only；用 root 运行安装，或先建好目录并 `chown` 给安装用户，否则脚本会在建目录时失败。
 - 音箱与 NAS 在同一 L2 网段；音箱端 client 指向 NAS 的 IP:4412
 - **镜像架构**：GitHub Actions 发的是 `linux/amd64` + `linux/arm64` 多架构镜像（见
   `.github/workflows/docker-publish.yml`）。在 Mac（arm64）本地 `docker build` 出来的
@@ -19,6 +24,19 @@
   `--platform linux/amd64` 构建。
 
 ### 控制台令牌（安全审计后必读）
+
+`install.sh` 里的 `rui setup` 会生成随机 `web.auth_token` 并打印一次；错过了就进容器读：
+
+```bash
+docker compose exec -T rui rui token
+docker compose exec -T rui rui token --rotate  # 轮换
+```
+
+控制台没有 token 会返回 401（页面会提示输入 `X-Auth-Token`）。**只有在本机开发**才可以显式
+`web.allow_anonymous: true` 关闭鉴权；生产模板默认关闭，且非 loopback + 空 token 会拒绝启动。
+
+> **分享前脱敏**：`install.sh` 的日志和 `setup` 输出都包含这个控制台 token（以及生成的
+> device token）。贴日志、截图或发 issue 之前先把它替换成 `***`。
 
 ### 火山豆包语音（可选）
 
@@ -30,22 +48,23 @@
   开通「大模型流式语音识别」资源并拿到 `VOLC_API_KEY`，再把 `providers.asr.chain` 改成
   `[volc-asr, local-asr]`；流式识别比本地 SenseVoice 多约 1 s 延迟，可在控制台随时切回。
 
-`install.sh` 里的 `rui setup` 会生成随机 `web.auth_token` 并打印一次：
-
-```bash
-docker compose logs rui | grep "console token"   # 或：
-docker compose exec rui rui token
-docker compose exec rui rui token --rotate  # 轮换
-```
-
-控制台没有 token 会返回 401（页面会提示输入 `X-Auth-Token`）。**只有在本机开发**才可以显式
-`web.allow_anonymous: true` 关闭鉴权；生产模板默认关闭，且非 loopback + 空 token 会拒绝启动。
-
 ## 2. 一条命令
 
+滚动版本（`main` + `:latest`，适合先试）：
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 ```
+
+固定发布版本（生产推荐；脚本、compose 文件和镜像都锁在同一个 tag）：
+
+```bash
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/install.sh \
+  | RUI_REF=v0.2.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0 sh
+```
+
+`RUI_REF` 决定脚本拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，
+`RUI_IMAGE` 决定运行哪个镜像；两个一起固定，重装或回滚时才不会悄悄换版本。
 
 `install.sh` 做五件事（幂等：已有文件不覆盖）：
 
