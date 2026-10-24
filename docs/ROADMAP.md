@@ -121,6 +121,8 @@ fetch-models 含 KWS + keywords 生成；「一条命令到第一句」只差 de
 如小爱 LX06）与 B 类（高权限/完整控制，如 dot2），做能力矩阵 + 接入契约 + 降级策略，建议文件
 `docs/speaker-adapter-standard.md`；v1 四门槛过后再开，详见 `docs/remaining-work.md` §I。
 后台「设备管理」参考 EchoMuse Device Management（MIT，可照抄），见 `docs/remaining-work.md` §J。
+长期目标：**RUI 做插座、音箱方做插头**（manifest + 可选 adapter，控制台插入即连），
+`DeviceAdapter`/`Capability`/`registry.register` 是现有地基，见 `docs/remaining-work.md` §K。
 
 ## 3. 明确不做（这一版）
 

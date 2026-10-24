@@ -106,3 +106,21 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
 - 边界：只借鉴后台逻辑与交互，**不引入 HA Assist 依赖**（EchoMuse pipeline 硬编码 HA Assist，rui 自己就是助手）；
   rui 仍由 adapter 层吸收机型差异（见 `rui-dot2-bridge/docs/adr-0001-adapter-as-controller.md`）。
 - 时机与合规：v1 四门槛过后再评估；若照抄代码需保留 MIT 版权/许可声明并注明来源。
+
+## K. 长期架构：RUI 是插座，音箱方做插头（2026-10-24 记录，未排期，冻结期只记录不动代码）
+
+- 9 哥原话/理想状态：音箱单独维护、RUI 也单独维护；RUI 只定义好**规则（插座）**；音箱维护者
+  （包括我们自己）按规则把该机型的各类参数封装成**插头**；插头插进 RUI 后台的插座里，直接就能连上。
+- 我的理解（可纠偏）：**插座** = RUI 侧稳定契约（`DeviceAdapter` + 能力声明 + 传输/连接生命周期 +
+  配置 schema + 控制台呈现），核心代码不出现品牌分支；**插头** = 一份机型描述包（机型/权限等级 A 或 B、
+  能力矩阵、client 安装与连接方式、协议版本、参数 schema，加可选的 adapter 实现）；
+  **插入** = 控制台添加设备时选插头/填参数 → RUI 校验 → 生成连接信息并启用，不用改 RUI 代码。
+- 已经有的地基：`src/house_ear/device/contract.py` 的 `DeviceAdapter`/`Capability`/`Transport` 就是插座雏形；
+  `registry.register(name, target)` 是插头注册钩子；`rui-dot2-bridge` 已用「adapter 放本仓库、不改 rui 核心」
+  的方式真机跑通，是第一个真实插头样板。
+- 还缺（将来做）：插头的**声明格式**（manifest：机型/能力/参数 schema/依赖/兼容版本）、安装与校验流程、
+  控制台「从插头添加设备」的 UX、第三方插头信任模型（签名/allowlist/权限声明）与版本兼容矩阵。
+- 开放问题：插头只做**纯声明**，还是允许带**可执行 adapter 代码**？（倾向：先纯声明 + 内置 adapter；
+  第三方自定义协议再走受限 adapter 包 + 签名。）
+- 关系：§I 是适配规范、§J 是可抄的设备管理后台、§K 是把两者合起来的最终形态；第一个候选插头是
+  Dot2（B 类，正在另一个对话里开发），现有 LX06（A 类）作为样板。
