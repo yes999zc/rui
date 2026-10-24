@@ -225,6 +225,20 @@ npm run build
 - 设备 token 决定音箱回连权限，和音箱管理员权限等同，按家庭网络边界保护。
 - 漏洞/安全问题请不要公开开 issue，先通过 GitHub 私下联系维护者。
 
+### 致谢 / Credits
+
+小瑞建立在这些开源项目与模型之上：
+
+- [open-xiaoai](https://github.com/coderzc/open-xiaoai) — 音箱端 client 与 LX06 回连协议（MIT）
+- [EchoMuse](https://github.com/wilbowes/EchoMuse) — 设备管理后台的参考实现（MIT，未直接随镜像分发）
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — 本地 ASR / 唤醒词运行时（Apache-2.0）
+- [SenseVoice / FunAudioLLM](https://github.com/FunAudioLLM/SenseVoice) — 本地语音识别模型（模型权重遵循 FunASR Model License，非 MIT）
+- [Silero VAD](https://github.com/snakers4/silero-vad) — 语音活动检测（MIT）
+- [SpeexDSP](https://github.com/xiph/speexdsp) — 回声消除（BSD-3-Clause）
+- [FFmpeg](https://ffmpeg.org/) — 音乐转码（当前静态构建的许可待审计）
+
+MIT 只覆盖本仓库自己的代码；以上第三方组件各自保留其许可证，完整清单与核查状态见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
 ### License 与品牌
 
 代码目前以 **MIT** 发布，见 [LICENSE](LICENSE)；许可证变更不在本轮范围，需要单独讨论。`小瑞 / Rui` 名称与 logo 是项目品牌资产，不随 MIT 授权用于其他产品品牌；截图仅用于本项目展示。
@@ -333,6 +347,20 @@ house-ear config restore --defaults
 </a>
 
 If Rui is useful to you, you can buy me a coffee — the link is a placeholder for now.
+
+### Credits / 致谢
+
+Rui stands on these open-source projects and models:
+
+- [open-xiaoai](https://github.com/coderzc/open-xiaoai) — speaker-side client and LX06 dial-in protocol (MIT)
+- [EchoMuse](https://github.com/wilbowes/EchoMuse) — reference for the device-management console (MIT; no code shipped)
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — local ASR and wake-word runtime (Apache-2.0)
+- [SenseVoice / FunAudioLLM](https://github.com/FunAudioLLM/SenseVoice) — local speech-recognition model (weights under the FunASR Model License, not MIT)
+- [Silero VAD](https://github.com/snakers4/silero-vad) — voice-activity detection (MIT)
+- [SpeexDSP](https://github.com/xiph/speexdsp) — echo cancellation (BSD-3-Clause)
+- [FFmpeg](https://ffmpeg.org/) — music transcoding (license of the current static build: needs audit)
+
+MIT covers this repository's own code only. These components keep their own licenses; the full inventory and verification status is in [THIRD_PARTY.md](THIRD_PARTY.md).
 
 ### License and brand
 

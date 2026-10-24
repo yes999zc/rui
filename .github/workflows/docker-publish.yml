@@ -20,7 +20,22 @@ permissions:
   packages: write
 
 jobs:
+  # Gate: a tag/main push must pass the same lint + tests as ci.yml before anything is
+  # published. Keep this in sync with the `test` job there (Python 3.12 here because that
+  # is the interpreter in the runtime image).
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra dev
+      - run: uv run ruff check src tests
+      - run: uv run pytest
+
   publish:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -6,6 +6,12 @@
 # Debian's `ffmpeg` package: the package drags in ~100 MB of shared libraries for one
 # subprocess, and this stage is pinned like any other dependency. Only the binary is
 # copied, so the runtime image stays python-slim + libspeexdsp.
+#
+# TODO(license/P1.6): this static build has not been audited for GPL components, so the
+# shipped binary must not be described as LGPL. Replace it with an LGPL-only ffmpeg
+# (preferably built from pinned source with --disable-gpl --disable-nonfree --enable-lgpl)
+# and make CI assert that `ffmpeg -version` shows no --enable-gpl/--enable-nonfree.
+# Do NOT change the image until that gate exists; options and status: THIRD_PARTY.md (FFmpeg).
 FROM mwader/static-ffmpeg:7.1 AS ffmpeg
 
 FROM node:22-alpine AS web
