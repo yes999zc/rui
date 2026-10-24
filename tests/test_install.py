@@ -158,7 +158,7 @@ def test_download_uses_bounded_http_timeouts(monkeypatch, tmp_path) -> None:
     class Client:
         timeout = None
 
-        def __enter__(self) -> "Client":
+        def __enter__(self):
             return self
 
         def __exit__(self, *exc: object) -> bool:
@@ -222,7 +222,7 @@ def test_read_timeout_on_the_first_mirror_falls_through_to_the_next(
             return False
 
     class Client:
-        def __enter__(self) -> "Client":
+        def __enter__(self):
             return self
 
         def __exit__(self, *exc: object) -> bool:
