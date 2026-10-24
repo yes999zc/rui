@@ -187,7 +187,7 @@ jobs:
           retention-days: 30
 
       - name: Fail on unignored or unexpired HIGH/CRITICAL findings
-        if: steps.trivy.outcome == 'failure'
+        if: always() && steps.trivy.outcome == 'failure'
         shell: bash
         run: |
           echo "::error::Trivy reported unignored HIGH/CRITICAL findings (or the scan failed). See the trivy-image-report artifact and the job summary."

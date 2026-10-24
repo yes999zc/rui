@@ -2,8 +2,8 @@
 
 This page covers the automated CVE checks added in P3.5: the Python dependency
 audit and the container-image scan. Container identity, volume permissions and
-the non-root runtime are covered separately in [security.md](security.md); the
-network guard is documented with the runtime code.
+the non-root runtime are covered separately in [security.md](security.md); this
+page is only the dependency/image scanning slice.
 
 ## 1. What runs, and when
 
@@ -51,8 +51,9 @@ the dated Trivy allowlist, so a passing image scan is not a silent pass.
 
 Allowlist edits are security-sensitive: require maintainer review and a linked
 advisory/issue, and never add a broad entry just to make a run green. Both files
-are reported in the job summary on every run; the image job also emits a warning
-annotation when its allowlist is non-empty, so a green scan is not a silent pass.
+are reported in the job summary on every run; the image job and the pip-audit
+script also emit warning annotations when their allowlist is non-empty, so a
+green scan is not a silent pass.
 
 ### 3.1 Python: `security/pip-audit-ignore.txt`
 
