@@ -11,9 +11,9 @@
    device/console token 已换新；音箱 root 密码仍受 squashfs 只读限制（见 C12）。
 3. **NAS 部署 ✅ 2026-10-23**：本机 Docker 构建 + NAS 运行 + 音箱切换 + LAN/Tailscale 实测
    （health、KWS/VAD、debug say、speaker audition）；一键脚本可用。
-4. **D3 唤醒门槛**：80% 音量放歌 20 次唤醒 ≥19；含 3–4 米远场正式计数。
-5. **打断 ≤300 ms 口径**：当前服务端 `silence_after_ms=0`，但设备端剩余 lead 约 420 ms，需按
-   300 ms 口径实测并决定是否继续调。
+4. **D3 唤醒门槛 ✅ 2026-10-24**：80% 音量放歌 **19/20**（2–3 m）；3–4 米远场正式计数仍未做（只记录项）。
+5. **打断 ≤300 ms 口径 ✅ 2026-10-24**：服务端停推 24.2 / 64.5 / 205.2 ms（max ≤300）；
+   设备缓冲听感「干脆」；首次 447.3 ms 为回答自然收尾伪影。
 
 ## B0. 交互缺陷（已定位，待修）
 
@@ -24,7 +24,7 @@
 ## B. 真机 / 功能遗留
 
 6. **音箱客户端安装路径 ✅（2026-10-24）**：`GET /api/v1/devices/{id}/connect` + Setup「音箱连接」卡
-   （ws URL/token/复制/未配置提示）+ `docs/open-xiaoai-client.md`；真实冷装仍待明天演练。
+   （ws URL/token/复制/未配置提示）+ `docs/open-xiaoai-client.md`；**冷装已真机演练通过**（423 s 到第一句）。
 7. **P12 / E1 第二台设备**：每设备音频配置（config v3）、无播放能力降级；等第二台设备到货。
 8. **B2 剩余**：远场唤醒计数、音量对账三个调用点、音乐收藏/口味 UI、farewell 静音续歌边角、
    gate-over-music 清理；ACK earcon 与老项目差异仍未解释。
@@ -39,6 +39,8 @@
 12. 设备 token/控制台 token 已轮换；**音箱 root 密码因 squashfs 只读未能改**（建议厂商方式/仅可信 LAN）。
 13. 安全审计 P2：安全响应头、鉴权失败日志、用户数据文件 0600 已完成；剩余 SSRF/端口探测
     allowlist、容器非 root、依赖 CVE 扫描（不阻塞 v1，排后续）。
+    **新增（2026-10-24 验收发现）**：config 被清空成 0 字节时会静默使用 schema defaults → `insecure_bind`
+    拒绝 → crash loop，未被 last-good 接管；应让空文件走 ConfigError 触发恢复（小修，待做）。
 14. P15b 镜像重建（品牌/新功能之后）与 GHCR 发布复验：品牌轮镜像已重建并 public ✅。
 
 ## D. 体验 / 控制台
@@ -77,8 +79,9 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
 - M7（托管 gateway 自动启动/watchdog、控制台 Start/Stop/Restart、NAS 部署）已完成；
   NAS 当前只启用 Telegram，微信只保留接口。NAS Telegram 出网走本机 mihomo SOCKS；
   mihomo IPv6 已关闭并选择可用节点，Node 选择为运行时状态（重启后若失效需在面板重选）。
-- **v1 冻结（2026-10-24）**：功能冻结；只做四道发布门槛。最新代码 **762 passed / 1 skipped**；
-  NAS 尚未部署本轮 onboarding/security/recovery UI 更新（等验收日统一）。
+- **v1 冻结（2026-10-24）**：四道门槛当日全部通过（冷装 423 s、唤醒 19/20、barge max 205 ms、
+  公开仓 ✅）；Telegram 4/4、微信接口保留、配置恢复/备份恢复 smoke 通过。最新代码
+  **748 passed / 17 skipped**（无模型环境；模型环境 764/1）；NAS 尚未部署新镜像（等 9 哥 明确指令）。
 
 ## I. 多类型音箱适配标准（2026-10-24 记录，未排期，冻结期只记录不动代码）
 

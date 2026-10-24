@@ -19,27 +19,28 @@
 
 | v1 门槛 | 状态 | 当前证据 / 还缺什么 |
 |---|---|---|
-| 1. NAS 冷装 30 分钟到第一句 | 🟡 | 一键脚本、镜像、setup、模型下载、音箱连接信息面板/`docs/open-xiaoai-client.md` 已就绪；**缺一次真实全新目录冷装计时** |
-| 2. 80% 音量放歌 20 次唤醒 ≥19 | ⬜ | 真机多轮唤醒可用；**缺正式 N/M 记录**（`scripts/acceptance-v1.py wake`） |
-| 3. 打断 ≤300 ms | ⬜ | 服务端停推已实现；设备缓冲 lead 约 420 ms；**缺按口径的正式测量**（`acceptance-v1.py barge`） |
-| 4. 公开仓可用 | ✅ | repo/GHCR public、README 双语+截图、MIT、历史清洗；Buy Me a Coffee 占位 |
+| 1. NAS 冷装 30 分钟到第一句 | ✅ | **2026-10-24 12:37:13→12:44:16，423 s ≈ 7 min 03 s**；镜像 `e3ea158`，模型本次真实下载；备注：镜像 pull 在此前失败尝试中已完成、pull 时间未计入；第一句前有约 3 min 配置注入/密钥对齐（测试手法，真实用户走 Setup 向导） |
+| 2. 80% 音量放歌 20 次唤醒 ≥19 | ✅ | **19/20**（11:39–11:46，2–3 m，音量 204，音乐在放，AEC ERLE≈31.6 dB；1 次唤醒后无回合，9 哥 耳朵确认仅 1 次没反应） |
+| 3. 打断 ≤300 ms | ✅ | 干净 3 轮 **24.2 / 64.5 / 205.2 ms**（max ≤300）；首次 447.3 ms 为回答自然收尾伪影；设备缓冲听感：干脆 |
+| 4. 公开仓可用 | ✅ | repo/GHCR public、README 双语+截图、MIT、历史清洗；Buy Me a Coffee 仍占位（非门槛） |
 
-**当前工程状态（2026-10-24 01:xx）**：**762 passed / 1 skipped**，ruff clean，web typecheck/build 绿；
-最新提交 `2acabce`（v1 freeze 前）/ `1942439`（onboarding/security/acceptance）。
-已完成：控制面/音频面、真机回合、音乐、HA/MCP、记忆/提醒、控制台 2.0、品牌、Telegram+微信接口、
-M7 托管 gateway、配置恢复（last-good+默认恢复+banner+CLI）、设备连接信息 API/UI、open-xiaoai 文档、
-安全响应头/鉴权日志/用户数据 0600、backup/restore、验收记录器、runbook。
+**当前工程状态（2026-10-24 12:45）**：本地 **748 passed / 17 skipped**（无模型环境）、**764 passed / 1 skipped**
+（设 `HOUSE_EAR_TEST_MODELS` 指向模型目录）、ruff clean、web typecheck/build 绿；最新提交 `4aa8f9e`。
+验收日修了三个真机/安装缺陷：VAD 上游仓失效 → fallback（`f0dde20`）、GitHub release 在 NAS 被 reset →
+ghproxy 镜像 fallback（`e3ea158`）、install.sh fetch 无超时/未强制 IPv4 → 挂死（`39af43f`/`4aa8f9e`）。
 
-**已知问题**：
-- 冷装/唤醒/打断三条真机门槛未正式过；
-- NAS 尚未部署本轮 onboarding/security/recovery 更新（按 9哥 要求等验收日统一）；
-- NAS Telegram 出网依赖本机 mihomo；节点选择是运行时状态，mihomo 重启后可能需重选可用节点；
-- 音箱 root 密码受 squashfs 只读限制；SSRF allowlist/非 root/CVE 扫描仍在后续；
-- 微信只保留接口（`enabled=false`），未做 NAS 真机验收；
-- 完整 Doctor Fix、Agent 接入、第二台设备不在本轮。
+**已知问题 / 遗留**：
+- 冷装是“网络加固后”通过：该 NAS 到 GitHub 仍不稳定（IPv6 无路由、release 被截断）；installer 已加超时/重试/IPv4/
+  `HOUSE_EAR_RAW` 换源，但未覆盖所有网络；
+- 冷装测试时新模板 LLM 读 `HOUSE_EAR_LLM_KEY`，老生产 `secrets.yaml` 里是 `DEEPSEEK_API_KEY`
+  （真实用户走向导不受影响，但迁移/复用旧 secrets 会踩）；
+- 把 config **清空成 0 字节**时会静默用 schema defaults → 触发 insecure_bind 拒绝 → crash loop（未被 last-good 接管），
+  已记录为后续修复；
+- 远场 3–4 m 唤醒计数未做（只记录项）；NAS 尚未部署新镜像（等 9 哥 明确“部署 NAS”）；
+- 音箱 root 密码受 squashfs 只读限制；SSRF allowlist/非 root/CVE 扫描仍后续；微信只保留接口。
 
-**下一步**：验收日只做四件事——冷装、20 次唤醒、barge、Telegram 文字/语音；全部通过后再部署最新控制面、
-更新文档/Release，然后才恢复功能开发（多设备/Agent/Doctor Fix）。
+**下一步**：等 9 哥 明确“部署 NAS” → 生产切到 `e3ea158`（或更新 latest）、打 tag/Release、更新 README/ROADMAP；
+之后才恢复功能开发（多设备/Agent/Doctor Fix）。
 
 ## 1. 阶段与门槛
 

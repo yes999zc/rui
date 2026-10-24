@@ -1165,3 +1165,22 @@ Telegram 可行性测试。
   微信接口保留但 `enabled=false`。
 - 明天验收：冷装 30 分钟、80% 音乐 20 次唤醒、barge ≤300ms、Telegram 文字/语音、配置恢复/备份 smoke。
 - 通过后再部署最新控制面 + 更新 Release/文档；未过之前不恢复新功能。
+
+### 12.34 2026-10-24 验收日：四道 v1 门槛全部通过
+
+- **门槛 1 冷装**：✅ 全新目录 `~/house-ear-verify`，镜像 `e3ea158`，12:37:13 → 12:44:16 听到第一句
+  （423 s ≈ 7 min 03 s，≤30 min）；VAD/KWS/ASR 模型本次真实下载；备注：镜像 pull 在此前失败尝试中已完成，
+  第一句前有约 3 min 配置注入/密钥对齐（测试手法，真实用户走 Setup 向导）。
+- **门槛 2 唤醒**：✅ 19/20（11:39–11:46，音量 204=80%，音乐《茧人》持续播放，2–3 m，AEC ERLE≈31.6 dB；
+  1 次唤醒后无回合，9 哥 耳朵确认仅 1 次没反应）。
+- **门槛 3 打断**：✅ 干净 3 轮 24.2 / 64.5 / 205.2 ms（max ≤300）；首次 447.3 ms 是回答自然收尾被计入的伪影；
+  设备缓冲听感「干脆」。
+- **门槛 4 公开仓**：✅ 维持（repo/GHCR public、raw install 200、MIT、无 secret）。
+- 附加：Telegram 2 文字 + 2 语音 **4/4 有回复**；微信接口保留（`enabled=false`，未扫码）；
+  配置恢复 smoke ✅（bad config → last-good + banner/API，CLI restore 后 doctor 正常、sha 一致）；
+  备份/恢复 smoke ✅（0600、sha256、临时目录恢复、权限 600）。
+- **验收日修的缺陷**：`f0dde20` VAD 上游 404 的 GitHub fallback；`e3ea158` ghproxy 模型镜像 fallback；
+  `39af43f` / `4aa8f9e` install.sh fetch 超时 + 强制 IPv4 + `HOUSE_EAR_RAW` 换源。
+- **额外发现（待修，不阻塞）**：config 被清空成 0 字节时静默用 schema defaults → insecure_bind → crash loop；
+  冷装测试中新模板 LLM 读 `HOUSE_EAR_LLM_KEY`，老生产 secrets 里是 `DEEPSEEK_API_KEY`（向导不受影响）。
+- NAS 生产仍跑 `f2abcef`（本次只是验收临时 stop/start）；等 9 哥 明确「部署 NAS」后再切 `e3ea158` + tag/Release。
