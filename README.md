@@ -8,7 +8,7 @@
     <a href="https://github.com/yes999zc/rui/actions/workflows/secret-scan.yml"><img src="https://github.com/yes999zc/rui/actions/workflows/secret-scan.yml/badge.svg?branch=main" alt="secret scan"></a>
     <a href="https://github.com/yes999zc/rui/actions/workflows/docker-publish.yml"><img src="https://github.com/yes999zc/rui/actions/workflows/docker-publish.yml/badge.svg?branch=main" alt="docker publish"></a>
     <a href="https://github.com/yes999zc/rui/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-0e6b63?style=flat-square" alt="MIT license"></a>
-    <img src="https://img.shields.io/badge/version-0.2.2-d98a3e?style=flat-square" alt="version 0.2.2">
+    <img src="https://img.shields.io/badge/version-0.3.0-d98a3e?style=flat-square" alt="version 0.3.0">
     <img src="https://img.shields.io/badge/status-v1%20in%20progress-8a4f0a?style=flat-square" alt="v1 in progress">
   </p>
   <p><a href="#中文">中文</a> · <a href="#english">English</a> · <a href="https://github.com/yes999zc/rui">GitHub</a></p>
@@ -114,15 +114,15 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 生产建议固定发布版本（脚本、compose 文件和镜像都锁到同一个 tag）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
-  | RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/install.sh \
+  | RUI_REF=v0.3.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0 sh
 ```
 
 装到 `/vol1/rui`（目录需可写）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
-  | RUI_HOME=/vol1/rui RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/install.sh \
+  | RUI_HOME=/vol1/rui RUI_REF=v0.3.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0 sh
 ```
 
 - `RUI_REF` 决定拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，`RUI_IMAGE` 决定运行哪个镜像；只固定一个，重装或回滚时仍可能换版本。
@@ -206,7 +206,7 @@ docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生�
 | 房间 | 自定义名字（如“客厅”），用于控制台和多设备区分 |
 | 唤醒词 | 1–3 个，每个最多 12 字；默认“你好小瑞” |
 | 音量 | 0–100，默认 60；**0 = 不接管音量**，沿用原厂 |
-| 灯效 | 0.2.2 新建 LX06 默认打开；不想要就关掉 |
+| 灯效 | 0.3.0 新建 LX06 默认打开；不想要就关掉 |
 | 监听端口 | 默认 4412；只有端口冲突才改，client 的 ws URL 要同步改 |
 | 麦克风增益 | 0–42 dB，可留空；越大越灵敏，也更容易收环境噪声 |
 
@@ -248,7 +248,7 @@ docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生�
 - **换密钥**：在控制台“AI 供应商/密钥”页或重跑 `keys` 步；密钥只写不读，不要写进 `config.yaml`。
 - **换 device token**：在 `connect` 步重新显示/复制；或在 `.env` 改 `RUI_DEVICE_TOKEN` 后 `docker compose up -d`，再把新值写进 client 并重启，最后回 `test` 确认。
 - **换控制台 token**：`docker compose exec -T rui rui token --rotate`，再 `docker compose restart rui` 让服务加载新值；重启后旧 token 失效，浏览器要重新输入。
-- **升级**：在 `.env` 固定 `RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2`；`docker compose pull && docker compose up -d`，等 healthy 后跑 `docker compose exec -T rui rui doctor`。
+- **升级**：在 `.env` 固定 `RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0`；`docker compose pull && docker compose up -d`，等 healthy 后跑 `docker compose exec -T rui rui doctor`。
 - **回滚**：把 `.env` 的 `RUI_IMAGE` 改回上一个 tag，先备份 `config/config.yaml`（降级可能不认新字段），再 `docker compose up -d`。
 - **备份/恢复**：`cd ~/rui && scripts/backup.sh --out ~/rui-backups`，恢复见 [docs/runbook.md](docs/runbook.md)。
 - **日常验收**：`curl -fsS http://localhost:8080/health`、`docker compose exec -T rui rui doctor`、`docker compose logs -f --tail=200 rui`。
@@ -260,7 +260,7 @@ docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生�
 | client 日志 401 / close 1008；NAS 日志 `bad or missing token` | client 还带着旧 token。到 `connect` 复制当前 ws URL/token，更新 client 配置并重启；确认 `.env` 的 `RUI_DEVICE_TOKEN` 没被改过 |
 | 重跑安装时报容器 `rui` 已存在 | 同一个 `RUI_HOME` 重跑是安全的；若属于另一个目录，按提示去那个目录 `docker compose down`，或先停旧安装。0.1.x 的 `house-ear` 按提示 `docker stop house-ear && docker rm house-ear` |
 | `docker pull ghcr.io/...` TLS handshake timeout / 403 | 给 Docker daemon 配代理或 registry mirror；或先在能出网的机器 `pull` + `save`，到 NAS `load`。脚本拉取失败会自动从源码构建（需要 `git`）；`raw` 卡住用 `RUI_RAW` 镜像前缀 |
-| 灯环不亮 | 0.2.2 新建 LX06 默认 `led.enabled: true`；到 `params` 的“灯效”或设备配置确认。老配置升级上来可能仍是关闭状态 |
+| 灯环不亮 | 0.3.0 新建 LX06 默认 `led.enabled: true`；到 `params` 的“灯效”或设备配置确认。老配置升级上来可能仍是关闭状态 |
 | 控制台 401 / 找不到 console token | 安装 `[2/5]` 输出的 `console token` 只打印一次；用 `cd ~/rui && docker compose exec -T rui rui token` 找回。注意它和 device token 不是同一个 |
 
 #### 手动 Docker Compose（可选）
@@ -426,15 +426,15 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 For production, pin a release (script, compose files and image all come from the same tag):
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
-  | RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/install.sh \
+  | RUI_REF=v0.3.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0 sh
 ```
 
 Install under `/vol1/rui` (the directory must be writable):
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
-  | RUI_HOME=/vol1/rui RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/install.sh \
+  | RUI_HOME=/vol1/rui RUI_REF=v0.3.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0 sh
 ```
 
 - `RUI_REF` selects the ref for `docker-compose.yml` / `config.example.yaml`; `RUI_IMAGE` selects the image. Pinning only one can still change versions on a reinstall or rollback.
@@ -517,7 +517,7 @@ Where each `params` value comes from:
 | Room | Any name (e.g. "Living room"), used by the console and multi-device views |
 | Wake words | 1–3 words, up to 12 characters each; default "你好小瑞" |
 | Volume | 0–100, default 60; **0 = do not take over volume**, keep the stock level |
-| LED | New LX06 devices default to on in 0.2.2; switch it off if you do not want the ring |
+| LED | New LX06 devices default to on in 0.3.0; switch it off if you do not want the ring |
 | Listen port | Default 4412; change only on a port conflict and update the client ws URL too |
 | Mic gain | 0–42 dB, optional; higher is more sensitive and picks up more room noise |
 
@@ -559,7 +559,7 @@ The commands below assume `~/rui`; replace the path if you installed under `/vol
 - **Change keys**: use the console "AI providers / secrets" pages or re-run `keys`; keys are write-only and must not go into `config.yaml`.
 - **Change the device token**: show/copy it again in `connect`, or edit `RUI_DEVICE_TOKEN` in `.env` and run `docker compose up -d`; then update the client, restart it, and re-run `test`.
 - **Rotate the console token**: `docker compose exec -T rui rui token --rotate`, then `docker compose restart rui` to load it; the old token stops working after the restart and the browser asks again.
-- **Upgrade**: pin `RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2` in `.env`; `docker compose pull && docker compose up -d`, wait for healthy, then run `docker compose exec -T rui rui doctor`.
+- **Upgrade**: pin `RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0` in `.env`; `docker compose pull && docker compose up -d`, wait for healthy, then run `docker compose exec -T rui rui doctor`.
 - **Roll back**: set `RUI_IMAGE` back to the previous tag, back up `config/config.yaml` first (old code may reject new fields), then `docker compose up -d`.
 - **Backup/restore**: `cd ~/rui && scripts/backup.sh --out ~/rui-backups`; restore steps are in [docs/runbook.md](docs/runbook.md).
 - **Daily checks**: `curl -fsS http://localhost:8080/health`, `docker compose exec -T rui rui doctor`, `docker compose logs -f --tail=200 rui`.
@@ -571,7 +571,7 @@ The commands below assume `~/rui`; replace the path if you installed under `/vol
 | Client logs 401 / close 1008; NAS logs `bad or missing token` | The client still has an old token. Copy the current ws URL/token from `connect`, update the client config, restart it, and confirm `.env`'s `RUI_DEVICE_TOKEN` was not changed |
 | Re-running the installer says container `rui` already exists | Re-running in the same `RUI_HOME` is safe; if it belongs to another directory, go there and run `docker compose down`, or stop the old install first. For 0.1.x, `docker stop house-ear && docker rm house-ear` as prompted |
 | `docker pull ghcr.io/...` TLS handshake timeout / 403 | Configure a proxy or registry mirror for the Docker daemon, or `pull` + `save` on a connected machine and `load` on the NAS. The installer falls back to a source build (requires `git`); use `RUI_RAW` when raw fetches stall |
-| LED ring stays off | New LX06 devices default to `led.enabled: true` in 0.2.2; check the `params` LED toggle or the device config. An upgraded old config may still have it off |
+| LED ring stays off | New LX06 devices default to `led.enabled: true` in 0.3.0; check the `params` LED toggle or the device config. An upgraded old config may still have it off |
 | Console 401 / cannot find the console token | The `console token` printed during `[2/5]` appears once; recover it with `cd ~/rui && docker compose exec -T rui rui token`. It is not the device token |
 
 #### Manual Docker Compose (optional)

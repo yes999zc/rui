@@ -60,15 +60,15 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 固定发布版本（生产推荐；脚本、compose 文件和镜像都锁在同一个 tag）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
-  | RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/install.sh \
+  | RUI_REF=v0.3.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0 sh
 ```
 
 装到 `/vol1/rui`（目录需可写）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
-  | RUI_HOME=/vol1/rui RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/install.sh \
+  | RUI_HOME=/vol1/rui RUI_REF=v0.3.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0 sh
 ```
 
 `RUI_REF` 决定脚本拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，
@@ -81,7 +81,7 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/insta
 RUI_HOME=~/rui          # 安装目录
 RUI_REPO=yes999zc/rui   # fork
 RUI_REF=main            # 分支/tag
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2   # 生产建议固定 tag 或 digest
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0   # 生产建议固定 tag 或 digest
 RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
                         # 可选：raw 不通时换成镜像前缀，例如
                         # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main
@@ -162,9 +162,9 @@ docker compose exec -T rui rui token --rotate  # 轮换；重启服务后生效
 
 ```bash
 mkdir -p /vol1/rui/config /vol1/rui/data/models /vol1/rui/scripts && cd /vol1/rui
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/docker-compose.yml -O
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/config.example.yaml -O
-IMAGE=ghcr.io/yes999zc/rui:0.2.2
+curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/docker-compose.yml -O
+curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/config.example.yaml -O
+IMAGE=ghcr.io/yes999zc/rui:0.3.0
 docker run --rm --user "$(id -u):$(id -g)" -v /vol1/rui/config:/config "$IMAGE" \
   setup --config /config/config.yaml
 # 按 §3.4 写 .env：至少 RUI_DEVICE_TOKEN 和 RUI_IMAGE；密钥可选
@@ -457,7 +457,7 @@ XFYUN_API_KEY=...
 XFYUN_API_SECRET=...
 RUI_HA_TOKEN=...       # 接 Home Assistant 时填
 RUI_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2   # 安装脚本写入；固定版本，回滚时改这里
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0   # 安装脚本写入；固定版本，回滚时改这里
 ```
 
 只填实际用到的即可。**没有讯飞 key 时**，在向导 `keys` 步把 TTS 选成 `volc_tts` 并填
@@ -637,7 +637,7 @@ uv sync && uv run rui doctor
 uv run rui serve
 ```
 
-## 10. 已知缺口（历史 P15 记录；0.2.2 仍适用部分）
+## 10. 已知缺口（历史 P15 记录；0.3.0 仍适用部分）
 
 - **`setup` 仍不写 devices**：这是有意的（不替用户猜设备）。模板已带 provider 链、模型路径、
   `keywords.txt`；正常冷装由 `/setup` 向导的 `params` 步写入 `devices[]`、`keys` 步写密钥，
@@ -658,6 +658,6 @@ uv run rui serve
 | client 日志 401 / close 1008；NAS 日志 `xiaoai: rejected ... (bad or missing token)` | client 还带着旧 token，或两边不是同一个值 | 到 `/setup` 的 `connect` 步重新复制当前 ws URL + device token，更新 client 配置并重启；确认 `.env` 的 `RUI_DEVICE_TOKEN` 没被改过。控制台 token 不用于这里 |
 | 重跑 `install.sh` 报容器 `rui` 已存在 | 同一 `RUI_HOME` 重跑是安全的；容器属于另一个 compose project 时脚本拒绝接管 | 按脚本打印的目录去执行 `docker compose down`，或在旧目录停掉旧安装后再重跑。0.1.x 的 `house-ear`：`docker stop house-ear && docker rm house-ear` |
 | `docker pull ghcr.io/...` TLS handshake timeout / 403 | Docker daemon 没有代理/镜像源，或 GHCR 不可达 | 给 daemon 配代理或 registry mirror；或 `docker pull` + `save` 到 NAS `load`。脚本会自动按 `RUI_REF` 从源码构建同一 tag（需 `git`）；`raw` 卡住用 `RUI_RAW` |
-| 灯环不亮 | 0.2.2 新建 LX06 默认 `led.enabled: true`；老配置/手动配置可能仍是关闭 | 到 `params` 的“灯效”打开，或检查 `config.yaml` 的 `devices[].led.enabled`；保存会重启平面 |
+| 灯环不亮 | 0.3.0 新建 LX06 默认 `led.enabled: true`；老配置/手动配置可能仍是关闭 | 到 `params` 的“灯效”打开，或检查 `config.yaml` 的 `devices[].led.enabled`；保存会重启平面 |
 | 控制台 401 / 找不到 console token | `[2/5]` 的 `console token:` 只打印一次，容易被日志刷走 | `cd ~/rui && docker compose exec -T rui rui token` 找回；`--rotate` 轮换后重启服务。它和 `.env` 的 device token 不是同一个 |
 | `install.sh` 最后报 120 s 不健康 | 容器起了但 `/health` 未通过；常见是 token/端口/模型或配置问题 | 按脚本提示跑 `docker compose exec -T rui rui-healthcheck` 和 `docker compose logs --tail=100 rui`；修好后重跑脚本（同目录安全） |
