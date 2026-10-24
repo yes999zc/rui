@@ -39,5 +39,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
       - name: Verify the binary really is ${{ matrix.arch }}
         run: |
-          docker run --rm --platform linux/${{ matrix.arch }} rui:check-${{ matrix.arch }} \
-            sh -c 'uname -m; ffmpeg -version | head -1'
+          # The image entrypoint is the rui CLI, so the shell has to be requested explicitly.
+          docker run --rm --platform linux/${{ matrix.arch }} \
+            --entrypoint sh rui:check-${{ matrix.arch }} \
+            -c 'uname -m; command -v ffmpeg; ffmpeg -version | head -1'
