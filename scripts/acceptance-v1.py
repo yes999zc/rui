@@ -508,6 +508,24 @@ def run_check(api: Api) -> int:
     return 0
 
 
+def _default_out() -> str:
+    """Host-visible output dir: containers often run on a read-only image layer.
+
+    The mounted data volume (/var/lib/house-ear) survives a container recreate; a path
+    under /data or the cwd does not (an earlier run lost its barge JSON that way).
+    """
+    env = os.environ.get("HOUSE_EAR_ACCEPTANCE_OUT", "").strip()
+    if env:
+        return env
+    mounted = Path("/var/lib/house-ear")
+    try:
+        if mounted.is_dir() and os.access(mounted, os.W_OK):
+            return str(mounted / "acceptance-runs")
+    except OSError:
+        pass
+    return "acceptance-runs"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -518,8 +536,10 @@ def main() -> int:
                        help="control-plane base URL (default loopback)")
         p.add_argument("--token-env", default="HOUSE_EAR_TOKEN",
                        help="env var holding X-Auth-Token (default HOUSE_EAR_TOKEN)")
-        p.add_argument("--out", default="acceptance-runs",
-                       help="directory for JSON/Markdown (default ./acceptance-runs)")
+        p.add_argument("--out", default=_default_out(),
+                       help="directory for JSON/Markdown (default: ./acceptance-runs, or "
+                            "/var/lib/house-ear/acceptance-runs inside the container; "
+                            "override with HOUSE_EAR_ACCEPTANCE_OUT)")
         p.add_argument("--label", default="", help="label, e.g. near-field or far-field")
         p.add_argument("--check", action="store_true",
                        help="only GET /health, /audio, /traces and exit")

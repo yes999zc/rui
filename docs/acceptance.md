@@ -89,6 +89,9 @@ python3 scripts/acceptance-v1.py wake --url http://<NAS-IP>:8080 --trials 20 --l
 脚本会逐轮提示：`y` 听到回答 / `n` 没回答 / `s` 跳过 / `q` 退出；同时读
 `/api/v1/audio` 的 `wake_count`、`voice_peak_db`、`aec_erle_db`、`ack_mode`。
 输出在 `acceptance-runs/acceptance-wake-*.json/.md`（0600）。
+> **输出路径**：在容器里跑时加 `--out /var/lib/house-ear/acceptance-runs`（宿主是
+> `~/house-ear/data/acceptance-runs/`），别放 `/data` 或容器层——容器重建会丢；也可设
+> `HOUSE_EAR_ACCEPTANCE_OUT`。
 
 | 位置 | 音量档 | 命中/总数 | 失败轮现象 | 服务端字段异常 | 结论 |
 |---|---|---|---|---|---|
