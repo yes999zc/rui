@@ -131,8 +131,18 @@ if [ ! -f "$DIR/config/keywords.txt" ]; then
 fi
 
 echo "[5/5] starting"
+# A second install on the same host would collide on the fixed container name. Fail with
+# an actionable message instead of a rawdocker "Conflict" (seen while testing a cold
+# install next to a running production instance on 2026-10-24).
+if docker ps -a --format '{{.Names}}' | grep -qx house-ear; then
+  echo "ERROR: a container named 'house-ear' already exists."
+  echo "       stop the other install first, e.g. (cd /path/to/other/install && docker compose down)"
+  exit 1
+fi
 cd "$DIR"
-HOUSE_EAR_IMAGE="$IMAGE" docker compose up -d
+# Pass the compose file explicitly: it also pins the project directory, so a stray cwd
+# can never make compose start the *other* install's project.
+HOUSE_EAR_IMAGE="$IMAGE" docker compose -f "$DIR/docker-compose.yml" --project-directory "$DIR" up -d
 
 # Wait for the service instead of printing a URL that may still 502. The probe is the
 # image's own healthcheck: it reads web.port from config and also requires the audio
