@@ -253,6 +253,9 @@ def install_setup_routes(
             if model:
                 asr_dir = Path(model).expanduser()
                 break
+        # A cloud-ASR install (e.g. the NAS Volc chain) has no local sherpa provider in
+        # the chain, so the ASR files are not required for the wizard to be complete.
+        asr_required = asr_dir is not None
         asr_ok = bool(
             asr_dir is not None and asr_dir.is_dir()
             and (asr_dir / "tokens.txt").is_file()
@@ -265,11 +268,11 @@ def install_setup_routes(
             kws_files = model_files(kws) if kws is not None else {}
         except KwsUnavailable:
             kws_files = {}
-        models_done = asr_ok and bool(vad and vad.is_file()) and len(kws_files) == 4
+        models_done = ((not asr_required) or asr_ok) and bool(vad and vad.is_file()) and len(kws_files) == 4
         models_step = {
             "id": "models", "status": "done" if models_done else "pending",
-            "evidence": {"asr": asr_ok, "vad": bool(vad and vad.is_file()),
-                         "kws": len(kws_files) == 4},
+            "evidence": {"asr": asr_ok, "asr_required": asr_required,
+                         "vad": bool(vad and vad.is_file()), "kws": len(kws_files) == 4},
             "detail": {"asr_dir": str(asr_dir) if asr_dir else "",
                        "vad": str(vad) if vad else "",
                        "kws_dir": str(kws) if kws else ""},
