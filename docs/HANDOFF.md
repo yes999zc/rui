@@ -130,6 +130,9 @@ docker compose exec -T rui rui config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
+- 10-24 晚：全仓改名 house-ear→rui（包/CLI/env/路径/容器），发布 0.2.0；干净冷装（新智能体只读公开文档）
+  85s healthy，装在 `/vol1/rui`，旧 `/vol1/house-ear` 停用保留。等待人工走向导配置 keys/设备。
+
 - 10-24 深夜：0.1.3 官方 `latest`（rev 50df3b4）含 VAD/KWS 镜像内置、doctor sherpa 运行时探测（issue #2）、
   模型下载 IPv4/代理/镜像策略修复、安装脚本容器预检；生产已切官方镜像 healthy。
 
