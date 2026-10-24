@@ -102,11 +102,28 @@ def migrate(raw: dict) -> dict:
 def load_config(path: str | Path) -> Config:
     p = Path(path)
     try:
-        raw = _yaml.load(p.read_text(encoding="utf-8")) or {}
+        text = p.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise ConfigError(f"config not found: {p}") from exc
     except Exception as exc:  # noqa: BLE001 - surfaced as ConfigError on purpose
+        raise ConfigError(f"cannot read {p}: {exc}") from exc
+    # A truncated write leaves a 0-byte file. Treating that as "use defaults" hides
+    # the failure and boots the service with an empty auth token; raise instead so
+    # load_with_recovery can fall back to last-good/defaults.
+    if not text.strip():
+        raise ConfigError(
+            f"config file is empty: {p} (0 bytes or whitespace only); "
+            "restore the last-good config or schema defaults"
+        )
+    try:
+        raw = _yaml.load(text)
+    except Exception as exc:  # noqa: BLE001 - surfaced as ConfigError on purpose
         raise ConfigError(f"cannot parse {p}: {exc}") from exc
+    if raw is None:
+        raise ConfigError(
+            f"config file contains no YAML document (null): {p}; "
+            "restore the last-good config or schema defaults"
+        )
     try:
         return Config.model_validate(migrate(dict(raw)))
     except ValidationError as exc:
