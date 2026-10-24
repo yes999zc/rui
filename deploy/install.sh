@@ -132,7 +132,7 @@ fi
 
 echo "[5/5] starting"
 # A second install on the same host would collide on the fixed container name. Fail with
-# an actionable message instead of a rawdocker "Conflict" (seen while testing a cold
+# an actionable message instead of a raw Docker "Conflict" (seen while testing a cold
 # install next to a running production instance on 2026-10-24).
 if docker ps -a --format '{{.Names}}' | grep -qx house-ear; then
   echo "ERROR: a container named 'house-ear' already exists."
