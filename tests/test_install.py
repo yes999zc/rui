@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from house_ear.__main__ import KWS_REPO, _fetch_kws_model, main
+from house_ear.__main__ import KWS_REPO, VAD_URLS, _download_first, _fetch_kws_model, main
 from house_ear.audio.kws import keyword_lines, write_keywords_file
 from house_ear.config import Config, load_config, save_config
 from house_ear.config.schema import DeviceConfig, MusicConfig
@@ -94,6 +94,36 @@ def test_fetch_models_unpacks_the_wake_model(monkeypatch, tmp_path) -> None:
     model = tmp_path / "kws" / KWS_REPO
     assert (model / "tokens.txt").exists()
     assert not (tmp_path / "kws" / f"{KWS_REPO}.tar.bz2").exists()  # unpacked, not kept
+
+
+def test_vad_download_falls_back_when_the_hf_mirror_breaks(monkeypatch, tmp_path) -> None:
+    """Regression 2026-10-24: the HF repo behind hf-mirror vanished; fetch-models then
+    aborted before the KWS tarball, so a cold install could not hear its wake word."""
+    calls: list[str] = []
+
+    def fake_download(url: str, target: Path, *, force: bool = False) -> int:
+        calls.append(url)
+        if "hf-mirror.com" in url:
+            raise RuntimeError("404 Not Found")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"vad")
+        return 3
+
+    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    target = tmp_path / "silero_vad.onnx"
+    assert _download_first(VAD_URLS, target) == 3
+    assert calls[0].startswith("https://hf-mirror.com/")
+    assert "github.com" in calls[-1]
+    assert target.read_bytes() == b"vad"
+
+
+def test_vad_download_raises_when_every_mirror_fails(monkeypatch, tmp_path) -> None:
+    def fake_download(url: str, target: Path, *, force: bool = False) -> int:
+        raise RuntimeError("down")
+
+    monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
+    with pytest.raises(RuntimeError):
+        _download_first(("https://a.invalid/x", "https://b.invalid/x"), tmp_path / "x.onnx")
 
 
 def test_playback_defaults_are_playable_by_the_device_adapter() -> None:

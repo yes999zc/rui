@@ -110,8 +110,16 @@ SENSEVOICE_FILES = ("model.int8.onnx", "tokens.txt")
 # Silero VAD, 2 MB. Without it the turn gate never exists, so the pre-wake replay, the
 # acknowledgement hold and `gate_*` metrics are all inert while everything still looks up -
 # the same "works on the dev Mac, silently dead on the NAS" shape as a missing model.
+# The HuggingFace repo behind hf-mirror disappeared (401/404 on 2026-10-24), which
+# silently cost every cold install its wake word: the KWS tarball is only fetched
+# after the VAD succeeds, and install.sh is best-effort. Keep a GitHub release asset
+# as a fallback so one upstream outage cannot break the one-command install again.
 VAD_REPO = "csukuangfj/sherpa-onnx-vad"
 VAD_FILE = "silero_vad.onnx"
+VAD_URLS = (
+    f"https://hf-mirror.com/{VAD_REPO}/resolve/main/{VAD_FILE}",
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+)
 # The wake model (32.9 MB archive). GitHub releases is the only place sherpa-onnx
 # publishes these; the tarball holds several chunk variants and we use chunk 8.
 KWS_REPO = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
@@ -175,6 +183,19 @@ def _download_to(url: str, target: Path, *, force: bool = False) -> int:
     return done
 
 
+def _download_first(urls: tuple[str, ...], target: Path, *, force: bool = False) -> int:
+    """Download from the first working mirror; raise the last error if none do."""
+    last: Exception | None = None
+    for url in urls:
+        try:
+            return _download_to(url, target, force=force)
+        except Exception as exc:  # noqa: BLE001 - try the next mirror
+            last = exc
+            print(f"  mirror failed: {url} ({type(exc).__name__}: {exc})")
+    assert last is not None
+    raise last
+
+
 def _fetch_kws_model(args: argparse.Namespace) -> int:
     """Download + unpack the wake model; the keywords file is written by setup."""
     import tarfile
@@ -218,8 +239,8 @@ def cmd_fetch_models(args: argparse.Namespace) -> int:
     for name, target in wanted.items():
         _download_to(f"{base}/{name}", target, force=args.force)
     vad_target = Path(args.vad_dest)
-    _download_to(args.vad_base or f"https://hf-mirror.com/{VAD_REPO}/resolve/main/{VAD_FILE}",
-                 vad_target, force=args.force)
+    vad_urls = (args.vad_base,) if args.vad_base else VAD_URLS
+    _download_first(vad_urls, vad_target, force=args.force)
     onnx, tokens = model_paths(dest)  # recompute: the int8 file did not exist before
     if not onnx.exists() or not tokens.exists():
         print(f"model incomplete in {dest}")
