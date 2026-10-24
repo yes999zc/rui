@@ -6,7 +6,12 @@ REPO="${HOUSE_EAR_REPO:-yes999zc/rui}"
 REF="${HOUSE_EAR_REF:-main}"
 IMAGE="${HOUSE_EAR_IMAGE:-ghcr.io/$REPO:latest}"
 DIR="${HOUSE_EAR_HOME:-$HOME/house-ear}"
-RAW="https://raw.githubusercontent.com/$REPO/$REF"
+RAW="${HOUSE_EAR_RAW:-https://raw.githubusercontent.com/$REPO/$REF}"
+# Every fetch below is bounded: on a mainland network raw.githubusercontent.com can
+# accept the TCP connection and then stall forever, and this script used to hang at
+# step [1/5] with no output (seen 2026-10-24). A timeout turns that into a visible
+# warning instead of an installer that never finishes.
+CURL="curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors"
 # Created by this script, so the files belong to the person who ran it, not to root.
 # The service container itself still runs as root (it writes its own data volume).
 RUN_AS="$(id -u):$(id -g)"
@@ -33,11 +38,11 @@ echo "[1/5] compose file"
 # config comes along as the reference for the hand edits in step 2 (setup writes the
 # production template; the example is the commented, annotated version of it).
 if [ ! -f "$DIR/docker-compose.yml" ]; then
-  curl -fsSL "$RAW/docker-compose.yml" -o "$DIR/docker-compose.yml"
+  $CURL "$RAW/docker-compose.yml" -o "$DIR/docker-compose.yml"
 else
   echo "      keeping existing docker-compose.yml"
 fi
-curl -fsSL "$RAW/config.example.yaml" -o "$DIR/config.example.yaml" \
+$CURL "$RAW/config.example.yaml" -o "$DIR/config.example.yaml" \
   || echo "      WARNING: could not fetch config.example.yaml (optional reference)"
 
 # Ops scripts live in the repo, not in the image. Fetch the backup/restore pair and the
@@ -46,7 +51,7 @@ curl -fsSL "$RAW/config.example.yaml" -o "$DIR/config.example.yaml" \
 mkdir -p "$DIR/scripts"
 for f in backup.sh restore.sh acceptance-v1.py; do
   if [ ! -f "$DIR/scripts/$f" ]; then
-    curl -fsSL "$RAW/scripts/$f" -o "$DIR/scripts/$f" \
+    $CURL "$RAW/scripts/$f" -o "$DIR/scripts/$f" \
       && chmod 755 "$DIR/scripts/$f" \
       || echo "      WARNING: could not fetch scripts/$f (backup/restore docs will need a manual copy)"
   fi
