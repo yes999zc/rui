@@ -105,7 +105,17 @@ KWS_TOKENS="$DIR/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/t
 if [ -f "$DIR/data/models/sensevoice/model.int8.onnx" ] && [ -f "$KWS_TOKENS" ]; then
   echo "      models already present"
 else
-  docker run --rm --user "$RUN_AS" -v "$DIR/data:/data" "$IMAGE" \
+  # A host proxy is the difference between a 2 MB/s download and a 55 KB/s one for the
+  # GitHub release assets (measured 2026-10-24: direct 55 KB/s, mihomo 2.1 MB/s). The
+  # container does not inherit the host environment, so forward the usual proxy vars
+  # explicitly; host networking keeps 127.0.0.1 proxies reachable.
+  FETCH_PROXY=""
+  for var in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NO_PROXY no_proxy; do
+    eval "value=\${$var:-}"
+    [ -n "$value" ] && FETCH_PROXY="$FETCH_PROXY -e $var=$value"
+  done
+  # shellcheck disable=SC2086  # FETCH_PROXY is a list of docker flags, not a path
+  docker run --rm --network host --user "$RUN_AS" -v "$DIR/data:/data" $FETCH_PROXY "$IMAGE" \
       fetch-models --dest /data/models/sensevoice \
       --vad-dest /data/models/silero_vad.onnx \
       --kws-dest /data/models/kws \
