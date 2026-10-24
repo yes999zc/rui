@@ -124,9 +124,8 @@ SENSEVOICE_FILES = ("model.int8.onnx", "tokens.txt")
 VAD_REPO = "csukuangfj/sherpa-onnx-vad"
 VAD_FILE = "silero_vad.onnx"
 VAD_URLS = (
-    f"https://hf-mirror.com/{VAD_REPO}/resolve/main/{VAD_FILE}",
-    # GitHub release assets reset or stall from mainland networks; the proxy mirrors
-    # returned the full 643,854 B file from the NAS when both upstream paths failed.
+    # The HuggingFace VAD repo is gone (401 on 2026-10-24), and the GitHub release asset
+    # is the remaining source. Try the proxy mirror first: direct GitHub stalled here.
     "https://ghproxy.net/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
     "asr-models/silero_vad.onnx",
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
