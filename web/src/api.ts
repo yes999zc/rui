@@ -100,6 +100,8 @@ export interface DoctorReport {
   checks: Check[]
 }
 
+export type DeviceStatus = 'ready' | 'disconnected' | 'unknown' | 'unavailable'
+
 export interface Device {
   id: string
   adapter: string
@@ -108,8 +110,16 @@ export interface Device {
   room: string
   host: string
   transport: string
-  status: 'ready' | 'unavailable'
+  /** Evidence-based link state: a null `connected` means no plane is running. */
+  status: DeviceStatus | string
+  connected?: boolean | null
+  last_seen?: number | null
+  latency_ms?: number | null
   error?: string
+  /** Resolved plug id (`params.plug_id`, or the adapter's manifest). */
+  plug_id?: string | null
+  /** Non-secret, plug-declared values; secret params are filtered server-side. */
+  params?: Record<string, unknown>
   capabilities: string[]
   missing_for_barge_in: string[]
   has_device_token?: boolean
@@ -507,7 +517,34 @@ export interface DeviceDoc {
 
 export interface DeviceDetail {
   device: DeviceDoc
-  live: { model?: string; transport?: string; status?: string; capabilities?: string[] }
+  live: {
+    model?: string
+    transport?: string
+    status?: string
+    connected?: boolean | null
+    last_seen?: number | null
+    latency_ms?: number | null
+    capabilities?: string[]
+  }
+  /** Resolved plug id; may be absent against an older control plane. */
+  plug_id?: string | null
+  /** Public params (secrets removed); mirrors `device.params`. */
+  params?: Record<string, unknown>
+  /** Last audio-plane restart outcome; empty when it came back. */
+  plane_error?: string
+}
+
+/** One row of `POST /api/v1/devices/{id}/test` (evidence only, no config write). */
+export interface DeviceTestCheck {
+  name: string
+  ok: boolean
+  detail: Record<string, unknown>
+}
+
+export interface DeviceTestResult {
+  ok: boolean
+  checks: DeviceTestCheck[]
+  error: string
 }
 
 /** GET /api/v1/devices/{id}/connect: what the open-xiaoai client needs. */
@@ -864,9 +901,15 @@ export const api = {
     request<DeviceDetail>(`/api/v1/devices/${encodeURIComponent(id)}`, {
       method: 'PUT', body: JSON.stringify(patch),
     }),
+  /** Evidence-only connection test; never writes config or returns the token. */
+  deviceTest: (id: string) =>
+    request<DeviceTestResult>(`/api/v1/devices/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    }),
   deleteDevice: (id: string) =>
-    request<{ removed: string; devices: string[] }>(`/api/v1/devices/${encodeURIComponent(id)}`,
-      { method: 'DELETE' }),
+    request<{ removed: string; devices: string[]; plane_error?: string }>(
+      `/api/v1/devices/${encodeURIComponent(id)}`, { method: 'DELETE' },
+    ),
   probeDevice: (host: string) =>
     request<{ host: string; usable: boolean; hint: string; ssh: { port_open: boolean; banner: boolean; ms?: number; error?: string } }>(
       '/api/v1/devices/probe', { method: 'POST', body: JSON.stringify({ host }) }),
