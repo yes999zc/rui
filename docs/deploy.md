@@ -219,10 +219,21 @@ docker compose logs --tail=100 house-ear
 
    `music.enabled: true` 时 `secrets_path` 必须非空（配置校验会报错）。
 
-3. 起歌需要 ffmpeg 做 16 kHz 单声道转码。**镜像已带 `ffmpeg`**（Dockerfile 用
-   `mwader/static-ffmpeg:7.1` 多阶段拷贝静态二进制，约 100 MB，不拖 Debian 共享库），
-   容器内自检：`docker compose exec house-ear ffmpeg -version`；缺了就是用了旧镜像。
-   Navidrome 侧能直出 mp3 时也仍然会走本地转码，行为一致。
+3. 起歌需要 ffmpeg 做 16 kHz 单声道转码。**镜像已带 `ffmpeg`**：Dockerfile 在
+   `debian:bookworm-slim` 构建阶段从固定版本源码（FFmpeg 7.1.5 + SHA-256 校验）编译
+   **LGPL-only** 静态二进制，只链接 libopus / libmp3lame，不装 Debian 的 ffmpeg 包、
+   也不拖共享库；构建时会自动断言许可（GPL/nonfree 标志会让镜像构建直接失败）。
+   容器内自检：
+
+   ```bash
+   docker compose exec house-ear ffmpeg -version   # configuration: 不含 --enable-gpl/--enable-nonfree
+   docker compose exec house-ear ffmpeg -L          # GNU Lesser General Public ... version 2.1
+   ```
+
+   二进制装到 `/usr/local/bin/ffmpeg`（旧镜像是 `/ffmpeg`），但代码一直按 PATH 里的
+   `ffmpeg` 调用，所以配置和调用方都不用改。缺了就是用了旧镜像。Navidrome 侧能直出
+   mp3 时也仍然会走本地转码，行为一致。来源、构建参数和 source-offer 说明见
+   [THIRD_PARTY.md](../THIRD_PARTY.md#ffmpeg)。
 
 音乐相关的环境变量：**没有**。账号在 JSON 里，其余都是配置项。控制台「音乐」面板在
 `music.enabled: true` 后才出现。

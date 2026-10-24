@@ -13,7 +13,7 @@ How each component reaches a user:
 
 | Delivery | Components |
 |---|---|
-| Bundled in the container image | sherpa-onnx (wheel), speexdsp (`libspeexdsp1`), FFmpeg (static binary), Python deps, compiled web console |
+| Bundled in the container image | sherpa-onnx (wheel), speexdsp (`libspeexdsp1`), FFmpeg (LGPL-only static build with libopus/libmp3lame), Python deps, compiled web console |
 | Downloaded at runtime into the data volume | SenseVoice ASR, Silero VAD, KWS wake-word model |
 | Installed by the user on the speaker | open-xiaoai client |
 | Reference only (no code shipped) | EchoMuse |
@@ -105,36 +105,68 @@ How each component reaches a user:
 
 ### FFmpeg
 
-- **Role:** music transcoder (Navidrome flac/opus → 16 kHz mono s16 PCM), invoked as a
-  subprocess. Only `/ffmpeg` is copied into the runtime image.
-- **Current source:** `FROM mwader/static-ffmpeg:7.1 AS ffmpeg` (see `Dockerfile`).
-- **License status:** **needs audit / LGPL-only plan** — do **not** assume this binary is
-  LGPL. FFmpeg upstream is LGPL-2.1-or-later by default, but a build with `--enable-gpl`
-  (or GPL-only libraries such as x264/x265) is GPL-2.0-or-later. The configure flags of this
-  static image have not been audited, and Docker Hub currently exposes only version tags
-  (no `-lgpl` variant) as of 2026-10-24.
-- **How to check the shipped binary:**
-  ```bash
-  docker run --rm ghcr.io/yes999zc/rui:latest ffmpeg -version
-  docker run --rm ghcr.io/yes999zc/rui:latest ffmpeg -L
-  # Inspect the configuration line: --enable-gpl / --enable-nonfree / --enable-libx264 ...
+- **Role:** music transcoder (Navidrome flac/opus/mp3/… → 16 kHz mono s16 PCM) and voice
+  encoder for channel replies (Ogg/Opus for Telegram, MP3 for WeChat), invoked as a
+  subprocess. Only `/opt/ffmpeg/bin/ffmpeg` from the builder stage is copied into the
+  runtime image, as `/usr/local/bin/ffmpeg`.
+- **Source:** FFmpeg **7.1.5**, pinned release tarball
+  <https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz>, SHA-256
+  `de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f`.
+  The builder stage (`FROM debian:bookworm-slim AS ffmpeg`) verifies the hash with
+  `sha256sum -c` **before** unpacking; bump `FFMPEG_VERSION` and `FFMPEG_SHA256` together.
+  `FFMPEG_MIRROR` may point at a mirror of the same tarball; the hash still applies.
+- **License:** **LGPL-2.1-or-later** (FFmpeg's default when GPL/nonfree/version3 code is
+  disabled). Note that FFmpeg has **no `--enable-lgpl` configure switch**; older notes in
+  this repo were wrong about that. LGPL is preserved by configuring with
+  `--disable-gpl --disable-nonfree --disable-version3` and by linking only
+  LGPL-compatible libraries:
+  - [`libopus`](https://github.com/xiph/opus) (BSD-3-Clause): Opus decode and the `libopus`
+    encoder for Telegram voice replies. Verified against upstream `COPYING`.
+  - [`libmp3lame`](https://lame.sourceforge.io/) (LGPL-2.0-or-later, GNU Library General
+    Public License v2): `libmp3lame` encoder used by the WeChat audio reply path. Verified against
+    upstream source headers; LGPL-2.0-or-later is compatible with the LGPL-2.1+ combination.
+  No GPL-only codec (x264/x265/etc.) is configured or linked. All container demuxers and
+  the flac/vorbis/opus/mp3/aac decoders are FFmpeg-native code covered by the LGPL.
+- **Exact build configuration (Dockerfile `ffmpeg` stage):**
+  ```text
+  ./configure --prefix=/opt/ffmpeg \
+    --disable-gpl --disable-nonfree --disable-version3 \
+    --disable-autodetect --disable-doc --disable-debug \
+    --disable-ffplay --disable-ffprobe \
+    --enable-static --disable-shared \
+    --enable-libopus --enable-libmp3lame \
+    --pkg-config-flags=--static --extra-ldflags=-static --extra-libs=-lm
   ```
-- **Options for the LGPL-only migration (research note; not changed in this task):**
-  1. **Build from pinned source (recommended).** Add a builder stage that compiles FFmpeg
-     from a pinned release tarball (with SHA-256) using
-     `--disable-gpl --disable-nonfree --enable-lgpl`, keeping only what the music path needs
-     (flac/opus/vorbis/mp3/aac decode, wav/pcm output). Copy the resulting binary. Add a CI
-     assertion that `ffmpeg -version` contains no `--enable-gpl`/`--enable-nonfree`.
-  2. **Use a verified LGPL-only distro build.** Debian's and Alpine's default `ffmpeg`
-     packages enable GPL code, so a package name alone is not proof; read the build config
-     and package copyright first. Only adopt after `ffmpeg -version`/`ffmpeg -L` confirms it.
-  3. **Request/consume an LGPL-only static image variant.** Not available from
-     `mwader/static-ffmpeg` today; would require an upstream change or a locally published
-     image.
-  4. **Transcode in-process or drop transcoding.** Rejected for now: larger scope and
-     CPU/latency risk on NAS hardware; revisit only if licensing forces it.
-- **Decision needed:** pick option 1 for the 0.1.1 image, keep the `ffmpeg -version` check in
-  CI, then update this section with the verified result.
+  `--disable-autodetect` is deliberate: only the two libraries above are linked, so no
+  system library can change the license or the configuration line. The result is a
+  stripped, statically linked `ffmpeg` binary; the runtime image stays `python:3.12-slim`
+  plus `libspeexdsp1`.
+- **Build-time license gates (fail `docker build`, therefore CI and image publishing):**
+  - builder stage: `ffmpeg -L` must say "GNU Lesser General Public … version 2.1 of the
+    License", must not say "GNU General Public License", and `ffmpeg -version` must contain
+    no `--enable-gpl`, `--enable-nonfree`, or `--enable-version3`;
+  - runtime stage: the same checks run on the copied binary, which also proves it executes
+    on the runtime base image.
+- **How to check the shipped image:**
+  ```bash
+  docker run --rm ghcr.io/yes999zc/rui:latest ffmpeg -L      # expect GNU Lesser General Public ... 2.1
+  docker run --rm ghcr.io/yes999zc/rui:latest ffmpeg -version # configuration: no --enable-gpl/nonfree/version3
+  docker run --rm ghcr.io/yes999zc/rui:latest ls /usr/share/doc/house-ear/ffmpeg
+  # COPYING.LGPLv2.1, LICENSE.md, libopus.copyright, libmp3lame.copyright
+  ```
+- **Source offer (LGPL compliance):** the image is built entirely from the pinned FFmpeg
+  tarball above plus Debian's `libopus`/`libmp3lame` sources; the Dockerfile is the complete
+  rebuild/relink recipe. Because `libmp3lame` is statically linked, a redistributor should
+  keep the tarballs (or a written offer for them) available for at least three years and
+  keep this recipe in the tree so anyone can rebuild the binary with a modified library
+  (LGPL-2.1 §6). Before a formal release, publish the tarball URLs and this commit/tag
+  alongside the image. (Inventory note, not legal advice.)
+- **Decision (P1.6):** from-source build adopted. `mwader/static-ffmpeg` publishes no
+  LGPL variant (Docker Hub tag list checked 2026-10-24), and no other prebuilt image was
+  adopted because its configure line could not be verified without pulling it. Fallback if
+  the build breaks: return to the last published image tag **only** with an explicit
+  "FFmpeg license not audited" NOTICE and keep the P1.6 item open; do **not** silently
+  ship a GPL binary.
 
 ## 5. Python dependencies
 
@@ -190,7 +222,7 @@ The console is compiled during the image build; these packages are build-time de
 |---|---|
 | python:3.12-slim | Python-2.0 plus Debian packages; see the image's `/usr/share/doc` |
 | node:22-alpine | Node.js MIT plus Alpine packages |
-| mwader/static-ffmpeg:7.1 | see [FFmpeg](#ffmpeg) — needs audit |
+| debian:bookworm-slim | build-only stage for FFmpeg; Debian packages plus the pinned FFmpeg tarball, see [FFmpeg](#ffmpeg) |
 
 ---
 
@@ -199,5 +231,6 @@ The console is compiled during the image build; these packages are build-time de
 1. Keep the upstream MIT/BSD/Apache notices for code and models that are redistributed.
 2. Preserve Apache-2.0 `NOTICE` content for sherpa-onnx and other Apache-2.0 dependencies.
 3. Attribute SenseVoice/FunASR model names and source; comply with the FunASR Model License.
-4. Audit FFmpeg (option 1 above) and record the verified license before claiming LGPL.
+4. Keep the FFmpeg source pin/SHA-256 and the LGPL build gates (`--disable-gpl`, builder +
+   runtime `ffmpeg -L`/`-version` checks) intact; re-run them whenever FFmpeg is bumped.
 5. Update this file and the README credits when a component is added or removed.

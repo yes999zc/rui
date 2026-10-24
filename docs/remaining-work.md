@@ -64,7 +64,7 @@ P0 polish、音乐凭据 UI、设备 plane_error、MCP test env、小瑞/Rui 品
 ## F. License（待 9哥 拍板）
 
 - 当前 MIT；讨论见本轮会话。候选：MIT（最简单）、Apache-2.0（专利/商标条款、更企业友好）、AGPL-3.0（防闭源托管）。
-- 注意容器内的静态 ffmpeg 仍是 GPL/LGPL 第三方组件，代码许可证不覆盖它。
+- 容器内的 ffmpeg 已改为从固定版本源码构建的 LGPL-only 二进制（P1.6，见 `THIRD_PARTY.md`）；它仍是第三方组件，MIT 代码许可证不覆盖它。
 
 ## G. CPU / 镜像（2026-10-23 定位）
 

@@ -235,7 +235,7 @@ npm run build
 - [SenseVoice / FunAudioLLM](https://github.com/FunAudioLLM/SenseVoice) — 本地语音识别模型（模型权重遵循 FunASR Model License，非 MIT）
 - [Silero VAD](https://github.com/snakers4/silero-vad) — 语音活动检测（MIT）
 - [SpeexDSP](https://github.com/xiph/speexdsp) — 回声消除（BSD-3-Clause）
-- [FFmpeg](https://ffmpeg.org/) — 音乐转码（当前静态构建的许可待审计）
+- [FFmpeg](https://ffmpeg.org/) — 音乐/语音转码（LGPL-2.1+；镜像内由固定版本源码构建，仅链接 libopus / libmp3lame）
 
 MIT 只覆盖本仓库自己的代码；以上第三方组件各自保留其许可证，完整清单与核查状态见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
@@ -358,7 +358,7 @@ Rui stands on these open-source projects and models:
 - [SenseVoice / FunAudioLLM](https://github.com/FunAudioLLM/SenseVoice) — local speech-recognition model (weights under the FunASR Model License, not MIT)
 - [Silero VAD](https://github.com/snakers4/silero-vad) — voice-activity detection (MIT)
 - [SpeexDSP](https://github.com/xiph/speexdsp) — echo cancellation (BSD-3-Clause)
-- [FFmpeg](https://ffmpeg.org/) — music transcoding (license of the current static build: needs audit)
+- [FFmpeg](https://ffmpeg.org/) — music/voice transcoding (LGPL-2.1+; built in-image from a pinned source tarball, linking only libopus / libmp3lame)
 
 MIT covers this repository's own code only. These components keep their own licenses; the full inventory and verification status is in [THIRD_PARTY.md](THIRD_PARTY.md).
 
