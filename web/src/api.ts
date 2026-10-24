@@ -585,6 +585,12 @@ export interface DeviceDoc {
   wake_words: string[]
   volume: number
   listen_port: number | null
+  /** Top-level LED toggle the setup params form writes (`led_enabled`). */
+  led_enabled?: boolean
+  /** Older control planes expose the LED state as a nested `led.enabled`. */
+  led?: { enabled?: boolean }
+  /** Microphone gain in dB; absent on control planes that predate the field. */
+  mic_gain_db?: number | null
   /** Non-secret, plug-declared values (never a `secret` param). */
   params?: Record<string, unknown>
   [key: string]: unknown

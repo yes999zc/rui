@@ -35,6 +35,13 @@ const tokenInput = ref<HTMLInputElement | null>(null)
 
 let timer: number | undefined
 
+/** Server-driven setup state (`GET /api/v1/setup/step`), cached briefly. */
+let setupCache: { at: number; complete: boolean } | null = null
+let setupComplete = false
+const SETUP_CACHE_MS = 30_000
+let nudgeBusy = false
+let lastNudge = Date.now()
+
 const signalWord = computed(() => {
   if (!online.value) return t('signal.offline')
   return audioOnline.value ? t('signal.listening') : t('signal.controlOnly')
@@ -64,6 +71,43 @@ async function refreshSignal(): Promise<void> {
     /* the ledger shows what it has; the page shows the error */
   }
   booted.value = true
+  // While setup is incomplete, keep nudging at most once a minute (cached result);
+  // once complete, stop asking.
+  if (!setupComplete && Date.now() - lastNudge >= 60_000) void nudgeSetup(false)
+}
+
+async function setupIsComplete(force: boolean): Promise<boolean> {
+  const now = Date.now()
+  if (!force && setupCache && now - setupCache.at < SETUP_CACHE_MS) {
+    return setupCache.complete
+  }
+  const state = await api.setupStepState()
+  setupCache = { at: Date.now(), complete: state.complete }
+  setupComplete = state.complete
+  return state.complete
+}
+
+/**
+ * A fresh install lands on the wizard, not on an overview of nothing. The legacy
+ * `/api/v1/setup` said "complete" after four steps, so users who had just saved
+ * wake words were dropped into an offline overview while connect/test were pending.
+ * The eight-step endpoint keeps the nudge alive until connect/test/verify are done.
+ *
+ * Only landing routes redirect: a bookmarked panel is a deliberate act. Results are
+ * cached, so the 10 s signal refresh never turns this into aggressive polling.
+ */
+async function nudgeSetup(force: boolean): Promise<void> {
+  if (nudgeBusy) return
+  if (route.path !== '/' && route.path !== '/panel/overview') return
+  nudgeBusy = true
+  try {
+    if (!(await setupIsComplete(force))) await router.replace('/setup')
+  } catch {
+    // 401/offline: the wizard would not load either; stay put.
+  } finally {
+    nudgeBusy = false
+    lastNudge = Date.now()
+  }
 }
 
 function saveToken(): void {
@@ -120,6 +164,15 @@ watch(tokenOpen, async (open) => {
   }
 })
 
+// A later navigation back to the landing page is checked fresh (cached results are
+// only for the periodic refresh): after finishing setup there must be no bounce.
+watch(
+  () => route.path,
+  (path) => {
+    if (path === '/' || path === '/panel/overview') void nudgeSetup(true)
+  },
+)
+
 onMounted(async () => {
   window.addEventListener('rui-401', onUnauthorized)
   window.addEventListener('keydown', onKeydown)
@@ -127,17 +180,7 @@ onMounted(async () => {
 
   await refreshSignal()
   timer = window.setInterval(refreshSignal, 10_000)
-
-  // A fresh install lands on the wizard, not on an overview of nothing. Only the
-  // landing route is redirected: a bookmark to a panel is a deliberate act.
-  if (route.path === '/' || route.path === '/panel/overview') {
-    try {
-      const setup = await api.setup()
-      if (!setup.complete) await router.replace('/setup')
-    } catch {
-      // 401/offline: the wizard would not load either; stay put.
-    }
-  }
+  await nudgeSetup(true)
 })
 
 onUnmounted(() => {

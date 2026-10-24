@@ -46,7 +46,7 @@ import {
 
 type Stage = 'llm' | 'asr' | 'tts'
 type KeyFieldRole = 'api_key' | 'app_id' | 'api_secret' | string
-type KeyTestStatus = 'ok' | 'fail' | 'error'
+type KeyTestStatus = 'ok' | 'fail' | 'error' | 'neutral'
 
 /** One credential input inside a provider row; `env` is shown as secondary text. */
 interface KeyFieldView {
@@ -79,6 +79,8 @@ interface ProviderView {
   voices: VoiceView[]
   defaultVoice: string
   selected: boolean
+  /** True when the provider declares no credential slots (local ASR / keyless). */
+  keyless: boolean
 }
 
 /** One fixed table row: use | provider | credentials | voice (TTS only). */
@@ -162,7 +164,6 @@ const PREPARE_FALLBACK_KEYS: MsgKey[] = [
   'setup.v2.prepare.fallback.ssh',
   'setup.v2.prepare.fallback.clientPath',
   'setup.v2.prepare.fallback.configPath',
-  'setup.v2.prepare.fallback.token',
   'setup.v2.prepare.fallback.restart',
   'setup.v2.prepare.fallback.log',
 ]
@@ -252,6 +253,7 @@ const ERROR_KEYS: Record<string, MsgKey> = {
 const CHECK_LABELS: Record<string, MsgKey> = {
   plane: 'setup.v2.test.check.plane',
   host: 'setup.v2.test.check.host',
+  token: 'setup.v2.test.check.token',
 }
 
 const ARTIFACT_KEYS: Record<string, MsgKey> = {
@@ -273,7 +275,16 @@ const SOURCE_KEYS: Record<string, MsgKey> = {
 }
 
 const PARAM_TYPES = new Set(['string', 'int', 'bool', 'list', 'secret', 'choice'])
-const RESERVED_PARAMS = new Set(['host', 'room', 'wake_words'])
+/** Owned by the fixed controls above; a manifest copy must not render twice. */
+const RESERVED_PARAMS = new Set([
+  'host',
+  'room',
+  'wake_words',
+  'volume',
+  'led_enabled',
+  'listen_port',
+  'mic_gain_db',
+])
 
 // ————————————————————————————————————————————————— state —————
 const state = ref<SetupStepResponse | null>(null)
@@ -310,6 +321,10 @@ const deviceDraft = ref<DeviceDoc | null>(null)
 const deviceDraftKey = ref('')
 const hostDraft = ref('')
 const roomDraft = ref('')
+const volumeDraft = ref('60')
+const ledEnabled = ref(true)
+const listenPortDraft = ref('')
+const micGainDraft = ref('')
 const wakeWords = ref<string[]>([''])
 const paramTexts = ref<Record<string, string>>({})
 const paramBools = ref<Record<string, boolean>>({})
@@ -567,6 +582,7 @@ function toProviderView(
     voices,
     defaultVoice,
     selected: entrySelected(entry, doc, index),
+    keyless: fields.length === 0,
   }
 }
 
@@ -620,9 +636,21 @@ const keyDirty = computed(() => {
 })
 
 function providerOptionLabel(provider: ProviderView): string {
+  if (provider.keyless) return `${provider.displayName} · ${t('setup.v2.keys.noKeyNeeded')}`
   return provider.configured
     ? `${provider.displayName} · ${t('setup.keys.configured')}`
     : provider.displayName
+}
+
+/** A keyless row (local ASR) is ready, not missing: neutral means "nothing to do". */
+function providerBadgeLabel(row: ProviderRowView): string {
+  if (row.selectedProvider?.keyless) return t('setup.v2.keys.noKeyNeeded')
+  return row.configured ? t('setup.keys.configured') : t('setup.keys.missing')
+}
+
+function providerBadgeClass(row: ProviderRowView): string {
+  if (row.selectedProvider?.keyless) return 'badge-muted'
+  return row.configured ? 'badge-ok' : 'badge-warn'
 }
 
 /** A changed draft invalidates the previous smoke-test result for that row. */
@@ -656,37 +684,62 @@ const testOutcome = computed<{ status: 'ok' | 'fail'; message: string; at: strin
   const at = String(ev.at ?? '')
   const checks = testChecks.value
   if (!at && !checks.length && !ev.stored && !ev.speaker_connected) return null
-  const passed = Boolean(ev.stored) || Boolean(ev.speaker_connected)
+  // A stored `ok` may only prove the SSH/ping probe: the live plane link is the test.
+  const passed = Boolean(ev.speaker_connected)
   if (passed) return { status: 'ok', message: t('setup.v2.params.testPassed'), at }
   const failed = checks.filter((check) => check.ok === false).map(checkLabel)
-  return {
-    status: 'fail',
-    message: failed.length
-      ? t('setup.v2.params.testFailed', { items: failed.join(' / ') })
-      : t('setup.v2.params.testFailedGeneric'),
-    at,
+  if (ev.stored && failed.length === 0) {
+    return { status: 'fail', message: t('setup.v2.test.storedOnly'), at }
   }
+  const connectionMessage = String(evidence(connectStep.value).connection_message ?? '')
+  const reason = failed.length
+    ? t('setup.v2.params.testFailed', { items: failed.join(' / ') })
+    : connectionMessage === 'waiting_for_client' || !connectionMessage
+      ? t('setup.v2.test.noLink')
+      : t('setup.v2.params.testFailedGeneric')
+  return { status: 'fail', message: reason, at }
 })
 
-/** Device-side checklist: manifest steps when provided, generic fallback otherwise. */
-const prepareSteps = computed<PrepareStep[]>(() => {
-  const manifestSteps = (deviceSide.value?.install_steps ?? [])
+/**
+ * Manifest steps that need the ws URL / device token from the later connect step.
+ * They are shown as a note, never as required checkboxes: requiring them here made
+ * an honest user unable to finish prepare (`connect` is three steps later).
+ *
+ * Deliberately narrow: "回连地址" also appears in the fixed-IP step, which is a
+ * pre-connect task. Only token handling and the post-connect retry qualify.
+ */
+const CONNECT_DEPENDENT_STEP =
+  /(?:device[ _-]?token|\btoken\b|speaker_connected|重试|retry|401|1008)/i
+
+function manifestPrepareSteps(): PrepareStep[] {
+  return (deviceSide.value?.install_steps ?? [])
     .map((line) => String(line).trim())
     .filter(Boolean)
-  if (manifestSteps.length) {
-    return manifestSteps.map((text, index) => ({
+    .map((text, index) => ({
       id: `manifest:${index}:${text.slice(0, 24)}`,
       text,
       fromManifest: true,
     }))
-  }
+}
+
+/** Device-side checklist: only what can be done before connect. */
+const prepareSteps = computed<PrepareStep[]>(() => {
+  const manifestSteps = manifestPrepareSteps().filter(
+    (item) => !CONNECT_DEPENDENT_STEP.test(item.text),
+  )
+  if (manifestSteps.length) return manifestSteps
   return PREPARE_FALLBACK_KEYS.map((key) => ({
     id: `fallback:${key}`,
     text: t(key),
     fromManifest: false,
   }))
 })
-const prepareFromManifest = computed(() => (deviceSide.value?.install_steps?.length ?? 0) > 0)
+
+/** Notes that depend on the connect step; they are not part of the required list. */
+const prepareLaterNotes = computed<PrepareStep[]>(() =>
+  manifestPrepareSteps().filter((item) => CONNECT_DEPENDENT_STEP.test(item.text)),
+)
+const prepareFromManifest = computed(() => prepareSteps.value.some((item) => item.fromManifest))
 const prepareCheckedCount = computed(
   () => prepareSteps.value.filter((item) => prepareChecks.value[item.id]).length,
 )
@@ -714,6 +767,28 @@ const wsCopyDisabled = computed(() => {
   const info = connectInfo.value
   return !info || (!info.configured && !info.allow_no_token)
 })
+
+/** Hostname of the generated ws URL, without IPv6 brackets or port. */
+function urlHostname(raw: string): string {
+  if (!raw) return ''
+  try {
+    return new URL(raw).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  } catch {
+    const match = raw.match(/^[a-z]+:\/\/([^/:?#]+)/i)
+    return (match?.[1] ?? '').replace(/^\[|\]$/g, '').toLowerCase()
+  }
+}
+
+/**
+ * The URL is built from the browser's Host header. Opening the console through
+ * localhost/SSH makes a ws://127.0.0.1 address the speaker can never reach, so say so.
+ */
+const wsLoopback = computed(() =>
+  ['127.0.0.1', 'localhost', '::1', '0.0.0.0'].includes(urlHostname(connectInfo.value?.ws_url ?? '')),
+)
+
+/** The server's own explanation for the connection_message code (exact reason). */
+const connectHint = computed(() => pickLocalized(evidence(connectStep.value).hint))
 const connectSkipped = computed(
   () => connectStep.value?.status === 'skipped' || manifestTransport.value === 'outbound',
 )
@@ -754,6 +829,18 @@ const connectStatus = computed<{
       tone: 'ok',
       badge: t('setup.v2.connect.badge.connected'),
       text: t('setup.v2.connect.status.connected'),
+    }
+  }
+  if (
+    connectionMessage === 'token_mismatch' &&
+    connectEvidence.token_configured === false
+  ) {
+    return {
+      tone: 'warn',
+      badge: t('setup.v2.connect.badge.waiting'),
+      text: t('setup.v2.connect.status.tokenMissing', {
+        env: String(connectEvidence.token_env ?? '') || tokenEnv.value,
+      }),
     }
   }
   if (connectionMessage === 'token_mismatch') {
@@ -820,6 +907,12 @@ function statusOf(step: SetupStepState): SetupStepStatus {
   // chip locally while this tab's request is in flight.
   if (busyStep.value === step.id) return 'running'
   if (step.id === 'verify' && verifySkipped.value && step.status !== 'done') return 'skipped'
+  // A stored test result is not a live link: SSH/host probes pass while the speaker
+  // is disconnected. Until the backend recomputes `test` from speaker_connected,
+  // never paint it green on a stored result alone.
+  if (step.id === 'test' && step.status === 'done' && !evidence(step).speaker_connected) {
+    return 'pending'
+  }
   return step.status
 }
 
@@ -1026,6 +1119,15 @@ function checkDetail(check: TestCheck): string {
       .filter(Boolean)
       .join(' · ')
   }
+  if (check.id === 'token') {
+    return [
+      `${t('setup.keys.configured')}: ${flag(raw.configured)}`,
+      raw.token_env ? `${t('setup.v2.connect.tokenEnv')}: ${String(raw.token_env)}` : '',
+      raw.allow_no_token ? t('setup.connect.allowNoToken') : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  }
   return raw && Object.keys(raw).length ? JSON.stringify(raw) : ''
 }
 
@@ -1103,6 +1205,19 @@ function initParamDrafts(): void {
   }
 }
 
+/** LED state from either the new top-level field or the legacy nested `led`. */
+function deviceLedEnabled(device: DeviceDoc): boolean {
+  if (typeof device.led_enabled === 'boolean') return device.led_enabled
+  if (device.led && typeof device.led.enabled === 'boolean') return device.led.enabled
+  return false
+}
+
+function numericDraft(value: unknown): string {
+  if (value === null || value === undefined || value === '') return ''
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? String(parsed) : ''
+}
+
 function prefillParams(device: DeviceDoc, clearSecrets: boolean): void {
   const texts: Record<string, string> = {}
   const bools: Record<string, boolean> = {}
@@ -1130,6 +1245,14 @@ function prefillParams(device: DeviceDoc, clearSecrets: boolean): void {
   paramTexts.value = texts
   paramBools.value = bools
   secretDrafts.value = secrets
+  // Device-level controls come from GET /devices/{id}; the server coerces the bounds.
+  volumeDraft.value = numericDraft(device.volume) || '60'
+  ledEnabled.value = deviceLedEnabled(device)
+  listenPortDraft.value = numericDraft(device.listen_port)
+  const storedGain =
+    device.mic_gain_db ??
+    (device.params && typeof device.params === 'object' ? device.params.mic_gain_db : null)
+  micGainDraft.value = numericDraft(storedGain)
 }
 
 function setFieldError(key: string, message: string): void {
@@ -1157,6 +1280,25 @@ function validateParams(): boolean {
   }
   if (roomDraft.value.trim().length > 32 || /[\u0000-\u001f]/.test(roomDraft.value)) {
     setFieldError('room', t('setup.v2.params.roomInvalid'))
+  }
+  const volumeText = volumeDraft.value.trim()
+  const volume = Number(volumeText)
+  if (!/^\d+$/.test(volumeText) || !Number.isInteger(volume) || volume < 0 || volume > 100) {
+    setFieldError('volume', t('setup.v2.params.invalidVolume'))
+  }
+  const port = listenPortDraft.value.trim()
+  if (port) {
+    const parsed = Number(port)
+    if (!/^\d+$/.test(port) || !Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+      setFieldError('listen_port', t('setup.v2.params.invalidPort'))
+    }
+  }
+  const gain = micGainDraft.value.trim()
+  if (gain) {
+    const parsed = Number(gain)
+    if (!/^\d+(?:\.\d+)?$/.test(gain) || !Number.isFinite(parsed) || parsed < 0 || parsed > 42) {
+      setFieldError('mic_gain_db', t('setup.v2.params.invalidGain'))
+    }
   }
   const wakeError = validateWakeWords()
   if (wakeError) setFieldError('wake_words', wakeError)
@@ -1223,6 +1365,14 @@ function buildParamsPayload(): Record<string, unknown> {
     room: roomDraft.value.trim(),
     wake_words: cleanWakeWords(),
     params,
+    // Device-level controls live at the top level of `device.upsert`, not in `params`:
+    // the server owns their schema and bounds (volume/LED/listen port/mic gain).
+    volume: Number.parseInt(volumeDraft.value.trim(), 10),
+    led_enabled: Boolean(ledEnabled.value),
+    listen_port: listenPortDraft.value.trim()
+      ? Number.parseInt(listenPortDraft.value.trim(), 10)
+      : null,
+    mic_gain_db: micGainDraft.value.trim() ? Number(micGainDraft.value.trim()) : 0,
   }
   const adapter = selectedDeviceManifest.value?.id
   if (adapter) values.adapter = adapter
@@ -1413,6 +1563,10 @@ function resetDeviceDraft(): void {
   deviceDraftKey.value = ''
   hostDraft.value = ''
   roomDraft.value = ''
+  volumeDraft.value = '60'
+  ledEnabled.value = true
+  listenPortDraft.value = ''
+  micGainDraft.value = ''
   wakeWords.value = ['']
   paramTexts.value = {}
   paramBools.value = {}
@@ -1693,12 +1847,14 @@ function retryStep(stepId: string): void {
 function keyTestLabel(status: KeyTestStatus): string {
   if (status === 'ok') return t('setup.v2.keys.testOk')
   if (status === 'fail') return t('setup.v2.keys.testFail')
+  if (status === 'neutral') return t('setup.v2.keys.noKeyNeeded')
   return t('setup.v2.keys.testError')
 }
 
 function keyTestClass(status: KeyTestStatus): string {
   if (status === 'ok') return 'badge-ok'
   if (status === 'fail') return 'badge-fail'
+  if (status === 'neutral') return 'badge-muted'
   return 'badge-warn'
 }
 
@@ -1812,6 +1968,10 @@ function keyTestCheckName(check: unknown, index: number): string {
  */
 function parseKeyTestResult(response: unknown, row: ProviderRowView): KeyTestResult {
   const product = row.selectedProvider?.displayName ?? row.stage
+  // Local ASR (sherpa) has no credential: "no safe online test" is its healthy state.
+  if (row.selectedProvider?.keyless) {
+    return { status: 'neutral', message: t('setup.v2.keys.testLocal') }
+  }
   const record =
     response && typeof response === 'object'
       ? (response as Record<string, unknown>)
@@ -1851,6 +2011,17 @@ function parseKeyTestResult(response: unknown, row: ProviderRowView): KeyTestRes
       (value) => typeof value === 'boolean',
     )
     const message = pickLocalized(obj.message ?? obj.hint ?? obj.error ?? '')
+    // A keyless/local provider reports ok:false with this sentence; it is not a failure.
+    if (
+      /no safe online test|needs no key|keyless|local provider/i.test(message) &&
+      explicit !== true
+    ) {
+      return {
+        status: 'neutral',
+        message: t('setup.v2.keys.testLocal'),
+        details: message || undefined,
+      }
+    }
     const details = failed.length
       ? t('setup.v2.keys.testChecksFailed', {
           items: failed
@@ -1883,43 +2054,109 @@ function parseKeyTestResult(response: unknown, row: ProviderRowView): KeyTestRes
   return { status: 'error', message: t('setup.v2.keys.testNoResult') }
 }
 
+/** Credentials currently typed for one row; sent only to the test call, never stored. */
+function draftKeys(row: ProviderRowView): Record<string, string> {
+  const keys: Record<string, string> = {}
+  for (const field of row.fields) {
+    const value = (keyDrafts.value[keyDraftId(row.stage, row.selectedName, field.name)] ?? '').trim()
+    if (value) keys[field.name] = value
+  }
+  return keys
+}
+
+function draftVoice(row: ProviderRowView): string {
+  return row.stage === 'tts' ? row.voice.trim() : ''
+}
+
+function rejectsDraftValues(exc: unknown): boolean {
+  const issue = describeError(exc)
+  return issue.code === 'invalid_values' || issue.code === 'http_422'
+}
+
+/** One test request; drafts ride along so an unsaved provider can be tested. */
+function requestKeyTest(row: ProviderRowView, includeDrafts: boolean): Promise<unknown> {
+  const values: Record<string, unknown> = {
+    stage: row.stage,
+    provider: row.selectedName,
+  }
+  if (includeDrafts) {
+    const keys = draftKeys(row)
+    if (Object.keys(keys).length) values.keys = keys
+    const voice = draftVoice(row)
+    if (voice) values.voice = voice
+  }
+  return api.setupStep({
+    plug: selectedPlug.value,
+    step: 'keys',
+    action: 'keys.test',
+    values,
+  })
+}
+
 async function testProviderRow(row: ProviderRowView): Promise<void> {
   if (!row.selectedProvider || busyStep.value || busyGlobal.value || keyTestBusy.value) return
-  keyTestBusy.value = row.stage
   clearKeyTest(row.stage)
   expanded.value = { ...expanded.value, keys: true }
-  try {
-    const response = await api.setupStep({
-      plug: selectedPlug.value,
-      step: 'keys',
-      action: 'keys.test',
-      // The existing contract tests stored credentials; no draft value leaves here.
-      values: { stage: row.stage, provider: row.selectedName },
-    })
-    if (Array.isArray((response as unknown as Record<string, unknown>).steps)) {
-      await applyState(response)
-    }
+  // Local ASR / any keyless provider: nothing to test online, and it is not a failure.
+  if (row.selectedProvider.keyless) {
     keyTestResults.value = {
       ...keyTestResults.value,
-      [row.stage]: parseKeyTestResult(response, row),
+      [row.stage]: { status: 'neutral', message: t('setup.v2.keys.testLocal') },
     }
+    return
+  }
+  keyTestBusy.value = row.stage
+  const drafts = draftKeys(row)
+  const hasDrafts = Object.keys(drafts).length > 0 || Boolean(draftVoice(row))
+  try {
+    let response: unknown
+    let savedOnly = false
+    try {
+      response = await requestKeyTest(row, true)
+    } catch (exc) {
+      if (!hasDrafts || !rejectsDraftValues(exc)) throw exc
+      // Older control planes only read stored secrets: retest them and say so.
+      savedOnly = true
+      response = await requestKeyTest(row, false)
+    }
+    const record =
+      response && typeof response === 'object'
+        ? (response as Record<string, unknown>)
+        : {}
+    if (Array.isArray(record.steps)) {
+      await applyState(response as SetupStepResponse)
+    }
+    const result = parseKeyTestResult(response, row)
+    if (hasDrafts && result.status === 'fail') {
+      result.details = [result.details, t('setup.v2.keys.testSavedOnly')]
+        .filter(Boolean)
+        .join(' ')
+    } else if (savedOnly && result.status === 'ok') {
+      result.details = [result.details, t('setup.v2.keys.testSavedOnly')]
+        .filter(Boolean)
+        .join(' ')
+    }
+    keyTestResults.value = { ...keyTestResults.value, [row.stage]: result }
   } catch (exc) {
     const issue = describeError(exc)
     const unavailable = [
       'unknown_action',
-      'http_400',
       'http_404',
+      'http_405',
       'keys_test_unavailable',
-      'unknown_stage',
-      'unknown_provider',
     ].includes(issue.code)
+    const saveFirst = ['unknown_provider', 'unknown_stage', 'invalid_values'].includes(
+      issue.code,
+    )
     keyTestResults.value = {
       ...keyTestResults.value,
       [row.stage]: {
         status: 'error',
-        message: unavailable
-          ? t('setup.v2.keys.testUnavailable', { code: issue.code })
-          : issue.message,
+        message: saveFirst
+          ? t('setup.v2.keys.testSaveFirst')
+          : unavailable
+            ? t('setup.v2.keys.testUnavailable', { code: issue.code })
+            : issue.message,
         details: issue.hint || issue.details || undefined,
       },
     }
@@ -2286,9 +2523,9 @@ onBeforeUnmount(stopWait)
                   <span
                     v-if="row.selectedProvider"
                     class="badge"
-                    :class="row.configured ? 'badge-ok' : 'badge-warn'"
+                    :class="providerBadgeClass(row)"
                   >
-                    {{ row.configured ? t('setup.keys.configured') : t('setup.keys.missing') }}
+                    {{ providerBadgeLabel(row) }}
                   </span>
                 </div>
 
@@ -2500,6 +2737,15 @@ onBeforeUnmount(stopWait)
                 <input v-model="prepareRollbackAck" type="checkbox" :disabled="busyStep !== ''" />
                 <span>{{ t('setup.v2.prepare.rollbackAck') }}</span>
               </label>
+              <p class="field-hint setup-prepare-token-note">
+                {{ t('setup.v2.prepare.tokenNote') }}
+              </p>
+              <div v-if="prepareLaterNotes.length" class="setup-prepare-later">
+                <span class="field-label">{{ t('setup.v2.prepare.laterTitle') }}</span>
+                <ul>
+                  <li v-for="item in prepareLaterNotes" :key="item.id">{{ item.text }}</li>
+                </ul>
+              </div>
               <p class="field-hint">{{ t('setup.v2.prepare.checkAllHint') }}</p>
               <div class="actions">
                 <button
@@ -2556,6 +2802,80 @@ onBeforeUnmount(stopWait)
                       :placeholder="roomSpec?.placeholder || t('setup.v2.params.roomPlaceholder')"
                     />
                     <p v-if="fieldErrors.room" class="field-hint fail">{{ fieldErrors.room }}</p>
+                  </div>
+                </div>
+
+                <div class="field-row" :class="{ invalid: fieldErrors.volume }">
+                  <div class="field-meta">
+                    <label class="field-label" for="setup-param-volume">{{ t('setup.v2.params.volume') }}</label>
+                    <p class="field-hint">{{ t('setup.v2.params.volumeHint') }}</p>
+                  </div>
+                  <div class="field-control">
+                    <input
+                      id="setup-param-volume"
+                      v-model="volumeDraft"
+                      type="number"
+                      inputmode="numeric"
+                      min="0"
+                      max="100"
+                      step="1"
+                    />
+                    <p v-if="fieldErrors.volume" class="field-hint fail">{{ fieldErrors.volume }}</p>
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <div class="field-meta">
+                    <label class="field-label" for="setup-param-led">{{ t('setup.v2.params.led') }}</label>
+                    <p class="field-hint">{{ t('setup.v2.params.ledHint') }}</p>
+                  </div>
+                  <div class="field-control">
+                    <input
+                      id="setup-param-led"
+                      v-model="ledEnabled"
+                      type="checkbox"
+                      class="setup-checkbox"
+                    />
+                  </div>
+                </div>
+
+                <div class="field-row" :class="{ invalid: fieldErrors.listen_port }">
+                  <div class="field-meta">
+                    <label class="field-label" for="setup-param-listen-port">{{ t('setup.v2.params.listenPort') }}</label>
+                    <p class="field-hint">{{ t('setup.v2.params.listenPortHint', { port: listenPort }) }}</p>
+                  </div>
+                  <div class="field-control">
+                    <input
+                      id="setup-param-listen-port"
+                      v-model="listenPortDraft"
+                      type="number"
+                      inputmode="numeric"
+                      min="1"
+                      max="65535"
+                      step="1"
+                      :placeholder="String(listenPort)"
+                    />
+                    <p v-if="fieldErrors.listen_port" class="field-hint fail">{{ fieldErrors.listen_port }}</p>
+                  </div>
+                </div>
+
+                <div class="field-row" :class="{ invalid: fieldErrors.mic_gain_db }">
+                  <div class="field-meta">
+                    <label class="field-label" for="setup-param-mic-gain">{{ t('setup.v2.params.micGain') }}</label>
+                    <p class="field-hint">{{ t('setup.v2.params.micGainHint') }}</p>
+                  </div>
+                  <div class="field-control">
+                    <input
+                      id="setup-param-mic-gain"
+                      v-model="micGainDraft"
+                      type="number"
+                      inputmode="decimal"
+                      min="0"
+                      max="42"
+                      step="0.5"
+                      placeholder="0"
+                    />
+                    <p v-if="fieldErrors.mic_gain_db" class="field-hint fail">{{ fieldErrors.mic_gain_db }}</p>
                   </div>
                 </div>
 
@@ -2760,6 +3080,9 @@ onBeforeUnmount(stopWait)
               </span>
               <span>{{ connectStatus.text }}</span>
             </div>
+            <p v-if="connectHint && connectStatus.tone !== 'ok'" class="field-hint setup-connect-hint">
+              {{ t('setup.connect.hint') }}: {{ connectHint }}
+            </p>
             <template v-if="!connectSkipped && deviceId">
               <p v-if="connectBusy" class="field-hint">{{ t('setup.connect.loading') }}</p>
               <div v-else-if="connectError" class="note fail" role="alert">
@@ -2787,6 +3110,9 @@ onBeforeUnmount(stopWait)
                     </button>
                   </div>
                   <p class="field-hint">{{ t('setup.v2.connect.wsHint') }}</p>
+                  <p v-if="wsLoopback" class="note fail setup-connect-loopback" role="alert">
+                    {{ t('setup.v2.connect.loopbackHint') }}
+                  </p>
                 </div>
                 <div class="setup-connect-row">
                   <div class="setup-connect-row-head">
@@ -2824,6 +3150,9 @@ onBeforeUnmount(stopWait)
                   <code class="setup-connect-value mono">{{ listenPort }}</code>
                   <p class="field-hint">{{ t('setup.v2.connect.portHint') }}</p>
                 </div>
+                <p class="field-hint setup-connect-token-update">
+                  {{ t('setup.v2.connect.updateTokenHint') }}
+                </p>
               </div>
 
               <div v-if="connectInfo && !connectInfo.configured" class="connect-warning">
@@ -2876,15 +3205,27 @@ onBeforeUnmount(stopWait)
               >
                 {{ busyStep === 'test' ? t('setup.v2.test.running') : t('setup.v2.test.run') }}
               </button>
-              <button
-                type="button"
-                class="btn btn-sm"
-                :disabled="busyStep !== '' || busyGlobal !== '' || !deviceId"
-                @click="inspectConnect"
-              >
-                {{ t('setup.v2.connect.inspect') }}
-              </button>
             </div>
+            <div
+              v-if="testOutcome"
+              class="setup-test-outcome"
+              :class="testOutcome.status === 'ok' ? 'is-ok' : 'is-fail'"
+              role="status"
+            >
+              <span class="badge" :class="testOutcome.status === 'ok' ? 'badge-ok' : 'badge-fail'">
+                {{ testOutcome.status === 'ok' ? t('setup.v2.test.ok') : t('setup.v2.test.fail') }}
+              </span>
+              <span>{{ testOutcome.message }}</span>
+              <span v-if="testOutcome.at" class="field-hint">
+                {{ t('setup.v2.test.at', { at: testOutcome.at }) }}
+              </span>
+            </div>
+            <p
+              v-if="testOutcome?.status === 'fail' && connectHint"
+              class="field-hint setup-connect-hint"
+            >
+              {{ t('setup.connect.hint') }}: {{ connectHint }}
+            </p>
             <div v-if="testChecks.length" class="setup-checks">
               <div class="field-label">{{ t('setup.v2.test.checks') }}</div>
               <div v-for="(check, at) in testChecks" :key="check.id || at" class="setup-check-row">
@@ -3355,6 +3696,43 @@ onBeforeUnmount(stopWait)
   min-width: 16px;
   color: var(--accent);
   font-size: 11px;
+}
+
+.setup-prepare-token-note {
+  margin-top: var(--s2);
+}
+
+.setup-prepare-later {
+  margin-top: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--line-strong);
+  background: var(--surface-2);
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.setup-prepare-later ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.setup-prepare-later li + li {
+  margin-top: 3px;
+}
+
+.setup-connect-hint {
+  margin-top: 4px;
+}
+
+.setup-connect-loopback {
+  margin-top: var(--s2);
+}
+
+.setup-connect-token-update {
+  padding: var(--s2) var(--s3) 0;
+  border-top: 1px solid var(--line);
 }
 
 .setup-test-outcome {
