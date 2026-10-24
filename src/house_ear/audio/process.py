@@ -95,6 +95,17 @@ PLAY_CHUNK_MS = 100
 PREBUFFER_S = 0.25
 CATCHUP = 1.0
 MAX_LEAD_S = 0.32
+# P2.9: how long a reply waits for `audio.playback.prebuffer_ms` of audio before it
+# starts anyway. The wait is the prebuffer itself plus this margin: long enough to let a
+# producer deliver the second batch the issue measured (~400 ms), short enough that a
+# short reply is never held hostage by a prebuffer it cannot fill. A config prebuffer of
+# 0 disables the wait entirely.
+PREBUFFER_TIMEOUT_EXTRA_S = 0.25
+PREBUFFER_POLL_S = 0.01
+# A lead that goes negative by less than this is scheduler jitter (the loop wakes a few
+# ms late, the device still has audio), not an audible underrun. The issue's gap is
+# ~400 ms, an order of magnitude above the floor.
+PLAYBACK_GAP_MIN_MS = 20.0
 # A producer that ignores SpeakFinished cannot grow the queue without bound.
 MAX_SPEAK_QUEUE_S = 120.0
 # 12 ms of ramp at the start of playback. Speech that begins on a hard sample boundary
@@ -277,6 +288,25 @@ class AudioPlane:
         self.ref_rms_db: float | None = None
         self.playback_s = 0.0
         self.playback_lead_s = 0.0
+        # P2.9: audible gaps, cumulative for metrics and per reply for the turn trace/log.
+        self.playback_gap_count = 0
+        self.playback_max_gap_ms = 0.0
+        self._reply_gap_count = 0
+        self._reply_max_gap_ms = 0.0
+        # When the audio already sent will run out, if the reply queue was empty at the
+        # last send. None = the queue was not starved, or the reply is not active.
+        self._starvation_due: float | None = None
+        # True once a PLAY_PCM burst is enqueued and no SpeakFinished has arrived since:
+        # an empty queue then means "producer still working", not "the answer ended".
+        self._speak_finished = True
+        # Incremented by _flush_speech so a chunk already pulled off the queue cannot
+        # still reach the speaker after a barge (the start gate widens that window).
+        self._speak_generation = 0
+        # Whether any audio has been handed to the device since the last explicit stop.
+        # The pre-start stop exists to restart a drained aplay; when this is False the
+        # device player is already stopped, so the control message is redundant - and on
+        # adapters with split control/data sockets it is also a race with the first PCM.
+        self._device_audio_pending = False
         # The speaker's own mixer value, read over the shell channel. Loudness on this box
         # belongs to the vendor's `mysoftvol`; every ERLE or barge number is only
         # comparable when this value is known.
@@ -581,6 +611,7 @@ class AudioPlane:
             if self.adapter is not None:
                 try:
                     await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                    self._device_audio_pending = False
                 except Exception as exc:  # noqa: BLE001 - the speaker may be gone
                     log.info("barge: stop failed: %s", exc)
             self.last_barge_stop_ms = (time.monotonic() - stop_started) * 1000.0
@@ -737,6 +768,7 @@ class AudioPlane:
                     channels=1,
                 )
                 self.playback_s += chunk.size / rate
+                self._device_audio_pending = True
             # No pacing. A cue is 320 ms and exists to be heard *now*: paced at real time
             # it took 320 ms to arrive, and while the device's buffer was under its 300 ms
             # start threshold it stayed silent - then came out together with the answer
@@ -938,6 +970,7 @@ class AudioPlane:
                     channels=1,
                 )
                 self.playback_s += seconds
+                self._device_audio_pending = True
                 self._file_position += chunk.size
                 if loop and audio.size:
                     # A looping file's position is measured against the track, not a
@@ -960,6 +993,64 @@ class AudioPlane:
                 break
         log.info("playback: %d chunks, lead max %.0f ms", chunks, lead_max * 1000)
 
+    # ------------------------------------------------------- P2.9 reply start gate
+    async def _await_reply_prebuffer(self, prebuffer_s: float) -> bool:
+        """Hold a reply's first block until `prebuffer_s` of audio is queued.
+
+        The issue (#1) measured a transport that delivers the first PCM batch, then the
+        rest ~400 ms later: the device drained the 250-320 ms the Pacer kept in hand and
+        the listener heard a gap mid-reply. Waiting at the *start* needs no change to the
+        steady-state pacing, and it is the only place where there is still a choice - once
+        the first block is on the wire the speaker owns the clock.
+
+        Bounded by design: `prebuffer_s + PREBUFFER_TIMEOUT_EXTRA_S`, so a reply shorter
+        than the prebuffer (or a producer that never sends more) starts anyway. Returns
+        True when the target was actually reached.
+        """
+        if prebuffer_s <= 0.0:
+            return True
+        started = time.monotonic()
+        deadline = started + prebuffer_s + PREBUFFER_TIMEOUT_EXTRA_S
+        while not self._stop.is_set():
+            if self._speak_queued_s >= prebuffer_s:
+                return True
+            now = time.monotonic()
+            if now >= deadline:
+                return False
+            await asyncio.sleep(min(PREBUFFER_POLL_S, deadline - now))
+        return False
+
+    def _record_playback_gap(self, gap_s: float) -> None:
+        """Count an audible underrun (`gap_s` seconds past the last queued audio)."""
+        gap_ms = gap_s * 1000.0
+        if gap_ms < PLAYBACK_GAP_MIN_MS:
+            return
+        self.playback_gap_count += 1
+        self.playback_max_gap_ms = max(self.playback_max_gap_ms, gap_ms)
+        if self._reply_open:
+            self._reply_gap_count += 1
+            self._reply_max_gap_ms = max(self._reply_max_gap_ms, gap_ms)
+
+    async def _prepare_reply_player(self, adapter: DeviceAdapter) -> bool:
+        """Stop the old player before a reply only when it may still hold audio.
+
+        The stop is what makes `play()` issue `start_play` again after a long silence
+        (the aplay underrun fix, docs/playback-path.md §3 A). When the plane has already
+        sent an explicit stop and nothing since, the device player is stopped and the
+        next `play()` opens it anyway: sending another stop buys nothing and, on an
+        adapter whose control and data paths are separate sockets, puts a control frame
+        in the race with the first PCM (issue #1 root cause (a)).
+        """
+        if not self._device_audio_pending:
+            return False
+        try:
+            await adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+        except Exception as exc:  # noqa: BLE001 - the speaker may be gone
+            log.info("reply: pre-start stop failed: %s", exc)
+            return False
+        self._device_audio_pending = False
+        return True
+
     async def _speak_loop(self) -> None:
         """Play the reply PCM the control plane pushes.
 
@@ -970,7 +1061,15 @@ class AudioPlane:
         """
         target = self.cfg.audio.playback.rate
         source = self.cfg.audio.voice.rate
-        pacer = Pacer()
+        # The configured prebuffer is the *start* gate (below) and, when set, the
+        # steady-state lead too: a reply that must hold 450 ms of audio before it begins
+        # also wants the Pacer to keep ~450 ms in hand, or the device drains to the old
+        # 320 ms cap. With the config at 0 the historical 250/320 ms pacing is unchanged.
+        prebuffer_s = self.cfg.audio.playback.prebuffer_ms / 1000.0
+        pacer = Pacer(
+            prebuffer=max(PREBUFFER_S, prebuffer_s),
+            max_lead=max(MAX_LEAD_S, prebuffer_s),
+        )
         reply_chunks = 0
         reply_lead_max = 0.0
         while not self._stop.is_set():
@@ -981,6 +1080,12 @@ class AudioPlane:
                 # back. Checking only after a send missed the case where the last chunk
                 # was already out and the loop sat waiting.
                 if self._speak_queue.empty():
+                    now = time.monotonic()
+                    if self._starvation_due is not None and not self._speak_finished:
+                        # A producer that stalls for the whole grace window is an
+                        # underrun too, not an end: SpeakFinished has not arrived.
+                        self._record_playback_gap(now - self._starvation_due)
+                    self._starvation_due = None
                     self._reply_open = False
                     # The lead is the number to read when a reply sounds rough; without
                     # this line the only copy of it was the console, 2 s stale. Only when
@@ -988,6 +1093,12 @@ class AudioPlane:
                     if reply_chunks:
                         log.info("reply: %d chunks, lead max %.0f ms",
                                  reply_chunks, reply_lead_max * 1000)
+                        if self._reply_gap_count:
+                            # One line per reply, never per chunk.
+                            log.info("reply: %d gaps, max %.0f ms",
+                                     self._reply_gap_count, self._reply_max_gap_ms)
+                    self._reply_gap_count = 0
+                    self._reply_max_gap_ms = 0.0
                     finished_reply = self._reply_finished
                     self._reply_finished = False
                     reply_hold, self._reply_hold = self._reply_hold, None
@@ -1062,10 +1173,25 @@ class AudioPlane:
                 continue
             if chunk is None:
                 continue
+            generation = self._speak_generation
+            if self._starvation_due is not None:
+                # The queue was empty at the last send; compare the arrival against the
+                # moment the device ran out, not against the queue-empty moment. A block
+                # that arrives while the lead is still positive is not a gap.
+                self._record_playback_gap(time.monotonic() - self._starvation_due)
+                self._starvation_due = None
             if isinstance(chunk, tuple):
                 chunk, segment = chunk
             else:  # a raw block: treat it as a sentence start
                 segment = True
+            if segment and not self._reply_open and prebuffer_s > 0.0:
+                # P2.9: do not put the first block on the wire until the producer has
+                # handed over the configured prebuffer. Bounded; see the helper.
+                await self._await_reply_prebuffer(prebuffer_s)
+                if generation != self._speak_generation or self._stop.is_set():
+                    # A barge/StopAudio flushed the queue while the gate was waiting:
+                    # this already-pulled chunk belongs to the cancelled reply.
+                    continue
             # A reply owns the device stream while it speaks; the song waits where it is.
             # A cue in flight is 320 ms: wait for it rather than cut it, but never wait
             # forever - an owner that is not releasing is a bug, not a reason to go silent.
@@ -1094,6 +1220,10 @@ class AudioPlane:
                 audio = fade_in(audio, target)
                 if not self._reply_open:
                     self._reply_open = True
+                    # A fresh reply owns its own gap accounting.
+                    self._reply_gap_count = 0
+                    self._reply_max_gap_ms = 0.0
+                    self._starvation_due = None
                     # Whatever we are about to sound - an answer, the farewell, a reminder -
                     # must close a gate the previous turn left open (see below).
                     self._disarm_gate_for_our_audio()
@@ -1104,9 +1234,13 @@ class AudioPlane:
                     # block written into a drained device is eaten by its restart, heard
                     # as a swallowed first syllable plus a click. Closing the player here
                     # makes the first play() below issue start_play, which respawns aplay
-                    # and settles 80 ms before the first chunk (0b).
-                    await adapter.stop_playback()
-                    log.info("reply: first chunk at %d Hz", target)
+                    # and settles 80 ms before the first chunk (0b). The stop is skipped
+                    # when the plane already stopped the device and sent nothing since:
+                    # on a split control/data transport that redundant frame raced the
+                    # first PCM (issue #1).
+                    stopped = await self._prepare_reply_player(adapter)
+                    log.info("reply: first chunk at %d Hz%s", target,
+                             "" if stopped else " (player already stopped)")
             pcm = np.round(np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
             seconds = audio.size / target
             # Pace by the device's play head when it reports one; the wall clock is only
@@ -1118,6 +1252,7 @@ class AudioPlane:
                 log.info("speak: %s", exc)
                 continue
             self.playback_s += seconds
+            self._device_audio_pending = True
             if credited:
                 # Bound only. The device's report means "aplay accepted the block into
                 # its pipe", so pacing by it alone keeps that pipe permanently full and
@@ -1138,6 +1273,15 @@ class AudioPlane:
             # Waiting until the buffer would drop to the target, not until it is
             # empty: that wait is the whole fix.
             await asyncio.sleep(wait)
+            # P2.9: remember when the device will run dry if the producer stays silent.
+            # Stamped *before* the sentence-boundary grace: a batch that arrives during
+            # that 0.4 s was already a gap at the speaker, and the grace must not erase
+            # the deadline it is measured against. A block that lands while the lead is
+            # still positive is not counted.
+            if reply_chunks and self._reply_open and self._speak_queue.empty():
+                self._starvation_due = pacer.due
+            else:
+                self._starvation_due = None
             if self._speak_queued_s <= 0.0 and self._speak_queue.empty():
                 # One short grace period: a sentence boundary is not the end of the answer,
                 # and resuming the song between two sentences would be worse than a pause.
@@ -1241,6 +1385,11 @@ class AudioPlane:
     def _flush_speech(self) -> None:
         self._release("dialogue")
         self._speak_queued_s = 0.0
+        # The producer's burst was cancelled: nothing more is expected, and any pending
+        # "the device will run dry" deadline describes audio the user just silenced.
+        self._speak_finished = True
+        self._starvation_due = None
+        self._speak_generation += 1
         # The queue is gone; the device's count for the old player is meaningless now.
         # The next reply opens a fresh player (and resets the credit again by generation).
         self._credit.reset()
@@ -1344,6 +1493,7 @@ class AudioPlane:
             if self.adapter is not None:
                 try:
                     await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                    self._device_audio_pending = False
                 except Exception as exc:  # noqa: BLE001 - the speaker may be gone
                     log.info("playback: stop failed: %s", exc)
             return
@@ -1354,6 +1504,7 @@ class AudioPlane:
         if self.adapter is not None:
             try:
                 await self.adapter.stop_playback(self.cfg.audio.playback.fade_out_ms)
+                self._device_audio_pending = False
             except Exception as exc:  # noqa: BLE001 - the speaker may be gone
                 log.info("playback: stop failed: %s", exc)
 
@@ -1383,6 +1534,8 @@ class AudioPlane:
             else False,
             playback_s=round(self.playback_s, 1),
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
+            playback_gap_count=self.playback_gap_count,
+            playback_max_gap_ms=round(self.playback_max_gap_ms, 1),
             device_volume=self.device_volume,
             output_owner=self._owner or "",
             voice_peak_db=(
@@ -1522,6 +1675,9 @@ class AudioPlane:
                             )
                         else:
                             self._speak_queued_s += seconds
+                            # More audio is expected: an empty queue from here until
+                            # SpeakFinished is a producer stall, not the end of the reply.
+                            self._speak_finished = False
                             # The ramp belongs only where the control plane declares a
                             # sentence start (SpeakStart); everything else is a slice of
                             # one continuous synthesis and must join untouched.
@@ -1606,6 +1762,9 @@ class AudioPlane:
                     self._reply_finished = True
                     self._reply_hold = msg.hold_music_s
                 elif isinstance(msg, SpeakFinished):
+                    # No more PLAY_PCM is expected for this burst. An empty queue is now
+                    # the normal end of the reply, not an underrun.
+                    self._speak_finished = True
                     log.info("speak finished, %s chunks still queued (%.1f s of audio)",
                              self._speak_queue.qsize(), self._speak_queued_s)
         except (asyncio.IncompleteReadError, ConnectionResetError):

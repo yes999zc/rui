@@ -138,10 +138,11 @@ grep -E "wake: |cue: |reply: first|player: start_play|turn \{" /tmp/house-ear-sc
 sshpass -p "$SPEAKER_PASSWORD" ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa \
   "root@$SPEAKER_IP" "grep -nE 'start_play|stop_play|slow write|TIMEOUT|underrun|chunk 1 ' /tmp/client.log | tail -20"
 
-# 音频面指标：谁占着喇叭、缓冲余量、参考电平、ERLE
+# 音频面指标：谁占着喇叭、缓冲余量、参考电平、ERLE、P2.9 的 gap
 curl -s localhost:8091/api/v1/audio | python3 -c \
   "import json,sys;m=json.load(sys.stdin)['metrics'];print({k:m.get(k) for k in
-   ['output_owner','playback_lead_ms','ref_active','aec_erle_db','device_volume']})"
+   ['output_owner','playback_lead_ms','playback_gap_count','playback_max_gap_ms',
+    'ref_active','aec_erle_db','device_volume']})"
 ```
 
 基线（2026-10-22 15:2x，1.00× 无追帧、提前量 250 ms）：35 s 连续播放
@@ -149,3 +150,101 @@ curl -s localhost:8091/api/v1/audio | python3 -c \
 2026-10-22 16:10 复测（新闻，约 35 s 播放）：**slow write 十余次（80–120 ms）、TIMEOUT 0 次**。
 2026-10-22 16:3x（0c 完成，30 s 音乐，`credit_window: 8`）：**slow write 0 次、
 underrun 0、queue full 0、TIMEOUT 0**。
+
+## 6. P2.9：回复预缓冲、gap 观测、有序起播（issue #1）
+
+> 2026-10-24。issue #1 的现象：树外 Echo Dot 2 适配器上，RUI 发出 PLAY_PCM 后第一批
+> 到了，约 400 ms 后其余批次才到，中间可听见断层。根因是两件事叠加：
+> (a) 首块前的 `stop_playback()` 与控制/数据两条独立 socket 上的首块 PCM 竞争；
+> (b) Pacer 的预缓冲（`MAX_LEAD_S=0.32`，部分路径 250 ms）小于 ~400 ms 的到达间隔。
+> 适配器侧已有 workaround（有序 flush + pong、0.45 s 预缓冲）；本轮只改 RUI 侧。
+
+### 6.1 `audio.playback.prebuffer_ms`：默认 0，按链路开启
+
+```yaml
+audio:
+  playback:
+    prebuffer_ms: 450   # 默认 0；issue #1 的树外适配器建议 400–500
+```
+
+- **范围 0–1000 ms，默认 0。** 默认 0 不是"没实现"，而是保留现有 LX06 行为：
+  LX06 的控制面/TTS 把一句一次性推进来，Pacer 250/320 ms 的提前量已经够用，
+  起播前再等只会把 `first_response_ms` 推后。默认值由 `tests/test_pacing.py` 的
+  既有基线守住：`prebuffer_ms=0` 时 Pacer 仍是 `PREBUFFER_S=0.25`、
+  `MAX_LEAD_S=0.32`（`_speak_loop` 用 `max(PREBUFFER_S, prebuffer_s)` 兜底）。
+- **什么时候开**：链路实测"首批 PCM → 停顿 → 余下 PCM"的间隔 ≥ 当前提前量时。
+  按 issue #1 的 ~400 ms，取 450 ms（间隔 + 50 ms 余量）。代价是最多 +450 ms 的
+  首音频延迟；这是用一次可预期的等待换掉句中可听的断层。
+- **起播条件**：`_await_reply_prebuffer()` 等到 `_speak_queued_s >= prebuffer_ms`
+  才放行首块；上限为 `prebuffer_ms + 250 ms`（`PREBUFFER_TIMEOUT_EXTRA_S`）。
+  更短的回复（或生产者不再送数据）超时后照常起播，不会死等；barge 冲刷队列时
+  用 `_speak_generation` 丢弃已经在门槛里取出的旧块。
+- **稳态**：`prebuffer_ms > 0` 时 Pacer 的 `prebuffer` 与 `max_lead` 同样抬到该值
+  （否则起播等到了 450 ms，稳态又被 320 ms 上限排空）；`prebuffer_ms=0` 时不动。
+
+### 6.2 gap / underrun 观测
+
+音频面在"回复队列空、播放器仍在放、下一块到达时设备已经放完"的时刻记一次 gap：
+
+- 判定：`arrival - pacer.due`（设备本应放完的时刻），不是"队列空的时刻"。
+  小于 `PLAYBACK_GAP_MIN_MS = 20 ms` 视为调度抖动，不计数。
+- `playback_gap_count`：进程启动以来的累计次数；
+  `playback_max_gap_ms`：累计最坏值。两者进 `Metrics`（控制面每 2 s 或
+  `QueryMetrics` 时收到），控制面可再写入轮次 trace 的 `meta`：
+  `TurnTrace.note_playback_metrics(metrics)` 会复制
+  `playback_gap_count` / `playback_max_gap_ms` 到 `meta`。
+- 每次回复结束只在有 gap 时打一行 `reply: N gaps, max X ms`；不逐块打日志。
+- 已知取舍：句间 TTS 合成停顿如果超过设备缓冲，也会被记为 gap——那是真实
+  underrun，不是误报；要区分"故意留的句间静音"，应把静音作为 PCM 发出来。
+
+### 6.3 有序起播：本轮做的最小改动
+
+`_speak_loop` 首块前原本无条件 `stop_playback()`，用途是让 `play()` 重新
+`start_play`，修复长静默后 aplay 排空导致的首字被吞（§3 A）。本轮加入
+`_device_audio_pending`：
+
+- `play()` / cue / 文件播放成功后置 True；任何显式 `stop_playback()` 成功后置 False。
+- 首块前若为 False（设备播放器已经停了，自上次 stop 后没再送过音频），跳过
+  `stop_playback()`；否则照旧发送。LX06 上 `play()` 自己会发 `start_play`，行为不变。
+- 效果：barge / StopAudio 之后的每轮回复不再向控制通道插入一个多余的 stop，
+  也就少一次与首块 PCM 竞争的机会。**这不是完整修复**：真正"必须 stop"的场景
+  （上一条回复/歌曲还在设备里）仍然存在跨 socket 竞争，需要 P3 的屏障契约。
+
+### 6.4 P3：起播/flush 屏障契约（设计，本轮不实现）
+
+适用对象：控制面与数据面是两条 socket 的适配器（Echo Dot 2 等）。LX06 的同一条
+websocket 已有天然顺序，继续走旧路径，不需要改。
+
+**目标**：RUI 永远不把新回复的 PCM 发到"还没 flush 完的旧播放器"上；flush 与首块
+之间不存在可观察的竞争窗口。
+
+**能力协商**：`Ready` 增加 `ordered_start: bool`（或协议版本）。为 False 时 RUI
+沿用现有 stop/start 路径；为 True 时走下面的契约。这样不会破坏 LX06。
+
+**契约**（所有消息都在**数据通道**上，或由适配器定义成单一有序流）：
+
+1. `flush(epoch: uint64)`：适配器停止当前 aplay/播放器，丢弃所有尚未播放的 PCM，
+   并以 `flushed(epoch)` 回应。`epoch` 由 RUI 单调递增，每次起播一个新值。
+2. RUI 收到 `flushed(epoch)` 后才发送 `start(epoch, sample_rate, channels)`；
+   适配器在 `start` 回执后才可以接收该 epoch 的 PCM。
+3. PCM 帧携带 `epoch`；适配器丢弃 epoch 不等于当前 epoch 的帧（迟到的旧数据
+   永远不可能灌进新播放器）。这与 P2.9 的 `_speak_generation` 是同一语义，
+   只是下沉到适配器。
+4. **超时**：RUI 等 `flushed` 最多 300 ms（可配置，≤ 起播预算）。超时则放弃该
+   epoch、记录 `start_barrier_timeout`，不发首块 PCM；宁可本轮静音，也不发
+   "可能被旧播放器接受"的音频。
+5. **幂等/空闲优化**：适配器已知播放器空闲且无排队 PCM 时，`flush` 可直接回
+   `flushed`（仍须回执，保持顺序不变）。RUI 侧 `_device_audio_pending == False`
+   时同理不发 flush，直接 `start`。
+6. **barge**：barge 走同一屏障：`flush(new_epoch)`，收到回执后本轮回复的
+   `start` 才能发出；中途到达的旧 epoch PCM 由适配器丢弃。
+7. **可观测**：`Ready.ordered_start`、`barrier_timeout_count`、
+   `pcm_stale_dropped`（适配器计数）进日志/指标；验收时要求
+   "首块 PCM 之前一定先看到同一 epoch 的 flushed"。
+
+**验收**（P3）：
+- 用 issue #1 的 400 ms 双批源回放：`playback_gap_count` 不增长。
+- 设备日志中 `stop_play`/`flush` 与 `chunk 1` 严格有序，无 "chunk 1 早于 flush"。
+- barge `silence_after_ms` 不明显回退（屏障只加一次回执，目标 ≤ 300 ms 预算内）。
+- LX06（`ordered_start: false`）行为不变，既有 `test_turn_audio` / `test_playback`
+  基线全绿。

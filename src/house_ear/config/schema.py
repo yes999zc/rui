@@ -244,6 +244,14 @@ class PlaybackConfig(BaseModel):
     # the clock too, 0 at 8). The window is a leak bound; the clock paces. 0 leaves
     # only the clock.
     credit_window: int = Field(default=8, ge=0, le=50)
+    # P2.9: how much reply audio the plane waits for before it hands the first block
+    # to the device. Zero (default) keeps the LX06 path exactly as it was: its control
+    # plane and TTS deliver a sentence in a burst, so waiting only adds
+    # first_response latency. A transport that delivers the reply in batches ~400 ms
+    # apart (issue #1, Echo Dot 2 adapter) underruns a 250-320 ms prebuffer; set this
+    # to ~450 there. The wait is bounded by prebuffer_ms + 250 ms so a short reply
+    # still starts. See docs/playback-path.md §6.
+    prebuffer_ms: int = Field(default=0, ge=0, le=1000)
     # Acceptance target: fully silent within this many ms of the user starting to speak.
     target_silence_ms: int = Field(default=300, ge=50, le=1500)
 

@@ -76,6 +76,21 @@ class TurnTrace:
             return None
         return round(b - a, 1)
 
+    def note_playback_metrics(self, metrics: object) -> None:
+        """Copy the audio plane's underrun counters into this turn's ``meta``.
+
+        Duck-typed on purpose: the plane is a separate process and ``trace.py`` must not
+        import its protocol models. The control plane calls this with the latest
+        ``Metrics`` snapshot before ``TraceLog.add``; absent fields (an older plane) are
+        skipped rather than recorded as zero.
+        """
+        count = getattr(metrics, "playback_gap_count", None)
+        if count is not None:
+            self.meta["playback_gap_count"] = int(count)
+        max_gap = getattr(metrics, "playback_max_gap_ms", None)
+        if max_gap is not None:
+            self.meta["playback_max_gap_ms"] = round(float(max_gap), 1)
+
     @property
     def first_response_ms(self) -> float | None:
         return self.delta("wake", "play_start")

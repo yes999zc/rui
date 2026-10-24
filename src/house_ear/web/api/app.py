@@ -1397,6 +1397,7 @@ def create_app(
                     if asr_report is not None:
                         result.stages.setdefault("asr", asr_report)
                     _record_turn(app, result.to_dict())
+                    trace.note_playback_metrics(getattr(client, "metrics", None))
                     traces.add(trace)
                     # A music/volume turn wants the song back the moment the reply
                     # drains, not after the follow-up window (measured 09:21: ~10 s).
@@ -2285,6 +2286,7 @@ def create_app(
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
                            _turn_light(result))
         _record_turn(app, result.to_dict())
+        trace.note_playback_metrics(getattr(client, "metrics", None))
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)
         return {

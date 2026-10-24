@@ -128,6 +128,12 @@ class Metrics(BaseModel):
     # that collapses) is what an underrun looks like from here; the speak loop aims for
     # PREBUFFER_S of lead and never more than MAX_LEAD_S.
     playback_lead_ms: float = 0.0
+    # P2.9 observability: audible underruns. A gap is counted when the reply queue is
+    # empty, the player was active, and the next block arrives after the audio already
+    # handed to the device had finished. `playback_max_gap_ms` is the worst one since the
+    # plane started; a gap under 20 ms is scheduler noise, not an underrun.
+    playback_gap_count: int = 0
+    playback_max_gap_ms: float = 0.0
     barge_count: int = 0
     probe_hits: int = 0
     voice_peak_db: float | None = None
