@@ -68,21 +68,22 @@
 | P2.0 | EchoMuse Device Management 调研 ✅ | `docs/device-management-research.md`（984 行）：流程映射、8 步向导、config.yaml+params、单设备 CRUD；**0.2 边界**：只做 manifest-only/内置可信插头，第三方可执行代码默认关闭（sidecar 后续）；不做 SQLite/approve/OTA/多设备仲裁 |
 | P2.1 ✅ | **`docs/socket-plug.md` 标准 v0**：插头 manifest（机型/A/B 等级/能力/参数 schema/协议/兼容版本/交付物+可选 adapter）、打包与校验、A/B 最小清单、信任模型、运行形态（in-process vs sidecar） | 标准文档可让第三方不看源码写出插头；LX06 与 dot2 都能套进去 |
 | P2.2 ✅ | **安装向导设计稿 + 后端切片**：`docs/install-wizard-design.md`（`5c7a0c4`）；`GET /plugs`、`/setup/step`（证据驱动 + setup.json + allowlist）与内置 LX06 manifest（`cfea073`）；UI 进行中 | 设计稿评审通过；后端 110 测试通过 |
-| P2.3 | **真·陌生人冷装**：全新目录 + 公开命令 + 向导填 key + 自动下模型 + 内置 LX06 参考插头，不复制生产配置 | 从零到第一句 ≤30 min；全程只按文档操作 |
-| P2.4 | 设备管理后台最小版（EchoMuse-inspired）：设备/插件/能力/状态/参数编辑/连接测试/删除 | 控制台可新增、查看、测试、删除设备；不用手改 YAML |
-| P2.5 | 运维与恢复：备份真恢复 + 换机（install→restore→fetch-models）；mihomo 失联提示；3 天长稳/断电自起 | 恢复后 healthy、设备在线；断电全链路自起 |
-| P2.6 | 生产微信验证（真机已过） | NAS 生产上文字/语音各 2 条通过（保持 enabled=false 直到通过） |
+| P2.3 ✅ | **真·陌生人冷装**：干净主机（无上下文智能体）85s 到 healthy，向导 8 步完成、首句真机走通；VAD/KWS 内置镜像 | 从零到第一句 ≈3m40s（含 239MB ASR）；文档/向导已验收 |
+| P2.4 ✅ | 设备管理后台 + 控制台：设备/状态/参数编辑/连接测试/删除；后续 P3.4 加启停/令牌轮换/端口校验 | 已交付 |
+| P2.5 🟡 | 备份/恢复 + 换机 smoke 已过；mihomo 失联提示/3 天长稳/断电自起待做 | 已记录 RUNLOG；长稳待补 |
+| P2.6 ⏸ | 生产微信验证（真机已过）；等待 9 哥 手机/决策 | 保持 enabled=false |
 
-### P3 · 0.2.0：插件化重构与功能线
+### P3 · Socket/Plug v1 + 设备唤醒 + 安全（0.3.x，已完成）
 
-| # | 任务 | 判据 |
+| # | 任务 | 状态/判据 |
 |---|---|---|
-| P3.1 | LX06 从核心抽成 `rui-plugin-xiaoai`（manifest + adapter），核心保留 mock + loader；内置参考插头仍默认可用 | 抽包后 LX06 真机全链路不回归；核心无品牌分支 |
-| P3.2 | `rui-dot2-bridge` 按标准改造成第一个外部 B 类插头（保留已工作的协议代码，只补 manifest/打包/参数 schema） | 按标准安装/删除 dot2 插头；无核心改动 |
-| P3.3 | 第二台设备（config v3、每设备音频配置、无播放降级） | 假 4 麦设备零改核心跑通 |
-| P3.4 | 设备管理增强：approve/OTA/多设备“谁最响谁答” | 多设备场景可配置、可诊断 |
-| P3.5 | 安全三项：SSRF/端口探测 allowlist、容器非 root、依赖 CVE 扫描 | 三项各有报告/修复记录 |
-| P3.6 | 0.2.0 发布：tag + Release + README | 发布清单同 0.1 |
+| P3.0 ✅ | Socket/Plug v1 规范：`docs/socket-plug-v1.md`（能力/manifest/adapter/device_wake/策略/迁移/测试工具） | Lead 决策 Q1–Q8 冻结；dot2 issue #3/#7 已答复 |
+| P3.1 ✅ | 契约核心 + 测试工具 + LX06 参考插头：`DeviceWake/drain_wakes`、manifest v0/v1、音频策略/metrics/trace、`rui plug-test`、`plugins/rui-plugin-xiaoai` | 948→962 tests；LX06 v0/KWS 不回归；参考插头 kit 16 PASS |
+| P3.2 ✅ | dot2 标准对齐：v1 契约 + 官方 downstream adapter 钩子（`RUI_ADAPTER_PLUGINS`/`rui.adapters`）；外部项目按规范迁移 | 0.3.1 提供钩子；不在核心写 dot2 分支 |
+| P3.3 ✅ | 第二台设备/示例插头：`examples/plugin-example` + 契约测试；无需改核心 | 契约工具可本地跑通 |
+| P3.4 ✅ | 设备管理增强：status/启停/token 轮换/端口冲突/多设备显式 warning + 控制台 | 0.3.0 交付 |
+| P3.5 ✅ | 安全三项：SSRF 出站守卫、非 root 容器（read_only/cap_drop/state 迁移）、CVE CI（pip-audit/Trivy/SARIF） | 0.3.2 交付；扫描 green（16 条 Debian 已知 CVE 日期化 allowlist） |
+| P3.6 ✅ | 发布：v0.3.0 / v0.3.1 / v0.3.2；生产 0.3.1 运行，0.3.2 镜像 CI 构建中 | tag/Release 已推 |
 
 ### P4 · 使用后统一打磨（等 9 哥 用几天再排）
 音乐真实凭据/收藏/续歌、控制台手机化（390 px/44 px/CJK/Logo）、微信 QR 取消、咖啡链接、其它体验债。
