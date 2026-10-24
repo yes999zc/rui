@@ -11,7 +11,9 @@ RAW="${HOUSE_EAR_RAW:-https://raw.githubusercontent.com/$REPO/$REF}"
 # accept the TCP connection and then stall forever, and this script used to hang at
 # step [1/5] with no output (seen 2026-10-24). A timeout turns that into a visible
 # warning instead of an installer that never finishes.
-CURL="curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors"
+# -4: hosts without a global IPv6 route get an unusable AAAA first answer; forcing
+# IPv4 removes one more way for a single fetch to stall.
+CURL="curl -4 -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors"
 # Created by this script, so the files belong to the person who ran it, not to root.
 # The service container itself still runs as root (it writes its own data volume).
 RUN_AS="$(id -u):$(id -g)"
