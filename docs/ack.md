@@ -105,7 +105,7 @@ Three conclusions, in the order they cost the most:
    of it, all of it: 0 utterances in 20 rounds. The LX06 mutes its microphone for ~1.2 s
    while the speaker plays, so the 550 ms cue plus that window swallows a 1.15 s request
    whole. This is why `mode: earcon` is the default and why the cap exists at all; the old
-   project recorded the same thing (`HANDOFF.md:1214`: "唤醒侧 preroll 只回放 0.5 秒，补不全").
+   project recorded the same thing (`docs/archive/HANDOFF-history-to-2026-10-24.md`（旧 HANDOFF:1214）: "唤醒侧 preroll 只回放 0.5 秒，补不全").
 
 The KWS lag is a constant, not a distribution: **p50 1.09-1.62 s measured from the start of
 the wake clip** (the spread is the gap, not the model). Two independent causes then clip the

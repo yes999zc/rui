@@ -50,7 +50,7 @@ table does not show:
 
 - **It stopped answering, and complained.** 你都能做什么, rounds 4-12: 「你是不是在试我」、
   「我不答了，你换个问题」、「再问我就装没听见」. The old build recorded the same drift
-  (`HANDOFF.md` §6: 「再问我要罢工了哦」).
+  (归档 HANDOFF §6: 「再问我要罢工了哦」).
 - **It advertised devices it cannot drive.** 「我能帮你开关灯、调空调、设闹钟和提醒、放音乐」
   with zero tools wired - a claim about capability, which is worse than a wrong number.
 

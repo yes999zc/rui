@@ -20,7 +20,7 @@ if 0 < peak < 0.25:
 ## 2. 唤醒后端点（已对齐到 1.0 s）
 
 - 老项目：`POST_WAKE_SILENCE = 1.0`，`wake_grace` 布尔；**首段**用 1.0 s，收到第一段后 `wake_grace=False` 并重建 0.5 s 的 VAD（`assistant_v3.py:238, 2874-2875, 3344-3350`）。
-- 起因：15:53:54 用户唤醒后稍停，600 ms 级静音把请求切成 1.52 s 碎片「你好，小。」（老 HANDOFF:1042-1044）。
+- 起因：15:53:54 用户唤醒后稍停，600 ms 级静音把请求切成 1.52 s 碎片「你好，小。」（归档 HANDOFF:1042-1044）。
 - 我们：gate 每轮 disarm，所以只有「唤醒后第一段」这一种情形 → `vad_end_silence_ms` 默认 1000（`ed77191`）。B2 做 600 vs 1000 对照。
 - **不照搬**：老项目无 10 s 硬截断（`max_speech_duration=45 s`，真机有 43.28 s 单段）；我们已改 45 s。
 
@@ -39,7 +39,7 @@ if 0 < peak < 0.25:
 
 - 文件：`server/memory.py` + `memory.json`，`{"items":[{id,text,source,status,pinned,created,updated}]}`，`MAX_ITEMS=200`，`DUP_RATIO=0.8`（SequenceMatcher）。
 - 抽取：**会话收尾**跑一次（超时/停止/原厂 stop 三条路径，30 s 内合并）；提示词 `MEMORY_PROMPT`（`assistant_v3.py:1405-1411`）：一行一条、最多 3 条、排除一次性指令/常识/当天新闻；输入最近 8 条消息、`text[:2000]`。
-- 参数：`deepseek-flash`、temp 0.1、**max_tokens 600**、reasoning low（160 会吃光预算返回空——老 HANDOFF:459-463）。
+- 参数：`deepseek-flash`、temp 0.1、**max_tokens 600**、reasoning low（160 会吃光预算返回空——归档 HANDOFF:459-463）。
 - 状态闸：自动抽取进 `candidate`，**人工确认后才注入**；「记住…」走 `remember` 工具直接写 `confirmed`（`tools/recall.py:34-55`）。D2 验收必须搬后者。
 - 注入：每轮拼进 system prompt；pinned 在前、新的在前、第一条必进，预算默认 800。
 - 控制台：开关、条目列表、从最近对话提取、待确认候选、注入预览（`web/index.html:365-410`）。

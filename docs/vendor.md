@@ -37,7 +37,7 @@ layer that knows whether a turn is open.
 The offline half is covered by `tests/test_vendor.py` (four frame shapes, partial vs final,
 StopCapture, the window and the counters). The device half needs the real window:
 
-1. switch the speaker to house-ear per `HANDOFF.md` §8 (port 4412, restore to 4399 after);
+1. switch the speaker to house-ear per `docs/archive/HANDOFF-history-to-2026-10-24.md` §8 (port 4412, restore to 4399 after);
 2. say **小爱同学，今天天气怎么样** once;
 3. expected: one answer (the vendor's), a `xiaoai: vendor wake (...), we yield` line, and
    **no** `[asr]` / `turn:` line of ours;
