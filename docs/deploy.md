@@ -61,8 +61,8 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 固定发布版本（生产推荐；脚本、compose 文件和镜像都锁在同一个 tag）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.1/deploy/install.sh \
-  | RUI_REF=v0.2.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.1 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
+  | RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
 ```
 
 `RUI_REF` 决定脚本拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，
@@ -90,7 +90,7 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.1/deploy/insta
 RUI_HOME=~/rui          # 安装目录
 RUI_REPO=yes999zc/rui   # fork
 RUI_REF=main                  # 分支/tag
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.1   # 生产建议固定 tag 或 digest
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2   # 生产建议固定 tag 或 digest
 RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
                                     # 可选：raw 不通时换成镜像前缀，例如
                                     # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main
@@ -244,7 +244,7 @@ XFYUN_API_KEY=...
 XFYUN_API_SECRET=...
 RUI_HA_TOKEN=...       # 接 Home Assistant 时填
 RUI_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.1   # 安装脚本写入；固定版本，回滚时改这里
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2   # 安装脚本写入；固定版本，回滚时改这里
 ```
 
 只填实际用到的即可。**没有讯飞 key 时**，在向导 `keys` 步把 TTS 选成 `volc_tts` 并填
