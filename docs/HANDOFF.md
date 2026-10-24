@@ -64,6 +64,13 @@
     密钥/用户数据 0600；坏配置不静默覆盖（空文件例外，见 P1.1）。
 12. **公开仓硬约束**：不硬编码 key / 内网 IP / 私人路径；MIT；发布走 GHCR 多架构。
 13. **生产变更需 9 哥 明确点头**（部署/重启 NAS）；测试期间也不要同时跑 Mac 外部 gateway。
+14. **Socket & Plug（2026-10-24 定）**：RUI 只做插座；插头 = 声明必需 + 代码包可选（manifest 描述机型/AB 等级/能力/参数/协议/兼容版本/交付物）；
+    内置 LX06 作为参考插头；第三方插头默认 sidecar 容器隔离，签名且声明可信的才 in-process。标准文件 `docs/socket-plug.md`（P2.1 起草）。
+15. **音箱端依赖上游**：open-xiaoai（[coderzc/open-xiaoai](https://github.com/coderzc/open-xiaoai)）；我们验证用的 fork 分支在文档里写清最低 client 版本。
+16. **ffmpeg 换 LGPL-only 构建**；MIT 只覆盖本项目代码，第三方组件进 `THIRD_PARTY.md` 并在 README 致谢（open-xiaoai / EchoMuse / sherpa-onnx / SenseVoice / silero-vad / speexdsp / FFmpeg）。
+17. **0.1.x 不拆 LX06**：核心保留 `device/xiaoai` 作为参考插头；0.2 再抽成独立包，避免契约未定稿就拆。
+18. **安装向导 manifest 驱动**；EchoMuse Device Management 作为参考，调研产出 `docs/device-management-research.md`。
+
 
 ## 4. 运维手册（详见 `docs/runbook.md`）
 
@@ -85,28 +92,41 @@ docker compose exec -T house-ear house-ear config restore --last-good
 - 开发：`.venv/bin/python -m pytest -o addopts="" -q`；`ruff check .`；`cd web && npm run typecheck && npm run build`。
 - 模型测试：`HOUSE_EAR_TEST_MODELS=/path/with/silero_vad.onnx+model dirs`。
 
-## 5. 已知问题与欠账（与 `ROADMAP` §0.2 一一对应）
+## 5. 已知问题与欠账（与 `ROADMAP` §2/§3 对齐，基础设施优先）
 
-| ID | 问题 | 状态 |
-|---|---|---|
-| P1.1 | config 被清空成 0 字节 → schema defaults → `insecure_bind` 拒绝 → crash loop，未走 last-good | 待修 |
-| P1.2 | 新模板 `HOUSE_EAR_LLM_KEY` vs 旧 `secrets.yaml` 的 `DEEPSEEK_API_KEY`，复用旧 secrets 会“唤醒后不回答” | 待修 |
-| P1.3 | `fetch-models` 的 httpx `timeout=None`，直连 GitHub 失败会拖住 fallback | 待修 |
-| P1.4 | 验收脚本输出路径曾在容器内 `/data/...`，容器重建后 barge JSON 丢失（本次从输出重建记录） | 待修 |
-| P1.5 | GHCR 发布 workflow 不跑测试（tag push 直接构建镜像） | 待修 |
-| P2.1 | **真·陌生人冷装未验证**：验收冷装用了缓存镜像 + 复制生产 config/secrets + 手工 key 对齐；真实用户路径（公开命令 → Setup 向导填 key → 加设备 → 自动下模型）未从头走 | 待做 |
-| P2.2 | 远场 3–4 m 唤醒正式计数（20 次）未做 | 待做 |
-| P2.3 | barge 设备缓冲只有耳朵“干脆”，无量化值 | 待做 |
-| P2.4 | 微信 iLink 真机扫码/语音未验；QR 登录无服务端取消端点 | 待做 |
-| P2.5 | 音乐：真实 NAS Navidrome 凭据确认、收藏/口味 UI、farewell 静音续歌边角、音量对账 | 待做 |
-| P2.6 | 控制台手机卡片化、控件尺寸、CJK webfont、Logo GIF | 待做 |
-| P2.7 | 备份/恢复真恢复 + 换机演练（install → restore → fetch-models） | 待做 |
-| P2.8 | NAS→GitHub 网络仍偶发不稳；Telegram 依赖 mihomo 节点运行时状态；3 天长稳/断电自起未验证 | 已知 |
-| P3.x | 第二台设备、多类型音箱标准/插座插头、EchoMuse 设备管理、Agent/新渠道/Doctor Fix、安全三项 | 见 ROADMAP §0.3 |
+**P1 可靠性（0.1.1）**
+- 空 config（0 字节）→ schema defaults → `insecure_bind` 拒绝 → crash loop（未走 last-good）
+- 新模板 `HOUSE_EAR_LLM_KEY` vs 旧 `secrets.yaml` 的 `DEEPSEEK_API_KEY`
+- `fetch-models` 的 httpx `timeout=None`，直连失败会拖住 fallback
+- 验收脚本输出曾在容器内 `/data/...`，容器重建后 barge JSON 丢失
+- GHCR 发布 workflow 不跑测试（tag push 直接构建）
+- 静态 ffmpeg 的 GPL 包袱与第三方声明缺失（换 LGPL 构建 + `THIRD_PARTY.md`）
 
-其它：README 的 Buy Me a Coffee 仍是占位链接（等 9 哥 给真实链接）；音箱 root 密码受 squashfs 只读限制。
+**P2 基础设施（当前主线）**
+- **Socket & Plug 标准 v0**（`docs/socket-plug.md`）：manifest/打包/校验/信任/in-process vs sidecar
+- **安装向导**：manifest 驱动、通用步 + 插头步、失败诊断、幂等续跑
+- **真·陌生人冷装**：公开命令 + Setup 向导 + 自动下模型，不复制生产配置（验收时用了复制/缓存）
+- 设备管理后台最小版（EchoMuse-inspired）
+- 运维韧性：真恢复/换机、mihomo 失联提示、3 天长稳/断电自起
+- 生产微信验证（真机已过，生产未过）
+
+**P3 功能/重构（0.2.0）**
+- LX06 抽成 `rui-plugin-xiaoai`；`rui-dot2-bridge` 按标准改造成第一个外部 B 类插头
+- 第二台设备（config v3、无播放降级）；设备管理增强（approve/OTA/多设备仲裁）
+- 安全：SSRF/端口探测 allowlist、容器非 root、CVE 扫描
+
+**P4 使用后打磨（9 哥 用几天再排）**
+- 音乐真凭据/收藏/续歌；控制台手机化；微信 QR 取消；咖啡链接；Logo GIF
+
+**已由 9 哥 实测、不再记欠账**：远场 3–4 m 唤醒（实测通过，未留 N/M，不作为门槛证据）；
+微信 iLink 真机文字/语音（真机通过；生产机仍待验，归 P2）。
+
+其它已知：音箱 root 密码受 squashfs 只读限制；Telegram 出网依赖 NAS mihomo 节点运行时状态。
 
 ## 6. 最近时间线（细节在归档）
+
+- 10-24 下午：确定 Socket & Plug 为长期架构（声明必需 + 可选代码包；内置 LX06 参考插头；第三方默认 sidecar）；
+  定 ffmpeg 走 LGPL-only；定上游 open-xiaoai；派智能体调研 EchoMuse Device Management；路线图按“基础设施优先”重排。
 
 - 10-22：真机回合、AEC/KWS、播放链路、灯环、音乐核心、连续对话；289→487 tests。
 - 10-23：HA/MCP + V2、控制台 2.0/安装向导/设备管理/话术编辑、公证归档/公开仓、NAS 真机部署、

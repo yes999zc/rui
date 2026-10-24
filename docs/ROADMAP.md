@@ -35,53 +35,63 @@
 - 附加验收：Telegram 4/4、微信接口保留、配置恢复 smoke、备份/恢复 smoke。
 - 文档：验收 `docs/acceptance.md`；运维 `docs/runbook.md`；历史 `docs/archive/HANDOFF-history-to-2026-10-24.md`。
 
-## 2. 欠账清单（截至 v0.1.0）
+## 2. 欠账清单（截至 v0.1.0，按“基础设施优先”重排）
 
-| 组 | 欠账 | 为什么现在记 |
+| 组 | 欠账 | 说明 |
 |---|---|---|
-| P1 | 空 config（0 字节）→ crash loop；旧 secrets 的 LLM key 命名；`fetch-models` httpx 无超时；验收产物落盘；发布镜像不跑测试 | 验收过程真实踩到，会影响下一个装的人 |
-| P2 | **真·陌生人冷装**；远场 3–4 m 唤醒计数；barge 设备缓冲量化；微信真机；音乐真凭据/收藏；控制台手机化；真恢复/换机；mihomo 运行时依赖与长稳 | 门槛之外的真实体验与可运维性 |
-| P3 | 第二台设备；多类型音箱标准与“插座/插头”；EchoMuse 设备管理；Agent/新渠道/Doctor Fix；安全三项 | 冻结解除后的功能线，不能混进 0.1.x |
-| 杂项 | Buy Me a Coffee 真实链接；音箱 root 密码 squashfs 限制 | 发布门面/已知限制 |
+| P1 可靠性 | 空 config crash loop；旧 secrets 的 LLM key 命名；`fetch-models` httpx 无超时；验收产物随容器丢失；发布镜像不跑测试；ffmpeg GPL 包袱与第三方声明 | 影响下一个装的人/发布合规 |
+| P2 基础设施 | **Socket & Plug 标准**（插头 manifest/打包/校验/信任）；**安装向导**（manifest 驱动）；**真·陌生人冷装**；设备管理后台；真恢复/换机；长稳/mihomo；生产微信 | 这是当前主线 |
+| P3 功能/重构 | LX06 抽成插件包；dot2 桥按标准改造成第一个外部插头；第二台设备（config v3）；设备管理增强；安全三项；0.2.0 | 插件标准定稿后做 |
+| P4 使用后打磨 | 音乐真凭据/收藏/续歌；控制台手机化；微信 QR 取消；咖啡链接；Logo GIF 等 | 9 哥 用几天后统一处理 |
 
-## 3. 路线图
+**已由 9 哥 实测、不再记欠账**：远场 3–4 m 唤醒（实测通过，未留 N/M，不作为门槛证据）；
+微信 iLink 真机文字/语音（真机通过；**生产机**仍未验，保留在 P2.6）。
 
-### P1 · 0.1.x 可靠性（1–2 天，先发 0.1.1）
+## 3. 路线图（基础设施优先）
+
+### P1 · 0.1.1 基础设施可靠性（1–2 天）
 
 | # | 任务 | 判据 |
 |---|---|---|
 | P1.1 | 空 config 走 ConfigError/last-good，不再 defaults→crash loop + 回归测试 | 清空 config 重启仍 healthy + banner；无 last-good 时给可读错误 |
 | P1.2 | 旧 secrets 兼容：`HOUSE_EAR_LLM_KEY` 缺失时映射 `DEEPSEEK_API_KEY` 或 doctor 明确提示 | 复用旧 secrets 冷装不再“唤醒后不回答” |
-| P1.3 | `fetch-models` httpx 超时（connect 10 s / read 60 s），直连失败快速切镜像 | 断网/直连失败 ≤30 s 内切到可用源或明确失败 |
-| P1.4 | 验收脚本输出默认落到宿主可见目录（避免容器重建丢 JSON） | 一次 barge/wake 后产物在工作区可读 |
-| P1.5 | GHCR 发布前跑测试（tag 触发的 workflow 依赖测试 job） | tag 推送时测试失败则镜像不发布 |
-| P1.6 | 0.1.1 回归：全量测试 + 一次冷装循环 | 时间不劣化（≤10 min 到第一句）；HANDOFF 记录 |
+| P1.3 | `fetch-models` httpx 超时（connect 10 s / read 60 s），失败快速切镜像 | 断网/直连失败 ≤30 s 内切源或明确失败 |
+| P1.4 | 验收脚本输出默认落到宿主可见目录 | 一次 barge/wake 后产物在工作区可读 |
+| P1.5 | GHCR 发布前跑测试（tag 触发 workflow 先跑测试） | 测试失败则镜像不发布 |
+| P1.6 | ffmpeg 换成 LGPL-only 构建 + `THIRD_PARTY.md` + README「致谢 / Credits」 | 镜像内 `ffmpeg -version` 无 GPL 组件；第三方清单齐全（open-xiaoai / EchoMuse / sherpa-onnx / SenseVoice / silero-vad / speexdsp / FFmpeg） |
+| P1.7 | 0.1.1 回归：全量测试 + 一次冷装循环 | 时间不劣化（≤10 min 到第一句）；HANDOFF 记录 |
 
-### P2 · 体验与真机遗留（3–5 天，可并行）
-
-| # | 任务 | 判据 |
-|---|---|---|
-| P2.1 | **真·陌生人冷装**：全新目录、只用公开命令、Setup 向导填 key、自动下模型、不复制生产配置 | 从零到第一句 ≤30 min，全程只按文档操作 |
-| P2.2 | 远场 3–4 m 唤醒正式计数（20 次）+ barge 设备缓冲耳朵口径量化 | 留下 N/M 与听感/秒表记录，写入 acceptance 附录 |
-| P2.3 | 微信 iLink 真机扫码/文字/语音；QR 登录补服务端取消 | 文字/语音各 2 条通过后再决定是否默认启用 |
-| P2.4 | 音乐：NAS 真实 Navidrome 凭据确认、收藏/口味 UI、farewell 静音续歌边角、音量对账 | 真机点歌/收藏/续歌路径通过 |
-| P2.5 | 控制台手机卡片化（390 px 无横向滚动）、控件 ≥44 px、CJK webfont、Logo GIF | 手机逐页截图通过；桌面无回归 |
-| P2.6 | 备份/恢复真恢复 + 换机演练（install → restore → fetch-models） | 新目录恢复后 healthy、doctor 通过、设备在线 |
-| P2.7 | 运维韧性：mihomo 节点失联提示/重选指引；3 天长稳 + NAS 断电自起演练 | 断电重启全链路自起；节点失效可诊断 |
-| P2.8 | Buy Me a Coffee 真实链接 + README 收尾 | 链接可用，不再占位 |
-
-### P3 · 功能线（0.2.0，冻结解除后）
+### P2 · 基础设施主线：Socket & Plug + 安装向导 + 设备管理（3–5 天）
 
 | # | 任务 | 判据 |
 |---|---|---|
-| P3.1 | 第二台设备（P12/E1）：每设备音频配置 config v3、无播放能力降级 | 假 4 麦设备零改 `src/` 跑通 |
-| P3.2 | 多类型音箱适配标准 → **RUI 插座 / 音箱插头**：纯声明 manifest；Dot2（B 类）首个真实插头；LX06（A 类）样板；控制台“从插头添加设备” | manifest 契约 + 一个第三方机型不改核心接入 |
-| P3.3 | 设备管理后台参考 EchoMuse Device Management（注册/审批/每设备配置/状态） | 管理面可用 |
-| P3.4 | Agent/OpenClaw/Hermes 接入、新渠道、完整 Doctor Fix | 单独窗口排期，不混进 0.2 |
-| P3.5 | 安全：SSRF/端口探测 allowlist、容器非 root、依赖 CVE 扫描 | 三项各有报告/修复记录 |
-| P3.6 | 0.2.0 发布：tag + Release + README 更新 | 发布清单同 0.1 |
+| P2.0 | EchoMuse Device Management 调研（进行中） | `docs/device-management-research.md`：流程映射、向导状态机、数据模型、开放问题 |
+| P2.1 | **`docs/socket-plug.md` 标准 v0**：插头 manifest（机型/A/B 等级/能力/参数 schema/协议/兼容版本/交付物+可选 adapter）、打包与校验、A/B 最小清单、信任模型、运行形态（in-process vs sidecar） | 标准文档可让第三方不看源码写出插头；LX06 与 dot2 都能套进去 |
+| P2.2 | **安装向导设计稿**：manifest 驱动，通用步（环境/密钥/模型）+ 插头步（设备侧安装链接/参数表单/连接测试），失败诊断、幂等/续跑 | 设计稿评审通过；每一步都有“用户做什么 / RUI 做什么” |
+| P2.3 | **真·陌生人冷装**：全新目录 + 公开命令 + 向导填 key + 自动下模型 + 内置 LX06 参考插头，不复制生产配置 | 从零到第一句 ≤30 min；全程只按文档操作 |
+| P2.4 | 设备管理后台最小版（EchoMuse-inspired）：设备/插件/能力/状态/参数编辑/连接测试/删除 | 控制台可新增、查看、测试、删除设备；不用手改 YAML |
+| P2.5 | 运维与恢复：备份真恢复 + 换机（install→restore→fetch-models）；mihomo 失联提示；3 天长稳/断电自起 | 恢复后 healthy、设备在线；断电全链路自起 |
+| P2.6 | 生产微信验证（真机已过） | NAS 生产上文字/语音各 2 条通过（保持 enabled=false 直到通过） |
 
-**顺序原则**：P1 先合入 0.1.1；P2 与 P3.2/P3.3 可并行；每项完成必须带判据与实测记录。
+### P3 · 0.2.0：插件化重构与功能线
+
+| # | 任务 | 判据 |
+|---|---|---|
+| P3.1 | LX06 从核心抽成 `rui-plugin-xiaoai`（manifest + adapter），核心保留 mock + loader；内置参考插头仍默认可用 | 抽包后 LX06 真机全链路不回归；核心无品牌分支 |
+| P3.2 | `rui-dot2-bridge` 按标准改造成第一个外部 B 类插头（保留已工作的协议代码，只补 manifest/打包/参数 schema） | 按标准安装/删除 dot2 插头；无核心改动 |
+| P3.3 | 第二台设备（config v3、每设备音频配置、无播放降级） | 假 4 麦设备零改核心跑通 |
+| P3.4 | 设备管理增强：approve/OTA/多设备“谁最响谁答” | 多设备场景可配置、可诊断 |
+| P3.5 | 安全三项：SSRF/端口探测 allowlist、容器非 root、依赖 CVE 扫描 | 三项各有报告/修复记录 |
+| P3.6 | 0.2.0 发布：tag + Release + README | 发布清单同 0.1 |
+
+### P4 · 使用后统一打磨（等 9 哥 用几天再排）
+音乐真实凭据/收藏/续歌、控制台手机化（390 px/44 px/CJK/Logo）、微信 QR 取消、咖啡链接、其它体验债。
+
+**运行形态待定（P2.1 里定）**：音箱端 client/固件跑在音箱上（不在 NAS）；
+RUI 侧 adapter 有两种形态——in-process（可信内置插头，简单）与 sidecar 容器（第三方插头隔离，NAS 上会多一个镜像）。
+默认建议：内置 LX06 in-process；第三方插头默认 sidecar，除非签名并声明可信。
+
+**顺序原则**：P1 先合入 0.1.1；P2 四项（标准/向导/冷装/管理）按序但可并行设计；P3 在标准定稿后开始。
 
 ## 4. 历史里程碑（详情见归档 HANDOFF）
 
