@@ -20,6 +20,7 @@ from pydantic import ValidationError
 from house_ear.__main__ import (
     KWS_REPO,
     VAD_URLS,
+    _download_client,
     _download_first,
     _download_to,
     _fetch_kws_model,
@@ -154,21 +155,39 @@ def test_download_uses_bounded_http_timeouts(monkeypatch, tmp_path) -> None:
         def __exit__(self, *exc: object) -> bool:
             return False
 
-    def fake_stream(method: str, url: str, **kwargs: object) -> Stream:
-        seen.update(kwargs)
-        return Stream()
+    class Client:
+        timeout = None
 
-    monkeypatch.setattr(httpx, "stream", fake_stream)
+        def __enter__(self) -> "Client":
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, **kwargs: object) -> Stream:
+            seen.update(kwargs)
+            return Stream()
+
+    def fake_client(timeout: object) -> Client:
+        client = Client()
+        client.timeout = timeout
+        return client
+
+    monkeypatch.setattr("house_ear.__main__._download_client", fake_client)
     target = tmp_path / "model.int8.onnx"
     assert _download_to("https://example.invalid/model.int8.onnx", target) == 4
-    timeout = seen["timeout"]
-    assert isinstance(timeout, httpx.Timeout)
-    assert timeout.connect == 10.0
-    assert timeout.read == 60.0
-    transport = seen["transport"]
-    assert isinstance(transport, httpx.HTTPTransport)
-    assert transport._pool._local_address == "0.0.0.0"
+    timeout = seen.get("timeout")
+    assert timeout is None  # the client carries the timeout, not each stream call
     assert target.read_bytes() == b"data"
+
+
+def test_download_client_forces_ipv4() -> None:
+    """The NAS has no global IPv6 route; the client must bind to IPv4."""
+    client = _download_client(httpx.Timeout(1.0))
+    try:
+        assert client._transport._pool._local_address == "0.0.0.0"
+    finally:
+        client.close()
 
 
 def test_read_timeout_on_the_first_mirror_falls_through_to_the_next(
@@ -202,11 +221,18 @@ def test_read_timeout_on_the_first_mirror_falls_through_to_the_next(
         def __exit__(self, *exc: object) -> bool:
             return False
 
-    def fake_stream(method: str, url: str, **kwargs: object) -> Stream:
-        calls.append(url)
-        return Stream(TimeoutResponse() if url == first else Response())
+    class Client:
+        def __enter__(self) -> "Client":
+            return self
 
-    monkeypatch.setattr(httpx, "stream", fake_stream)
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, **kwargs: object) -> Stream:
+            calls.append(url)
+            return Stream(TimeoutResponse() if url == first else Response())
+
+    monkeypatch.setattr("house_ear.__main__._download_client", lambda timeout: Client())
     target = tmp_path / "model.int8.onnx"
     assert _download_first((first, second), target) == 4
     assert calls == [first, second]

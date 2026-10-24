@@ -6,6 +6,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import __version__
 from .config import (
@@ -18,6 +19,9 @@ from .config import (
 )
 from .doctor import run_doctor
 from .log_setup import LOG_FILE_NAME, setup_logging
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import httpx
 
 
 def _config_path(args: argparse.Namespace) -> Path:
@@ -174,6 +178,19 @@ DOWNLOAD_CONNECT_TIMEOUT_S = 10.0
 DOWNLOAD_READ_TIMEOUT_S = 60.0
 
 
+# The NAS has no global IPv6 route. hf-mirror/GitHub resolve to AAAA records too, and
+# httpx would then hang the TLS handshake until the connect timeout. Binding the
+# transport to 0.0.0.0 forces IPv4, which is the only route that works there.
+def _download_client(timeout: httpx.Timeout) -> httpx.Client:
+    import httpx
+
+    return httpx.Client(
+        transport=httpx.HTTPTransport(local_address="0.0.0.0"),
+        follow_redirects=True,
+        timeout=timeout,
+    )
+
+
 def _download_to(url: str, target: Path, *, force: bool = False) -> int:
     """Stream one file to disk atomically; returns its size in bytes."""
     import httpx
@@ -185,12 +202,7 @@ def _download_to(url: str, target: Path, *, force: bool = False) -> int:
     part = target.with_suffix(target.suffix + ".part")
     print(f"fetching {url}")
     timeout = httpx.Timeout(DOWNLOAD_READ_TIMEOUT_S, connect=DOWNLOAD_CONNECT_TIMEOUT_S)
-    # The NAS has no global IPv6 route. hf-mirror/GitHub resolve to AAAA records too, and
-    # httpx would then hang the TLS handshake until the connect timeout. Binding the
-    # transport to 0.0.0.0 forces IPv4, which is the only route that works there.
-    transport = httpx.HTTPTransport(local_address="0.0.0.0")
-    with httpx.stream("GET", url, follow_redirects=True, timeout=timeout,
-                      transport=transport) as resp:
+    with _download_client(timeout) as client, client.stream("GET", url) as resp:
         resp.raise_for_status()
         total = int(resp.headers.get("content-length") or 0)
         done = 0
