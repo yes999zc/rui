@@ -119,12 +119,23 @@ VAD_FILE = "silero_vad.onnx"
 VAD_URLS = (
     f"https://hf-mirror.com/{VAD_REPO}/resolve/main/{VAD_FILE}",
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+    # GitHub release assets reset or stall from mainland networks; two proxy mirrors
+    # returned the full 643,854 B file from the NAS when both upstream paths failed.
+    "https://ghproxy.net/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+    "asr-models/silero_vad.onnx",
+    "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+    "asr-models/silero_vad.onnx",
 )
 # The wake model (32.9 MB archive). GitHub releases is the only place sherpa-onnx
 # publishes these; the tarball holds several chunk variants and we use chunk 8.
 KWS_REPO = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
-KWS_URL = (f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/"
-           f"{KWS_REPO}.tar.bz2")
+KWS_URLS = (
+    f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/{KWS_REPO}.tar.bz2",
+    f"https://ghproxy.net/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+    f"kws-models/{KWS_REPO}.tar.bz2",
+    f"https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+    f"kws-models/{KWS_REPO}.tar.bz2",
+)
 DEFAULT_WAKE_WORDS = ("你好小瑞",)
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
@@ -205,7 +216,8 @@ def _fetch_kws_model(args: argparse.Namespace) -> int:
     tar_path = dest / f"{KWS_REPO}.tar.bz2"
     if not (model_dir / "tokens.txt").exists() or args.force:
         dest.mkdir(parents=True, exist_ok=True)
-        _download_to(args.kws_url or KWS_URL, tar_path, force=args.force)
+        kws_urls = (args.kws_url,) if args.kws_url else KWS_URLS
+        _download_first(kws_urls, tar_path, force=args.force)
         print(f"  unpacking {tar_path.name}")
         with tarfile.open(tar_path, "r:bz2") as tar:
             tar.extractall(dest, filter="data")
