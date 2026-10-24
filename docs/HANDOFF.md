@@ -130,6 +130,9 @@ docker compose exec -T rui rui config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
+- 10-25 凌晨：0.3.1：官方 downstream adapter 钩子（环境变量/entry points，fail-soft），dot2 issue #7 的 Q1–Q6 已答复；
+  生产仍 0.2.2，等 GHCR 网络恢复升级 0.3.x。
+
 - 10-25 凌晨：P3.0–P3.4 完成并发布 0.3.0（生产暂留 0.2.2：NAS 拉 GHCR TLS 超时，网络恢复后升级）：Socket/Plug v1（device_wake 契约、契约测试工具、LX06 参考插头）、
   设备管理（状态/启停/token 轮换/端口冲突/多设备 warning）；全量 948 tests；下一步 P3.5 安全。
 
