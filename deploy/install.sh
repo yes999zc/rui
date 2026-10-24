@@ -46,15 +46,33 @@ fi
 # A private GHCR package (or an offline registry) must not make the one-command install
 # fail forever. If the image cannot be pulled, build the same tag from the public source;
 # a later re-run reuses the image, and once the package is public the fast path returns.
+# The clone/build must follow RUI_REF, not the default branch: a pinned install
+# (RUI_REF=v0.2.1) that silently builds main would run untested code under a release tag.
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   if ! PULL_OUTPUT="$(docker pull "$IMAGE" 2>&1)"; then
     echo "WARNING: could not pull $IMAGE; falling back to a source build." >&2
     printf '%s\n' "$PULL_OUTPUT" | sed 's/^/         /' >&2
-    echo "[0/5] building the image from the public source (first run only)"
+    if ! command -v git >/dev/null 2>&1; then
+      echo "ERROR: the source fallback needs 'git'." >&2
+      echo "       install git, or pull the image manually and re-run this script." >&2
+      exit 1
+    fi
     SRC="$DIR/src"
     if [ ! -d "$SRC/.git" ]; then
-      git clone --depth 1 "https://github.com/$REPO.git" "$SRC"
+      if [ -d "$SRC" ] && [ -n "$(ls -A "$SRC" 2>/dev/null || true)" ]; then
+        echo "ERROR: $SRC exists but is not a git checkout; refusing to build unknown source." >&2
+        echo "       move it aside (or remove it) and re-run this script." >&2
+        exit 1
+      fi
+      echo "      cloning https://github.com/$REPO.git at ref '$REF'"
+      git clone --depth 1 --branch "$REF" "https://github.com/$REPO.git" "$SRC"
+    else
+      echo "      updating $SRC to ref '$REF'"
+      git -C "$SRC" fetch --depth 1 origin "$REF"
+      git -C "$SRC" checkout --detach FETCH_HEAD
     fi
+    BUILT_REV="$(git -C "$SRC" rev-parse --short HEAD)"
+    echo "[0/5] building $IMAGE from $REPO@$REF (commit $BUILT_REV)"
     docker build -t "$IMAGE" "$SRC"
   fi
 fi
@@ -62,8 +80,8 @@ fi
 echo "[1/5] compose file"
 # The deploy directory is never a git checkout: fetch the one file compose needs,
 # otherwise `docker compose up` fails with "no configuration file provided". The example
-# config comes along as the reference for the hand edits in step 2 (setup writes the
-# production template; the example is the commented, annotated version of it).
+# config comes along as the commented reference for manual recovery; `setup` writes the
+# production template, and the wizard owns devices[] on the normal path.
 if [ ! -f "$DIR/docker-compose.yml" ]; then
   $CURL "$RAW/docker-compose.yml" -o "$DIR/docker-compose.yml"
 else
@@ -91,7 +109,9 @@ if [ ! -f "$DIR/config/config.yaml" ]; then
   # are devices[] and the keys in .env. It still writes no devices: a fresh install must
   # not show a speaker that does not exist.
   docker run --rm -e RUI_INSTALLER=1 --user "$RUN_AS" -v "$DIR/config:/config" "$IMAGE" setup --config /config/config.yaml
-  echo "      next: add devices[] and set audio.voice.kws_keywords_file/wake_words to match"
+  echo "      next: open http://<nas-lan-ip>:8080/ and finish the first-run wizard (/setup)"
+  echo "            keys -> models -> prepare -> params -> wake -> connect -> test -> verify"
+  echo "      no YAML editing is needed: the wizard writes devices[]; the device token is in .env"
   echo "      after changing wake words: docker run --rm -v $DIR/config:/config $IMAGE keywords --config /config/config.yaml"
   echo "      reference: $DIR/config.example.yaml and docs/deploy.md"
 else
@@ -128,11 +148,27 @@ echo "[4/5] local models: ASR + VAD + wake word"
 # already in the image. An older image without /opt/seed-models falls back to the previous
 # download path automatically; no flag needed here. Without ASR the chain silently falls
 # back to cloud; without VAD the gate never starts; without KWS the box cannot hear its
-# own wake word. Loud when it fails, but never blocks the install.
-KWS_TOKENS="$DIR/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/tokens.txt"
-if [ -f "$DIR/data/models/sensevoice/model.int8.onnx" ] && [ -f "$KWS_TOKENS" ]; then
-  echo "      models already present"
+# own wake word. A rerun must repair a *partial* install too, so run fetch-models
+# whenever any required artifact is missing - not only when ASR and KWS happen to be
+# present. fetch-models copies the image seed first, so this keeps the seed-first
+# behavior and only downloads what is actually absent. Loud when it fails, but never
+# blocks the install.
+ASR_DIR="$DIR/data/models/sensevoice"
+VAD_FILE="$DIR/data/models/silero_vad.onnx"
+KWS_DIR="$DIR/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+KWS_TOKENS="$KWS_DIR/tokens.txt"
+MISSING_MODELS=""
+if [ ! -f "$ASR_DIR/model.int8.onnx" ] && [ ! -f "$ASR_DIR/model.onnx" ]; then
+  MISSING_MODELS="$MISSING_MODELS asr-model"
+fi
+[ -f "$ASR_DIR/tokens.txt" ] || MISSING_MODELS="$MISSING_MODELS asr-tokens"
+[ -f "$VAD_FILE" ] || MISSING_MODELS="$MISSING_MODELS vad"
+[ -d "$KWS_DIR" ] || MISSING_MODELS="$MISSING_MODELS kws-dir"
+[ -f "$KWS_TOKENS" ] || MISSING_MODELS="$MISSING_MODELS kws-tokens"
+if [ -z "$MISSING_MODELS" ]; then
+  echo "      models already present (ASR + VAD + KWS)"
 else
+  echo "      missing:$MISSING_MODELS; running fetch-models (image seed first)"
   # A host proxy is the difference between a 2 MB/s download and a 55 KB/s one for the
   # GitHub release assets (measured 2026-10-24: direct 55 KB/s, mihomo 2.1 MB/s). The
   # container does not inherit the host environment, so forward the usual proxy vars
@@ -156,31 +192,60 @@ if [ ! -f "$DIR/config/keywords.txt" ]; then
 fi
 
 echo "[5/5] starting"
-# A second install on the same host would collide on the fixed container name. 0.1.x used
-# `house-ear`, 0.2.0 uses `rui`, and either container with --network host keeps :8080/:4412
-# after its compose project is gone - so check both names instead of only `rui`. Fail with
-# an actionable message rather than a raw Docker "Conflict" (seen 2026-10-24 while testing
-# a cold install next to a running production instance).
-for name in rui house-ear; do
-  if docker ps -a --format '{{.Names}}' | grep -qx "$name"; then
-    echo "ERROR: a container named '$name' already exists (another Rui/house-ear install)."
-    echo "       stop and remove it before installing here:"
-    echo "         docker stop $name && docker rm $name"
-    echo "       or, from that install's directory: docker compose down"
+# Re-runnable by design. A container left by an earlier run of *this* installer is not a
+# conflict: compare the compose project's recorded working directory instead of failing
+# on the name alone, then let `docker compose up -d` reconcile/recreate it.
+# A container owned by another directory is a real conflict, and 0.1.x used a different
+# name. Never stop or remove containers here - print the exact command and let the owner
+# decide (removing someone's production install is not a repair).
+if docker ps -a --format '{{.Names}}' | grep -qx house-ear; then
+  echo "ERROR: the old 'house-ear' container (0.1.x install) is still present." >&2
+  echo "       0.2.x uses the name 'rui' and will not take over the old install." >&2
+  echo "       stop the old install first (config/data on disk are not touched):" >&2
+  echo "         docker stop house-ear && docker rm house-ear" >&2
+  echo "       or, from the old install directory: docker compose down" >&2
+  echo "       upgrade notes: docs/migration-house-ear-to-rui.md" >&2
+  exit 1
+fi
+if docker ps -a --format '{{.Names}}' | grep -qx rui; then
+  RUI_WORKDIR="$(docker inspect -f '{{with index .Config.Labels "com.docker.compose.project.working_dir"}}{{.}}{{end}}' rui 2>/dev/null || true)"
+  RUI_PROJECT="$(docker inspect -f '{{with index .Config.Labels "com.docker.compose.project"}}{{.}}{{end}}' rui 2>/dev/null || true)"
+  DIR_REAL="$(cd "$DIR" && pwd -P)"
+  # Accept both spellings: compose records the path it was given, which may or may not
+  # have gone through a symlink. A missing label means the container was not created by
+  # compose, so this script cannot prove ownership and must not adopt it.
+  if [ -z "$RUI_WORKDIR" ]; then
+    echo "ERROR: a container named 'rui' exists but was not created by docker compose." >&2
+    echo "       this installer will not adopt or remove it. stop/remove it manually:" >&2
+    echo "         docker stop rui && docker rm rui" >&2
+    echo "       then re-run this script. nothing was stopped or removed." >&2
+    exit 1
+  elif [ "$RUI_WORKDIR" = "$DIR" ] || [ "$RUI_WORKDIR" = "$DIR_REAL" ]; then
+    echo "      reusing the existing 'rui' container from this install ($RUI_WORKDIR)"
+  else
+    echo "ERROR: container 'rui' belongs to another install (compose project '${RUI_PROJECT:-unknown}')." >&2
+    echo "       its project directory:  $RUI_WORKDIR" >&2
+    echo "       this install directory: $DIR" >&2
+    echo "       stop that install from its own directory first:" >&2
+    echo "         cd $RUI_WORKDIR && docker compose down" >&2
+    echo "       nothing was stopped or removed." >&2
     exit 1
   fi
-done
+fi
 cd "$DIR"
-# --network host publishes no port mapping, so the name check above is the owner signal.
-# If the port is still taken (an unrelated service or a manually run container), say so
-# now instead of letting uvicorn fail during startup.
+# --network host publishes no port mapping, so the compose label above is the owner
+# signal. If the port is still taken (an unrelated service or a manually run container),
+# say so now instead of letting uvicorn fail during startup. Skip the check when our own
+# container is already running: it is expected to hold the port, and `up -d` reconciles it.
 PORT="$(grep -E '^[[:space:]]*port:' "$DIR/config/config.yaml" 2>/dev/null | head -1 | awk '{print $2}')"
 PORT="${PORT:-8080}"
-if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE "[:.]$PORT[[:space:]]"; then
-  OWNER="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | awk -v p=":$PORT->" 'index($0, p) {print $1; exit}')"
-  echo "WARNING: port $PORT is already in use${OWNER:+ by container '$OWNER'}."
-  ss -ltnp 2>/dev/null | grep -E "[:.]$PORT[[:space:]]" | sed 's/^/         /' || true
-  echo "         free it, or change web.port in $DIR/config/config.yaml, before starting."
+if ! docker ps --format '{{.Names}}' | grep -qx rui; then
+  if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null | grep -qE "[:.]$PORT[[:space:]]"; then
+    OWNER="$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | awk -v p=":$PORT->" 'index($0, p) {print $1; exit}')"
+    echo "WARNING: port $PORT is already in use${OWNER:+ by container '$OWNER'}."
+    ss -ltnp 2>/dev/null | grep -E "[:.]$PORT[[:space:]]" | sed 's/^/         /' || true
+    echo "         free it, or change web.port in $DIR/config/config.yaml, before starting."
+  fi
 fi
 # Pass the compose file explicitly: it also pins the project directory, so a stray cwd
 # can never make compose start the *other* install's project.
@@ -201,16 +266,21 @@ while [ "$i" -lt 120 ]; do
   sleep 1
 done
 if [ "$i" -ge 120 ]; then
-  echo "      WARNING: not healthy after 120 s; inspect: docker compose logs --tail=100 rui"
+  echo "ERROR: service is still not healthy after 120 s." >&2
+  echo "       probe: docker compose exec -T rui rui-healthcheck" >&2
+  echo "       logs:  docker compose logs --tail=100 rui" >&2
+  echo "       install did not complete; fix the failure above and re-run this script." >&2
+  exit 1
 fi
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
 echo "done. open http://${IP:-127.0.0.1}:${PORT}/"
-echo "  doctor:  docker compose exec rui rui doctor"
-echo "  logs:    docker compose logs -f rui"
+echo "  doctor:  cd $DIR && docker compose exec rui rui doctor"
+echo "  logs:    cd $DIR && docker compose logs -f rui"
 echo "  keys:    open the console -> Setup -> Keys (one provider per use), or fill $DIR/.env"
-echo "  speaker: open the console -> Setup -> Speaker connection to copy the ws URL + device token"
+echo "  speaker: open the console -> Setup -> Connect to copy the ws URL + device token"
 echo "           (step-by-step: docs/open-xiaoai-client.md)"
 echo "  pin:     image is pinned in $DIR/.env ($IMAGE); edit that line to change version"
 echo "  rollback: set the previous tag in $DIR/.env and run docker compose up -d"
+echo "  re-run:  this script is safe to run again; it reconciles this directory's container"

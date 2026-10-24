@@ -61,12 +61,13 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 固定发布版本（生产推荐；脚本、compose 文件和镜像都锁在同一个 tag）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/install.sh \
-  | RUI_REF=v0.2.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.1/deploy/install.sh \
+  | RUI_REF=v0.2.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.1 sh
 ```
 
 `RUI_REF` 决定脚本拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，
-`RUI_IMAGE` 决定运行哪个镜像；两个一起固定，重装或回滚时才不会悄悄换版本。
+`RUI_IMAGE` 决定运行哪个镜像；两个一起固定，重装或回滚时才不会悄悄换版本。镜像拉取失败时，
+源码回退也用同一个 `RUI_REPO` + `RUI_REF` 克隆/构建，并打印实际 ref 与 commit。
 
 `install.sh` 做五件事（幂等：已有文件不覆盖）：
 
@@ -75,8 +76,13 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/insta
 | 1 | 拉 `docker-compose.yml` + `config.example.yaml`（参考件） | `~/rui/` |
 | 2 | `setup` 写**生产模板**（provider 链、模型路径、playback 16k/1ch）+ 生成 `keywords.txt`（默认唤醒词），无设备/无密钥 | `~/rui/config/config.yaml`、`config/keywords.txt` |
 | 3 | 生成 `.env`，含随机 device token | `~/rui/.env`（chmod 600） |
-| 4 | 下 SenseVoice（~239 MB）+ 从镜像 seed 复制 Silero VAD / KWS 到数据卷（旧镜像无 seed 时仍下载这三个） | `~/rui/data/models/` |
-| 5 | `docker compose up -d` 并等 `/health` 通过 | 容器 `rui` |
+| 4 | 检查 ASR/VAD/KWS 三件套；任一缺失就 `fetch-models`（先从镜像 seed 复制 VAD/KWS，再下 SenseVoice） | `~/rui/data/models/` |
+| 5 | `docker compose up -d` 并等 `/health` 通过；120 s 仍不健康则打印探针/日志命令并 `exit 1` | 容器 `rui` |
+
+**重跑是安全的**：同一个 `RUI_HOME` 再跑一次时，如果 `rui` 容器的 compose project
+`working_dir` 就是本目录，脚本直接 `docker compose up -d`（按需重建，并补齐缺失模型）；
+如果容器属于其他目录/项目，脚本报出对方的 project 目录并退出，**不会停/删容器**；
+0.1.x 的 `house-ear` 容器则报“旧安装，先停掉”，同样不自动处理。升级/换版本仍建议按 §7。
 
 安装脚本里可用的环境变量（契约不变，只是补充说明）：
 
@@ -84,7 +90,7 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/insta
 RUI_HOME=~/rui          # 安装目录
 RUI_REPO=yes999zc/rui   # fork
 RUI_REF=main                  # 分支/tag
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0   # 生产建议固定 tag 或 digest
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.1   # 生产建议固定 tag 或 digest
 RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
                                     # 可选：raw 不通时换成镜像前缀，例如
                                     # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main
@@ -97,30 +103,51 @@ RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
 
 ## 3. 冷装：到第一句回应
 
-`setup` 写出的是**生产模板**（`src/rui/config/template.yaml`）：provider 链、模型
-路径、16 kHz 单声道播放、ack TTS 都已按生产值配好，并自动生成 `config/keywords.txt`。
-冷装只剩三件事：**加 devices[]、填 `.env` 密钥、下模型**（`install.sh` 自动完成模型这一步）。
-`config.example.yaml` 是同一份配置的带注释版本，可对照。
+`install.sh` 跑完后，**不需要手改 YAML**。打开 `http://<nas-lan-ip>:8080/`，输入控制台
+token，按 `/setup` 的 8 步向导走完即可：
+
+`keys` → `models` → `prepare` → `params` → `wake` → `connect` → `test` → `verify`
+
+| 步 | 用户做什么 | 写入哪里 |
+|---|---|---|
+| `keys` | 每种用途（LLM/ASR/TTS）选一个 provider，填它的凭据；TTS 选音色 | `data/secrets.yaml`（只写不读）；选中 provider 写成 `chain=[selected]` |
+| `models` | 缺模型时按提示跑 `fetch-models`，再点“重新检查” | `data/models/` |
+| `prepare` | 在音箱上装 open-xiaoai client，勾选确认（向导只给链接/步骤/回滚） | 无 |
+| `params` | 填音箱地址、房间、唤醒词并保存 | `config/config.yaml` 的 `devices[]` |
+| `wake` | 确认/修改 1–3 个唤醒词 | `config/keywords.txt` |
+| `connect` | 复制 ws 地址与 device token 到 client | 无（只读展示） |
+| `test` | 等音箱回连，点测试 | 无（只探测） |
+| `verify` | 试一句，听到回答；可跳过 | 仅运行时证据 |
+
+下面的 YAML / `.env` 片段是**参考和手工排障用**的；正常冷装由安装脚本和向导写入。
+`setup` 已写好生产模板（provider 链、模型路径、16 kHz 单声道播放、ack TTS），并自动生成
+`config/keywords.txt`；`config.example.yaml` 是同一份配置的带注释版本。
 
 ### 3.1 设备（`devices[]`）
+
+正常不用手写：向导 `params` 步会 merge 写入第一台设备。LX06 新设备**默认开灯环**
+（`led.enabled: true`）；音量（默认 60）、回连端口（4412）和麦克风增益可以在向导/控制台的
+设备参数里调整，没展示的字段保存时保留。下面的 YAML 只用于对照或手工恢复：
 
 ```yaml
 devices:
   - id: living
     adapter: xiaoai
-    host: speaker.local       # 音箱的 LAN 名/IP；inbound 传输下只用于显示和 doctor 的 SSH 探测
+    host: <speaker-ip>        # 向导 params 步填写；inbound 下只用于显示和 doctor 的 SSH 探测
     room: 客厅
     wake_words: ["你好小瑞"]
-    volume: 0                 # 0 = 不接管音量，沿用原厂
+    volume: 60                # 默认 60；0 = 不接管音量，沿用原厂
     listen_port: 4412         # 音箱 client 回连的端口
     token_env: RUI_DEVICE_TOKEN
     led:
-      enabled: false          # 灯环默认关；亮度按真机调，不照抄
+      enabled: true           # 向导创建的新 LX06 默认开灯环
 ```
 
 ### 3.2 provider（`providers.catalog` + 三条链）
 
-`setup` 已经写入生产用的 provider 链，**正常不用改**：
+正常路径在向导 `keys` 步用下拉选 provider，保存后自动把对应 stage 的
+`chain` 写成 `[selected]`，**不需要手改 `config.yaml`**。只有手工/非向导部署时才参考
+下面的模板链和 `.env`：
 
 ```yaml
 providers:
@@ -129,21 +156,10 @@ providers:
   llm: {chain: [deepseek_llm]}
 ```
 
-需要做的只是把密钥填进 `.env`（对照各 provider 的 `api_key_env` / `app_id_env`）：
-
-| 用途 | `.env` 变量 | 说明 |
-|---|---|---|
-| 本地 ASR | — | `fetch-models` 放模型，不需要 key；缺模型时走 `siliconflow_asr` |
-| 云端 ASR 兜底 | `RUI_ASR_KEY` | SiliconFlow |
-| TTS 主 | `XFYUN_APPID`、`XFYUN_API_KEY`、`XFYUN_API_SECRET` | 讯飞 websocket TTS |
-| TTS 兜底 | `VOLC_API_KEY` | 火山豆包 TTS 2.0（`volc_tts`） |
-| LLM | `RUI_LLM_KEY` | DeepSeek（模板用 `deepseek-flash`） |
-| HA | `RUI_HA_TOKEN` | 见 §5 |
-| 搜索（可选） | `DEEPSEEK_API_KEY` | 模板里 `tools.search.enabled: false`，开了才需要 |
-
-密钥只放 `~/rui/.env`（或控制台「设置→密钥」写入 `data/secrets.yaml`，写后不可读回），
-**不要写进 config.yaml**。容器里 `env_file: .env` 注入。要换 provider（例如全用火山）
-就改 `providers.catalog` + 三条链，`config.example.yaml` 有完整写法。
+密钥优先在向导 `keys` 步填写（写入 `data/secrets.yaml`，0600，只写不读），也可以写进
+`~/rui/.env`（环境变量优先）。密钥只放 `~/rui/.env` 或控制台「设置→密钥」，
+**不要写进 config.yaml**。容器里 `env_file: .env` 注入。要换 provider 时，向导里改选即可；
+只有非向导部署才需要改 `providers.catalog` + 三条链，`config.example.yaml` 有完整写法。
 
 ### 3.3 模型（`fetch-models` 一次装齐）
 
@@ -228,12 +244,13 @@ XFYUN_API_KEY=...
 XFYUN_API_SECRET=...
 RUI_HA_TOKEN=...       # 接 Home Assistant 时填
 RUI_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0   # 可选：固定版本
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.1   # 安装脚本写入；固定版本，回滚时改这里
 ```
 
-只填模板链里实际用到的即可：没有讯飞 key 就留空（自动落到火山 `volc_tts`，需要
-`VOLC_API_KEY`）；没有 SiliconFlow ASR key 时本地 ASR 顶上（需已跑 `fetch-models`）。
-硅基流动 TTS 已从控制台与模板链下线（2026-10-23），旧的 `RUI_TTS_KEY` 不再使用。
+只填实际用到的即可。**没有讯飞 key 时**，在向导 `keys` 步把 TTS 选成 `volc_tts` 并填
+`VOLC_API_KEY`；模板的 `xfyun_tts` 仍是 `chain[0]`，不会因为 `.env` 留空就自动跳过。
+没有 SiliconFlow ASR key 时，向导里选本地 ASR（需已跑 `fetch-models`）。硅基流动 TTS 已从
+控制台与模板链下线（2026-10-23），旧的 `RUI_TTS_KEY` 不再使用。
 
 改完 `.env` / `config.yaml` 后：`docker compose up -d`（配置读盘，无需重建镜像）。
 
@@ -248,8 +265,8 @@ docker compose logs --tail=100 rui
 
 期望：`/health` 的 `status=ok`、`audio_plane=true`（配置了设备时）；`/api/v1/doctor`
 `verdict=ok|degraded`，`wake_path` PASS 表示模型与 `keywords.txt` 已就位。`degraded` 常见但
-可接受的原因：没设 `web.auth_token`（只在内网问题不大）、音箱 SSH 22 探测不到（inbound
-设备本来就不要求 SSH）、`music.enabled` 关闭。
+可接受的原因：音箱 SSH 22 探测不到（inbound 设备本来就不要求 SSH）、`music.enabled` 关闭。
+非 loopback 且没设 `web.auth_token` 时服务会**拒绝启动**，不属于可接受的 degraded。
 
 ## 4. 音乐：Navidrome
 
@@ -382,7 +399,8 @@ uv run rui serve
 ## 10. 已知缺口（P15 记录，本版 0.0.1-p15；部分已由 Lead 接）
 
 - **`setup` 仍不写 devices**：这是有意的（不替用户猜设备）。模板已带 provider 链、模型路径、
-  `keywords.txt`，冷装只剩「加 devices[] + 填 .env」。
+  `keywords.txt`；正常冷装由 `/setup` 向导的 `params` 步写入 `devices[]`、`keys` 步写密钥，
+  不需要手改 YAML。只有非向导部署才手工加 `devices[]` + 填 `.env`。
 - **AI 之外的人工项**：真机接线（音箱 client 指向 NAS IP:4412、device token 一致）仍要人做；
   `docs/runbook.md` 的故障表覆盖了排查路径。
 - **损坏的模型文件会让采集静默停摆**：无效 `silero_vad.onnx` 下 plane 不报错、

@@ -8,7 +8,7 @@
     <a href="https://github.com/yes999zc/rui/actions/workflows/secret-scan.yml"><img src="https://github.com/yes999zc/rui/actions/workflows/secret-scan.yml/badge.svg?branch=main" alt="secret scan"></a>
     <a href="https://github.com/yes999zc/rui/actions/workflows/docker-publish.yml"><img src="https://github.com/yes999zc/rui/actions/workflows/docker-publish.yml/badge.svg?branch=main" alt="docker publish"></a>
     <a href="https://github.com/yes999zc/rui/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-0e6b63?style=flat-square" alt="MIT license"></a>
-    <img src="https://img.shields.io/badge/version-0.2.0-d98a3e?style=flat-square" alt="version 0.2.0">
+    <img src="https://img.shields.io/badge/version-0.2.1-d98a3e?style=flat-square" alt="version 0.2.1">
     <img src="https://img.shields.io/badge/status-v1%20in%20progress-8a4f0a?style=flat-square" alt="v1 in progress">
   </p>
   <p><a href="#中文">中文</a> · <a href="#english">English</a> · <a href="https://github.com/yes999zc/rui">GitHub</a></p>
@@ -46,7 +46,7 @@ v1 目前只支持 **Xiaomi 小爱音箱 Pro（LX06）**，且音箱需要运行
   </tr>
   <tr>
     <td><em>AI 供应商：三段链路、供应商卡片、音色选择与音箱/本机试听。</em></td>
-    <td><em>首次运行向导：密钥、模型、音箱、唤醒词、试一句。</em></td>
+    <td><em>首次运行向导：密钥、模型、设备准备/接线、测试、试一句。</em></td>
   </tr>
 </table>
 
@@ -102,8 +102,8 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 生产建议固定发布版本（脚本、compose 文件和镜像都锁到同一个 tag）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/install.sh \
-  | RUI_REF=v0.2.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.1/deploy/install.sh \
+  | RUI_REF=v0.2.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.1 sh
 ```
 
 `RUI_REF` 决定拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，`RUI_IMAGE`
@@ -117,9 +117,13 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/insta
 | 2 | `rui setup` 写入生产配置模板，并生成默认唤醒词文件 `keywords.txt` |
 | 3 | 生成 `.env`（含随机设备 token，0600） |
 | 4 | 下载本地模型：SenseVoice ASR（约 239 MB，一次）；VAD/KWS 已内置镜像，直接复制 |
-| 5 | `docker compose up -d`，等待 health 通过 |
+| 5 | `docker compose up -d`，等待 health 通过（不通过则以非 0 退出） |
 
-镜像：默认 `ghcr.io/yes999zc/rui:latest`（公开，多架构 amd64/arm64，滚动更新；生产用上面的固定 tag 示例）。如果镜像拉取失败，脚本会**从公开源码自动构建**同一 tag；也可以手动：
+同一 `~/rui` 可以安全重跑：如果 `rui` 容器属于本目录的 compose project，脚本直接
+`docker compose up -d`（按需重建/补齐缺失模型）；容器属于其他目录/项目、或遇到 0.1.x 的
+`house-ear` 容器时会报错并给出处理命令，不会擅自停删容器。
+
+镜像：默认 `ghcr.io/yes999zc/rui:latest`（公开，多架构 amd64/arm64，滚动更新；生产用上面的固定 tag 示例）。如果镜像拉取失败，脚本会按 `RUI_REF` 从 `RUI_REPO` 的公开源码克隆并构建同一 tag（日志会打印 ref 和 commit）；也可以手动：
 
 ```bash
 git clone https://github.com/yes999zc/rui.git
@@ -135,7 +139,11 @@ cd ~/rui
 docker compose exec rui rui token
 ```
 
-打开 `http://<nas-lan-ip>:8080/`，输入控制台 token，按**首次运行向导**完成：选 provider、填密钥 → 模型 → 添加音箱 → 唤醒词 → 试一句。
+打开 `http://<nas-lan-ip>:8080/`，输入控制台 token，按**首次运行向导**的 8 步完成：
+`keys`（每种用途选一个 provider、填密钥）→ `models`（检查 ASR/VAD/KWS）→
+`prepare`（按说明装 open-xiaoai client）→ `params`（音箱地址/房间）→ `wake`（唤醒词）→
+`connect`（复制 ws 地址 + device token）→ `test`（等音箱回连）→ `verify`（试一句）。
+正常路径不需要手改 YAML。
 
 #### 音箱端（必须单独做）
 
@@ -289,20 +297,20 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 For production, pin a release (script, compose files and image all come from the same tag):
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.0/deploy/install.sh \
-  | RUI_REF=v0.2.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.0 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.1/deploy/install.sh \
+  | RUI_REF=v0.2.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.1 sh
 ```
 
 `RUI_REF` selects the ref for `docker-compose.yml` / `config.example.yaml`; `RUI_IMAGE` selects the image. Pinning only one can still change versions on a reinstall or rollback.
 
-The installer writes `~/rui/`, generates a `.env` with a random device token, downloads the SenseVoice ASR model (~239 MB, one time; VAD/KWS are baked into the image and copied from `/opt/seed-models`), starts `docker compose`, and waits for health. For a self-hosted model mirror set `RUI_ASR_URL`, `RUI_VAD_URL` and `RUI_KWS_URL` in `.env` (full file URLs; built-in mirrors stay as fallbacks). Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch, rolling; pin a tag as shown above for production). If the registry is unreachable, the installer builds the same tag from public source; manual build:
+The installer writes `~/rui/`, generates a `.env` with a random device token, downloads the SenseVoice ASR model (~239 MB, one time; VAD/KWS are baked into the image and copied from `/opt/seed-models`), starts `docker compose`, and waits for health (a failed probe exits non-zero). Re-running it against the same `~/rui` reconciles that directory's `rui` container with `docker compose up -d`; a container owned by another directory, or a legacy `house-ear` container, fails with the exact stop command instead of being removed. For a self-hosted model mirror set `RUI_ASR_URL`, `RUI_VAD_URL` and `RUI_KWS_URL` in `.env` (full file URLs; built-in mirrors stay as fallbacks). Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch, rolling; pin a tag as shown above for production). If the registry is unreachable, the installer builds the same tag from `RUI_REPO` at `RUI_REF` and logs the ref/commit; manual build:
 
 ```bash
 git clone https://github.com/yes999zc/rui.git
 cd rui && docker build -t ghcr.io/yes999zc/rui:latest .
 ```
 
-Open `http://<nas-lan-ip>:8080/`, enter the console token printed at install time, and complete the first-run wizard. The speaker itself is configured separately:
+Open `http://<nas-lan-ip>:8080/`, enter the console token printed at install time, and complete the 8-step first-run wizard: `keys` (one provider per use, credentials) → `models` → `prepare` (install the open-xiaoai client) → `params` (speaker address/room) → `wake` (wake words) → `connect` (ws URL + device token) → `test` (speaker dials in) → `verify` (one real sentence). No YAML editing is needed on the normal path. The speaker itself is configured separately:
 
 ```text
 ws://<nas-lan-ip>:4412/?token=<RUI_DEVICE_TOKEN>
