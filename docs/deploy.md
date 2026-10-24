@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh
 HOUSE_EAR_HOME=~/house-ear          # 安装目录
 HOUSE_EAR_REPO=yes999zc/rui   # fork
 HOUSE_EAR_REF=main                  # 分支/tag
-HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.1   # 生产建议固定 tag 或 digest
+HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.1.0   # 生产建议固定 tag 或 digest
 HOUSE_EAR_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
                                     # 可选：raw 不通时换成镜像前缀，例如
                                     # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main
@@ -165,7 +165,7 @@ XFYUN_API_KEY=...
 XFYUN_API_SECRET=...
 HOUSE_EAR_HA_TOKEN=...       # 接 Home Assistant 时填
 HOUSE_EAR_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
-HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.1   # 可选：固定版本
+HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.1.0   # 可选：固定版本
 ```
 
 只填模板链里实际用到的即可：没有讯飞 key 就留空（自动落到火山 `volc_tts`，需要
