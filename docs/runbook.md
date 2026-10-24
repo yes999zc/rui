@@ -163,7 +163,7 @@ docker compose exec house-ear house-ear doctor
 | `unhealthy`，`/health` 还 200 | `docker inspect ... .State.Health`；`/api/v1/audio` 的 `restarts`；`docker compose logs \| grep "audio plane"` | 音频面崩溃由看门狗自动重建（约 2 s，`restarts` +1），一般无需人工；若 `restarts` 持续增长，查退避日志和 plane 错误（模型/token/端口） |
 | 网页打不开 | `docker compose ps`；`ss -ltnp \| grep 8080`；`curl -v localhost:8080/health` | 端口被占：改配置；容器没起：`up -d` |
 | 音箱不出声、不响应唤醒 | `/api/v1/devices`（`connected`）、`docker compose logs \| grep xiaoai`、`ss -ltnp \| grep 4412` | token 不一致（`.env` 的 `HOUSE_EAR_DEVICE_TOKEN` 与音箱 client 不同）→ 改一致后重启；4412 被旧进程占 → 停旧的；音箱 client 没指向 NAS IP |
-| 能连上但永远不唤醒 | `house-ear doctor` 的 `wake_path`；`kws_enabled` / `kws_model_dir`；`config/keywords.txt` | 模型由 `fetch-models` 自动装（KWS 32.9 MB，`--kws-dest`）；`setup` 已生成 keywords；改过 `devices[].wake_words` 后跑 `house-ear keywords --config /config/config.yaml` 重生成 |
+| 能连上但永远不唤醒 | `house-ear doctor` 的 `wake_runtime`（import/onnxruntime）和 `wake_path`（模型路径）；`kws_enabled` / `kws_model_dir`；`config/keywords.txt`；日志 `kws off:` / `vad off:` | 模型由 `fetch-models` 自动装（KWS 32.9 MB，`--kws-dest`）；`setup` 已生成 keywords；改过 `devices[].wake_words` 后跑 `house-ear keywords --config /config/config.yaml` 重生成；日志写 `failed to load: libonnxruntime.so...` 时按 §14 处理 |
 | `audio_plane=false` 且日志 `audio plane did not start` | `docker compose logs house-ear \| grep -A2 "audio plane"` | 有设备但 device token 空 → 填 `.env`（plane 会拒绝未认证连接）；`listen_port` 被占 → 改端口；没有 `devices[]` 时这是**正常状态**（只开控制台）。看门狗只重建「已经起来过」的进程，起不来的原因仍看这条日志 |
 | 音频面反复重启、`restarts` 持续增长 | `/api/v1/audio` 的 `restarts`；日志 `audio plane restart failed`、`restarting in N s` | 退避到 60 s 封顶；按 `audio plane did not start` 那条查根因（token/端口/模型），修好后看门狗自动恢复，无需重启容器 |
 | 音箱连着但 `frames_in` 一直 0、没有转写 | `/api/v1/audio` 的 `frames_in`；`vad_enabled` | 模型文件损坏/不匹配会让采集循环静默停摆（实测：换回有效 `silero_vad.onnx` 立即恢复）→ 重新 `fetch-models` 或换有效模型后重启 |
@@ -385,3 +385,44 @@ docker compose restart house-ear
   排查：`ss -tnp | grep 4412` 只应有一个 ESTAB；停掉多余客户端后客户端会自动重连恢复。
 - **recovery 缺口（待修）**：config 被清空成 0 字节时不会走 last-good，会用 schema defaults →
   `insecure_bind` 拒绝 → crash loop。手改配置前先 `scripts/backup.sh`。
+
+## 14. Linux 裸机（无 Docker）：sherpa/onnxruntime 加载失败
+
+[issue #2](https://github.com/yes999zc/rui/issues/2)：Debian 裸机上 `uv sync --extra kws`
+可能装上了 sherpa-onnx，但 C 扩展加载不了 `libonnxruntime.so`。服务照常启动，KWS/VAD
+静默关闭。典型报错：
+
+```text
+ImportError: libonnxruntime.so: cannot open shared object file: No such file or directory
+# 或
+ImportError: .../libonnxruntime.so: version `VERS_1.28.2' not found
+```
+
+先区分「没装包」和「装上了但加载失败」：
+
+```bash
+cd house-ear
+uv run house-ear doctor        # wake_runtime FAIL 会带真实异常文本
+uv run python -c "import sherpa_onnx; print(sherpa_onnx.__version__)"
+ldd .venv/lib/python*/site-packages/sherpa_onnx/lib/_sherpa_onnx*.so | grep onnxruntime
+```
+
+`doctor` 的 `wake_runtime` 才真正 import（并在模型可读时加载 Silero）；`wake_path` 只检查
+配置的模型路径是否存在/可读。两者都 PASS 才说明裸机的 KWS/VAD 真的可用。日志里现在会写
+`sherpa-onnx is installed but failed to load: <异常>`，不再是笼统的 "not installed"。
+
+修复（onnxruntime 1.28.2 与 wheel 的 ABI 一致；arm64 把 `x64` 换成 `aarch64`）：
+
+```bash
+curl -fL -o /tmp/ort.tgz \
+  https://github.com/microsoft/onnxruntime/releases/download/v1.28.2/onnxruntime-linux-x64-1.28.2.tgz
+tar -xzf /tmp/ort.tgz -C /tmp
+cp -a /tmp/onnxruntime-linux-x64-1.28.2/lib/libonnxruntime.so* \
+  .venv/lib/python*/site-packages/sherpa_onnx/lib/
+uv run python -c "import sherpa_onnx; print(sherpa_onnx.__version__)"
+uv run house-ear doctor        # wake_runtime 应为 PASS
+```
+
+- 重新 `uv sync --reinstall-package sherpa-onnx-core`（或重建 venv）会覆盖手放的库，需重做。
+- 生产优先用 Docker 镜像（镜像自带可用的 sherpa/ORT，不需要这一步）。
+- 部署总览见 [`docs/deploy.md`](deploy.md)（本文 §14 是裸机专用排障）。

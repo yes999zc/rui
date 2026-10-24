@@ -7,6 +7,7 @@ fact. A number that silently encodes a guess is worse than no number.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import platform
 import shutil
@@ -14,6 +15,7 @@ import socket
 import time
 import wave
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import psutil
 
@@ -153,6 +155,95 @@ def _llm_key_check(cfg: Config) -> Check | None:
     return Check("llm_key", "ok", f"{env_name} from {resolution.source}")
 
 
+_SHERPA_DETAIL_LIMIT = 320
+_SHERPA_REQUIRED = ("VoiceActivityDetector", "KeywordSpotter")
+
+
+def _brief_exc(exc: BaseException, limit: int = _SHERPA_DETAIL_LIMIT) -> str:
+    """One line, bounded: an ImportError can carry a multi-kilobyte loader dump."""
+    text = " ".join(str(exc).split())
+    if not text:
+        text = type(exc).__name__
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _sherpa_runtime_check(cfg: Config) -> Check:
+    """Whether `sherpa_onnx` really imports, not just whether paths are configured.
+
+    A Debian install can keep the wheel and still fail at import when the C extension
+    cannot load `libonnxruntime.so`; the plane then runs with KWS/VAD off and only logs a
+    generic "not installed". This check reports the loader's own exception text, so the
+    missing library is visible without reading site-packages by hand (issue #2).
+    """
+    try:
+        sherpa = importlib.import_module("sherpa_onnx")
+    except ModuleNotFoundError as exc:
+        missing = (exc.name or "").split(".")[0]
+        if missing in ("", "sherpa_onnx", "sherpa_onnx_core"):
+            return Check(
+                "wake_runtime", "fail", f"not installed: {_brief_exc(exc)}",
+                "KWS/VAD stay off: run `uv sync --extra kws` (or use the Docker image)",
+            )
+        return Check(
+            "wake_runtime", "fail",
+            f"installed but failed to load: missing dependency {missing} ({_brief_exc(exc)})",
+            "the wheel is present but its dependency is missing; reinstall with "
+            "`uv sync --extra kws`",
+        )
+    except (ImportError, OSError) as exc:
+        return Check(
+            "wake_runtime", "fail", f"installed but failed to load: {_brief_exc(exc)}",
+            "the wheel is present but its C extension/onnxruntime cannot load; see "
+            "docs/runbook.md §14 Linux bare-metal (issue #2), or deploy with Docker",
+        )
+    except Exception as exc:  # a half-installed native extension can raise anything
+        return Check(
+            "wake_runtime", "fail", f"installed but failed to load: {_brief_exc(exc)}",
+            "the wheel is present but its C extension is broken; reinstall the extra",
+        )
+
+    version = str(getattr(sherpa, "__version__", "") or "unknown")
+    absent = [name for name in _SHERPA_REQUIRED if not hasattr(sherpa, name)]
+    if absent:
+        return Check(
+            "wake_runtime", "fail",
+            f"sherpa-onnx {version} imported but lacks {', '.join(absent)}",
+            "the Python package is incomplete; reinstall with `uv sync --extra kws`",
+        )
+
+    voice = cfg.audio.voice
+    model = str(voice.vad_model_path or "")
+    loaded = False
+    if model:
+        path = Path(model).expanduser()
+        # A missing model is the path check's job (a download, not a broken install).
+        # Load only when there is a readable file: otherwise doctor would crash on a
+        # half-fetched model during install.
+        if path.is_file() and os.access(path, os.R_OK):
+            try:
+                vad_cfg = sherpa.VadModelConfig()
+                vad_cfg.silero_vad.model = str(path)
+                vad_cfg.sample_rate = voice.rate
+                sherpa.VoiceActivityDetector(vad_cfg, buffer_size_in_seconds=30)
+            except Exception as exc:
+                return Check(
+                    "wake_runtime", "fail",
+                    f"sherpa-onnx {version} imported, but VAD model failed to load: "
+                    f"{_brief_exc(exc)}",
+                    "check that the file is a valid silero_vad.onnx; re-run "
+                    "`house-ear fetch-models`",
+                )
+            loaded = True
+
+    detail = f"sherpa-onnx {version} imported"
+    if loaded:
+        detail += "; silero VAD loaded"
+    return Check(
+        "wake_runtime", "ok", detail,
+        "" if loaded else "VAD/KWS classes present; no readable VAD model to load",
+    )
+
+
 def run_doctor(cfg: Config | None = None) -> Report:
     cfg = cfg or Config()
     checks: list[Check] = []
@@ -223,7 +314,9 @@ def run_doctor(cfg: Config | None = None) -> Report:
                         "" if status == "ok" else "reduce aec.filter_len or run single-mic mode"))
 
     # --- the wake path: a missing model or an unwritable data volume makes S5a inert
-    # while every number elsewhere still looks healthy.
+    # while every number elsewhere still looks healthy. Runtime first: a configured
+    # path says nothing about whether `import sherpa_onnx` works (issue #2).
+    checks.append(_sherpa_runtime_check(cfg))
     gate_on = bool(audio.voice.vad_model_path)
     if not gate_on and (cfg.ack.mode != "none" or audio.voice.wake_preroll_ms > 0):
         checks.append(Check(
@@ -231,6 +324,23 @@ def run_doctor(cfg: Config | None = None) -> Report:
             "the turn gate never starts, so the wake cue, the pre-wake replay and the "
             "gate metrics are inert; run `house-ear fetch-models`",
         ))
+    elif gate_on:
+        model = Path(audio.voice.vad_model_path).expanduser()
+        if not model.is_file():
+            checks.append(Check(
+                "wake_path", "warn", f"vad_model_path not found: {model}",
+                "a configured path is not a model on disk: the turn gate never starts; "
+                "run `house-ear fetch-models`",
+            ))
+        elif not os.access(model, os.R_OK):
+            checks.append(Check(
+                "wake_path", "warn", f"vad_model_path not readable: {model}",
+                "the service user cannot read the model; fix permissions or re-run "
+                "`house-ear fetch-models`",
+            ))
+        else:
+            checks.append(Check("wake_path", "ok", f"preroll {audio.voice.wake_preroll_ms} ms",
+                                f"ack mode {cfg.ack.mode}; silero {model}"))
     else:
         checks.append(Check("wake_path", "ok", f"preroll {audio.voice.wake_preroll_ms} ms",
                             f"ack mode {cfg.ack.mode}"))

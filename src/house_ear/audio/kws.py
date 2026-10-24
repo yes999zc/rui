@@ -27,6 +27,29 @@ class KwsUnavailable(RuntimeError):
     """sherpa-onnx or the model files are missing: wake word is off, not silently dead."""
 
 
+def _brief_exc(exc: BaseException, limit: int = 320) -> str:
+    """One line, bounded: the loader dump (and every rpath it tried) is not a log line."""
+    text = " ".join(str(exc).split())
+    if not text:
+        text = type(exc).__name__
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _sherpa_unavailable(exc: BaseException) -> str:
+    """Distinguish "not installed" from "installed but the C library will not load".
+
+    On Debian `uv sync --extra kws` can leave the wheel in place while
+    `libonnxruntime.so` is missing. Reporting only "not installed" sends the operator
+    to reinstall the extra, which cannot fix a loader problem - keep the real text.
+    """
+    missing = (getattr(exc, "name", None) or "").split(".")[0]
+    if isinstance(exc, ModuleNotFoundError) and missing in (
+        "", "sherpa_onnx", "sherpa_onnx_core"
+    ):
+        return "sherpa-onnx is not installed (uv sync --extra kws)"
+    return f"sherpa-onnx is installed but failed to load: {_brief_exc(exc)}"
+
+
 @dataclass(frozen=True)
 class WakeHit:
     keyword: str
@@ -120,7 +143,10 @@ class WakeProbe:
         num_threads: int = 1,
         rate: int = 16000,
     ) -> None:
-        import sherpa_onnx
+        try:
+            import sherpa_onnx
+        except (ImportError, OSError) as exc:  # pragma: no cover - install extra
+            raise KwsUnavailable(_sherpa_unavailable(exc)) from exc
 
         model_dir = Path(model_dir)
         files = model_files(model_dir, chunk)
@@ -179,10 +205,8 @@ class WakeWord:
     ) -> None:
         try:
             import sherpa_onnx
-        except ImportError as exc:  # pragma: no cover - depends on the install extra
-            raise KwsUnavailable(
-                "sherpa-onnx is not installed (uv sync --extra kws)"
-            ) from exc
+        except (ImportError, OSError) as exc:  # pragma: no cover - depends on the extra
+            raise KwsUnavailable(_sherpa_unavailable(exc)) from exc
 
         model_dir = Path(model_dir)
         files = model_files(model_dir, chunk)

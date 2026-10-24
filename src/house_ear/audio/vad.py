@@ -25,6 +25,21 @@ class VadUnavailable(RuntimeError):
     """sherpa-onnx or silero_vad.onnx is missing: no turn segmentation."""
 
 
+def _sherpa_unavailable(exc: BaseException) -> str:
+    """Missing wheel vs present-but-unloadable C library, with the loader's own text."""
+    text = " ".join(str(exc).split())
+    if not text:
+        text = type(exc).__name__
+    elif len(text) > 320:
+        text = text[:319] + "…"
+    missing = (getattr(exc, "name", None) or "").split(".")[0]
+    if isinstance(exc, ModuleNotFoundError) and missing in (
+        "", "sherpa_onnx", "sherpa_onnx_core"
+    ):
+        return "sherpa-onnx is not installed (uv sync --extra kws)"
+    return f"sherpa-onnx is installed but failed to load: {text}"
+
+
 @dataclass
 class GateConfig:
     rate: int = 16000
@@ -47,8 +62,8 @@ class UtteranceGate:
     def __init__(self, cfg: GateConfig, model_path: str | Path) -> None:
         try:
             import sherpa_onnx
-        except ImportError as exc:  # pragma: no cover - install extra
-            raise VadUnavailable("sherpa-onnx is not installed (uv sync --extra kws)") from exc
+        except (ImportError, OSError) as exc:  # pragma: no cover - install extra
+            raise VadUnavailable(_sherpa_unavailable(exc)) from exc
         model = Path(model_path)
         if not model.exists():
             raise VadUnavailable(f"VAD model not found: {model}")
