@@ -130,6 +130,9 @@ docker compose exec -T house-ear house-ear config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
+- 10-24 傍晚：P1 全部落地（空 config 恢复、旧 key 兼容、下载超时、验收落盘、发布测试门禁、LGPL ffmpeg）；
+  P2.1 Socket & Plug 标准 + manifest loader、P2.2 向导设计 + 后端切片（plugs/setup-step/params）完成；准备 0.1.1。
+
 - 10-24 下午：确定 Socket & Plug 为长期架构（声明必需 + 可选代码包；内置 LX06 参考插头；第三方默认 sidecar）；
   定 ffmpeg 走 LGPL-only；定上游 open-xiaoai；派智能体调研 EchoMuse Device Management；路线图按“基础设施优先”重排。
 

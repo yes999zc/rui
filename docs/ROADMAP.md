@@ -53,21 +53,21 @@
 
 | # | 任务 | 判据 |
 |---|---|---|
-| P1.1 | 空 config 走 ConfigError/last-good，不再 defaults→crash loop + 回归测试 | 清空 config 重启仍 healthy + banner；无 last-good 时给可读错误 |
-| P1.2 | 旧 secrets 兼容：`HOUSE_EAR_LLM_KEY` 缺失时映射 `DEEPSEEK_API_KEY` 或 doctor 明确提示 | 复用旧 secrets 冷装不再“唤醒后不回答” |
-| P1.3 | `fetch-models` httpx 超时（connect 10 s / read 60 s），失败快速切镜像 | 断网/直连失败 ≤30 s 内切源或明确失败 |
-| P1.4 | 验收脚本输出默认落到宿主可见目录 | 一次 barge/wake 后产物在工作区可读 |
-| P1.5 | GHCR 发布前跑测试（tag 触发 workflow 先跑测试） | 测试失败则镜像不发布 |
-| P1.6 | ffmpeg 换成 LGPL-only 构建 + `THIRD_PARTY.md` + README「致谢 / Credits」 | 镜像内 `ffmpeg -version` 无 GPL 组件；第三方清单齐全（open-xiaoai / EchoMuse / sherpa-onnx / SenseVoice / silero-vad / speexdsp / FFmpeg） |
-| P1.7 | 0.1.1 回归：全量测试 + 一次冷装循环 | 时间不劣化（≤10 min 到第一句）；HANDOFF 记录 |
+| P1.1 ✅ | 空 config 走 ConfigError/last-good，不再 defaults→crash loop + 回归测试（`f71958a`） | 清空 config 重启仍 healthy + banner；无 last-good 时给可读错误 |
+| P1.2 ✅ | 旧 secrets 兼容：`HOUSE_EAR_LLM_KEY` 缺失时映射 `DEEPSEEK_API_KEY`；doctor 明确提示（`ae2105c`） | 复用旧 secrets 冷装不再“唤醒后不回答” |
+| P1.3 ✅ | `fetch-models` httpx 超时（connect 10 s / read 60 s），失败快速切镜像（`ae2105c`） | 断网/直连失败 ≤30 s 内切源或明确失败 |
+| P1.4 ✅ | 验收脚本输出默认落到宿主可见目录（`bfee677`） | 一次 barge/wake 后产物在工作区可读 |
+| P1.5 ✅ | GHCR 发布前跑测试（`3ee86cc`） | 测试失败则镜像不发布 |
+| P1.6 ✅ | ffmpeg 换成 LGPL-only 构建（pinned source 7.1.5 + build 内 license gate）+ `THIRD_PARTY.md` + README 致谢（`b71a7e7`；本机 amd64 已验证） | 镜像内 `ffmpeg -version` 无 GPL 组件；第三方清单齐全（open-xiaoai / EchoMuse / sherpa-onnx / SenseVoice / silero-vad / speexdsp / FFmpeg） |
+| P1.7 🟡 | 0.1.1 回归：全量测试 ✅（815/17）+ 一次冷装循环（部署后做） | 时间不劣化（≤10 min 到第一句）；HANDOFF 记录 |
 
 ### P2 · 基础设施主线：Socket & Plug + 安装向导 + 设备管理（3–5 天）
 
 | # | 任务 | 判据 |
 |---|---|---|
 | P2.0 | EchoMuse Device Management 调研 ✅ | `docs/device-management-research.md`（984 行）：流程映射、8 步向导、config.yaml+params、单设备 CRUD；**0.2 边界**：只做 manifest-only/内置可信插头，第三方可执行代码默认关闭（sidecar 后续）；不做 SQLite/approve/OTA/多设备仲裁 |
-| P2.1 | **`docs/socket-plug.md` 标准 v0**：插头 manifest（机型/A/B 等级/能力/参数 schema/协议/兼容版本/交付物+可选 adapter）、打包与校验、A/B 最小清单、信任模型、运行形态（in-process vs sidecar） | 标准文档可让第三方不看源码写出插头；LX06 与 dot2 都能套进去 |
-| P2.2 | **安装向导设计稿**：manifest 驱动，通用步（环境/密钥/模型）+ 插头步（设备侧安装链接/参数表单/连接测试），失败诊断、幂等/续跑 | 设计稿评审通过；每一步都有“用户做什么 / RUI 做什么” |
+| P2.1 ✅ | **`docs/socket-plug.md` 标准 v0**：插头 manifest（机型/A/B 等级/能力/参数 schema/协议/兼容版本/交付物+可选 adapter）、打包与校验、A/B 最小清单、信任模型、运行形态（in-process vs sidecar） | 标准文档可让第三方不看源码写出插头；LX06 与 dot2 都能套进去 |
+| P2.2 ✅ | **安装向导设计稿 + 后端切片**：`docs/install-wizard-design.md`（`5c7a0c4`）；`GET /plugs`、`/setup/step`（证据驱动 + setup.json + allowlist）与内置 LX06 manifest（`cfea073`）；UI 进行中 | 设计稿评审通过；后端 110 测试通过 |
 | P2.3 | **真·陌生人冷装**：全新目录 + 公开命令 + 向导填 key + 自动下模型 + 内置 LX06 参考插头，不复制生产配置 | 从零到第一句 ≤30 min；全程只按文档操作 |
 | P2.4 | 设备管理后台最小版（EchoMuse-inspired）：设备/插件/能力/状态/参数编辑/连接测试/删除 | 控制台可新增、查看、测试、删除设备；不用手改 YAML |
 | P2.5 | 运维与恢复：备份真恢复 + 换机（install→restore→fetch-models）；mihomo 失联提示；3 天长稳/断电自起 | 恢复后 healthy、设备在线；断电全链路自起 |
