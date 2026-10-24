@@ -1,5 +1,10 @@
 # 安装向导设计（P2.2）
 
+> Implementation note (0.2.2): 实际端点是 `GET/POST /api/v1/setup/step`、`GET /api/v1/setup/providers`；
+> 文档里的 `/setup/try`、`/setup/test-connection` 未按独立端点实现，prepare/verify 确认持久化在 `data/setup.json`，
+> verify 跳过目前仅前端语义。
+
+
 > 状态：**设计稿，待评审（2026-10-24）**。在现有 `SetupView` 上增量实现；不建 DB、不做设备端自动化、不加载第三方可执行代码。
 > 输入：`docs/device-management-research.md` §3、`docs/socket-plug.md` v0、`docs/ROADMAP.md` §3 P2.2。
 > 契约：manifest 以 socket-plug 的 **`rui-plugin/v0` / `rui-device/v0`** 为准；调研稿的 `rui-plug/v1`、`manifest`、`requires_socket`、JSON Schema 形式的 `params`、`setup.slots` **已被 v0 取代**。

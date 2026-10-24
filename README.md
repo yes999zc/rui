@@ -75,28 +75,40 @@ flowchart LR
 
 更深入的分层、进程模型和 IPC 契约见 [docs/architecture.md](docs/architecture.md)，音频链路细节见 [docs/audio-pipeline.md](docs/audio-pipeline.md)。
 
-### 快速开始
+### 安装 / Install
 
-#### 前置条件
+#### 0. 先决条件：音箱已经能拨入
 
-| 需要 | 说明 |
-|---|---|
-| 一台 Docker 主机 | NAS / Linux，x86_64 或 arm64，建议 4 核 / 4 GB / 2 GB 可用磁盘 |
-| Docker 权限 | 安装用户需为 root，或已加入 `docker` 组并重新登录（`docker info` 必须能通） |
-| 可写安装目录 | 默认 `~/rui`；`/vol1` 这类 root-only 挂载点需用 root 安装或先 `chown` 给安装用户 |
-| 小爱音箱 Pro（LX06） | 已刷/已装 **open-xiaoai client**，与主机在同一 LAN |
-| LLM 与 TTS 密钥 | 每种用途（LLM/ASR/TTS）在向导里选一个 provider；LLM/TTS 需要密钥，ASR 可先用本地模型 |
-| 可选 | Home Assistant、Navidrome、火山/讯飞语音账号 |
+小瑞从「音箱已经运行 open-xiaoai client，并能回连 NAS」开始。**刷机、拿 root/SSH、安装 client 都不属于小瑞**：请按 [open-xiaoai](https://github.com/coderzc/open-xiaoai) 项目完成；小瑞不刷机、不托管固件，也不会在音箱上执行命令。接线细节见 [docs/open-xiaoai-client.md](docs/open-xiaoai-client.md)。v1 只支持 **Xiaomi 小爱音箱 Pro（LX06）**，音箱和 NAS 在同一 LAN/L2，client 回连 NAS 的 `4412` 端口。
 
-#### 一条命令（推荐）
+刷机/装 client 时，把下面这些记在手机备忘录里——后面每一步都要用，SSH 进不去时再猜最费时间：
+
+| # | 记什么 | 后面用在哪 |
+|---|---|---|
+| 1 | 音箱型号/固件版本，以及 open-xiaoai client 的版本或 commit | `prepare` 的兼容性确认、排障、回滚 |
+| 2 | 音箱的局域网 IP，以及路由器里的 **DHCP 固定租约** | `params` 的“音箱地址”；IP 一变，SSH 和回连地址都会失效 |
+| 3 | SSH/root 登录方式：`ssh root@<speaker-ip>`、密码或密钥、刷机工具版本 | `prepare`、看日志、回滚 |
+| 4 | client 安装路径（常见 `/data/open-xiaoai/`） | 重启 client、找日志、卸载/回滚 |
+| 5 | client 保存回连地址/token 的位置：`server.txt`、`config.json`，或启动脚本里的 `WS_URL` / `SERVER_URL` | `connect` 填 ws 地址和 token |
+| 6 | 重启 client 的命令，以及日志路径/查看命令（如 `tail -f <log>`） | `connect` / `test` 失败时先看这里 |
+| 7 | 回滚方式：停止/移除 client、恢复原启动脚本；原厂固件/分区不要动 | `prepare` 的确认项、出问题时恢复 |
+| 8 | RUI 的 device token 要填进 client 的哪个字段（完整 ws URL 或单独的 token 项） | `connect`；值来自 RUI，服务端与 client 必须一致 |
+
+> ws 地址和 device token 等同于音箱控制权。不要发到公开群、截图或 issue 里；贴日志前先脱敏。
+
+#### 1. 安装 RUI（约 1–5 分钟）
+
+主机前置条件：
+
+- **Docker Engine + `docker compose` 插件**；安装用户能访问 Docker daemon（`/var/run/docker.sock`）：root，或已加入 `docker` 组并重新登录（`docker info` 必须能通）。
+- **可写安装目录**：默认 `~/rui`（`RUI_HOME` 可改）。`/vol1/rui` 这类 NAS 挂载点常是 root-only：用 root 安装，或先建目录并 `chown` 给安装用户。
+- **出网**：能访问 `raw.githubusercontent.com`、`ghcr.io`、`hf-mirror.com`。镜像拉取走 Docker daemon 的代理；模型下载可选宿主机代理——安装脚本会把 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` 传给 `fetch-models`。
+- **架构**：amd64 或 arm64；建议 4 核 / 4 GB 内存 / 2 GB 可用磁盘（另留约 250 MB 给模型）。
 
 滚动版本（`main` + `:latest`，先试最省事）：
 
 ```bash
 curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
-# 网络不通/卡住时用镜像：
-#   RUI_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main \
-#     curl -4 -fsSL "$RUI_RAW/deploy/install.sh" | sh
 ```
 
 生产建议固定发布版本（脚本、compose 文件和镜像都锁到同一个 tag）：
@@ -106,64 +118,154 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/insta
   | RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
 ```
 
-`RUI_REF` 决定拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，`RUI_IMAGE`
-决定运行哪个镜像；只固定一个，重装或回滚时仍可能换版本。
+装到 `/vol1/rui`（目录需可写）：
+
+```bash
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
+  | RUI_HOME=/vol1/rui RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
+```
+
+- `RUI_REF` 决定拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，`RUI_IMAGE` 决定运行哪个镜像；只固定一个，重装或回滚时仍可能换版本。
+- `raw.githubusercontent.com` 卡住时用 `RUI_RAW` 指到镜像前缀，例如
+  `RUI_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main`。
+- `ghcr.io` 拉不动时，脚本会按 `RUI_REF` 从 `RUI_REPO` 的公开源码克隆并构建同一 tag（需要 `git`，日志会打印 ref/commit）。
 
 安装脚本做五件事：
 
-| 步骤 | 内容 |
-|---|---|
-| 1 | 拉取 `docker-compose.yml` 和 `config.example.yaml` 到 `~/rui/` |
-| 2 | `rui setup` 写入生产配置模板，并生成默认唤醒词文件 `keywords.txt` |
-| 3 | 生成 `.env`（含随机设备 token，0600） |
-| 4 | 下载本地模型：SenseVoice ASR（约 239 MB，一次）；VAD/KWS 已内置镜像，直接复制 |
-| 5 | `docker compose up -d`，等待 health 通过（不通过则以非 0 退出） |
+| 步骤 | 内容 | 落在哪 |
+|---|---|---|
+| 1 | 拉取 `docker-compose.yml`、`config.example.yaml`（参考件）和运维脚本 `backup.sh` / `restore.sh` / `acceptance-v1.py` | `~/rui/`、`~/rui/scripts/` |
+| 2 | `rui setup` 写入生产配置模板，生成默认唤醒词 `keywords.txt` 和**控制台 token** | `~/rui/config/config.yaml`、`config/keywords.txt` |
+| 3 | 生成 `.env`，含随机 device token（0600） | `~/rui/.env` |
+| 4 | 准备本地模型：SenseVoice ASR（约 239 MB，一次）；VAD/KWS 从镜像 `/opt/seed-models` 复制 | `~/rui/data/models/` |
+| 5 | `docker compose up -d`，等待 `/health` 通过（120 s 不通过则以非 0 退出） | 容器 `rui` |
 
-同一 `~/rui` 可以安全重跑：如果 `rui` 容器属于本目录的 compose project，脚本直接
-`docker compose up -d`（按需重建/补齐缺失模型）；容器属于其他目录/项目、或遇到 0.1.x 的
-`house-ear` 容器时会报错并给出处理命令，不会擅自停删容器。
+期望输出（路径/地址随环境不同）：
 
-镜像：默认 `ghcr.io/yes999zc/rui:latest`（公开，多架构 amd64/arm64，滚动更新；生产用上面的固定 tag 示例）。如果镜像拉取失败，脚本会按 `RUI_REF` 从 `RUI_REPO` 的公开源码克隆并构建同一 tag（日志会打印 ref 和 commit）；也可以手动：
-
-```bash
-git clone https://github.com/yes999zc/rui.git
-cd rui
-docker build -t ghcr.io/yes999zc/rui:latest .
+```text
+[1/5] compose file
+[2/5] config + wake words
+console token: <console-token>          ← 只在这里打印一次，先复制
+[3/5] env
+      wrote .env with a generated device token (48 hex chars)
+[4/5] local models: ASR + VAD + wake word
+      missing: asr-model; running fetch-models (image seed first)
+[5/5] starting
+      waiting for the service to answer /health
+      healthy
+done. open http://<nas-lan-ip>:8080/
 ```
 
-安装完成后：
+镜像已在本机（或拉取很快）且只需下载 ASR 时，实测约 **85 秒**到 `healthy`；首次含镜像拉取和 239 MB 模型，按网络通常 **4–8 分钟**。日志里的 `console token` 和 `.env` 里的 device token 都要先收好。
+
+打开 `http://<nas-lan-ip>:8080/`，输入控制台 token。**必须用 NAS 的局域网 IP 打开**：用 `localhost` 或 SSH 隧道打开时，`connect` 会按浏览器地址生成 `ws://127.0.0.1:4412`，音箱永远连不上。
 
 ```bash
 cd ~/rui
-# 控制台访问令牌（安装时生成；也可以稍后读取）
-docker compose exec rui rui token
+docker compose exec -T rui rui token          # 找回控制台 token
+docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生效）
 ```
 
-打开 `http://<nas-lan-ip>:8080/`，输入控制台 token，按**首次运行向导**的 8 步完成：
-`keys`（每种用途选一个 provider、填密钥）→ `models`（检查 ASR/VAD/KWS）→
-`prepare`（按说明装 open-xiaoai client）→ `params`（音箱地址/房间）→ `wake`（唤醒词）→
-`connect`（复制 ws 地址 + device token）→ `test`（等音箱回连）→ `verify`（试一句）。
-正常路径不需要手改 YAML。
+同一 `RUI_HOME` 可以安全重跑：如果 `rui` 容器属于本目录的 compose project，脚本直接 `docker compose up -d`（按需重建、补齐缺失模型）；容器属于其他目录/项目、或遇到 0.1.x 的 `house-ear` 容器时会报错并给出处理命令，不会擅自停删容器。
 
-#### 音箱端（必须单独做）
+#### 2. 配置：首次运行向导的 8 步
 
-音箱必须运行 open-xiaoai client 并回连：
+安装完成后控制台会进入 `/setup`。正常路径全部在网页里完成，**不需要手改 YAML**；每一步都可以点开重跑。
 
-```text
-ws://<nas-lan-ip>:4412/?token=<RUI_DEVICE_TOKEN>
-```
+| # | 步骤 | 点之前准备/决定 | 这一步做什么 | 完成标志 |
+|---|---|---|---|---|
+| 1 | `keys` | 决定 LLM / ASR / TTS 各用哪个 provider，准备对应凭据（见下表） | 写本地密钥文件，把该用途的 provider 链改为选中的一项，保存 TTS 音色 | 三个用途都有可用 provider；控制台只显示“已配置” |
+| 2 | `models` | 通常不用准备：安装脚本已下好 | 只检查 ASR / VAD / 唤醒模型文件，不代下 | ASR、VAD、KWS 三项都打勾 |
+| 3 | `prepare` | 拿出第 0 步的清单：client 已装、IP 已固定、SSH/重启/日志/回滚都记下 | 展示 open-xiaoai 链接和机型检查清单；不执行任何设备命令 | 勾完设备侧项目并确认；token 留到 `connect` |
+| 4 | `params` | 音箱 LAN IP、房间名、唤醒词、音量/LED/端口/增益策略 | 写入 `devices[]`，重启音频面 | 保存成功且没有 `plane_error`；client 随后重新回连 |
+| 5 | `wake` | 1–3 个唤醒词（每个 ≤12 字） | 重写 `config/keywords.txt`，重启音频面 | 文件里每个词都有对应的 `@词` 行 |
+| 6 | `connect` | 打开第 0 步记下的 client 配置文件；控制台用 LAN IP 打开 | 生成只读的 ws 地址 + device token；你把它填进 client 并重启 | 状态“已连接”，`speaker_connected=true` |
+| 7 | `test` | 无 | 只读探测音频面、主机/SSH、token 配置 | 显示“通过”，且依据是音箱真的回连（SSH 通不算） |
+| 8 | `verify` | 一句想测试的话 | 跑一次真实 turn，记录 `audio_bytes` | 听到音箱回答，或点“我听到了回答”；可跳过，但会标记未验证 |
 
-设备 token 在 `~/rui/.env` 的 `RUI_DEVICE_TOKEN`；服务端和 client 必须一致。详细接线、音量/LED 能力、协议说明见 [docs/deploy.md](docs/deploy.md) 和 [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md)。
+`keys` 的 provider 表（每个用途只选一个；未选中的 fallback 不需要配）：
 
-#### 手动 Docker Compose
+| 用途 | 向导里选 | 需要准备 | 说明 |
+|---|---|---|---|
+| LLM | DeepSeek（模板默认） | `RUI_LLM_KEY` | 也可选已配置的其他 OpenAI 兼容 provider；LLM 必须有一个可用项 |
+| ASR | 本地 SenseVoice（默认） | 无 key | 免密钥，模型由安装脚本下好；推荐 |
+| ASR | 火山豆包流式识别 2.0 | `VOLC_API_KEY` | 新版控制台只要 API Key，不需要 AppID；资源 ID 选 `volc.seedasr.sauc.duration` 或 `...concurrent` |
+| ASR | SiliconFlow | `RUI_ASR_KEY` | 云端兜底；需要联网 |
+| TTS | 讯飞（模板默认） | `XFYUN_APPID` + `XFYUN_API_KEY` + `XFYUN_API_SECRET` | 三项缺一不可 |
+| TTS | 火山豆包语音合成 2.0 | `VOLC_API_KEY` + 音色 | 新版控制台只要 API Key；不要填 AK/SK |
 
-```bash
-mkdir -p ~/rui && cd ~/rui
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/docker-compose.yml -O
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/config.example.yaml -O
-# 按 docs/deploy.md 填 .env，再：
-docker compose up -d
-```
+- **每个用途都必须有一个可用 provider**，但 ASR 可选本地模型，所以最少只需要 LLM + TTS 两组凭据。TTS 和 ASR 不需要同时用云端。
+- “测试”会用当前输入发起一次真实小请求（未保存的值只用于本次探测，不落盘）；保存后任何页面都读不回原文。
+- 火山 API Key 在火山控制台创建，和 AK/SK 不是一回事；讯飞三项在讯飞控制台同一条应用里取。详见 [docs/volc-credentials.md](docs/volc-credentials.md)。
+
+`params` 的每个值从哪来：
+
+| 字段 | 填什么 / 从哪来 |
+|---|---|
+| 音箱地址 | 第 0 步记的 LAN IP，只填地址，不要带 `http://`，不能有空格 |
+| 房间 | 自定义名字（如“客厅”），用于控制台和多设备区分 |
+| 唤醒词 | 1–3 个，每个最多 12 字；默认“你好小瑞” |
+| 音量 | 0–100，默认 60；**0 = 不接管音量**，沿用原厂 |
+| 灯效 | 0.2.2 新建 LX06 默认打开；不想要就关掉 |
+| 监听端口 | 默认 4412；只有端口冲突才改，client 的 ws URL 要同步改 |
+| 麦克风增益 | 0–42 dB，可留空；越大越灵敏，也更容易收环境噪声 |
+
+保存 `params` / `wake` 会重启音频面，client 会短暂断线后自动重连。
+
+`wake` 保存时会同时更新 `devices[].wake_words` 和 `config/keywords.txt`，**两者必须一致**。`keywords.txt` 是服务端 KWS 的唯一来源，client 不需要另配一份；若你在 client/固件里也配了唤醒词，两处也必须一致。手动改过 `devices[].wake_words` 后要重跑 `keywords` 命令重新生成文件（见 [docs/deploy.md §3.3](docs/deploy.md#33-模型fetch-models-一次装齐)）。
+
+`connect` 的接线步骤：
+
+1. 在控制台点“显示/复制”拿到完整 `ws://<nas-lan-ip>:4412/?token=<device-token>`。
+2. 把它写进第 0 步记下的 client 配置（`server.txt` / `config.json` / 启动脚本的 `WS_URL`）。
+3. 重启 client，确认日志出现 `connected` / `已连接`。
+4. 回到向导点“等待连接”（每 3 秒查一次，最多 1 分钟）或“刷新连接状态”（旧版叫“检测”），直到状态变“已连接”。
+
+| 现象 | 先查什么 | 处理 |
+|---|---|---|
+| client 日志 401 / close 1008，NAS 日志 `xiaoai: rejected ... (bad or missing token)` | 两边 token 是否同一个 | 在 `connect` 重新复制当前 token，更新 client，重启 client；不是控制台 token |
+| `port_blocked` / 连接被拒绝 | `4412` 是否在监听 | `ss -ltnp \| grep 4412`；确认音频面在跑、`listen_port` 一致、容器用 host network、防火墙放行 |
+| 一直 `waiting_for_client` | client 是否在跑、地址是否指向 NAS LAN IP | 看 client 日志；确认同一 LAN、DHCP 固定租约、地址不是 `127.0.0.1`；重启 client 再点“等待连接” |
+| 连上又频繁断 | 是否只有一个 client 占用 4412 | `ss -tnp \| grep 4412` 只应有一个 ESTAB；停掉多余的调试 client |
+
+`test` 的“运行设备测试”只读、不写配置。它检查三项：音频面（`speaker_connected`）、主机/SSH（诊断用）、device token 是否配置。**inbound 音箱只有真的回连才算通过**；SSH 探测通过不代表接线成功。
+
+`verify` 的“说一句”走真实全链路：ASR → LLM → TTS → 播放，`audio_bytes>0` 表示有音频产出，但最终要人耳确认音箱真的出声。也可以点“我听到了回答”人工确认。跳过验证不会阻止整体完成（`verify` 是可选步），但控制台会标记“未验证”；跳过只是本次界面的标记，不会写成已验证。
+
+#### 3. 安装后
+
+以下命令默认在 `~/rui` 下执行；装在 `/vol1/rui` 就把路径替换掉。
+
+| 位置 | 内容 | 备注 |
+|---|---|---|
+| `~/rui/config/config.yaml` | `devices[]`、provider 链、`web.auth_token` | 0600；改动前先备份 |
+| `~/rui/data/secrets.yaml` | 向导里保存的密钥 | 0600，只写不读；环境变量优先 |
+| `~/rui/.env` | `RUI_DEVICE_TOKEN`、`RUI_IMAGE`、可选 key | 0600；`docker compose` 注入 |
+| `~/rui/config/keywords.txt` | 唤醒词/KWS 参数 | 改唤醒词后重新生成 |
+| `~/rui/data/models/` | SenseVoice、VAD、KWS | 删了可重新 `fetch-models` |
+| `~/rui/data/setup.json` | 向导确认/时间戳 | 0600；不存密钥 |
+
+- **换密钥**：在控制台“AI 供应商/密钥”页或重跑 `keys` 步；密钥只写不读，不要写进 `config.yaml`。
+- **换 device token**：在 `connect` 步重新显示/复制；或在 `.env` 改 `RUI_DEVICE_TOKEN` 后 `docker compose up -d`，再把新值写进 client 并重启，最后回 `test` 确认。
+- **换控制台 token**：`docker compose exec -T rui rui token --rotate`，再 `docker compose restart rui` 让服务加载新值；重启后旧 token 失效，浏览器要重新输入。
+- **升级**：在 `.env` 固定 `RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2`；`docker compose pull && docker compose up -d`，等 healthy 后跑 `docker compose exec -T rui rui doctor`。
+- **回滚**：把 `.env` 的 `RUI_IMAGE` 改回上一个 tag，先备份 `config/config.yaml`（降级可能不认新字段），再 `docker compose up -d`。
+- **备份/恢复**：`cd ~/rui && scripts/backup.sh --out ~/rui-backups`，恢复见 [docs/runbook.md](docs/runbook.md)。
+- **日常验收**：`curl -fsS http://localhost:8080/health`、`docker compose exec -T rui rui doctor`、`docker compose logs -f --tail=200 rui`。
+
+#### 4. 常见故障
+
+| 现象 | 原因/处理 |
+|---|---|
+| client 日志 401 / close 1008；NAS 日志 `bad or missing token` | client 还带着旧 token。到 `connect` 复制当前 ws URL/token，更新 client 配置并重启；确认 `.env` 的 `RUI_DEVICE_TOKEN` 没被改过 |
+| 重跑安装时报容器 `rui` 已存在 | 同一个 `RUI_HOME` 重跑是安全的；若属于另一个目录，按提示去那个目录 `docker compose down`，或先停旧安装。0.1.x 的 `house-ear` 按提示 `docker stop house-ear && docker rm house-ear` |
+| `docker pull ghcr.io/...` TLS handshake timeout / 403 | 给 Docker daemon 配代理或 registry mirror；或先在能出网的机器 `pull` + `save`，到 NAS `load`。脚本拉取失败会自动从源码构建（需要 `git`）；`raw` 卡住用 `RUI_RAW` 镜像前缀 |
+| 灯环不亮 | 0.2.2 新建 LX06 默认 `led.enabled: true`；到 `params` 的“灯效”或设备配置确认。老配置升级上来可能仍是关闭状态 |
+| 控制台 401 / 找不到 console token | 安装 `[2/5]` 输出的 `console token` 只打印一次；用 `cd ~/rui && docker compose exec -T rui rui token` 找回。注意它和 device token 不是同一个 |
+
+#### 手动 Docker Compose（可选）
+
+仅排障/离线时使用；正常路径用上面的一键安装。手动部署要自己生成配置、写 `.env`（至少 `RUI_DEVICE_TOKEN`、`RUI_IMAGE`）并准备模型；完整命令见 [docs/deploy.md §2.7](docs/deploy.md#27-手动-docker-compose可选)。
 
 ### 配置速览
 
@@ -284,11 +386,37 @@ MIT 只覆盖本仓库自己的代码；以上第三方组件各自保留其许�
 
 ASR prefers local SenseVoice, with Volc streaming ASR 2.0 and a cloud fallback as optional chain entries; TTS can use Xfyun and Volc Doubao 2.0, with voice/rate/emotion audition in the console. It also ships a bilingual admin console (four-tier config catalog, provider-chain UX, setup wizard, diagnostics), Home Assistant over MCP, generic MCP servers, weather/news/web search, reminders, memory, and Navidrome/Subsonic music.
 
-### Quick start
+### Install
 
-Requirements: a Docker host (NAS/Linux, amd64 or arm64), an LX06 with the **open-xiaoai client**, and one provider per use in the wizard. The LLM and TTS providers need keys; the local SenseVoice ASR does not need a cloud key. The install user must be able to reach the Docker daemon (root or the `docker` group, verified by `docker info`) and write the install directory (`~/rui` by default; root-only mounts such as `/vol1` need root or a prior `chown`).
+#### 0. Before you start: the speaker must already dial in
 
-Rolling release (`main` + `:latest`):
+Rui starts from "the speaker already runs the open-xiaoai client and can dial back to the NAS". **Flashing, gaining root/SSH, and installing the client are not part of Rui**: follow the [open-xiaoai](https://github.com/coderzc/open-xiaoai) project for that. Rui does not flash firmware, host images, or run commands on the speaker. Hook-up details: [docs/open-xiaoai-client.md](docs/open-xiaoai-client.md). v1 supports only the **Xiaomi AI Speaker Pro (LX06)**, with the open-xiaoai client, on the same LAN/L2 as the NAS; the client dials the NAS on port `4412`.
+
+Record these while flashing/installing the client — every later step uses them, and guessing after SSH stops working is expensive:
+
+| # | Record | Used later for |
+|---|---|---|
+| 1 | Speaker model/firmware, plus the open-xiaoai client version or commit | `prepare` compatibility check, troubleshooting, rollback |
+| 2 | Speaker LAN IP and a **DHCP reservation** in the router | `params` "speaker address"; if the IP changes, SSH and the dial-in URL break |
+| 3 | SSH/root login: `ssh root@<speaker-ip>`, password or key, flashing tool/version | `prepare`, reading logs, rollback |
+| 4 | Client install path (usually `/data/open-xiaoai/`) | Restarting the client, finding logs, uninstall/rollback |
+| 5 | Where the client keeps the dial-in URL/token: `server.txt`, `config.json`, or `WS_URL` / `SERVER_URL` in a startup script | `connect` |
+| 6 | The command that restarts the client, and the log path/command (e.g. `tail -f <log>`) | First thing to check when `connect` / `test` fails |
+| 7 | Rollback: stop/remove the client, restore the stock startup script; leave stock firmware/partitions alone | `prepare` confirmation, recovery |
+| 8 | Which field in the client receives Rui's device token (full ws URL or a separate token value) | `connect`; both sides must use the same value |
+
+> The ws URL and device token are equivalent to speaker control. Do not post them in public chats, screenshots or issues; redact logs before sharing.
+
+#### 1. Install Rui (about 1–5 minutes)
+
+Host prerequisites:
+
+- **Docker Engine + the `docker compose` plugin**. The install user must be able to access the Docker daemon (`/var/run/docker.sock`): root, or in the `docker` group and logged in again (`docker info` must work).
+- **A writable install directory**: `~/rui` by default (`RUI_HOME` overrides it). NAS mounts such as `/vol1/rui` are often root-only: install as root, or create the directory and `chown` it to the install user first.
+- **Outbound network**: `raw.githubusercontent.com`, `ghcr.io`, `hf-mirror.com`. Image pulls use the Docker daemon proxy; model downloads can use a host proxy — the installer forwards `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` to `fetch-models`.
+- **Architecture**: amd64 or arm64; 4 cores / 4 GB RAM / 2 GB free disk recommended (plus ~250 MB for models).
+
+Rolling release (`main` + `:latest`, easiest first try):
 
 ```bash
 curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
@@ -301,22 +429,153 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/insta
   | RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
 ```
 
-`RUI_REF` selects the ref for `docker-compose.yml` / `config.example.yaml`; `RUI_IMAGE` selects the image. Pinning only one can still change versions on a reinstall or rollback.
-
-The installer writes `~/rui/`, generates a `.env` with a random device token, downloads the SenseVoice ASR model (~239 MB, one time; VAD/KWS are baked into the image and copied from `/opt/seed-models`), starts `docker compose`, and waits for health (a failed probe exits non-zero). Re-running it against the same `~/rui` reconciles that directory's `rui` container with `docker compose up -d`; a container owned by another directory, or a legacy `house-ear` container, fails with the exact stop command instead of being removed. For a self-hosted model mirror set `RUI_ASR_URL`, `RUI_VAD_URL` and `RUI_KWS_URL` in `.env` (full file URLs; built-in mirrors stay as fallbacks). Public image: **`ghcr.io/yes999zc/rui:latest`** (multi-arch, rolling; pin a tag as shown above for production). If the registry is unreachable, the installer builds the same tag from `RUI_REPO` at `RUI_REF` and logs the ref/commit; manual build:
+Install under `/vol1/rui` (the directory must be writable):
 
 ```bash
-git clone https://github.com/yes999zc/rui.git
-cd rui && docker build -t ghcr.io/yes999zc/rui:latest .
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.2.2/deploy/install.sh \
+  | RUI_HOME=/vol1/rui RUI_REF=v0.2.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2 sh
 ```
 
-Open `http://<nas-lan-ip>:8080/`, enter the console token printed at install time, and complete the 8-step first-run wizard: `keys` (one provider per use, credentials) → `models` → `prepare` (install the open-xiaoai client) → `params` (speaker address/room) → `wake` (wake words) → `connect` (ws URL + device token) → `test` (speaker dials in) → `verify` (one real sentence). No YAML editing is needed on the normal path. The speaker itself is configured separately:
+- `RUI_REF` selects the ref for `docker-compose.yml` / `config.example.yaml`; `RUI_IMAGE` selects the image. Pinning only one can still change versions on a reinstall or rollback.
+- If `raw.githubusercontent.com` stalls, point `RUI_RAW` at a mirror prefix, e.g. `RUI_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main`.
+- If `ghcr.io` cannot be pulled, the installer builds the same tag from public source at `RUI_REF` (requires `git`; the log prints the ref/commit).
+
+What the installer does:
+
+| Step | What | Where |
+|---|---|---|
+| 1 | Fetches `docker-compose.yml`, `config.example.yaml` (reference) and the ops scripts `backup.sh` / `restore.sh` / `acceptance-v1.py` | `~/rui/`, `~/rui/scripts/` |
+| 2 | `rui setup` writes the production config, default wake words, and the **console token** | `~/rui/config/config.yaml`, `config/keywords.txt` |
+| 3 | Generates `.env` with a random device token (0600) | `~/rui/.env` |
+| 4 | Prepares models: SenseVoice ASR (~239 MB, one time); VAD/KWS copied from the image's `/opt/seed-models` | `~/rui/data/models/` |
+| 5 | `docker compose up -d` and waits for `/health` (exits non-zero after 120 s) | container `rui` |
+
+Expected output (paths/addresses vary):
 
 ```text
-ws://<nas-lan-ip>:4412/?token=<RUI_DEVICE_TOKEN>
+[1/5] compose file
+[2/5] config + wake words
+console token: <console-token>          ← printed here once; copy it now
+[3/5] env
+      wrote .env with a generated device token (48 hex chars)
+[4/5] local models: ASR + VAD + wake word
+      missing: asr-model; running fetch-models (image seed first)
+[5/5] starting
+      waiting for the service to answer /health
+      healthy
+done. open http://<nas-lan-ip>:8080/
 ```
 
-See [docs/deploy.md](docs/deploy.md) for volumes, keys, music/HA configuration and the speaker client, [docs/open-xiaoai-client.md](docs/open-xiaoai-client.md) for the step-by-step client hookup, and [docs/xiaoai-protocol.md](docs/xiaoai-protocol.md) for the LX06 wire protocol.
+With the image already local (or a fast pull) and only ASR to download, the tested path reaches `healthy` in about **85 seconds**; the first run with an image pull and the 239 MB model usually takes **4–8 minutes** depending on the network. Keep both the `console token` from the log and the device token in `.env`.
+
+Open `http://<nas-lan-ip>:8080/` and enter the console token. **Use the NAS LAN IP**: opening the console via `localhost` or an SSH tunnel makes `connect` generate `ws://127.0.0.1:4412`, which the speaker can never reach.
+
+```bash
+cd ~/rui
+docker compose exec -T rui rui token          # recover the console token
+docker compose exec -T rui rui token --rotate # rotate (restart the service to apply)
+```
+
+Re-running against the same `RUI_HOME` is safe: if the `rui` container belongs to that directory's compose project, the installer runs `docker compose up -d` (recreating as needed and filling in missing models). A container owned by another directory/project, or a legacy 0.1.x `house-ear` container, fails with the exact stop command instead of being removed.
+
+#### 2. Configure: the 8-step first-run wizard
+
+After install the console opens `/setup`. The normal path happens entirely in the browser — **no YAML editing**. Any completed step can be reopened and re-run.
+
+| # | Step | Prepare/decide before clicking | What the step does | Done looks like |
+|---|---|---|---|---|
+| 1 | `keys` | Pick the LLM / ASR / TTS provider and have its credentials ready (table below) | Writes the local secret file, sets that use's provider chain to the selection, saves the TTS voice | Every use has a usable provider; the console shows only "configured" |
+| 2 | `models` | Normally nothing: the installer already fetched them | Only checks ASR / VAD / wake-model files; never downloads | All three (ASR, VAD, KWS) are green |
+| 3 | `prepare` | Use the checklist from step 0: client installed, IP reserved, SSH/restart/logs/rollback recorded | Shows the open-xiaoai link and the device-side checklist; runs nothing on the speaker | Device-side items checked and confirmed; the token comes later |
+| 4 | `params` | Speaker LAN IP, room name, wake words, volume/LED/port/gain choices | Writes `devices[]` and restarts the audio plane | Saved with no `plane_error`; the client reconnects afterwards |
+| 5 | `wake` | 1–3 wake words, up to 12 characters each | Rewrites `config/keywords.txt` and restarts the audio plane | The file contains an `@word` line for every word |
+| 6 | `connect` | Open the client config from step 0; open the console via the LAN IP | Generates a read-only ws URL + device token; you paste it into the client and restart it | Status "connected", `speaker_connected=true` |
+| 7 | `test` | Nothing | Read-only probe of the audio plane, host/SSH and token configuration | "Passed", based on a real speaker dial-in (SSH alone is not enough) |
+| 8 | `verify` | One sentence to test | Runs a real turn and records `audio_bytes` | You hear the answer, or click "I heard the reply"; skipping marks it unverified |
+
+`keys` provider table (one provider per use; unselected fallbacks need no credentials):
+
+| Use | Choose in the wizard | Prepare | Notes |
+|---|---|---|---|
+| LLM | DeepSeek (template default) | `RUI_LLM_KEY` | Another OpenAI-compatible provider already in the catalog also works; one LLM is required |
+| ASR | Local SenseVoice (default) | No key | Keyless; the installer fetched the model; recommended |
+| ASR | Volc Doubao streaming ASR 2.0 | `VOLC_API_KEY` | New console needs only an API key (no AppID); resource id `volc.seedasr.sauc.duration` or `...concurrent` |
+| ASR | SiliconFlow | `RUI_ASR_KEY` | Cloud fallback; needs network |
+| TTS | iFlytek (template default) | `XFYUN_APPID` + `XFYUN_API_KEY` + `XFYUN_API_SECRET` | All three are required |
+| TTS | Volc Doubao TTS 2.0 | `VOLC_API_KEY` + voice | New console needs only an API key; do not put AK/SK here |
+
+- **Every use needs one usable provider**, but ASR can be local, so the minimum is the LLM + TTS credentials. TTS and ASR do not both have to be cloud.
+- "Test" makes one real, small request with the current input (unsaved values are used for that probe only and are not persisted); after saving, values can never be read back.
+- Volc API keys are created in the Volc console and are not AK/SK; the iFlytek trio lives in one iFlytek app. See [docs/volc-credentials.md](docs/volc-credentials.md).
+
+Where each `params` value comes from:
+
+| Field | Value / source |
+|---|---|
+| Speaker address | The LAN IP from step 0; address only, no `http://`, no spaces |
+| Room | Any name (e.g. "Living room"), used by the console and multi-device views |
+| Wake words | 1–3 words, up to 12 characters each; default "你好小瑞" |
+| Volume | 0–100, default 60; **0 = do not take over volume**, keep the stock level |
+| LED | New LX06 devices default to on in 0.2.2; switch it off if you do not want the ring |
+| Listen port | Default 4412; change only on a port conflict and update the client ws URL too |
+| Mic gain | 0–42 dB, optional; higher is more sensitive and picks up more room noise |
+
+Saving `params` / `wake` restarts the audio plane; the client disconnects briefly and reconnects.
+
+The `wake` step updates both `devices[].wake_words` and `config/keywords.txt`; **the two must match**. `keywords.txt` is the single source for server-side KWS; the client does not need a second copy. If your client/firmware also has its own wake words, keep both lists identical. After manually editing `devices[].wake_words`, regenerate the file with the `keywords` command (see [docs/deploy.md §3.3](docs/deploy.md#33-模型fetch-models-一次装齐)).
+
+`connect` hookup:
+
+1. In the console, click "show/copy" to get the full `ws://<nas-lan-ip>:4412/?token=<device-token>`.
+2. Put it into the client config recorded in step 0 (`server.txt` / `config.json` / `WS_URL` in the startup script).
+3. Restart the client and confirm its log says `connected`.
+4. Back in the wizard, click "Wait for connection" (polls every 3 s for up to 1 minute) or "Refresh status" (older builds called it "Check") until it says connected.
+
+| Symptom | Check first | Fix |
+|---|---|---|
+| Client logs 401 / close 1008; NAS logs `xiaoai: rejected ... (bad or missing token)` | Whether both sides use the same token | Copy the current token from `connect`, update the client, restart it; this is not the console token |
+| `port_blocked` / connection refused | Whether `4412` is listening | `ss -ltnp \| grep 4412`; confirm the audio plane runs, `listen_port` matches, the container uses host networking, and the firewall allows it |
+| Stuck on `waiting_for_client` | Whether the client runs and points at the NAS LAN IP | Read the client log; same LAN, DHCP reservation, not `127.0.0.1`; restart the client and wait again |
+| Connects then keeps dropping | More than one client on 4412 | `ss -tnp \| grep 4412` should show one ESTAB; stop extra debug clients |
+
+`test` ("Run device test") is read-only and writes no config. It checks three things: the audio plane (`speaker_connected`), host/SSH (diagnostics only), and whether a device token is configured. **An inbound speaker passes only when it is actually connected**; a successful SSH probe is not a working hookup.
+
+`verify` ("Say a sentence") runs the real chain: ASR → LLM → TTS → playback. `audio_bytes>0` proves audio was produced, but a human still has to hear the speaker. You can also click "I heard the reply". Skipping does not block completion (`verify` is optional), but the console marks the setup unverified; the skip is a UI mark for this session, not a persisted "verified" claim.
+
+#### 3. After install
+
+The commands below assume `~/rui`; replace the path if you installed under `/vol1/rui`.
+
+| Location | Contents | Notes |
+|---|---|---|
+| `~/rui/config/config.yaml` | `devices[]`, provider chains, `web.auth_token` | 0600; back it up before edits |
+| `~/rui/data/secrets.yaml` | Keys saved by the wizard | 0600, write-only; environment variables win |
+| `~/rui/.env` | `RUI_DEVICE_TOKEN`, `RUI_IMAGE`, optional keys | 0600; injected by `docker compose` |
+| `~/rui/config/keywords.txt` | Wake words / KWS parameters | Regenerate after changing wake words |
+| `~/rui/data/models/` | SenseVoice, VAD, KWS | Re-fetch with `fetch-models` if deleted |
+| `~/rui/data/setup.json` | Wizard confirmations/timestamps | 0600; contains no secrets |
+
+- **Change keys**: use the console "AI providers / secrets" pages or re-run `keys`; keys are write-only and must not go into `config.yaml`.
+- **Change the device token**: show/copy it again in `connect`, or edit `RUI_DEVICE_TOKEN` in `.env` and run `docker compose up -d`; then update the client, restart it, and re-run `test`.
+- **Rotate the console token**: `docker compose exec -T rui rui token --rotate`, then `docker compose restart rui` to load it; the old token stops working after the restart and the browser asks again.
+- **Upgrade**: pin `RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2` in `.env`; `docker compose pull && docker compose up -d`, wait for healthy, then run `docker compose exec -T rui rui doctor`.
+- **Roll back**: set `RUI_IMAGE` back to the previous tag, back up `config/config.yaml` first (old code may reject new fields), then `docker compose up -d`.
+- **Backup/restore**: `cd ~/rui && scripts/backup.sh --out ~/rui-backups`; restore steps are in [docs/runbook.md](docs/runbook.md).
+- **Daily checks**: `curl -fsS http://localhost:8080/health`, `docker compose exec -T rui rui doctor`, `docker compose logs -f --tail=200 rui`.
+
+#### 4. Common failures
+
+| Symptom | Cause / fix |
+|---|---|
+| Client logs 401 / close 1008; NAS logs `bad or missing token` | The client still has an old token. Copy the current ws URL/token from `connect`, update the client config, restart it, and confirm `.env`'s `RUI_DEVICE_TOKEN` was not changed |
+| Re-running the installer says container `rui` already exists | Re-running in the same `RUI_HOME` is safe; if it belongs to another directory, go there and run `docker compose down`, or stop the old install first. For 0.1.x, `docker stop house-ear && docker rm house-ear` as prompted |
+| `docker pull ghcr.io/...` TLS handshake timeout / 403 | Configure a proxy or registry mirror for the Docker daemon, or `pull` + `save` on a connected machine and `load` on the NAS. The installer falls back to a source build (requires `git`); use `RUI_RAW` when raw fetches stall |
+| LED ring stays off | New LX06 devices default to `led.enabled: true` in 0.2.2; check the `params` LED toggle or the device config. An upgraded old config may still have it off |
+| Console 401 / cannot find the console token | The `console token` printed during `[2/5]` appears once; recover it with `cd ~/rui && docker compose exec -T rui rui token`. It is not the device token |
+
+#### Manual Docker Compose (optional)
+
+Only for troubleshooting/offline use; the one-liner above is the normal path. A manual install must generate the config, provide `.env` (at least `RUI_DEVICE_TOKEN` and `RUI_IMAGE`) and models; the complete commands are in [docs/deploy.md §2.7](docs/deploy.md#27-手动-docker-compose可选).
 
 ### Architecture
 
@@ -362,27 +621,27 @@ Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.m
 
 Audio and local recognition stay on your box; only the providers you configure receive the corresponding requests. Keys are injected via `.env` / `secrets.yaml` (0600) and are write-only through the API. The console uses a generated token and refuses to start on a non-loopback bind without one. Keep `:8080` on a trusted network (or put it behind TLS/VPN); the device token is equivalent to speaker control. See [docs/runbook.md](docs/runbook.md).
 
-### 配置恢复
+### Configuration recovery
 
-成功启动会把当前配置存为 `config.last-good.yaml`。如果下次启动时 `config.yaml` 校验失败，服务会保留坏文件、回退到 last-good（没有则用 schema 默认值），并在控制台顶部显示恢复 banner，可一键恢复；也可以：
+A successful start stores the current config as `config.last-good.yaml`. If `config.yaml` fails validation on the next start, the service keeps the bad file, falls back to last-good (or the schema defaults when none exists), and shows a recovery banner at the top of the console with one-click restore. You can also run:
 
 ```bash
 rui config restore --last-good
 rui config restore --defaults
 ```
 
-详见 [docs/config-recovery.md](docs/config-recovery.md)。
+See [docs/config-recovery.md](docs/config-recovery.md).
 
 ### Support
 
-如果小瑞帮到了你，可以请我喝杯咖啡：
+If Rui is useful to you, you can buy me a coffee:
 
 <!-- TODO: replace the placeholder with the real Buy Me a Coffee page when ready. -->
 <a href="https://www.buymeacoffee.com/" target="_blank" rel="noopener">
   <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-d98a3e?style=flat-square" alt="Buy Me a Coffee">
 </a>
 
-If Rui is useful to you, you can buy me a coffee — the link is a placeholder for now.
+The link is a placeholder for now.
 
 ### Credits / 致谢
 

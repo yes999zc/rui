@@ -3,7 +3,7 @@ name: rui
 services:
   rui:
     # Pin a release in production. install.sh passes RUI_IMAGE, and .env can hold it
-    # for good: RUI_IMAGE=ghcr.io/yes999zc/rui:0.0.1
+    # for good: RUI_IMAGE=ghcr.io/yes999zc/rui:0.2.2
     # `latest` is the rolling default, not the only recommendation - a tag or a digest is
     # what makes a rollback (and a bug report) reproducible. See docs/runbook.md.
     image: ${RUI_IMAGE:-${HOUSE_EAR_IMAGE:-ghcr.io/yes999zc/rui:latest}}

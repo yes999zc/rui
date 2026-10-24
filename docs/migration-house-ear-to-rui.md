@@ -64,7 +64,7 @@ only the environment variable that supplies the token name changes.
 5. Replace `docker-compose.yml` with the 0.2.0 file (container name `rui`, data mount
    `/var/lib/rui`), then `docker compose up -d --force-recreate`.
 6. Verify: `docker compose exec rui rui-healthcheck`, `docker compose exec rui rui doctor`,
-   and the console's Setup → Speaker connection page.
+   and the console's Setup → connect page.
 
 ## Rollback
 
