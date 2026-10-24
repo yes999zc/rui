@@ -31,6 +31,9 @@ jobs:
           context: .
           platforms: linux/${{ matrix.arch }}
           push: false
+          # push:false keeps the result inside the buildx cache only, so the image must be
+          # loaded into the daemon before it can be run to check its architecture.
+          load: true
           tags: rui:check-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
