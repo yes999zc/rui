@@ -41,10 +41,21 @@ _XIAOAI_LX06 = {
         "source": "https://github.com/coderzc/open-xiaoai",
         "version_min": "v0.x",
         "install_steps": [
-            "Enable SSH on the speaker (see the open-xiaoai README).",
-            "Install the open-xiaoai client and confirm it can reconnect.",
+            "记下音箱的局域网 IP，并在路由器里给它做 DHCP 固定租约：IP 一变，SSH 和客户端的回连地址都会失效。",
+            "按 open-xiaoai 的刷机/root 说明打开音箱 SSH，记录 root 密码和登录方式"
+            "（通常是 ssh root@<speaker-ip>）。",
+            "安装 open-xiaoai client，记下它的安装路径（常见为 /data/open-xiaoai/）"
+            "以及保存连接配置的文件或启动脚本（server.txt、start.sh 里的 WS_URL 等）。",
+            "在 client 配置里填 ws://<server-lan-ip>:4412/?token=<device-token>："
+            "device token 由本向导的 connect 步骤给出，服务端和客户端必须用同一个值。",
+            "重启 client（重跑启动脚本或重启音箱），在 client 日志里确认出现 "
+            "connected / 已连接 ws://...；日志路径或查看命令也要记下来。",
+            "回到向导 connect 步骤点「重试」，speaker_connected 变成 true 才继续；"
+            "若 client 日志是 401 / close 1008，先核对两边的 token。",
+            "记下回滚方法：停止并移除 client、恢复原启动脚本；原厂固件/分区不动。",
         ],
-        "rollback": "Stop and uninstall the open-xiaoai client; the stock firmware is untouched.",
+        "rollback": "Stop and remove the open-xiaoai client, restore the stock boot script; "
+                    "the stock firmware and partitions are untouched.",
     },
     "runtime": {
         "mode": "in-process",

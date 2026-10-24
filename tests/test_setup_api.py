@@ -13,7 +13,8 @@ from fastapi.testclient import TestClient
 
 from rui import secrets as secrets_module
 from rui.config import Config, DeviceConfig, load_config, save_config
-from rui.config.schema import ProviderConfig
+from rui.config.schema import ProviderConfig, StageConfig
+from rui.providers import keycheck
 from rui.web.api import app as app_module
 from rui.web.api.app import create_app
 
@@ -285,7 +286,7 @@ def test_unknown_step_and_action_are_rejected_with_an_object(wizard) -> None:
     detail = rejected.json()["detail"]
     assert detail["code"] == "unknown_action"
     assert detail["details"]["step"] == "keys"
-    assert detail["details"]["allowed"] == ["keys.save"]
+    assert detail["details"]["allowed"] == ["keys.save", "keys.test"]
 
 
 def test_legacy_validators_become_object_errors_on_the_new_endpoint(wizard) -> None:
@@ -413,3 +414,264 @@ def test_keys_save_is_write_only_and_idempotent(wizard) -> None:
         "payload": {"values": KEYS}}).status_code == 200
     assert secrets_file.read_bytes() == before
     assert secrets_file.stat().st_mtime_ns == stamp
+
+
+# ---------------------------------------------------------------- provider keys (issue #5)
+
+PROVIDER_SECRETS = {
+    "RUI_LLM_KEY": "sk-llm-catalog-should-not-echo",
+    "VOLC_API_KEY": "volc-key-catalog-should-not-echo",
+    "XFYUN_APPID": "appid-catalog-should-not-echo",
+    "XFYUN_API_KEY": "xfyun-key-catalog-should-not-echo",
+    "XFYUN_API_SECRET": "xfyun-secret-catalog-should-not-echo",
+}
+
+
+def _provider_client(tmp_path, monkeypatch):
+    """A config with the real vendor shapes: DeepSeek, 火山 ASR/TTS, 讯飞 TTS, local ASR."""
+    for name in (*PROVIDER_SECRETS, "RUI_DEVICE_TOKEN", "DEEPSEEK_API_KEY",
+                 "VOLC_ACCESS_KEY_ID", "VOLC_SECRET_ACCESS_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.providers.catalog = {
+        "local_asr": ProviderConfig(kind="sherpa", model=str(tmp_path / "asr")),
+        "volc_asr": ProviderConfig(
+            kind="volc_asr", model="volc.seedasr.sauc.duration",
+            api_key_env="VOLC_API_KEY"),
+        "volc_tts": ProviderConfig(
+            kind="volc_tts", model="seed-tts-2.0",
+            voice="zh_female_xiaohe_uranus_bigtts", api_key_env="VOLC_API_KEY"),
+        "xfyun_tts": ProviderConfig(
+            kind="xfyun", voice="x4_lingxiaowan_boy",
+            app_id_env="XFYUN_APPID", api_key_env="XFYUN_API_KEY",
+            api_secret_env="XFYUN_API_SECRET"),
+        "deepseek_llm": ProviderConfig(
+            kind="openai_compat", base_url="https://api.deepseek.com",
+            model="deepseek-chat", api_key_env="RUI_LLM_KEY"),
+    }
+    cfg.providers.asr = StageConfig(chain=["volc_asr", "local_asr"])
+    cfg.providers.tts = StageConfig(chain=["xfyun_tts", "volc_tts"])
+    cfg.providers.llm = StageConfig(chain=["deepseek_llm"])
+    path = tmp_path / "config.yaml"
+    save_config(path, cfg)
+    return TestClient(create_app(cfg, config_path=path)), path, tmp_path
+
+
+def test_setup_providers_catalog_shape_state_and_no_values(tmp_path, monkeypatch) -> None:
+    client, _path, _tmp = _provider_client(tmp_path, monkeypatch)
+    response = client.get("/api/v1/setup/providers")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    rows = {(row["stage"], row["name"]): row for row in body["providers"]}
+    assert set(rows) == {
+        ("asr", "volc_asr"), ("asr", "local_asr"),
+        ("tts", "xfyun_tts"), ("tts", "volc_tts"), ("llm", "deepseek_llm"),
+    }
+    assert body["stages"]["llm"] == ["llm:deepseek_llm"]
+
+    volc_asr = rows[("asr", "volc_asr")]
+    assert volc_asr["display_name"] == "火山引擎"
+    assert volc_asr["display_name_en"] == "Volcano Engine"
+    assert volc_asr["configured"] is False
+    assert volc_asr["missing"] == ["VOLC_API_KEY"]
+    assert volc_asr["docs_url"].startswith("https://docs.volcengine.com/")
+    field = volc_asr["fields"][0]
+    assert (field["name"], field["role"], field["label"]) == (
+        "VOLC_API_KEY", "api_key", "API Key")
+    assert field["configured"] is False
+    assert field["hint"] and field["hint_i18n"]["zh"]
+    assert field["docs_url"].startswith("https://docs.volcengine.com/")
+
+    # The same key serves ASR and TTS, but the UI must show both uses separately.
+    volc_tts = rows[("tts", "volc_tts")]
+    assert volc_tts["fields"][0]["name"] == "VOLC_API_KEY"
+    assert [f["label"] for f in rows[("tts", "xfyun_tts")]["fields"]] == [
+        "API Key", "AppID", "API Secret"]
+    assert rows[("asr", "local_asr")]["fields"] == []
+    assert rows[("asr", "local_asr")]["configured"] is True
+    assert rows[("llm", "deepseek_llm")]["display_name"] == "DeepSeek"
+
+    saved = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.save",
+        "payload": {"values": PROVIDER_SECRETS}})
+    assert saved.status_code == 200, saved.text
+    assert not any(value in saved.text for value in PROVIDER_SECRETS.values())
+    catalog = client.get("/api/v1/setup/providers")
+    assert not any(value in catalog.text for value in PROVIDER_SECRETS.values())
+    rows = {(row["stage"], row["name"]): row
+            for row in catalog.json()["providers"]}
+    assert all(row["configured"] for row in rows.values())
+
+    state = client.get("/api/v1/setup/step").json()
+    keys_step = _step(state, "keys")
+    assert keys_step["status"] == "done"
+    assert keys_step["evidence"]["stages"] == {"asr": True, "tts": True, "llm": True}
+    assert {row["name"] for row in keys_step["evidence"]["providers"]} == {
+        "volc_asr", "local_asr", "xfyun_tts", "volc_tts", "deepseek_llm"}
+
+
+def test_setup_providers_endpoint_requires_the_console_token(tmp_path, monkeypatch) -> None:
+    for name in PROVIDER_SECRETS:
+        monkeypatch.delenv(name, raising=False)
+    cfg = Config(web={"auth_token": "tok"})
+    cfg.system.data_dir = str(tmp_path / "data")
+    client = TestClient(create_app(cfg))
+    assert client.get("/api/v1/setup/providers").status_code == 401
+    assert client.get("/api/v1/setup/providers",
+                      headers={"X-Auth-Token": "tok"}).status_code == 200
+
+
+def test_keys_test_llm_success_failure_and_no_secret_leak(tmp_path, monkeypatch) -> None:
+    client, _path, _tmp = _provider_client(tmp_path, monkeypatch)
+    client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.save",
+        "payload": {"values": {"RUI_LLM_KEY": PROVIDER_SECRETS["RUI_LLM_KEY"]}}})
+
+    async def ok_probe(entry, values):
+        assert values["api_key"] == PROVIDER_SECRETS["RUI_LLM_KEY"]
+        return {"ok": True, "check": "models", "status": 200,
+                "message": "models endpoint accepted the key"}
+
+    monkeypatch.setattr(keycheck, "_probe_llm", ok_probe)
+    response = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test",
+        "payload": {"stage": "llm", "provider": "deepseek_llm"}})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is True and body["stage"] == "llm"
+    assert body["provider"] == "deepseek_llm"
+    assert body["message"] and body["details"]["check"] == "models"
+    assert not any(value in response.text for value in PROVIDER_SECRETS.values())
+
+    async def fail_probe(entry, values):
+        return {"ok": False, "check": "models", "status": 401,
+                "message": "provider rejected the key (HTTP 401)"}
+
+    monkeypatch.setattr(keycheck, "_probe_llm", fail_probe)
+    response = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test", "payload": {"stage": "llm"}})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False and body["provider"] == "deepseek_llm"
+    assert "401" in body["message"]
+    assert not any(value in response.text for value in PROVIDER_SECRETS.values())
+
+
+def test_keys_test_asr_tts_missing_no_safe_test_and_dispatch(tmp_path, monkeypatch) -> None:
+    client, _path, _tmp = _provider_client(tmp_path, monkeypatch)
+
+    # No ASR key yet: a clear missing-credential result, not a network call.
+    response = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test", "payload": {"stage": "asr"}})
+    body = response.json()
+    assert response.status_code == 200 and body["ok"] is False
+    assert "VOLC_API_KEY" in body["message"]
+    assert body["details"]["check"] == "none"
+
+    # A local/keyless provider has no safe online test and must not fake a pass.
+    response = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test",
+        "payload": {"stage": "asr", "provider": "local_asr"}})
+    body = response.json()
+    assert response.status_code == 200 and body["ok"] is False
+    assert "no safe online test" in body["message"]
+
+    # With a key, ASR/TTS dispatch to their stage probe (not to the LLM probe).
+    client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.save",
+        "payload": {"values": {
+            "VOLC_API_KEY": PROVIDER_SECRETS["VOLC_API_KEY"],
+            "XFYUN_APPID": PROVIDER_SECRETS["XFYUN_APPID"],
+            "XFYUN_API_KEY": PROVIDER_SECRETS["XFYUN_API_KEY"],
+            "XFYUN_API_SECRET": PROVIDER_SECRETS["XFYUN_API_SECRET"],
+        }}})
+
+    calls: list[tuple[str, str]] = []
+
+    async def asr_probe(entry, values):
+        calls.append(("asr", entry.kind))
+        return {"ok": True, "check": "asr", "status": 200,
+                "message": "asr endpoint accepted the key"}
+
+    async def tts_probe(entry, values):
+        calls.append(("tts", entry.kind))
+        return {"ok": True, "check": "synthesis", "status": 200,
+                "message": "tts endpoint returned audio"}
+
+    monkeypatch.setattr(keycheck, "_probe_asr", asr_probe)
+    monkeypatch.setattr(keycheck, "_probe_tts", tts_probe)
+
+    asr = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test", "payload": {"stage": "asr"}}).json()
+    tts = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test", "payload": {"stage": "tts"}}).json()
+    assert asr["ok"] is True and asr["provider"] == "volc_asr"
+    assert tts["ok"] is True and tts["provider"] == "xfyun_tts"
+    assert calls == [("asr", "volc_asr"), ("tts", "xfyun")]
+
+    unknown = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test",
+        "payload": {"stage": "asr", "provider": "deepseek_llm"}})
+    assert unknown.status_code == 400
+    assert unknown.json()["detail"]["code"] == "unknown_provider"
+    bad_stage = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test", "payload": {"stage": "vision"}})
+    assert bad_stage.status_code == 422
+    assert bad_stage.json()["detail"]["code"] == "invalid_values"
+
+
+def test_connect_evidence_has_clean_fields_and_message(wizard, monkeypatch) -> None:
+    client, _path, _tmp = wizard
+    evidence = _step(client.get("/api/v1/setup/step").json(), "connect")["evidence"]
+    assert evidence["connection_message"] == "waiting_for_client"
+    assert evidence["speaker_connected"] is False
+    assert evidence["listen_port"] == 4412
+    assert evidence["last_seen"] is None
+    assert evidence["hint"]["zh"] and evidence["hint"]["en"]
+    assert {"speaker_connected", "listen_port", "last_seen", "hint"} <= set(evidence)
+
+    # A configured device with a token but no listener is a port problem.
+    monkeypatch.setenv("RUI_DEVICE_TOKEN", "device-token")
+    client.post("/api/v1/setup/step", json={
+        "step": "params", "action": "device.upsert",
+        "payload": {"host": "speaker.local", "wake_words": ["你好小瑞"]}})
+    evidence = _step(client.get("/api/v1/setup/step").json(), "connect")["evidence"]
+    assert evidence["connection_message"] == "port_blocked"
+
+    # A live inbound link is "connected" and carries a last_seen timestamp.
+    client.app.state.audio = _Plane(connected=True)
+    evidence = _step(client.get("/api/v1/setup/step").json(), "connect")["evidence"]
+    assert evidence["connection_message"] == "connected"
+    assert evidence["speaker_connected"] is True
+    assert isinstance(evidence["last_seen"], (int, float))
+
+    # A refused client is the one signal that means token mismatch.
+    plane = _Plane(connected=False)
+    plane.status = lambda: {
+        "running": True, "device_id": "living", "error": "",
+        "metrics": {"speaker_connected": False, "speaker_rejected": 2},
+    }
+    client.app.state.audio = plane
+    state = client.get("/api/v1/setup/step").json()
+    evidence = _step(state, "connect")["evidence"]
+    assert evidence["connection_message"] == "token_mismatch"
+    assert _step(state, "connect")["detail"]["speaker_rejected"] == 2
+
+
+def test_prepare_detail_carries_the_manifest_install_steps(wizard) -> None:
+    client, _path, _tmp = wizard
+    detail = _step(client.get("/api/v1/setup/step").json(), "prepare")["detail"]
+    steps = detail["install_steps"]
+    assert len(steps) >= 6
+    joined = "\n".join(steps)
+    for needle in ("DHCP", "SSH", "open-xiaoai", "ws://", "4412", "token"):
+        assert needle in joined, needle
+    assert "connect" in joined and ("重启" in joined or "restart" in joined)
+    assert "日志" in joined or "log" in joined
+    assert detail["rollback"]
+
+    manifest = client.get("/api/v1/plugs/xiaoai-lx06").json()["manifest"]
+    device_side = manifest["devices"][0]["device_side"]
+    assert device_side["install_steps"] == steps
+    assert device_side["rollback"] == detail["rollback"]

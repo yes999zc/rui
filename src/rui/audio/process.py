@@ -1515,6 +1515,12 @@ class AudioPlane:
         return snapshot
 
     def _build_metrics(self) -> Metrics:
+        health: dict = {}
+        if self.adapter is not None:
+            try:
+                health = dict(self.adapter.health() or {})
+            except Exception:  # noqa: BLE001 - diagnostics must not break the plane
+                health = {}
         return Metrics(
             uptime_s=round(time.monotonic() - self.started, 1),
             aec_enabled=self.aec is not None,
@@ -1530,9 +1536,8 @@ class AudioPlane:
             gate_speaking=bool(self.gate.speaking) if self.gate is not None else False,
             gate_discarded=self.gate.discarded if self.gate is not None else 0,
             gate_interrupted=self.gate.interrupted if self.gate is not None else 0,
-            speaker_connected=bool(getattr(self.adapter, "health", lambda: {})().get("connected"))
-            if self.adapter is not None
-            else False,
+            speaker_connected=bool(health.get("connected")),
+            speaker_rejected=int(health.get("rejected") or 0),
             playback_s=round(self.playback_s, 1),
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
             playback_gap_count=self.playback_gap_count,

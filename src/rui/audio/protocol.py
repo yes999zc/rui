@@ -110,6 +110,9 @@ class Metrics(BaseModel):
     aec_channel: int = 0
     ref_active: bool = False
     speaker_connected: bool = False
+    # Connections refused for a bad/missing token since the plane started. The setup
+    # wizard uses this to tell "no client yet" from "the client's token is wrong".
+    speaker_rejected: int = 0
     wake_count: int = 0
     kws_enabled: bool = False
     kws_error: str = ""

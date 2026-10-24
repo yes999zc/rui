@@ -40,6 +40,8 @@ docker compose exec -T rui rui token --rotate  # 轮换
 
 ### 火山豆包语音（可选）
 
+- 凭证：新版控制台 ASR/TTS 都只需要 `VOLC_API_KEY`（`X-Api-Key`），不需要 AppID 或
+  AK/SK；AK/SK 只给额度卡片用。详见 [volc-credentials.md](volc-credentials.md)。
 - TTS：`.env` 里填 `VOLC_API_KEY`（控制台 API Key），把 `config.yaml` 的
   `providers.tts.chain` 改成 `[volc_tts, xfyun_tts]` 即启用；
   音色在控制台「外部资源 → volc_tts → 音色」选并「试听」，保存后重启服务生效。

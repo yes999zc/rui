@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from ... import secrets
 from ... import setup_state as setup_store
 from ...audio.kws import KwsUnavailable, model_files
-from ...config.schema import Config, DeviceConfig
+from ...config.schema import STAGES, Config, DeviceConfig
 from ...config.store import ConfigError, load_config
 from ...plugins import (
     DeviceManifest,
@@ -27,8 +27,41 @@ from ...plugins import (
     builtin_plugins,
     discover_plugins,
 )
+from ...providers import keycheck
 
 __all__ = ["install_setup_routes"]
+
+# Why the connect step sees what it sees. The value is a code so the UI can translate
+# it; the hint is the localised sentence to show under it.
+_CONNECT_HINTS: dict[str, dict[str, str]] = {
+    "connected": {
+        "zh": "音箱已连上，可以试着说唤醒词。",
+        "en": "The speaker is connected; try the wake word.",
+    },
+    "waiting_for_client": {
+        "zh": "服务端在等音箱客户端回连。确认 client 已启动，并且指向 "
+              "ws://<本机局域网 IP>:<端口>/?token=<设备 token>。",
+        "en": "Waiting for the speaker client. Check that it is running and points at "
+              "ws://<server-lan-ip>:<port>/?token=<device-token>.",
+    },
+    "token_mismatch": {
+        "zh": "服务端没有配置设备 token，或客户端带的 token 不一致。客户端日志通常显示 "
+              "401 / close 1008；两边用同一个值后重连。",
+        "en": "The server has no device token, or the client's token differs. The client "
+              "usually logs 401 / close 1008; use the same value on both sides and reconnect.",
+    },
+    "port_blocked": {
+        "zh": "服务端端口没有在监听：检查 4412 是否被占用、容器是否映射、防火墙是否放行，"
+              "以及音频面是否启动。",
+        "en": "Nothing is listening on the port: check 4412, container mapping, firewall "
+              "and whether the audio plane is running.",
+    },
+    "not_applicable": {
+        "zh": "这个音箱是服务端主动连接（outbound），连接状态由 test 步骤检查。",
+        "en": "This speaker is dialled by the server (outbound); the test step checks the "
+              "link.",
+    },
+}
 
 
 def install_setup_routes(
@@ -50,7 +83,7 @@ def install_setup_routes(
     # under <data_dir>/plugs/*/plugin.yaml. A broken user plug is listed with its error,
     # never allowed to stop startup or hide the other plugs.
     _SETUP_ACTIONS: dict[str, set[str]] = {
-        "keys": {"keys.save"},
+        "keys": {"keys.save", "keys.test"},
         "models": set(),
         "prepare": {"manual.confirm"},
         "params": {"device.upsert"},
@@ -236,11 +269,26 @@ def install_setup_routes(
                 missing.update(item for item in names if secrets.resolve(item) is None)
             stage_ok[stage] = ok
         keys_done = bool(stage_ok) and all(stage_ok.values())
+        provider_rows = [
+            {
+                "stage": entry.stage,
+                "name": entry.name,
+                "display_name": entry.display_name,
+                "configured": entry.configured,
+                "missing": entry.missing,
+            }
+            for entry in keycheck.provider_entries(current)
+        ]
+        last_test = saved.get("keys", {}).get("last_test", {})
+        if not isinstance(last_test, dict):
+            last_test = {}
         keys_step = {
             "id": "keys", "status": "done" if keys_done else "pending",
-            "evidence": {"stages": stage_ok, "missing": sorted(missing)},
+            "evidence": {"stages": stage_ok, "missing": sorted(missing),
+                         "providers": provider_rows,
+                         "last_test": last_test},
             "detail": {"stages": stage_ok, "missing": sorted(missing)},
-            "actions": ["keys.save"],
+            "actions": ["keys.save", "keys.test"],
         }
 
         # models: ASR (sherpa) files, VAD file, and the four KWS files.
@@ -289,14 +337,21 @@ def install_setup_routes(
         rollback_ack = bool(manual.get("rollback_ack"))
         prepare_skipped = artifact == "none"
         prepare_done = prepare_skipped or (confirmed and (rollback_ack or not needs_rollback))
+        device_side = manifest.device_side
         prepare_step = {
             "id": "prepare",
             "status": "skipped" if prepare_skipped else ("done" if prepare_done else "pending"),
             "evidence": {"artifact": artifact, "confirmed": confirmed,
                          "rollback_ack": rollback_ack,
                          "rollback_required": needs_rollback},
-            "detail": {"artifact": artifact,
-                       "source": manifest.device_side.source if manifest.device_side else ""},
+            "detail": {
+                "artifact": artifact,
+                "name": device_side.name if device_side else "",
+                "source": device_side.source if device_side else "",
+                "version_min": device_side.version_min if device_side else "",
+                "install_steps": list(device_side.install_steps) if device_side else [],
+                "rollback": device_side.rollback if device_side else "",
+            },
             "actions": [] if prepare_skipped else ["manual.confirm"],
         }
 
@@ -367,16 +422,55 @@ def install_setup_routes(
         }
 
         # connect: inbound only, and "connected" is the live plane, not a claim.
+        # The code below is the clean contract: one message code plus the numbers it was
+        # derived from. `token_mismatch` and `port_blocked` are inferences from real
+        # evidence (a rejection, or no listener), never guesses from a client claim.
         outbound = str(manifest.transport) == "outbound"
         connected = bool(plane.get("speaker_connected"))
+        rejected = int(plane.get("speaker_rejected") or 0)
+        listen_port = (
+            device.listen_port if device is not None and device.listen_port is not None
+            else (manifest.runtime.listen_port if manifest.runtime else None)
+        )
+        token_env = (
+            device.token_env if device is not None
+            else (manifest.runtime.token_env if manifest.runtime else "")
+        )
+        token_configured = bool(secrets.resolve(token_env)) if token_env else False
+        if device is not None and bool(device.allow_no_token):
+            token_configured = True
+        if outbound:
+            connection_message = "not_applicable"
+        elif connected:
+            connection_message = "connected"
+        elif rejected > 0:
+            connection_message = "token_mismatch"
+        elif device is None:
+            connection_message = "waiting_for_client"
+        elif not token_configured:
+            connection_message = "token_mismatch"
+        elif not plane.get("running"):
+            connection_message = "port_blocked"
+        else:
+            connection_message = "waiting_for_client"
         connect_step = {
             "id": "connect",
             "status": "skipped" if outbound else ("done" if connected else "pending"),
-            "evidence": {"transport": str(manifest.transport), "speaker_connected": connected,
-                         "listen_port": manifest.runtime.listen_port if manifest.runtime else None,
-                         "token_env": manifest.runtime.token_env if manifest.runtime else ""},
-            "detail": {"plane_running": bool(plane.get("running")),
-                       "plane_error": str(plane.get("error") or "")},
+            "evidence": {
+                "transport": str(manifest.transport),
+                "speaker_connected": connected,
+                "listen_port": listen_port,
+                "last_seen": plane.get("last_seen"),
+                "connection_message": connection_message,
+                "hint": _CONNECT_HINTS[connection_message],
+                "token_env": token_env,
+                "token_configured": token_configured,
+            },
+            "detail": {
+                "plane_running": bool(plane.get("running")),
+                "plane_error": str(plane.get("error") or ""),
+                "speaker_rejected": rejected,
+            },
             "actions": [] if outbound else ["connect.inspect"],
         }
 
@@ -481,6 +575,15 @@ def install_setup_routes(
         """Server-computed eight-step state; never trusts a client claim or cookie."""
         return _setup_state(plug)
 
+    @app.get("/api/v1/setup/providers", dependencies=[Depends(auth)])
+    async def setup_providers() -> dict:
+        """The keys step's render model: one row per (stage, provider) in the chains.
+
+        Each row carries a display name, the required credential fields with a plain
+        human label, a hint, an official docs URL and ``configured`` - never a value.
+        """
+        return keycheck.provider_catalog(_current())
+
     def _load_disk_config() -> Config:
         if config_path is None or not Path(config_path).exists():
             raise _setup_error(409, "no_config", "there is no config file on disk to write")
@@ -572,6 +675,27 @@ def install_setup_routes(
                         lambda data: setup_store.set_value(
                             data, ("keys", "last_saved_at"), setup_store.iso_now()),
                     )
+            elif action == "keys.test":
+                # A cheap real call, not a shape check. The result is data for the UI;
+                # a wrong key is `ok: false` (HTTP 200), not a failed request.
+                stage = str(values.get("stage") or "").strip().lower()
+                if stage not in STAGES:
+                    raise _setup_error(
+                        422, "invalid_values",
+                        f"stage must be one of {', '.join(STAGES)}",
+                        {"stage": stage, "stages": list(STAGES)},
+                    )
+                provider = str(values.get("provider") or "").strip() or None
+                try:
+                    result = await keycheck.test_provider(current, stage, provider)
+                except keycheck.KeyCheckError as exc:
+                    raise _setup_error(400, exc.code, str(exc), exc.details) from exc
+                setup_store.update(
+                    data_dir,
+                    lambda data, result=result: setup_store.set_value(
+                        data, ("keys", "last_test"), result),
+                )
+                return result
             elif action == "manual.confirm":
                 plugin, _source, _error = _select_plugin(current, requested_plug)
                 device = _target_device(current, plugin)

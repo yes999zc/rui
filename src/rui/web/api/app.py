@@ -821,6 +821,8 @@ def _plane_snapshot(app: FastAPI) -> dict:
     return {
         "running": bool(status.get("running")),
         "speaker_connected": connected,
+        # Refused links since the plane started: the setup wizard's token check.
+        "speaker_rejected": int(metrics.get("speaker_rejected") or 0),
         "speaker_device": str(status.get("device_id") or ""),
         "last_seen": getattr(app.state, "speaker_last_seen", 0.0) or None,
         "error": str(status.get("error") or ""),
