@@ -5,10 +5,12 @@
  *
  * The view never invents completion: every badge is the server's `status`, every
  * piece of evidence is the server's `evidence`, and the only actions offered are
- * the ones the server put in `step.actions`. Secrets are write-only: key/secret
- * inputs start empty, are never bound to a response value, and never leave this
- * component except in the one POST that stores them. Diagnostics are assembled
- * explicitly (no token, host, key or full config path) and only copied.
+ * the ones the server put in `step.actions` (keys.test is shown optimistically so
+ * a backend without it fails inline instead of hiding the button). Secrets are
+ * write-only: key/secret inputs start empty, are never bound to a response value,
+ * and never leave this component except in the one POST that stores them.
+ * Diagnostics are assembled explicitly (no token, host, key or full config path)
+ * and only copied.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
@@ -39,14 +41,40 @@ import {
 } from '../i18n'
 
 type Stage = 'llm' | 'asr' | 'tts'
+type KeyFieldRole = 'api_key' | 'app_id' | 'api_secret'
+type KeyTestStatus = 'ok' | 'fail' | 'error'
 
 interface SetupKey {
   name: string
-  stages: Stage[]
-  providers: string[]
+  role: KeyFieldRole
+  stage: Stage
+  provider: string
   hasValue: boolean
   hint: string
   missing: boolean
+}
+
+interface SetupKeyGroup {
+  id: string
+  stage: Stage
+  provider: string
+  product: string
+  label: string
+  fields: SetupKey[]
+  configured: boolean
+  missing: boolean
+}
+
+interface KeyTestResult {
+  status: KeyTestStatus
+  message: string
+  details?: string
+}
+
+interface PrepareStep {
+  id: string
+  text: string
+  fromManifest: boolean
 }
 
 interface StepIssue {
@@ -81,6 +109,39 @@ const STAGE_LABELS: Record<Stage, MsgKey> = {
   asr: 'setup.keys.stage.asr',
   tts: 'setup.keys.stage.tts',
 }
+
+/** Human names for the three uses, independent of the backend's LLM/ASR/TTS ids. */
+const STAGE_USE_LABELS: Record<Stage, MsgKey> = {
+  llm: 'setup.v2.keys.use.llm',
+  asr: 'setup.v2.keys.use.asr',
+  tts: 'setup.v2.keys.use.tts',
+}
+
+const KEY_ROLE_LABELS: Record<KeyFieldRole, MsgKey> = {
+  api_key: 'setup.v2.keys.field.apiKey',
+  app_id: 'setup.v2.keys.field.appId',
+  api_secret: 'setup.v2.keys.field.apiSecret',
+}
+
+/** Product names for the group heading; unknown ids fall back to providerName(). */
+const PRODUCT_RULES: Array<{ re: RegExp; key: MsgKey }> = [
+  { re: /deepseek|^ds-/i, key: 'setup.v2.keys.product.deepseek' },
+  { re: /volc|doubao/i, key: 'setup.v2.keys.product.volc' },
+  { re: /xfyun|iflytek/i, key: 'setup.v2.keys.product.xfyun' },
+  { re: /siliconflow|silicon|^sf-/i, key: 'setup.v2.keys.product.siliconflow' },
+  { re: /local|sherpa/i, key: 'setup.v2.keys.product.local' },
+]
+
+/** Generic device-side checklist used only when the plug manifest has no steps. */
+const PREPARE_FALLBACK_KEYS: MsgKey[] = [
+  'setup.v2.prepare.fallback.ip',
+  'setup.v2.prepare.fallback.ssh',
+  'setup.v2.prepare.fallback.clientPath',
+  'setup.v2.prepare.fallback.configPath',
+  'setup.v2.prepare.fallback.token',
+  'setup.v2.prepare.fallback.restart',
+  'setup.v2.prepare.fallback.log',
+]
 
 const STEP_TITLES: Record<string, MsgKey> = {
   keys: 'setup.step.keys',
@@ -160,6 +221,8 @@ const ERROR_KEYS: Record<string, MsgKey> = {
   missing_keys: 'setup.error.missing_keys',
   missing_models: 'setup.error.missing_models',
   plane_restart_failed: 'setup.error.plane_restart_failed',
+  keys_test_failed: 'setup.error.keys_test_failed',
+  keys_test_unavailable: 'setup.error.keys_test_unavailable',
 }
 
 const CHECK_LABELS: Record<string, MsgKey> = {
@@ -205,6 +268,8 @@ const retryFns: Record<string, () => Promise<unknown>> = {}
 
 const catalog = ref<CatalogDoc | null>(null)
 const keyDrafts = ref<Record<string, string>>({})
+const keyTestBusy = ref('')
+const keyTestResults = ref<Record<string, KeyTestResult>>({})
 
 const deviceDraft = ref<DeviceDoc | null>(null)
 const deviceDraftKey = ref('')
@@ -216,7 +281,7 @@ const paramBools = ref<Record<string, boolean>>({})
 const secretDrafts = ref<Record<string, string>>({})
 const fieldErrors = ref<Record<string, string>>({})
 
-const prepareConfirmed = ref(false)
+const prepareChecks = ref<Record<string, boolean>>({})
 const prepareRollbackAck = ref(false)
 
 const connectInfo = ref<DeviceConnectInfo | null>(null)
@@ -283,6 +348,9 @@ const manifestVerified = computed<boolean | null>(() => {
 })
 const manifestTransport = computed(() => selectedDeviceManifest.value?.transport ?? '')
 const listenPort = computed(() => {
+  const reported = evidence(connectStep.value).listen_port
+  if (typeof reported === 'number' && reported > 0) return reported
+  if (typeof reported === 'string' && reported.trim()) return reported
   const runtime = selectedDeviceManifest.value?.runtime
   if (runtime?.listen_port) return runtime.listen_port
   const resolved = plugDetail.value?.resolved?.devices?.find(
@@ -291,6 +359,8 @@ const listenPort = computed(() => {
   return resolved?.listen_port ?? 4412
 })
 const tokenEnv = computed(() => {
+  const reported = evidence(connectStep.value).token_env
+  if (typeof reported === 'string' && reported.trim()) return reported
   const runtime = selectedDeviceManifest.value?.runtime
   if (runtime?.token_env) return runtime.token_env
   const resolved = plugDetail.value?.resolved?.devices?.find(
@@ -360,37 +430,109 @@ const stageOk = computed<Record<string, boolean>>(() => {
   return out
 })
 
+function keyRoleFromSuffix(path: string): KeyFieldRole {
+  if (path.endsWith('app_id_env')) return 'app_id'
+  if (path.endsWith('api_secret_env')) return 'api_secret'
+  return 'api_key'
+}
+
+function keyRoleFromEnv(name: string): KeyFieldRole {
+  if (/APP_?ID|APPID/i.test(name)) return 'app_id'
+  if (/SECRET/i.test(name)) return 'api_secret'
+  return 'api_key'
+}
+
+/** Best-effort provider id when the catalog cannot tell us which chain owns an env. */
+function providerFromEnv(name: string): string {
+  if (/^VOLC/i.test(name)) return 'volc'
+  if (/^XFYUN/i.test(name)) return 'xfyun'
+  if (/DEEPSEEK|LLM_KEY/i.test(name)) return 'deepseek'
+  if (/SILICON|RUI_ASR|RUI_TTS/i.test(name)) return 'siliconflow'
+  return ''
+}
+
+/** Short, human product name; never the raw env var or provider id. */
+function keyProductName(provider: string): string {
+  for (const rule of PRODUCT_RULES) {
+    if (rule.re.test(provider)) return t(rule.key)
+  }
+  if (provider) return providerName(provider)
+  return t('setup.v2.keys.product.unknown')
+}
+
+function keyFieldHint(role: KeyFieldRole, stage: Stage, provider: string): string {
+  const product = keyProductName(provider)
+  if (role === 'app_id') return t('setup.v2.keys.hint.appId', { provider: product })
+  if (role === 'api_secret') return t('setup.v2.keys.hint.apiSecret', { provider: product })
+  return t('setup.v2.keys.hint.apiKey', {
+    provider: product,
+    use: t(STAGE_USE_LABELS[stage]),
+  })
+}
+
+function keyTestLabel(status: KeyTestStatus): string {
+  if (status === 'ok') return t('setup.v2.keys.testOk')
+  if (status === 'fail') return t('setup.v2.keys.testFail')
+  return t('setup.v2.keys.testError')
+}
+
+function keyTestClass(status: KeyTestStatus): string {
+  if (status === 'ok') return 'badge-ok'
+  if (status === 'fail') return 'badge-fail'
+  return 'badge-warn'
+}
+
+/** A changed draft invalidates the previous smoke-test result for that group. */
+function clearKeyTest(groupId: string): void {
+  if (!keyTestResults.value[groupId]) return
+  const next = { ...keyTestResults.value }
+  delete next[groupId]
+  keyTestResults.value = next
+}
+
 /**
- * Keys the wizard must show, derived from the live catalog (active chain →
- * provider env names → secrets table) plus any name the server reports missing.
- * Only presence is known; no value is ever read back.
+ * Keys the wizard must show, grouped by provider + use (LLM/ASR/TTS). Every row
+ * knows its human field label, one-line hint and configured state; only presence
+ * is known, no value is ever read back.
  */
-const requiredKeys = computed<SetupKey[]>(() => {
+const keyGroups = computed<SetupKeyGroup[]>(() => {
   const missing = new Set(missingKeyNames.value)
   const doc = catalog.value
-  const buckets = new Map<string, SetupKey>()
+  const groups = new Map<string, SetupKeyGroup>()
+  const known = new Set<string>()
 
   const remember = (
     env: string,
     stage: Stage,
     provider: string,
+    role: KeyFieldRole,
     hasValue: boolean,
-    hint: string,
   ) => {
-    const existing = buckets.get(env)
-    if (existing) {
-      if (!existing.stages.includes(stage)) existing.stages.push(stage)
-      if (provider && !existing.providers.includes(provider)) existing.providers.push(provider)
-      existing.hasValue = existing.hasValue || hasValue
-      existing.missing = missing.has(env) || !existing.hasValue
-      return
+    known.add(env)
+    const id = `${stage}:${provider || 'unknown'}`
+    let group = groups.get(id)
+    if (!group) {
+      const product = keyProductName(provider)
+      group = {
+        id,
+        stage,
+        provider,
+        product,
+        label: `${t(STAGE_USE_LABELS[stage])} · ${product}`,
+        fields: [],
+        configured: false,
+        missing: true,
+      }
+      groups.set(id, group)
     }
-    buckets.set(env, {
+    if (group.fields.some((field) => field.name === env)) return
+    group.fields.push({
       name: env,
-      stages: [stage],
-      providers: provider ? [provider] : [],
+      role,
+      stage,
+      provider,
       hasValue,
-      hint,
+      hint: keyFieldHint(role, stage, provider),
       missing: missing.has(env) || !hasValue,
     })
   }
@@ -407,25 +549,32 @@ const requiredKeys = computed<SetupKey[]>(() => {
           const env = String(doc.values[field.path] ?? '').trim()
           if (!env) continue
           const meta = doc.secrets?.[env]
-          remember(env, stage, provider, Boolean(meta?.has_value), pickLocalized(meta?.hint))
+          remember(env, stage, provider, keyRoleFromSuffix(field.path), Boolean(meta?.has_value))
         }
       }
     }
   }
 
+  // The server can report an env that is not in the catalog (broken/partial
+  // config). Keep it visible, but in a readable group rather than a raw row.
   for (const name of missing) {
-    if (!buckets.has(name)) {
-      buckets.set(name, {
-        name,
-        stages: STAGES.filter((stage) => !stageOk.value[stage]),
-        providers: [],
-        hasValue: false,
-        hint: '',
-        missing: true,
-      })
-    }
+    if (known.has(name)) continue
+    const stage = STAGES.find((item) => !stageOk.value[item]) ?? 'llm'
+    remember(name, stage, providerFromEnv(name), keyRoleFromEnv(name), false)
   }
-  return [...buckets.values()]
+
+  const order = new Map(STAGES.map((stage, index) => [stage, index]))
+  return [...groups.values()]
+    .map((group) => {
+      const configured = group.fields.length > 0 && group.fields.every((field) => field.hasValue)
+      return { ...group, configured, missing: !configured }
+    })
+    .filter((group) => group.fields.length > 0)
+    .sort(
+      (left, right) =>
+        (order.get(left.stage) ?? 99) - (order.get(right.stage) ?? 99) ||
+        left.label.localeCompare(right.label),
+    )
 })
 
 const anyKeyInput = computed(() =>
@@ -446,6 +595,52 @@ const testChecks = computed<TestCheck[]>(() => {
     (item): item is TestCheck => Boolean(item) && typeof item === 'object',
   )
 })
+
+/** Compact pass/fail summary reused in the params card and the test card. */
+const testOutcome = computed<{ status: 'ok' | 'fail'; message: string; at: string } | null>(() => {
+  const step = testStep.value
+  if (!step) return null
+  const ev = evidence(step)
+  const at = String(ev.at ?? '')
+  const checks = testChecks.value
+  if (!at && !checks.length && !ev.stored && !ev.speaker_connected) return null
+  const passed = Boolean(ev.stored) || Boolean(ev.speaker_connected)
+  if (passed) return { status: 'ok', message: t('setup.v2.params.testPassed'), at }
+  const failed = checks.filter((check) => check.ok === false).map(checkLabel)
+  return {
+    status: 'fail',
+    message: failed.length
+      ? t('setup.v2.params.testFailed', { items: failed.join(' / ') })
+      : t('setup.v2.params.testFailedGeneric'),
+    at,
+  }
+})
+
+/** Device-side checklist: manifest steps when provided, generic fallback otherwise. */
+const prepareSteps = computed<PrepareStep[]>(() => {
+  const manifestSteps = (deviceSide.value?.install_steps ?? [])
+    .map((line) => String(line).trim())
+    .filter(Boolean)
+  if (manifestSteps.length) {
+    return manifestSteps.map((text, index) => ({
+      id: `manifest:${index}:${text.slice(0, 24)}`,
+      text,
+      fromManifest: true,
+    }))
+  }
+  return PREPARE_FALLBACK_KEYS.map((key) => ({
+    id: `fallback:${key}`,
+    text: t(key),
+    fromManifest: false,
+  }))
+})
+const prepareFromManifest = computed(() => (deviceSide.value?.install_steps?.length ?? 0) > 0)
+const prepareCheckedCount = computed(
+  () => prepareSteps.value.filter((item) => prepareChecks.value[item.id]).length,
+)
+const prepareAllChecked = computed(
+  () => prepareSteps.value.length > 0 && prepareCheckedCount.value === prepareSteps.value.length,
+)
 
 const verifyAudioBytes = computed(() => {
   const raw = evidence(verifyStep.value).audio_bytes
@@ -470,6 +665,88 @@ const wsCopyDisabled = computed(() => {
 const connectSkipped = computed(
   () => connectStep.value?.status === 'skipped' || manifestTransport.value === 'outbound',
 )
+
+type ConnectStatusTone = 'ok' | 'warn' | 'fail' | 'muted'
+
+/** One human-readable status line for the read-only hook-up card. */
+const connectStatus = computed<{
+  tone: ConnectStatusTone
+  badge: string
+  text: string
+}>(() => {
+  if (connectSkipped.value) {
+    return {
+      tone: 'muted',
+      badge: t('setup.v2.connect.badge.outbound'),
+      text: t('setup.v2.connect.status.outbound'),
+    }
+  }
+  if (!deviceId.value) {
+    return {
+      tone: 'muted',
+      badge: t('setup.v2.connect.badge.noDevice'),
+      text: t('setup.v2.connect.status.noDevice'),
+    }
+  }
+  if (state.value?.plane_error) {
+    return {
+      tone: 'fail',
+      badge: t('setup.v2.connect.badge.planeError'),
+      text: t('setup.v2.connect.status.planeError', { error: state.value.plane_error }),
+    }
+  }
+  const connectEvidence = evidence(connectStep.value)
+  const connectionMessage = String(connectEvidence.connection_message ?? '')
+  if (Boolean(connectEvidence.speaker_connected) || connectionMessage === 'connected') {
+    return {
+      tone: 'ok',
+      badge: t('setup.v2.connect.badge.connected'),
+      text: t('setup.v2.connect.status.connected'),
+    }
+  }
+  if (connectionMessage === 'token_mismatch') {
+    return {
+      tone: 'fail',
+      badge: t('setup.v2.connect.badge.tokenMismatch'),
+      text: t('setup.v2.connect.status.tokenMismatch'),
+    }
+  }
+  if (connectionMessage === 'port_blocked') {
+    return {
+      tone: 'fail',
+      badge: t('setup.v2.connect.badge.portBlocked'),
+      text: t('setup.v2.connect.status.portBlocked'),
+    }
+  }
+  const info = connectInfo.value
+  if (info && !info.configured && !info.allow_no_token) {
+    return {
+      tone: 'warn',
+      badge: t('setup.v2.connect.badge.waiting'),
+      text: t('setup.v2.connect.status.tokenMissing', {
+        env: info.token_env || tokenEnv.value,
+      }),
+    }
+  }
+  return {
+    tone: 'warn',
+    badge: t('setup.v2.connect.badge.waiting'),
+    text: t('setup.v2.connect.status.waiting'),
+  }
+})
+
+function connectToneClass(tone: ConnectStatusTone): string {
+  switch (tone) {
+    case 'ok':
+      return 'badge-ok'
+    case 'fail':
+      return 'badge-fail'
+    case 'muted':
+      return 'badge-muted'
+    default:
+      return 'badge-warn'
+  }
+}
 
 const currentWakeWord = computed(
   () => cleanWakeWords()[0] || t('setup.device.wakePlaceholder'),
@@ -599,17 +876,17 @@ function evidenceText(step: SetupStepState): string {
         .filter(Boolean)
         .join(' · ')
     case 'connect':
-      return [
-        `${t('setup.v2.source')}: ${text(ev.transport)}`,
-        `${t('setup.v2.connect.connected')}: ${flag(ev.speaker_connected)}`,
-        `${t('setup.v2.connect.listenPort')}: ${text(ev.listen_port)}`,
-      ].join(' · ')
+      return connectStatus.value.text
     case 'test':
       return [
         `${t('setup.v2.test.stored')}: ${flag(ev.stored)}`,
-        `${t('setup.v2.test.at', { at: text(ev.at) })}`,
-        `${t('setup.v2.connect.connected')}: ${flag(ev.speaker_connected)}`,
-      ].join(' · ')
+        ev.at ? `${t('setup.v2.test.at', { at: text(ev.at) })}` : '',
+        ev.speaker_connected
+          ? t('setup.v2.connect.badge.connected')
+          : t('setup.v2.connect.badge.waiting'),
+      ]
+        .filter(Boolean)
+        .join(' · ')
     case 'verify':
       return [
         `${t('setup.v2.verify.audio', { n: text(ev.audio_bytes) })}`,
@@ -653,11 +930,6 @@ function plugReason(plug: SetupPlugSummary): string {
 function blockedText(block: { code: string; message: string }): string {
   const key = ERROR_KEYS[block.code]
   return key ? t(key) : block.message
-}
-
-function selectInput(event: Event): void {
-  const input = event.target as HTMLInputElement | null
-  input?.select()
 }
 
 function plugOptionLabel(plug: SetupPlugSummary): string {
@@ -1246,11 +1518,151 @@ async function saveKeys(): Promise<void> {
     if (value.trim()) values[name] = value.trim()
   }
   if (!Object.keys(values).length) return
+  if (keyTestBusy.value) return
   const ok = await runStep('keys', 'keys.save', { values }, { retry: saveKeys })
   if (ok) {
     keyDrafts.value = {}
+    keyTestResults.value = {}
     catalog.value = await api.catalog().catch(() => catalog.value)
     notice.value = t('setup.v2.keys.saved')
+  }
+}
+
+function keyTestCheckName(check: unknown, index: number): string {
+  if (!check || typeof check !== 'object') {
+    return `${t('setup.v2.details')} ${index + 1}`
+  }
+  const obj = check as Record<string, unknown>
+  const name = obj.name ?? obj.id ?? obj.key ?? obj.env
+  return name ? String(name) : `${t('setup.v2.details')} ${index + 1}`
+}
+
+/**
+ * Parse a key-test result without assuming one backend shape: the step detail,
+ * the step evidence, or the top-level response may carry `{ok, message, checks}`.
+ */
+function parseKeyTestResult(response: unknown, group: SetupKeyGroup): KeyTestResult {
+  const record =
+    response && typeof response === 'object'
+      ? (response as Record<string, unknown>)
+      : {}
+  const rawSteps = record.steps
+  const keysStep = Array.isArray(rawSteps)
+    ? (rawSteps as SetupStepState[]).find((step) => step.id === 'keys')
+    : undefined
+  const detail = (keysStep?.detail ?? {}) as Record<string, unknown>
+  const stepEvidence = (keysStep?.evidence ?? {}) as Record<string, unknown>
+  const candidates = [
+    // The backend currently answers keys.test with the result itself.
+    record,
+    detail.keys_test,
+    detail.key_test,
+    detail.test,
+    detail.result,
+    stepEvidence.keys_test,
+    stepEvidence.key_test,
+    stepEvidence.test,
+    record.keys_test,
+    record.key_test,
+    record.test,
+  ]
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+    const obj = candidate as Record<string, unknown>
+    const rawChecks = obj.checks ?? obj.results
+    const checks = Array.isArray(rawChecks) ? rawChecks : []
+    const failed = checks.filter(
+      (check) =>
+        Boolean(check) &&
+        typeof check === 'object' &&
+        (check as Record<string, unknown>).ok === false,
+    )
+    const explicit = [obj.ok, obj.passed, obj.success].find(
+      (value) => typeof value === 'boolean',
+    )
+    const message = pickLocalized(obj.message ?? obj.hint ?? obj.error ?? '')
+    const details = failed.length
+      ? t('setup.v2.keys.testChecksFailed', {
+          items: failed
+            .map((check, index) => keyTestCheckName(check, index))
+            .join(' / '),
+        })
+      : undefined
+    if (typeof explicit === 'boolean') {
+      const ok = explicit && failed.length === 0
+      return {
+        status: ok ? 'ok' : 'fail',
+        message: ok
+          ? t('setup.v2.keys.testPass', { provider: group.product })
+          : t('setup.v2.keys.testFailMessage', { provider: group.product }),
+        details: details || message || undefined,
+      }
+    }
+    if (checks.length) {
+      const ok = failed.length === 0
+      return {
+        status: ok ? 'ok' : 'fail',
+        message: ok
+          ? t('setup.v2.keys.testPass', { provider: group.product })
+          : t('setup.v2.keys.testFailMessage', { provider: group.product }),
+        details,
+      }
+    }
+    if (message) return { status: 'error', message }
+  }
+  return { status: 'error', message: t('setup.v2.keys.testNoResult') }
+}
+
+async function testKeyGroup(group: SetupKeyGroup): Promise<void> {
+  if (busyStep.value || busyGlobal.value || keyTestBusy.value) return
+  keyTestBusy.value = group.id
+  const remaining = { ...keyTestResults.value }
+  delete remaining[group.id]
+  keyTestResults.value = remaining
+  expanded.value = { ...expanded.value, keys: true }
+  try {
+    const response = await api.setupStep({
+      plug: selectedPlug.value,
+      step: 'keys',
+      action: 'keys.test',
+      // No secret values leave the browser: only the provider/use and env names.
+      values: {
+        stage: group.stage,
+        provider: group.provider,
+        names: group.fields.map((field) => field.name),
+      },
+    })
+    const result = parseKeyTestResult(response, group)
+    // Current backend returns the test result itself; older/newer shapes return
+    // the whole SetupState. Recompute state in the former case, apply it in the latter.
+    if (Array.isArray((response as unknown as Record<string, unknown>).steps)) {
+      await applyState(response)
+    } else {
+      await refreshState({ silent: true })
+    }
+    keyTestResults.value = { ...keyTestResults.value, [group.id]: result }
+  } catch (exc) {
+    const issue = describeError(exc)
+    const unavailable = [
+      'unknown_action',
+      'http_400',
+      'http_404',
+      'keys_test_unavailable',
+      'unknown_stage',
+      'unknown_provider',
+    ].includes(issue.code)
+    keyTestResults.value = {
+      ...keyTestResults.value,
+      [group.id]: {
+        status: 'error',
+        message: unavailable
+          ? t('setup.v2.keys.testUnavailable', { code: issue.code })
+          : issue.message,
+        details: issue.hint || issue.details || undefined,
+      },
+    }
+  } finally {
+    keyTestBusy.value = ''
   }
 }
 
@@ -1269,7 +1681,7 @@ async function saveParams(): Promise<void> {
 }
 
 async function confirmPrepare(): Promise<void> {
-  if (!prepareConfirmed.value) return
+  if (!prepareAllChecked.value) return
   if (manifestClass.value === 'B' && !prepareRollbackAck.value) return
   const ok = await runStep(
     'prepare',
@@ -1278,7 +1690,7 @@ async function confirmPrepare(): Promise<void> {
     { retry: confirmPrepare },
   )
   if (ok) {
-    prepareConfirmed.value = false
+    prepareChecks.value = {}
     prepareRollbackAck.value = false
     notice.value = t('setup.v2.prepare.confirmed')
   }
@@ -1332,7 +1744,7 @@ async function pollConnect(): Promise<void> {
   await refreshState({ silent: true })
   if (stepById('connect')?.status === 'done') {
     stopWait()
-    notice.value = t('setup.v2.connect.connected')
+    notice.value = t('setup.v2.connect.status.connected')
     return
   }
   if (waitTicks.value >= 20) {
@@ -1575,35 +1987,76 @@ onBeforeUnmount(stopWait)
             </div>
           </div>
 
-          <!-- keys: write-only provider keys, presence from evidence -->
+          <!-- keys: grouped by provider + use, each group testable -->
           <template v-if="step.id === 'keys'">
             <p class="field-hint">{{ t('setup.keys.lede') }}</p>
-            <div v-if="requiredKeys.length" class="setup-fields">
-              <div v-for="key in requiredKeys" :key="key.name" class="field-row setup-key-row">
-                <div class="field-meta">
-                  <div class="field-label"><code class="mono">{{ key.name }}</code></div>
-                  <div class="setup-key-tags">
-                    <span v-for="stage in key.stages" :key="stage" class="badge">{{ stageLabel(stage) }}</span>
-                    <span class="badge" :class="key.missing ? 'badge-warn' : 'badge-ok'">
-                      {{ key.missing ? t('setup.keys.missing') : t('setup.keys.configured') }}
-                    </span>
-                    <span v-if="key.providers.length" class="field-hint">
-                      {{ t('setup.keys.usedBy', { providers: key.providers.map(providerName).join(' / ') }) }}
+            <div v-if="keyGroups.length" class="setup-key-groups">
+              <section v-for="group in keyGroups" :key="group.id" class="setup-key-group">
+                <header class="setup-key-group-head">
+                  <div class="setup-key-group-title">
+                    <h3>{{ group.label }}</h3>
+                    <span class="badge" :class="group.configured ? 'badge-ok' : 'badge-warn'">
+                      {{ group.configured ? t('setup.keys.configured') : t('setup.keys.missing') }}
                     </span>
                   </div>
-                  <p v-if="key.hint" class="field-hint setup-key-hint">{{ key.hint }}</p>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    :disabled="busyStep !== '' || busyGlobal !== '' || keyTestBusy !== ''"
+                    @click="testKeyGroup(group)"
+                  >
+                    {{ keyTestBusy === group.id ? t('setup.v2.keys.testing') : t('setup.v2.keys.test') }}
+                  </button>
+                </header>
+                <div class="setup-key-fields">
+                  <div v-for="field in group.fields" :key="field.name" class="setup-key-field">
+                    <div class="setup-key-field-meta">
+                      <div class="setup-key-field-label">
+                        <label class="field-label" :for="`setup-key-${field.name}`">
+                          {{ t(KEY_ROLE_LABELS[field.role]) }}
+                        </label>
+                        <span class="badge" :class="field.missing ? 'badge-warn' : 'badge-ok'">
+                          {{ field.missing ? t('setup.keys.missing') : t('setup.keys.configured') }}
+                        </span>
+                      </div>
+                      <p class="field-hint">{{ field.hint }}</p>
+                      <code class="setup-key-env mono">
+                        {{ t('setup.v2.keys.envLabel') }}: {{ field.name }}
+                      </code>
+                    </div>
+                    <div class="field-control">
+                      <input
+                        :id="`setup-key-${field.name}`"
+                        v-model="keyDrafts[field.name]"
+                        type="password"
+                        autocomplete="off"
+                        spellcheck="false"
+                        :placeholder="t('secrets.placeholder')"
+                        @input="clearKeyTest(group.id)"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div class="field-control">
-                  <input
-                    :id="`setup-key-${key.name}`"
-                    v-model="keyDrafts[key.name]"
-                    type="password"
-                    autocomplete="off"
-                    spellcheck="false"
-                    :placeholder="t('secrets.placeholder')"
-                  />
+                <div
+                  v-if="keyTestResults[group.id]"
+                  class="setup-key-test"
+                  :class="`is-${keyTestResults[group.id].status}`"
+                  role="status"
+                >
+                  <span
+                    class="badge"
+                    :class="keyTestClass(keyTestResults[group.id].status)"
+                  >
+                    {{ keyTestLabel(keyTestResults[group.id].status) }}
+                  </span>
+                  <div>
+                    <strong>{{ keyTestResults[group.id].message }}</strong>
+                    <p v-if="keyTestResults[group.id].details" class="field-hint">
+                      {{ keyTestResults[group.id].details }}
+                    </p>
+                  </div>
                 </div>
-              </div>
+              </section>
             </div>
             <p v-else-if="!catalog" class="field-hint">{{ t('setup.keys.unavailable') }}</p>
             <p v-else class="field-hint">{{ t('setup.v2.keys.none') }}</p>
@@ -1611,7 +2064,7 @@ onBeforeUnmount(stopWait)
               <button
                 type="button"
                 class="btn btn-primary"
-                :disabled="busyStep !== '' || busyGlobal !== '' || !anyKeyInput"
+                :disabled="busyStep !== '' || busyGlobal !== '' || keyTestBusy !== '' || !anyKeyInput"
                 @click="saveKeys"
               >
                 {{ busyStep === 'keys' ? t('common.saving') : t('setup.v2.keys.save') }}
@@ -1657,12 +2110,6 @@ onBeforeUnmount(stopWait)
                 </a>
                 <code v-else-if="deviceSide.source" class="mono">{{ deviceSide.source }}</code>
               </div>
-              <div v-if="deviceSide.install_steps.length" class="setup-manifest-row setup-manifest-block">
-                <span class="field-label">{{ t('setup.v2.prepare.steps') }}</span>
-                <ol>
-                  <li v-for="(line, at) in deviceSide.install_steps" :key="at">{{ line }}</li>
-                </ol>
-              </div>
               <div v-if="deviceSide.rollback" class="setup-manifest-row setup-manifest-block">
                 <span class="field-label">{{ t('setup.v2.prepare.rollback') }}</span>
                 <p>{{ deviceSide.rollback }}</p>
@@ -1673,19 +2120,41 @@ onBeforeUnmount(stopWait)
             <p v-else-if="deviceSide" class="field-hint">{{ t('setup.v2.prepare.noArtifact') }}</p>
 
             <div v-if="hasAction(step, 'manual.confirm') && deviceSide && deviceSide.artifact !== 'none'" class="setup-fields">
-              <label class="setup-check">
-                <input v-model="prepareConfirmed" type="checkbox" :disabled="busyStep !== ''" />
-                <span>{{ t('setup.v2.prepare.confirm') }}</span>
-              </label>
+              <div class="setup-checklist">
+                <div class="setup-checklist-head">
+                  <span class="field-label">{{ t('setup.v2.prepare.checklist') }}</span>
+                  <span class="field-hint">
+                    {{ t('setup.v2.prepare.checklistProgress', { done: prepareCheckedCount, total: prepareSteps.length }) }}
+                  </span>
+                </div>
+                <p v-if="!prepareFromManifest" class="field-hint">
+                  {{ t('setup.v2.prepare.fallbackNote') }}
+                </p>
+                <label
+                  v-for="(item, at) in prepareSteps"
+                  :key="item.id"
+                  class="setup-check setup-prepare-item"
+                  :class="{ checked: prepareChecks[item.id] }"
+                >
+                  <input
+                    v-model="prepareChecks[item.id]"
+                    type="checkbox"
+                    :disabled="busyStep !== ''"
+                  />
+                  <span class="setup-prepare-num mono">{{ at + 1 }}</span>
+                  <span>{{ item.text }}</span>
+                </label>
+              </div>
               <label v-if="manifestClass === 'B'" class="setup-check">
                 <input v-model="prepareRollbackAck" type="checkbox" :disabled="busyStep !== ''" />
                 <span>{{ t('setup.v2.prepare.rollbackAck') }}</span>
               </label>
+              <p class="field-hint">{{ t('setup.v2.prepare.checkAllHint') }}</p>
               <div class="actions">
                 <button
                   type="button"
                   class="btn btn-primary"
-                  :disabled="busyStep !== '' || busyGlobal !== '' || !prepareConfirmed || (manifestClass === 'B' && !prepareRollbackAck)"
+                  :disabled="busyStep !== '' || busyGlobal !== '' || !prepareAllChecked || (manifestClass === 'B' && !prepareRollbackAck)"
                   @click="confirmPrepare"
                 >
                   {{ busyStep === 'prepare' ? t('common.saving') : t('setup.v2.prepare.submit') }}
@@ -1702,6 +2171,7 @@ onBeforeUnmount(stopWait)
           <template v-else-if="step.id === 'params'">
             <p v-if="!selectedDeviceManifest" class="field-hint">{{ t('setup.v2.params.noManifest') }}</p>
             <template v-else>
+              <p class="field-hint setup-step-lede">{{ t('setup.v2.params.lede') }}</p>
               <p v-if="unsupportedParam" class="note fail">
                 {{ t('setup.v2.params.unsupported', { type: unsupportedParam.type }) }}
               </p>
@@ -1855,7 +2325,34 @@ onBeforeUnmount(stopWait)
                 >
                   {{ busyStep === 'params' ? t('common.saving') : t('setup.v2.params.save') }}
                 </button>
+                <button
+                  type="button"
+                  class="btn"
+                  :disabled="busyStep !== '' || busyGlobal !== '' || !deviceId"
+                  @click="runTest"
+                >
+                  {{ busyStep === 'test' ? t('setup.v2.params.testing') : t('setup.v2.params.test') }}
+                </button>
               </div>
+              <div
+                v-if="testOutcome"
+                class="setup-test-outcome"
+                :class="testOutcome.status === 'ok' ? 'is-ok' : 'is-fail'"
+                role="status"
+              >
+                <span class="badge" :class="testOutcome.status === 'ok' ? 'badge-ok' : 'badge-fail'">
+                  {{ testOutcome.status === 'ok' ? t('setup.v2.test.ok') : t('setup.v2.test.fail') }}
+                </span>
+                <span>{{ testOutcome.message }}</span>
+                <span v-if="testOutcome.at" class="field-hint">
+                  {{ t('setup.v2.test.at', { at: testOutcome.at }) }}
+                </span>
+              </div>
+              <p v-if="issues.test" class="note fail" role="alert">
+                {{ issues.test?.message }}
+                <template v-if="issues.test?.hint"> — {{ issues.test?.hint }}</template>
+              </p>
+              <p v-else-if="!testOutcome" class="field-hint">{{ t('setup.v2.params.testHint') }}</p>
               <p class="field-hint">{{ t('setup.v2.params.note') }}</p>
             </template>
           </template>
@@ -1903,15 +2400,16 @@ onBeforeUnmount(stopWait)
             </div>
           </template>
 
-          <!-- connect: ws URL + token from the one endpoint that returns it -->
+          <!-- connect: read-only info card + one human status line -->
           <template v-else-if="step.id === 'connect'">
-            <p v-if="connectSkipped" class="field-hint">{{ t('setup.v2.connect.outbound') }}</p>
-            <p v-else-if="!deviceId" class="field-hint">{{ t('setup.v2.connect.noDevice') }}</p>
-            <template v-else>
-              <div class="setup-connect-meta">
-                <span class="field-hint">{{ t('setup.v2.connect.listenPort') }}: <code class="mono">{{ listenPort }}</code></span>
-                <span class="field-hint">{{ t('setup.v2.connect.tokenEnv') }}: <code class="mono">{{ tokenEnv }}</code></span>
-              </div>
+            <div class="setup-connect-status" :class="`is-${connectStatus.tone}`" role="status">
+              <span class="field-label">{{ t('setup.v2.connect.statusLabel') }}</span>
+              <span class="badge" :class="connectToneClass(connectStatus.tone)">
+                {{ connectStatus.badge }}
+              </span>
+              <span>{{ connectStatus.text }}</span>
+            </div>
+            <template v-if="!connectSkipped && deviceId">
               <p v-if="connectBusy" class="field-hint">{{ t('setup.connect.loading') }}</p>
               <div v-else-if="connectError" class="note fail" role="alert">
                 {{ t('setup.connect.loadError', { message: connectError }) }}
@@ -1919,100 +2417,98 @@ onBeforeUnmount(stopWait)
                   {{ t('setup.connect.retry') }}
                 </button>
               </div>
-              <template v-else-if="connectInfo">
-                <div class="connect-fields">
-                  <div class="connect-field">
-                    <label class="field-label" for="connect-ws">{{ t('setup.connect.wsUrl') }}</label>
-                    <div class="copy-row">
-                      <input
-                        id="connect-ws"
-                        :value="wsDisplay"
-                        readonly
-                        spellcheck="false"
-                        class="mono"
-                        @focus="selectInput"
-                      />
-                      <button
-                        type="button"
-                        class="btn btn-sm"
-                        :disabled="wsCopyDisabled"
-                        @click="copyText(connectInfo.ws_url, 'ws')"
-                      >
-                        {{ copied === 'ws' ? t('setup.connect.copied') : t('setup.connect.copy') }}
-                      </button>
-                    </div>
+              <div v-else-if="connectInfo" class="setup-connect-card">
+                <div class="setup-connect-card-head">
+                  <span class="field-label">{{ t('setup.v2.connect.infoTitle') }}</span>
+                  <span class="field-hint">{{ t('setup.v2.connect.readonlyHint') }}</span>
+                </div>
+                <div class="setup-connect-row">
+                  <span class="setup-connect-row-label">{{ t('setup.connect.wsUrl') }}</span>
+                  <div class="copy-row">
+                    <code class="setup-connect-value mono">{{ wsDisplay }}</code>
+                    <button
+                      type="button"
+                      class="btn btn-sm"
+                      :disabled="wsCopyDisabled"
+                      @click="copyText(connectInfo.ws_url, 'ws')"
+                    >
+                      {{ copied === 'ws' ? t('setup.connect.copied') : t('setup.connect.copy') }}
+                    </button>
                   </div>
-                  <div class="connect-field">
-                    <div class="connect-label-row">
-                      <label class="field-label" for="connect-token">{{ t('setup.connect.token') }}</label>
-                      <span class="field-hint mono">{{ connectInfo.token_env }}</span>
-                    </div>
-                    <div class="copy-row">
-                      <input
-                        id="connect-token"
-                        :value="tokenVisible ? connectInfo.token : maskedToken"
-                        readonly
-                        spellcheck="false"
-                        autocomplete="off"
-                        class="mono"
-                        :aria-label="t('setup.connect.token')"
-                      />
-                      <button
-                        type="button"
-                        class="btn btn-sm"
-                        :disabled="!connectInfo.token"
-                        @click="tokenVisible = !tokenVisible"
-                      >
-                        {{ tokenVisible ? t('setup.connect.hide') : t('setup.connect.show') }}
-                      </button>
-                      <button
-                        type="button"
-                        class="btn btn-sm"
-                        :disabled="!connectInfo.token"
-                        @click="copyText(connectInfo.token, 'token')"
-                      >
-                        {{ copied === 'token' ? t('setup.connect.copied') : t('setup.connect.copy') }}
-                      </button>
-                    </div>
-                    <p class="field-hint">{{ t('setup.connect.tokenHint') }}</p>
+                  <p class="field-hint">{{ t('setup.v2.connect.wsHint') }}</p>
+                </div>
+                <div class="setup-connect-row">
+                  <div class="setup-connect-row-head">
+                    <span class="setup-connect-row-label">{{ t('setup.connect.token') }}</span>
+                    <span class="badge" :class="connectInfo.configured ? 'badge-ok' : 'badge-warn'">
+                      {{ connectInfo.configured ? t('setup.keys.configured') : t('setup.keys.missing') }}
+                    </span>
                   </div>
+                  <div class="copy-row">
+                    <code class="setup-connect-value mono">{{ tokenVisible ? connectInfo.token : maskedToken }}</code>
+                    <button
+                      type="button"
+                      class="btn btn-sm"
+                      :disabled="!connectInfo.token"
+                      @click="tokenVisible = !tokenVisible"
+                    >
+                      {{ tokenVisible ? t('setup.connect.hide') : t('setup.connect.show') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-sm"
+                      :disabled="!connectInfo.token"
+                      @click="copyText(connectInfo.token, 'token')"
+                    >
+                      {{ copied === 'token' ? t('setup.connect.copied') : t('setup.connect.copy') }}
+                    </button>
+                  </div>
+                  <p class="field-hint">
+                    {{ t('setup.v2.connect.tokenHintCard') }}
+                    <code class="mono">{{ connectInfo.token_env || tokenEnv }}</code>
+                  </p>
                 </div>
+                <div class="setup-connect-row">
+                  <span class="setup-connect-row-label">{{ t('setup.v2.connect.listenPort') }}</span>
+                  <code class="setup-connect-value mono">{{ listenPort }}</code>
+                  <p class="field-hint">{{ t('setup.v2.connect.portHint') }}</p>
+                </div>
+              </div>
 
-                <div v-if="!connectInfo.configured" class="connect-warning">
-                  <strong>{{ t('setup.connect.missingTitle') }}</strong>
-                  <p>{{ t('setup.connect.missingBody', { env: connectInfo.token_env || tokenEnv }) }}</p>
-                  <pre class="connect-command mono">{{ t('setup.connect.rotate') }}</pre>
-                </div>
-                <div v-else-if="connectInfo.allow_no_token" class="connect-warning">
-                  <strong>{{ t('setup.connect.allowNoToken') }}</strong>
-                  <p>{{ t('setup.connect.allowNoTokenHint') }}</p>
-                </div>
+              <div v-if="connectInfo && !connectInfo.configured" class="connect-warning">
+                <strong>{{ t('setup.connect.missingTitle') }}</strong>
+                <p>{{ t('setup.connect.missingBody', { env: connectInfo.token_env || tokenEnv }) }}</p>
+                <pre class="connect-command mono">{{ t('setup.connect.rotate') }}</pre>
+              </div>
+              <div v-else-if="connectInfo?.allow_no_token" class="connect-warning">
+                <strong>{{ t('setup.connect.allowNoToken') }}</strong>
+                <p>{{ t('setup.connect.allowNoTokenHint') }}</p>
+              </div>
 
-                <div class="actions">
-                  <button
-                    type="button"
-                    class="btn"
-                    :disabled="busyStep !== '' || busyGlobal !== ''"
-                    @click="inspectConnect"
-                  >
-                    {{ busyStep === 'connect' ? t('setup.v2.connect.inspecting') : t('setup.v2.connect.inspect') }}
-                  </button>
-                  <button type="button" class="btn btn-sm" @click="toggleWait">
-                    {{ waiting ? t('setup.v2.connect.stopWait') : t('setup.v2.connect.waiting') }}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn-sm"
-                    :disabled="busyGlobal !== '' || busyStep !== ''"
-                    @click="refreshState({ force: true })"
-                  >
-                    {{ t('setup.v2.recheck') }}
-                  </button>
-                </div>
-                <p class="field-hint">
-                  {{ waiting ? t('setup.v2.connect.waitActive', { n: waitTicks }) : t('setup.v2.connect.waitHint') }}
-                </p>
-              </template>
+              <div class="actions">
+                <button
+                  type="button"
+                  class="btn"
+                  :disabled="busyStep !== '' || busyGlobal !== ''"
+                  @click="inspectConnect"
+                >
+                  {{ busyStep === 'connect' ? t('setup.v2.connect.inspecting') : t('setup.v2.connect.inspect') }}
+                </button>
+                <button type="button" class="btn btn-sm" @click="toggleWait">
+                  {{ waiting ? t('setup.v2.connect.stopWait') : t('setup.v2.connect.waiting') }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="busyGlobal !== '' || busyStep !== ''"
+                  @click="refreshState({ force: true })"
+                >
+                  {{ t('setup.v2.recheck') }}
+                </button>
+              </div>
+              <p class="field-hint">
+                {{ waiting ? t('setup.v2.connect.waitActive', { n: waitTicks }) : t('setup.v2.connect.waitHint') }}
+              </p>
             </template>
           </template>
 
@@ -2309,28 +2805,170 @@ onBeforeUnmount(stopWait)
   margin-top: var(--s3);
 }
 
-.setup-key-row {
-  align-items: start;
+.setup-step-lede {
+  margin-top: 0;
 }
 
-.setup-key-tags {
+.setup-key-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin-top: var(--s2);
+}
+
+.setup-key-group {
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.setup-key-group-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.setup-key-group-title {
   display: flex;
   align-items: center;
+  gap: var(--s2);
   flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 3px;
 }
 
-.setup-key-tags .field-hint {
+.setup-key-group-title h3 {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 14px;
 }
 
-.setup-key-hint {
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.setup-key-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin-top: var(--s2);
+}
+
+.setup-key-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s3);
+  align-items: start;
+  padding-top: var(--s2);
+  border-top: 1px solid var(--line);
+}
+
+.setup-key-field:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.setup-key-field-meta {
+  min-width: 0;
+}
+
+.setup-key-field-label {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.setup-key-env {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.setup-key-test {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin-top: var(--s2);
+  padding: 8px 10px;
+  border-radius: var(--r-xs);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.setup-key-test.is-ok {
+  background: var(--ok-soft);
+}
+
+.setup-key-test.is-fail {
+  background: var(--fail-soft);
+}
+
+.setup-key-test.is-error {
+  background: var(--warn-soft);
+}
+
+.setup-key-test p {
+  margin-top: 2px;
+}
+
+.setup-step-lede + .note {
+  margin-top: var(--s2);
+}
+
+.setup-checklist {
+  margin: var(--s3) 0;
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.setup-checklist-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-bottom: var(--s2);
+}
+
+.setup-checklist .setup-prepare-item {
+  margin: 0;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+}
+
+.setup-checklist .setup-prepare-item:first-of-type {
+  border-top: 0;
+}
+
+.setup-prepare-item.checked {
+  color: var(--muted);
+}
+
+.setup-prepare-num {
+  min-width: 16px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.setup-test-outcome {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: var(--s2);
+  padding: 8px 10px;
+  border-radius: var(--r-xs);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.setup-test-outcome.is-ok {
+  background: var(--ok-soft);
+}
+
+.setup-test-outcome.is-fail {
+  background: var(--fail-soft);
 }
 
 .setup-evidence-grid {
@@ -2430,11 +3068,90 @@ onBeforeUnmount(stopWait)
   min-width: 0;
 }
 
-.setup-connect-meta {
+.setup-connect-status {
   display: flex;
-  gap: var(--s3);
+  align-items: center;
+  gap: var(--s2);
   flex-wrap: wrap;
-  margin-bottom: var(--s2);
+  margin: var(--s2) 0 var(--s3);
+  padding: 8px 10px;
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--surface-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.setup-connect-status.is-ok {
+  border-left-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.setup-connect-status.is-warn {
+  border-left-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.setup-connect-status.is-fail {
+  border-left-color: var(--fail);
+  background: var(--fail-soft);
+}
+
+.setup-connect-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin-top: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.setup-connect-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.setup-connect-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+.setup-connect-card-head + .setup-connect-row {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.setup-connect-row-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.setup-connect-row-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.setup-connect-value {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
 }
 
 .setup-checks {
@@ -2551,28 +3268,6 @@ onBeforeUnmount(stopWait)
   margin-left: 4px;
 }
 
-.connect-fields {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
-  margin-top: var(--s3);
-}
-
-.connect-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.connect-label-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--s2);
-  flex-wrap: wrap;
-}
-
 .copy-row {
   display: flex;
   align-items: stretch;
@@ -2648,11 +3343,31 @@ onBeforeUnmount(stopWait)
     flex-wrap: wrap;
   }
 
+  .setup-key-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s2);
+  }
+
+  .setup-key-group-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .setup-key-group-head .btn {
+    width: 100%;
+    min-height: 40px;
+  }
+
+  .setup-connect-status {
+    align-items: flex-start;
+  }
+
   .copy-row {
     flex-wrap: wrap;
   }
 
-  .copy-row input {
+  .copy-row input,
+  .copy-row .setup-connect-value {
     flex: 1 1 100%;
     min-height: 44px;
   }
