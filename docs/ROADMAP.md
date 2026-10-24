@@ -24,8 +24,8 @@
 | 3. 打断 ≤300 ms | ✅ | 干净 3 轮 **24.2 / 64.5 / 205.2 ms**（max ≤300）；首次 447.3 ms 为回答自然收尾伪影；设备缓冲听感：干脆 |
 | 4. 公开仓可用 | ✅ | repo/GHCR public、README 双语+截图、MIT、历史清洗；Buy Me a Coffee 仍占位（非门槛） |
 
-**当前工程状态（2026-10-24 12:45）**：本地 **748 passed / 17 skipped**（无模型环境）、**764 passed / 1 skipped**
-（设 `HOUSE_EAR_TEST_MODELS` 指向模型目录）、ruff clean、web typecheck/build 绿；最新提交 `4aa8f9e`。
+**当前工程状态（2026-10-24 13:05，v0.1.0 已发布）**：本地 **749 passed / 17 skipped**（无模型环境）、
+**765 passed / 1 skipped**（设 `HOUSE_EAR_TEST_MODELS`）、ruff clean、web typecheck/build 绿；release commit `1966db6`，tag `v0.1.0`。
 验收日修了三个真机/安装缺陷：VAD 上游仓失效 → fallback（`f0dde20`）、GitHub release 在 NAS 被 reset →
 ghproxy 镜像 fallback（`e3ea158`）、install.sh fetch 无超时/未强制 IPv4 → 挂死（`39af43f`/`4aa8f9e`）。
 
@@ -36,11 +36,49 @@ ghproxy 镜像 fallback（`e3ea158`）、install.sh fetch 无超时/未强制 IP
   （真实用户走向导不受影响，但迁移/复用旧 secrets 会踩）；
 - 把 config **清空成 0 字节**时会静默用 schema defaults → 触发 insecure_bind 拒绝 → crash loop（未被 last-good 接管），
   已记录为后续修复；
-- 远场 3–4 m 唤醒计数未做（只记录项）；NAS 尚未部署新镜像（等 9 哥 明确“部署 NAS”）；
+- 远场 3–4 m 唤醒计数未做（只记录项）；**NAS 已部署 0.1.0**（`ghcr.io/yes999zc/rui:0.1.0`，
+  digest `sha256:694fc924…`，回滚 tag `acceptance-f2abcef`）；
 - 音箱 root 密码受 squashfs 只读限制；SSRF allowlist/非 root/CVE 扫描仍后续；微信只保留接口。
 
-**下一步**：等 9 哥 明确“部署 NAS” → 生产切到 `e3ea158`（或更新 latest）、打 tag/Release、更新 README/ROADMAP；
-之后才恢复功能开发（多设备/Agent/Doctor Fix）。
+**下一步**：0.1 已发布并部署；按 §0.2 的 P1 → P2 → P3 推进（P1 先出 0.1.1，P3 才恢复功能开发）。
+
+## 0.2 v0.1 发布后路线图（2026-10-24 制定）
+
+> 0.1 已发布（tag `v0.1.0`）。0.1.x 只修可靠性，不塞新功能；P2 做体验/真机遗留；P3 才开功能线。
+> 每条必须有可复现判据；完成即更新本文件与 `docs/HANDOFF.md`。
+
+### P1 · 0.1.x 可靠性修复（1–2 天，先发 0.1.1）
+
+| # | 任务 | 判据 |
+|---|---|---|
+| P1.1 | 空 config（0 字节）走 ConfigError/last-good，不再用 schema defaults 触发 `insecure_bind` crash loop；补回归测试 | 清空 config 重启 → 仍 healthy + banner；测试覆盖空文件/无 last-good |
+| P1.2 | 旧 secrets 兼容：`HOUSE_EAR_LLM_KEY` 缺失时从 `DEEPSEEK_API_KEY` 映射或给明确 doctor 警告 | `doctor` 对“旧 secrets 复用”给可操作提示；冷装不再出现“唤醒后不回答” |
+| P1.3 | `fetch-models` 的 httpx 超时收口（当前 `timeout=None`，直连 GitHub 失败时会拖住 fallback） | 断网/直连失败时 ≤30 s 内切到镜像并完成或明确失败 |
+| P1.4 | 0.1.1 回归：全量测试 + 一次冷装循环（既有 NAS 验证目录） | 时间不劣化（≤10 min 到第一句）；HANDOFF 记录 |
+
+### P2 · 体验与真机遗留（3–5 天，可并行）
+
+| # | 任务 | 判据 |
+|---|---|---|
+| P2.1 | 远场 3–4 m 唤醒正式计数（20 次）+ barge 设备缓冲耳朵实测值 | 留下 N/M 与听感记录，写入 acceptance 附录 |
+| P2.2 | 控制台手机卡片化（390 px 无横向滚动）、provider 控件 ≥44 px、CJK webfont 评估、Logo GIF | 手机截图逐页通过；桌面无回归 |
+| P2.3 | 音乐收尾：NAS 真实 Navidrome 凭据确认、收藏/口味 UI、farewell 静音续歌边角 | 真机点歌/收藏/续歌路径通过 |
+| P2.4 | 微信 iLink 真机扫码验收（当前只保留接口） | 文字/语音各 2 条通过后再决定是否默认启用 |
+| P2.5 | 备份/恢复真恢复 + 换机演练（install → restore → fetch-models） | 新目录恢复后 healthy、doctor 通过、设备在线 |
+
+### P3 · 功能线（0.2.0，冻结解除后）
+
+| # | 任务 | 判据 |
+|---|---|---|
+| P3.1 | 第二台设备（P12/E1）：每设备音频配置 config v3、无播放能力降级 | 假 4 麦设备零改 `src/` 跑通 |
+| P3.2 | 多类型音箱适配标准（§I）→ **RUI 插座 / 音箱插头**（§K）：先纯声明 manifest，Dot2（B 类）作首个真实插头，LX06（A 类）样板；控制台“从插头添加设备” | 插头 manifest 契约 + 一个第三方机型不改 rui 核心接入 |
+| P3.3 | 设备管理后台参考 EchoMuse Device Management（§J） | 设备注册/审批/每设备配置/在线状态页可用 |
+| P3.4 | Agent/OpenClaw/Hermes 接入、新渠道、完整 Doctor Fix | 单独窗口排期，不在 0.2 混做 |
+| P3.5 | 安全：SSRF/端口探测 allowlist、容器非 root、依赖 CVE 扫描 | 三项各有报告/修复记录 |
+| P3.6 | 0.2.0 发布：tag + Release + README 更新 | 发布清单同 0.1 |
+
+**0.2 明确不做**：多房间同时出声、唤醒词自训练、云端 ASR 主路、通用语音助手框架。
+**顺序原则**：P1 先合入 0.1.1；P2 与 P3.2/P3.3 可并行；每项完成必须带判据与实测记录。
 
 ## 1. 阶段与门槛
 

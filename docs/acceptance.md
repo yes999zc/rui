@@ -265,7 +265,9 @@ docker compose ps && docker compose exec -T house-ear house-ear doctor
 
 ### 9.3 现场镜像与版本
 
-- 生产（验收 2/3/Telegram 用）：`f2abcef`（本地 tag `acceptance-f2abcef`，`.env` 暂时指向它，防误拉新版）
+- 生产（验收 2/3/Telegram 用）：`f2abcef`（本地 tag `acceptance-f2abcef`，验收期间 `.env` 指向它）
+- **验收后发布部署（2026-10-24 13:05）**：生产已切 `ghcr.io/yes999zc/rui:0.1.0`
+  （digest `sha256:694fc924…`，revision `1966db6`；回滚 tag `acceptance-f2abcef` 保留）
 - 冷装验证：`e3ea158`（含 VAD/KWS 镜像 fallback）
 - GHCR `:latest`：`afaabe7`（docs commit；运行代码与 `e3ea158` 相同；amd64 digest `sha256:03bdc1f3…`）
 - 代码：`main@afaabe7`，748 passed / 17 skipped（无模型环境；`HOUSE_EAR_TEST_MODELS` 时 764/1），ruff clean，

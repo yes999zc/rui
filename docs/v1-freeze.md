@@ -22,12 +22,12 @@
   `HOUSE_EAR_LLM_KEY` 与老 `secrets.yaml` 的 `DEEPSEEK_API_KEY` 命名差异（向导不受影响）。
 - 未做：3–4 m 远场唤醒正式计数（只记录项）。
 
-## 部署（等 9 哥 明确指令）
+## 部署 ✅（2026-10-24 13:05 完成）
 
-1. NAS `docker pull ghcr.io/yes999zc/rui:latest`（当前 latest revision `afaabe7`，代码等价 `e3ea158`）
-2. prod `.env` 的 `HOUSE_EAR_IMAGE` 从 `acceptance-f2abcef` 改回 `:latest` → `docker compose up -d`
-3. 验证 `/health`、doctor、音箱在线、Telegram gateway；回滚 tag `acceptance-f2abcef` 已保留
-4. 打 `v1.0.0` tag/Release、更新 README 状态
+1. ✅ NAS `docker pull ghcr.io/yes999zc/rui:0.1.0`（digest `sha256:694fc924…`，revision `1966db6`）
+2. ✅ prod `.env` 的 `HOUSE_EAR_IMAGE` 切到 `:0.1.0` → `docker compose up -d --force-recreate`
+3. ✅ 验证 `/health`（version 0.1.0）、doctor、音箱在线、Telegram gateway；回滚 tag 保留
+4. ✅ tag `v0.1.0` 已推；GitHub Release + README Buy Me a Coffee 真实链接待补
 
 ## 冻结期间不做
 

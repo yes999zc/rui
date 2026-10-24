@@ -1184,3 +1184,19 @@ Telegram 可行性测试。
 - **额外发现（待修，不阻塞）**：config 被清空成 0 字节时静默用 schema defaults → insecure_bind → crash loop；
   冷装测试中新模板 LLM 读 `HOUSE_EAR_LLM_KEY`，老生产 secrets 里是 `DEEPSEEK_API_KEY`（向导不受影响）。
 - NAS 生产仍跑 `f2abcef`（本次只是验收临时 stop/start）；等 9 哥 明确「部署 NAS」后再切 `e3ea158` + tag/Release。
+
+### 12.35 2026-10-24 v0.1.0 发布与 NAS 部署
+
+- 版本：`pyproject` / `house_ear.__version__` = **0.1.0**；tag `v0.1.0`（release commit `1966db6`）；
+  GHCR 产出 `0.1.0` / `0.1` / `latest` / `sha-1966db6`（多架构）。
+- 发布前修：`/health` 曾仍报 `0.0.1`（`__init__` 硬编码），已改为 `0.1.0` 并加 `tests/test_version.py`
+  防与 pyproject 漂移（749 passed / 17 skipped，ruff clean）。
+- NAS 部署（2026-10-24 12:58–13:05）：
+  - 部署前备份：`house-ear-backup-20261024-125842.tar.gz`，61,492 KiB，sha256 `9c879d60…`
+  - 生产 `.env` → `HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.1.0`；`docker compose up -d --force-recreate`
+  - 镜像：`ghcr.io/yes999zc/rui@sha256:694fc92444ff157b59ed22df44e72722edb6fd2fb3cb0fa2166c5805c93f6aba`，
+    revision `1966db6`，label version `0.1.0`
+  - 验证：container healthy；`/health` → `version 0.1.0`、`audio_plane=true`、`speaker_connected=true`；
+    Telegram gateway running、`enabled=true`；微信仍 `enabled=false`；doctor 仅容器内 `container_runtime` 误报
+  - 回滚：tag `acceptance-f2abcef`（旧镜像）保留，`.env.pre-0.1.0-*` 备份保留
+- 下一步：按 `ROADMAP` §0.2 的 P1（0.1.1 可靠性修复）→ P2（体验/真机）→ P3（功能线 0.2.0）。
