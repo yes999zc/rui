@@ -21,3 +21,6 @@ docs/console-shots/polish-*.png
 docs/console-shots/mcp-v2*.png
 
 docs/console-shots/brand-*.png
+
+# Guided acceptance output (docs/acceptance.md). May name the deployment; keep local.
+acceptance-runs/
