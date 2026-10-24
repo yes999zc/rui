@@ -13,10 +13,18 @@ import io
 import tarfile
 from pathlib import Path
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
-from house_ear.__main__ import KWS_REPO, VAD_URLS, _download_first, _fetch_kws_model, main
+from house_ear.__main__ import (
+    KWS_REPO,
+    VAD_URLS,
+    _download_first,
+    _download_to,
+    _fetch_kws_model,
+    main,
+)
 from house_ear.audio.kws import keyword_lines, write_keywords_file
 from house_ear.config import Config, load_config, save_config
 from house_ear.config.schema import DeviceConfig, MusicConfig
@@ -124,6 +132,83 @@ def test_vad_download_raises_when_every_mirror_fails(monkeypatch, tmp_path) -> N
     monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
     with pytest.raises(RuntimeError):
         _download_first(("https://a.invalid/x", "https://b.invalid/x"), tmp_path / "x.onnx")
+
+
+def test_download_uses_bounded_http_timeouts(monkeypatch, tmp_path) -> None:
+    """`timeout=None` is what let a stalled direct GitHub attempt hang forever."""
+    seen: dict[str, object] = {}
+
+    class Response:
+        headers = {"content-length": "4"}
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def iter_bytes(self, chunk_size: int):
+            yield b"data"
+
+    class Stream:
+        def __enter__(self) -> Response:
+            return Response()
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+    def fake_stream(method: str, url: str, **kwargs: object) -> Stream:
+        seen.update(kwargs)
+        return Stream()
+
+    monkeypatch.setattr(httpx, "stream", fake_stream)
+    target = tmp_path / "model.int8.onnx"
+    assert _download_to("https://example.invalid/model.int8.onnx", target) == 4
+    timeout = seen["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 10.0
+    assert timeout.read == 60.0
+    assert target.read_bytes() == b"data"
+
+
+def test_read_timeout_on_the_first_mirror_falls_through_to_the_next(
+    monkeypatch, tmp_path
+) -> None:
+    """A dead first mirror must fail fast enough for `_download_first` to try the next."""
+    calls: list[str] = []
+    first = "https://direct.invalid/model.int8.onnx"
+    second = "https://mirror.invalid/model.int8.onnx"
+
+    class Response:
+        headers = {"content-length": "4"}
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def iter_bytes(self, chunk_size: int):
+            yield b"data"
+
+    class TimeoutResponse(Response):
+        def iter_bytes(self, chunk_size: int):
+            raise httpx.ReadTimeout("read timed out", request=httpx.Request("GET", first))
+
+    class Stream:
+        def __init__(self, response: Response) -> None:
+            self._response = response
+
+        def __enter__(self) -> Response:
+            return self._response
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+    def fake_stream(method: str, url: str, **kwargs: object) -> Stream:
+        calls.append(url)
+        return Stream(TimeoutResponse() if url == first else Response())
+
+    monkeypatch.setattr(httpx, "stream", fake_stream)
+    target = tmp_path / "model.int8.onnx"
+    assert _download_first((first, second), target) == 4
+    assert calls == [first, second]
+    assert target.read_bytes() == b"data"
+    assert not list(tmp_path.glob("*.part"))
 
 
 def test_playback_defaults_are_playable_by_the_device_adapter() -> None:

@@ -11,11 +11,16 @@ Order of resolution: the environment first (a container keeps its keys there, an
 keep winning), then this file. The file lives next to the rest of the runtime state
 (`system.data_dir/secrets.yaml`) with 0600 and is replaced atomically, so a crash cannot
 leave it half-written.
+
+A cold install renamed the LLM key to `HOUSE_EAR_LLM_KEY`, but an install that reuses an
+older `secrets.yaml` (or `.env`) still spells it `DEEPSEEK_API_KEY`. The old names are read
+as fallbacks only: whatever name the config asks for always wins.
 """
 from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
 
@@ -25,6 +30,54 @@ log = logging.getLogger(__name__)
 
 FILENAME = "secrets.yaml"
 _name: str = ""          # set by `configure()` at startup; empty means "environment only"
+
+# Configured name -> names used by older installs. Keep this list tiny: it is a bridge
+# for one rename, not a general alias mechanism.
+LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
+    "HOUSE_EAR_LLM_KEY": ("DEEPSEEK_API_KEY",),
+}
+
+
+@dataclass(frozen=True)
+class Resolution:
+    """Where a secret came from. The value itself is excluded from `repr` on purpose."""
+
+    name: str                         # the name the config asked for
+    found_as: str                     # the name that actually had a value
+    source: str                       # "environment" or "secrets.yaml"
+    value: str = field(repr=False)
+
+    @property
+    def from_alias(self) -> bool:
+        return self.found_as != self.name
+
+
+def aliases(name: str) -> tuple[str, ...]:
+    """Older names to try when `name` is unset (empty for names without a rename)."""
+    return LEGACY_ALIASES.get(name, ())
+
+
+def resolve(name: str) -> Resolution | None:
+    """The value and its origin, or None if neither the name nor an alias is set.
+
+    Environment before file, as everywhere else. Within one source the configured name
+    is tried before its legacy aliases, so an explicit `HOUSE_EAR_LLM_KEY` is never
+    shadowed by `DEEPSEEK_API_KEY`.
+    """
+    if not name:
+        return None
+    for candidate in (name, *aliases(name)):
+        value = os.environ.get(candidate, "")
+        if value:
+            return Resolution(name=name, found_as=candidate,
+                              source="environment", value=value)
+    data = _read()
+    for candidate in (name, *aliases(name)):
+        value = data.get(candidate, "")
+        if value:
+            return Resolution(name=name, found_as=candidate,
+                              source="secrets.yaml", value=value)
+    return None
 
 
 def configure(data_dir: str | Path | None) -> None:
@@ -50,15 +103,17 @@ def _read() -> dict[str, str]:
 
 
 def get(name: str) -> str:
-    """Environment wins over the file: a container's keys are not on that volume."""
-    value = os.environ.get(name, "")
-    if value:
-        return value
-    return _read().get(name, "") if name else ""
+    """Environment wins over the file: a container's keys are not on that volume.
+
+    A legacy alias is consulted only when the configured name has no value, so the
+    provider code (which reads every key through `get`) keeps working after the rename.
+    """
+    resolution = resolve(name)
+    return resolution.value if resolution else ""
 
 
 def has(name: str) -> bool:
-    return bool(get(name))
+    return resolve(name) is not None
 
 
 def put(name: str, value: str) -> None:

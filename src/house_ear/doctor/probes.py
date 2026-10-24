@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 import psutil
 
+from .. import secrets
 from ..audio.ack import ack_wav_path
 from ..config.schema import AecConfig, Config
 
@@ -116,10 +117,49 @@ def measure_aec_rtf(
     return elapsed / audio_seconds * channels
 
 
+def _llm_key_check(cfg: Config) -> Check | None:
+    """Whether the primary LLM has a key, and whether a legacy alias is carrying it.
+
+    The provider itself reads through `secrets.get()`, which now accepts the old
+    `DEEPSEEK_API_KEY` name. That fallback must not be silent: an install that reuses an
+    old secrets file would answer fine and keep the deprecated name forever.
+    """
+    chain = list(cfg.providers.llm.chain)
+    if not chain:
+        return None
+    provider = cfg.providers.catalog.get(chain[0])
+    if provider is None:
+        return None
+    env_name = str(getattr(provider, "api_key_env", "") or "")
+    if not env_name:
+        return Check("llm_key", "warn", "no api_key_env",
+                     f"providers.catalog.{chain[0]} has no key variable, so the LLM "
+                     "cannot answer")
+    legacy = secrets.aliases(env_name)
+    resolution = secrets.resolve(env_name)
+    if resolution is None:
+        also = f" (also tried legacy {', '.join(legacy)})" if legacy else ""
+        return Check(
+            "llm_key", "warn", f"missing {env_name}{also}",
+            "the assistant will not answer: set it in .env or the console's Secrets page",
+        )
+    if resolution.from_alias:
+        return Check(
+            "llm_key", "warn",
+            f"{env_name} unset; using legacy {resolution.found_as} ({resolution.source})",
+            f"copy it to {env_name} and remove {resolution.found_as}: the old name still "
+            "works as a fallback",
+        )
+    return Check("llm_key", "ok", f"{env_name} from {resolution.source}")
+
+
 def run_doctor(cfg: Config | None = None) -> Report:
     cfg = cfg or Config()
     checks: list[Check] = []
     audio = cfg.audio
+    # `doctor` is a one-shot process: unlike serve/audio, nothing else has pointed the
+    # secret store at this config's data_dir yet.
+    secrets.configure(cfg.system.data_dir)
 
     arch = platform.machine()
     checks.append(Check("arch", "ok" if arch in SUPPORTED_ARCH else "fail", arch,
@@ -149,6 +189,10 @@ def run_doctor(cfg: Config | None = None) -> Report:
     if not cfg.web.auth_token and cfg.web.host not in {"127.0.0.1", "localhost", "::1"}:
         checks.append(Check("web_auth", "warn", f"{cfg.web.host}:{cfg.web.port} without a token",
                             "anyone on the LAN can read the console; set web.auth_token"))
+
+    key_check = _llm_key_check(cfg)
+    if key_check is not None:
+        checks.append(key_check)
 
     cap = audio.capture
     checks.append(Check(

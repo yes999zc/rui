@@ -166,6 +166,14 @@ def _new_web_token() -> str:
     return _secrets.token_urlsafe(24)
 
 
+# fetch-models pulls ~272 MB from a mirror. `timeout=None` meant a stalled connection
+# never failed, so `_download_first` could not move on to the next mirror. Connect is
+# capped tightly; read is generous because it is the gap *between* 1 MiB blocks, and a
+# slow-but-live large download must still finish.
+DOWNLOAD_CONNECT_TIMEOUT_S = 10.0
+DOWNLOAD_READ_TIMEOUT_S = 60.0
+
+
 def _download_to(url: str, target: Path, *, force: bool = False) -> int:
     """Stream one file to disk atomically; returns its size in bytes."""
     import httpx
@@ -176,7 +184,8 @@ def _download_to(url: str, target: Path, *, force: bool = False) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     part = target.with_suffix(target.suffix + ".part")
     print(f"fetching {url}")
-    with httpx.stream("GET", url, follow_redirects=True, timeout=None) as resp:
+    timeout = httpx.Timeout(DOWNLOAD_READ_TIMEOUT_S, connect=DOWNLOAD_CONNECT_TIMEOUT_S)
+    with httpx.stream("GET", url, follow_redirects=True, timeout=timeout) as resp:
         resp.raise_for_status()
         total = int(resp.headers.get("content-length") or 0)
         done = 0
