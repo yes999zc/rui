@@ -6,20 +6,25 @@ frames, accepts PCM into an in-memory sink, and lets the test kit inject
 
 The ``inject_wake`` hook is **kit-only** (not part of ``DeviceAdapter``); a real
 adapter would push events from its own wake engine into ``drain_wakes()``.
+
+Volume follows the canonical v1 contract: ``set_volume`` takes the config/UI
+percentage (0-100) and maps it to the device mixer, while ``services`` exposes the
+low-level 0-255 unit that the 0.3 audio plane calls (v1 spec §4.1).
 """
 from __future__ import annotations
 
 import asyncio
 import time
-from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from rui.device.contract import (
     AudioFrame,
+    BoundedWakeQueue,
     Capability,
     DeviceInfo,
     Transport,
+    percent_to_device_volume,
 )
 
 try:  # RUI 0.3+ has the v1 event; 0.2.x (this tree) does not yet.
@@ -44,6 +49,27 @@ def _capability(name: str) -> object:
     return getattr(Capability, name.upper(), name)
 
 
+class FakeServices:
+    """The low-level mixer surface: 0-255, like a real adapter's ``services``."""
+
+    def __init__(self, adapter: FakeSpeakerAdapter) -> None:
+        self._adapter = adapter
+
+    async def shell(self, script: str, timeout: float = 3.0) -> str:
+        raise NotImplementedError("the fake speaker has no shell")
+
+    async def read_volume(self) -> int | None:
+        return self._adapter._device_volume
+
+    async def set_volume(self, volume: int) -> None:
+        if isinstance(volume, bool) or not isinstance(volume, int) or not 0 <= volume <= 255:
+            raise ValueError("device volume is 0-255")
+        self._adapter._device_volume = volume
+
+    async def set_led(self, effect: str, color: str = "", *, repaint: bool = False) -> None:
+        self._adapter.last_led = effect
+
+
 class FakeSpeakerAdapter:
     """A deterministic fake device with DeviceWake injection."""
 
@@ -55,9 +81,11 @@ class FakeSpeakerAdapter:
         self.played: list[bytes] = []
         self.play_calls: list[tuple[int, int]] = []
         self.stops = 0
-        self.volume = 40
+        # The mixer is device units (0-255); the config-facing set_volume maps to it.
+        self._device_volume = 102
         self.last_led = ""
-        self._wakes: deque[DeviceWake] = deque(maxlen=32)
+        self.services = FakeServices(self)
+        self._wakes = BoundedWakeQueue(32)
         self.info = DeviceInfo(
             id=device_id,
             adapter="example-open-speaker",
@@ -80,6 +108,11 @@ class FakeSpeakerAdapter:
             mic_channels=1,
             ref_channels=0,
         )
+
+    @property
+    def volume(self) -> int:
+        """Current mixer value (0-255), for tests that want the raw unit."""
+        return self._device_volume
 
     async def probe(self) -> DeviceInfo:
         return self.info
@@ -118,11 +151,16 @@ class FakeSpeakerAdapter:
     async def stop_playback(self, fade_ms: int = 120) -> None:
         self.stops += 1
 
-    async def set_volume(self, volume: int) -> None:
-        self.volume = volume
+    async def set_volume(self, percent: int) -> None:
+        """Config/UI unit (0-100); the mixer unit is ``services.set_volume``."""
+        await self.services.set_volume(percent_to_device_volume(percent))
+
+    async def read_volume(self) -> int | None:
+        """Mixer unit (0-255); the caller converts to percent at the UI boundary."""
+        return await self.services.read_volume()
 
     async def set_led(self, effect: str, color: str = "", *, repaint: bool = False) -> None:
-        self.last_led = effect
+        await self.services.set_led(effect, color, repaint=repaint)
 
     def drain_signals(self) -> list:
         """Vendor signals are a separate channel; this fake has none."""
@@ -130,11 +168,7 @@ class FakeSpeakerAdapter:
 
     def drain_wakes(self) -> list[DeviceWake]:
         """Return every pending wake once, then clear (bounded to 32)."""
-        if not self._wakes:
-            return []
-        pending = list(self._wakes)
-        self._wakes.clear()
-        return pending
+        return self._wakes.drain()
 
     # --- kit-only injection hook ------------------------------------------
     def inject_wake(
@@ -146,7 +180,7 @@ class FakeSpeakerAdapter:
         barge: bool = False,
         level: float | None = None,
     ) -> None:
-        self._wakes.append(
+        self._wakes.push(
             DeviceWake(
                 ts_ms=time.monotonic() * 1000.0 if ts_ms is None else float(ts_ms),
                 score=float(score),

@@ -306,6 +306,10 @@ def install_setup_routes(
             missing.update(stage_missing)
             selected[stage] = str(stage_states[stage]["selected"])
         keys_done = all(stage_ok.get(stage, False) for stage in ("asr", "tts", "llm"))
+        chains = {
+            stage: list(getattr(current.providers, stage).chain)
+            for stage in ("asr", "tts", "llm")
+        }
         provider_rows = [
             {
                 "stage": entry.stage,
@@ -314,6 +318,10 @@ def install_setup_routes(
                 "selected": entry.selected,
                 "configured": entry.configured,
                 "missing": entry.missing,
+                # What the runtime will actually build; `configured` alone does not
+                # cover a local model or a missing base_url.
+                "ready": entry.ready,
+                "ready_reason": entry.ready_reason,
             }
             for entry in keycheck.provider_entries(current)
         ]
@@ -324,12 +332,15 @@ def install_setup_routes(
             "id": "keys", "status": "done" if keys_done else "pending",
             "evidence": {"stages": stage_ok, "missing": sorted(missing),
                          "selected": selected,
+                         # A save moves the selected provider first and keeps the rest
+                         # as fallbacks; the console can show that full order.
+                         "chains": chains,
                          "required": {stage: True for stage in ("asr", "tts", "llm")},
                          "stage_state": stage_states,
                          "providers": provider_rows,
                          "last_test": last_test},
             "detail": {"stages": stage_ok, "missing": sorted(missing),
-                       "selected": selected},
+                       "selected": selected, "chains": chains},
             "actions": ["keys.save", "keys.test", "providers.save"],
         }
 
@@ -796,7 +807,14 @@ def install_setup_routes(
                             raise _setup_error(422, "invalid_values",
                                                "tts.voice must be a string")
                         voice_value = voice.strip()
-                    merged["providers"][stage]["chain"] = [provider_name]
+                    # Selected first, previous providers kept as fallbacks in their old
+                    # order. Overwriting the chain with `[selected]` silently dropped a
+                    # working fallback (and the runtime then had no ready provider when
+                    # the new primary failed). Dedupe, never reorder the others.
+                    previous_chain = list(getattr(current.providers, stage).chain)
+                    merged["providers"][stage]["chain"] = [provider_name] + [
+                        name for name in previous_chain if name != provider_name
+                    ]
                     if stage == "tts" and voice_value:
                         merged["providers"]["catalog"][provider_name]["voice"] = voice_value
                 if not chosen:

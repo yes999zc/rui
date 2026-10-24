@@ -1128,15 +1128,19 @@ def _music_fields() -> list[dict]:
                   "password are never returned). Saved to data_dir/lan_media.json (0600) "
                   "from the config center, verified with Test connection; empty deletes."),
                effect="restart", writable=False, virtual=True),
-        _field("music.source", "music", "text",
+        # Select, not free text: a typo used to leave the panel "enabled" while the
+        # runtime silently kept music off. New adapters add their id here.
+        _field("music.source", "music", "select",
                _t("音乐源", "Music source"),
-               _t("音源类型（当前 navidrome = Subsonic 兼容）。改成 navidrome 时后端会自动把 "
-                  "secrets_path 填成 <data_dir>/lan_media.json、cache_dir 填成 "
-                  "<data_dir>/music_cache；未知源保持手动值并警告。改完重启服务。",
-                  "Source kind (navidrome = Subsonic-compatible today). Switching to "
-                  "navidrome auto-fills secrets_path (<data_dir>/lan_media.json) and "
-                  "cache_dir (<data_dir>/music_cache); an unknown kind keeps the manual "
-                  "values and warns. Restart to apply."),
+               _t("音源类型（当前 navidrome = Subsonic 兼容；以后接入新适配器时在这里增加选项）。"
+                  "选 navidrome 时后端会自动把 secrets_path 填成 <data_dir>/lan_media.json、"
+                  "cache_dir 填成 <data_dir>/music_cache。没有适配器的音源不会启动服务，"
+                  "音乐页会明确显示停用原因。改完重启服务。",
+                  "Source kind (navidrome = Subsonic-compatible today; new adapters add "
+                  "their option here). Choosing navidrome auto-fills secrets_path "
+                  "(<data_dir>/lan_media.json) and cache_dir (<data_dir>/music_cache). "
+                  "A source without an adapter cannot start the service, and the music "
+                  "page says so instead of pretending it is enabled. Restart to apply."),
                effect="restart", options=["navidrome"]),
         _field("music.secrets_path", "music", "text",
                _t("凭据文件", "Credentials file"),

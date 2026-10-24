@@ -12,10 +12,16 @@ bridge) to register an adapter on top of the official image, without the
 
 Security posture: only code named by the operator's environment or by an installed
 distribution is imported, in-process. Nothing here reads ``devices[].params``,
-``plugin.yaml``, console input, the config file or the network, and it never starts
-a subprocess. The environment is root/container-operator controlled; treating it as
-trusted is the same decision as choosing the image. Third-party plugs stay
-sidecar-only in the v1 contract (0.4 tightens this into a formal loader).
+console input, the config file or the network, and it never starts a subprocess. The
+environment is root/container-operator controlled; treating it as trusted is the same
+decision as choosing the image.
+
+Both channels are **manifest-gated** (v1 §4.4): an entry is registered only when a
+resolvable plug manifest with ``trust: builtin|trusted`` backs its adapter name. The
+manifest may live next to the adapter module/package (recommended for downstream
+images), under ``<data_dir>/plugs/*`` (pass ``data_dir=`` or set ``RUI_DATA_DIR``), or
+be the in-image builtin manifest. ``third-party`` manifests are refused in-process
+because 0.3.x has no sidecar runner. A builtin name can never be replaced.
 
 Everything is fail-soft: one bad entry logs one bounded warning and startup
 continues. A missing module must never take the control plane down.
@@ -26,9 +32,11 @@ import importlib
 import inspect
 import logging
 import re
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import metadata
+from pathlib import Path
 from typing import Any
 
 from .. import env
@@ -39,14 +47,24 @@ log = logging.getLogger(__name__)
 
 ENV_VAR = "RUI_ADAPTER_PLUGINS"
 ENTRY_POINT_GROUP = "rui.adapters"
+#: Optional operator-owned data directory for ``<data_dir>/plugs/*`` manifests.
+#: The web app does not pass its config value here (the hook runs before config is
+#: available), so a downstream image either ships the manifest next to its adapter
+#: package or sets this variable.
+DATA_DIR_ENV = "RUI_DATA_DIR"
 
 __all__ = [
     "AdapterPluginReport",
+    "DATA_DIR_ENV",
     "ENTRY_POINT_GROUP",
     "ENV_VAR",
     "load_adapter_plugins",
     "load_plugins",
 ]
+
+#: In-process code may only be backed by these manifest trust levels (§4.4).
+IN_PROCESS_TRUST = frozenset({"builtin", "trusted"})
+_FACTORY_ROLE_NAMES = frozenset({"factory", "make", "create_factory"})
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
 _MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
@@ -92,14 +110,23 @@ class _SpecError(ValueError):
     pass
 
 
-def load_adapter_plugins(value: str | None = None) -> AdapterPluginReport:
+def load_adapter_plugins(
+    value: str | None = None,
+    *,
+    data_dir: str | Path | None = None,
+) -> AdapterPluginReport:
     """Load every configured downstream adapter, env first, then entry points.
 
     ``value`` defaults to ``RUI_ADAPTER_PLUGINS`` (``RUI_*`` before the legacy
     ``HOUSE_EAR_*`` spelling). Passing ``""`` disables env entries but still scans
-    ``rui.adapters``. The function never raises for plugin problems.
+    ``rui.adapters``. ``data_dir`` (default: ``RUI_DATA_DIR``) is where a plug
+    manifest may be installed under ``plugs/*``; a manifest shipped next to the
+    adapter module is always considered. The function never raises for plugin
+    problems.
     """
     report = AdapterPluginReport()
+    registry.clear_runtime_defaults()
+    root = Path(data_dir).expanduser() if data_dir is not None else _env_data_dir()
     raw = env.get(ENV_VAR) if value is None else value
     for text in _entries(raw):
         try:
@@ -108,16 +135,21 @@ def load_adapter_plugins(value: str | None = None) -> AdapterPluginReport:
             _warn(report, f"{ENV_VAR}: {exc}")
             continue
         try:
-            _load_env_spec(report, spec)
+            _load_env_spec(report, spec, data_dir=root)
         except Exception as exc:  # noqa: BLE001 - plugin code must not stop startup
             _warn(report, f"{spec.source}: unexpected error: {_brief(exc)}")
     try:
-        _load_entry_points(report)
+        _load_entry_points(report, data_dir=root)
     except Exception as exc:  # noqa: BLE001 - metadata/plugin code must not stop startup
         _warn(report, f"entry point group {ENTRY_POINT_GROUP!r}: unexpected error: {_brief(exc)}")
     if report.registered:
         log.info("adapter plugins: registered %s", ", ".join(sorted(report.registered)))
     return report
+
+
+def _env_data_dir() -> Path | None:
+    text = env.get(DATA_DIR_ENV).strip()
+    return Path(text).expanduser() if text else None
 
 
 def _entries(raw: str | None) -> list[str]:
@@ -159,7 +191,9 @@ def _parse(text: str) -> _Spec:
     )
 
 
-def _load_env_spec(report: AdapterPluginReport, spec: _Spec) -> None:
+def _load_env_spec(
+    report: AdapterPluginReport, spec: _Spec, *, data_dir: Path | None = None
+) -> None:
     try:
         module = importlib.import_module(spec.module)
     except Exception as exc:  # noqa: BLE001 - a broken plugin is an operator problem
@@ -174,6 +208,23 @@ def _load_env_spec(report: AdapterPluginReport, spec: _Spec) -> None:
             f"{attr or 'build()/register()'}",
         )
         return
+    if spec.name and spec.name in registry.BUILTIN_NAMES:
+        _warn(
+            report,
+            f"{spec.source}: adapter name {spec.name!r} is built into this image and "
+            "cannot be replaced; use a new name in devices[].adapter",
+        )
+        return
+    before = set(report.registered)
+    allowed, manifest_device = _manifest_allows(
+        report,
+        module=module,
+        name=spec.name or spec.module,
+        source=spec.source,
+        data_dir=data_dir,
+    )
+    if not allowed:
+        return
     _apply(
         report,
         explicit_name=spec.name,
@@ -183,6 +234,155 @@ def _load_env_spec(report: AdapterPluginReport, spec: _Spec) -> None:
         source=spec.source,
         allow_override=True,
     )
+    _remember_runtime_defaults(
+        report, before=before, device=manifest_device, extra=spec.name
+    )
+
+
+def _manifest_allows(
+    report: AdapterPluginReport,
+    *,
+    module: Any,
+    name: str,
+    source: str,
+    data_dir: Path | None,
+) -> tuple[bool, Any | None]:
+    """Require a builtin/trusted manifest before executing an in-process adapter.
+
+    ``trust`` itself is self-asserted metadata, not an authorization boundary; this
+    gate is the mechanical half the audit asked for: no manifest (or a third-party
+    one) means the env/entry-point channel refuses to register the name. The real
+    authorization remains "the operator put the code and the manifest in the image".
+    """
+    found, problem = _find_manifest(module=module, name=name, data_dir=data_dir)
+    if problem:
+        _warn(report, f"{source}: {problem}")
+        return False, None
+    if found is None:
+        _warn(
+            report,
+            f"{source}: no plug manifest backs adapter {name!r}; the env/entry-point "
+            "hook requires a rui-plugin manifest with trust: builtin|trusted (ship "
+            "plugin.yaml next to the adapter, or install it under <data_dir>/plugs/ "
+            f"and set {DATA_DIR_ENV})",
+        )
+        return False, None
+    plugin, device = found
+    trust = str(getattr(plugin, "trust", ""))
+    if trust not in IN_PROCESS_TRUST:
+        _warn(
+            report,
+            f"{source}: plug {getattr(plugin, 'id', '?')!r} is trust={trust!r}; "
+            "in-process adapters require trust: builtin or trusted (third-party is "
+            "sidecar-only and 0.3.x has no sidecar runner)",
+        )
+        return False, None
+    runtime = getattr(device, "runtime", None)
+    if runtime is not None and str(getattr(runtime, "mode", "")) == "sidecar":
+        _warn(
+            report,
+            f"{source}: plug {getattr(plugin, 'id', '?')!r} asks for runtime.mode "
+            "'sidecar', which is not implemented in 0.3.x; set mode: in-process with "
+            "trust: trusted, or wait for the 0.4 sidecar runner",
+        )
+        return False, None
+    return True, device
+
+
+def _find_manifest(
+    *, module: Any, name: str, data_dir: Path | None
+) -> tuple[tuple[Any, Any] | None, str]:
+    """Find the (plugin, device) manifest that backs ``name``; ``(None, "")`` if absent.
+
+    Search order: the in-image builtin catalog, user plugs under ``data_dir``, then a
+    ``plugin.yaml`` shipped next to the adapter module/package (the downstream-image
+    recipe). A manifest file that exists but cannot be loaded is a hard failure, not a
+    fall-through: a broken upper bound must never degrade into "no manifest".
+    """
+    try:
+        from ..plugins.builtin import builtin_plugins
+    except Exception as exc:  # pragma: no cover - import cycle guard
+        return None, f"cannot read the builtin plug catalog: {_brief(exc)}"
+
+    for plugin in builtin_plugins():
+        # Strict match: the single builtin device must not become a universal
+        # trust grant for an arbitrary env entry name.
+        device = _match_device(plugin, name, allow_single=False)
+        if device is not None:
+            return (plugin, device), ""
+
+    scan_problem = ""
+    if data_dir is not None:
+        try:
+            from ..plugins.loader import discover_plugins
+        except Exception as exc:  # pragma: no cover - import cycle guard
+            return None, f"cannot read the plug loader: {_brief(exc)}"
+        scan = discover_plugins(data_dir)
+        for plugin in scan.plugins:
+            device = _match_device(plugin, name, allow_single=False)
+            if device is not None:
+                return (plugin, device), ""
+        # Broken user plugs never authorize anything. Keep the first failures as the
+        # explanation only if no co-located manifest resolves the name either.
+        if scan.errors:
+            detail = "; ".join(error.splitlines()[0] for error in scan.errors[:2])
+            scan_problem = (
+                f"no loadable plug declares adapter {name!r} under {data_dir}: {detail}"
+            )
+
+    root_problem = ""
+    for root in _module_plugin_roots(module):
+        try:
+            from ..plugins.loader import load_plugin
+        except Exception as exc:  # pragma: no cover - import cycle guard
+            return None, f"cannot read the plug loader: {_brief(exc)}"
+        try:
+            plugin = load_plugin(root)
+        except Exception as exc:  # noqa: BLE001 - include our own path in the warning
+            return None, f"manifest {root / 'plugin.yaml'} cannot be loaded: {_brief(exc)}"
+        # A co-located manifest belongs to the adapter module we just imported, so a
+        # single device may back an env name that differs from the device id (the
+        # ``lxref=...`` case). The env prefix still selects the config-facing name.
+        device = _match_device(plugin, name, allow_single=True)
+        if device is not None:
+            return (plugin, device), ""
+        root_problem = (
+            f"manifest {root / 'plugin.yaml'} has no device {name!r} and declares "
+            f"{len(plugin.devices)} device(s); name the env entry after a device id "
+            "or add a matching devices/<model>.yaml"
+        )
+    return None, root_problem or scan_problem
+
+
+def _match_device(plugin: Any, name: str, *, allow_single: bool) -> Any | None:
+    devices = list(getattr(plugin, "devices", []) or [])
+    for device in devices:
+        if str(getattr(device, "id", "")) == name:
+            return device
+    if str(getattr(plugin, "id", "")) == name and devices:
+        return devices[0]
+    if allow_single and len(devices) == 1:
+        return devices[0]
+    return None
+
+
+def _module_plugin_roots(module: Any) -> list[Path]:
+    """Directories around an adapter module that may hold its ``plugin.yaml``."""
+    path = getattr(module, "__file__", None)
+    if not path:
+        return []
+    try:
+        base = Path(path).resolve()
+    except (OSError, ValueError):
+        return []
+    roots: list[Path] = []
+    for candidate in (base.parent, base.parent.parent):
+        try:
+            if (candidate / "plugin.yaml").is_file() and candidate not in roots:
+                roots.append(candidate)
+        except OSError:
+            continue
+    return roots
 
 
 def _pick_attribute(module: Any, spec: _Spec) -> tuple[str, Any]:
@@ -194,6 +394,34 @@ def _pick_attribute(module: Any, spec: _Spec) -> tuple[str, Any]:
         if callable(obj):
             return attr, obj
     return "", None
+
+
+def _remember_runtime_defaults(
+    report: AdapterPluginReport,
+    *,
+    before: set[str],
+    device: Any,
+    extra: str = "",
+) -> None:
+    """Cache a gated manifest's runtime defaults for ``build_adapters``.
+
+    The adapter loader is the only component that sees a co-located manifest; the
+    registry later needs its ``listen_port``/``token_env`` when the config leaves
+    those fields unset (P1-7). The cache is keyed by registration name, so a factory
+    that returns a metadata-named builder is covered too.
+    """
+    runtime = getattr(device, "runtime", None)
+    if runtime is None:
+        return
+    names = set(report.registered) - before
+    if extra and extra in report.registered:
+        names.add(extra)
+    for name in names:
+        registry.set_runtime_defaults(
+            name,
+            listen_port=getattr(runtime, "listen_port", None),
+            token_env=getattr(runtime, "token_env", "") or None,
+        )
 
 
 def _apply(
@@ -295,6 +523,53 @@ def _apply_result(
     )
 
 
+class _RegistryFacade:
+    """The registry view a register hook may mutate.
+
+    Passing the real module let a hook call ``registry.register("mock", ...)`` and
+    bypass ``allow_override=False`` (impl audit P1-9). This facade routes every
+    registration through the loader's checks, including the builtin-name protection;
+    it deliberately exposes only the public read helpers a well-behaved hook needs.
+    """
+
+    BUILTIN_NAMES = registry.BUILTIN_NAMES
+
+    def __init__(
+        self,
+        report: AdapterPluginReport,
+        *,
+        source: str,
+        allow_override: bool,
+    ) -> None:
+        self._report = report
+        self._source = source
+        self._allow_override = allow_override
+
+    def register(self, name: str, target: Any) -> None:
+        source = f"{self._source} (register hook)"
+        if isinstance(target, str):
+            # The public registry accepts the lazy ``module:attr`` form; keep that
+            # working for hooks but route it through the same checked path.
+            _register_target(
+                self._report,
+                name,
+                target,
+                source=source,
+                allow_override=self._allow_override,
+            )
+            return
+        _register(
+            self._report,
+            name,
+            target,
+            source=source,
+            allow_override=self._allow_override,
+        )
+
+    def available(self) -> list[str]:
+        return registry.available()
+
+
 def _run_register_hook(
     report: AdapterPluginReport,
     *,
@@ -307,14 +582,18 @@ def _run_register_hook(
     """Call ``register(registry)`` and record the names it added/replaced.
 
     The hook owns its names, so the env ``name=`` prefix is only a fallback for a
-    hook that returns a builder instead of registering directly.
+    hook that returns a builder instead of registering directly. A hook receives
+    :class:`_RegistryFacade`, not the real module, so ``allow_override=False`` and the
+    builtin-name rule hold even for a hook that calls ``registry.register`` directly.
     """
     before = dict(registry._BUILDERS)
+    facade = _RegistryFacade(report, source=source, allow_override=allow_override)
     try:
-        result = hook(registry) if _accepts_positional(hook) else hook()
+        result = hook(facade) if _accepts_positional(hook) else hook()
     except Exception as exc:  # noqa: BLE001 - plugin code
         _warn(report, f"{source}: register hook raised {_brief(exc)}")
         return
+    _restore_builtins(report, source=source)
     if result is not None:
         _apply_result(
             report,
@@ -334,13 +613,36 @@ def _run_register_hook(
         report.registered.setdefault(name, f"{source} (register hook)")
 
 
-def _call_kind(obj: Callable[..., Any], attr: str) -> str:
-    """Classify by name first, then by required positional arguments.
+def _restore_builtins(report: AdapterPluginReport, *, source: str) -> None:
+    """Undo a hook that imported the real registry and replaced an image adapter."""
+    restored: list[str] = []
+    for name, target in registry.BUILTIN_TARGETS.items():
+        if registry._BUILDERS.get(name) is not target:
+            registry._BUILDERS[name] = target
+            restored.append(name)
+    if restored:
+        _warn(
+            report,
+            f"{source}: register hook replaced built-in adapter(s) "
+            f"{', '.join(sorted(restored))}; restored the image definitions",
+        )
 
-    ``build(dev, cfg)`` (or a 1-arg builder) is called per device later;
-    ``register(registry)`` and zero-argument factories run now.
+
+def _call_kind(obj: Callable[..., Any], attr: str) -> str:
+    """Classify by declared role, then by whether it can take a device/config.
+
+    The bug this fixes (impl audit P1-1): ``build(dev=None, cfg=None)`` has no
+    *required* argument, so the old rule called it at startup as a zero-argument
+    factory. Both bundled reference adapters use exactly that shape. The rule now is:
+
+    * ``register*`` -> registration hook;
+    * ``factory``/``make``/``create_factory`` -> zero-argument factory;
+    * any callable that declares a positional parameter (required *or* defaulted)
+      is a per-device builder, and is never called at startup;
+    * a truly parameterless callable is a factory (``build()`` returning a builder).
     """
-    if attr.lower() in _REGISTER_NAMES:
+    role = attr.lower()
+    if role in _REGISTER_NAMES:
         return "register"
     try:
         signature = inspect.signature(obj)
@@ -349,16 +651,21 @@ def _call_kind(obj: Callable[..., Any], attr: str) -> str:
     params = list(signature.parameters.values())
     if any(param.kind is inspect.Parameter.VAR_POSITIONAL for param in params):
         return "builder"
-    required = [
+    positional = [
         param
         for param in params
         if param.kind in (inspect.Parameter.POSITIONAL_ONLY,
                           inspect.Parameter.POSITIONAL_OR_KEYWORD)
-        and param.default is inspect.Parameter.empty
     ]
-    if not required:
+    if role in _FACTORY_ROLE_NAMES:
+        if any(param.default is inspect.Parameter.empty for param in positional):
+            # A "factory" that requires arguments cannot be run now; treating it as a
+            # builder at least defers the error to the per-device call.
+            return "builder"
         return "factory"
-    return "builder"
+    if positional:
+        return "builder"
+    return "factory"
 
 
 def _accepts_positional(fn: Callable[..., Any]) -> bool:
@@ -437,6 +744,13 @@ def _register(
     if current is builder:
         report.registered[name] = source
         return
+    if name in registry.BUILTIN_NAMES and current is registry.BUILTIN_TARGETS.get(name):
+        _warn(
+            report,
+            f"{source}: adapter name {name!r} is built into this image and cannot be "
+            "replaced; register a new name and set devices[].adapter to it",
+        )
+        return
     if current is not None:
         if not allow_override:
             _warn(report, f"{source}: adapter name {name!r} is already registered; skipped")
@@ -445,7 +759,11 @@ def _register(
             report,
             f"{source}: adapter name {name!r} replaces {_describe(current)}",
         )
-    registry.register(name, builder)
+    try:
+        registry.register(name, builder)
+    except registry.BuiltinAdapterName as exc:
+        _warn(report, f"{source}: {exc}")
+        return
     report.registered[name] = source
 
 
@@ -486,7 +804,9 @@ def _changed_names(before: dict[str, Any]) -> list[str]:
     )
 
 
-def _load_entry_points(report: AdapterPluginReport) -> None:
+def _load_entry_points(
+    report: AdapterPluginReport, *, data_dir: Path | None = None
+) -> None:
     try:
         points = list(metadata.entry_points(group=ENTRY_POINT_GROUP))
     except TypeError:  # pragma: no cover - Python < 3.10 compatibility
@@ -515,6 +835,24 @@ def _load_entry_points(report: AdapterPluginReport) -> None:
         except Exception as exc:  # noqa: BLE001 - plugin code
             _warn(report, f"entry point {name!r}: cannot load {value!r}: {_brief(exc)}")
             continue
+        module = _entry_point_module(obj, value)
+        if module is None:
+            _warn(
+                report,
+                f"entry point {name!r}: cannot locate the module of {value!r} for its "
+                "manifest trust check",
+            )
+            continue
+        before = set(report.registered)
+        allowed, manifest_device = _manifest_allows(
+            report,
+            module=module,
+            name=name,
+            source=f"entry point {name!r}",
+            data_dir=data_dir,
+        )
+        if not allowed:
+            continue
         try:
             _apply(
                 report,
@@ -527,6 +865,23 @@ def _load_entry_points(report: AdapterPluginReport) -> None:
             )
         except Exception as exc:  # noqa: BLE001 - plugin code must not stop startup
             _warn(report, f"entry point {name!r}: unexpected error: {_brief(exc)}")
+            continue
+        _remember_runtime_defaults(report, before=before, device=manifest_device, extra=name)
+
+
+def _entry_point_module(obj: Any, value: str) -> Any | None:
+    """The module object an entry point's manifest can live next to."""
+    module_name = str(getattr(obj, "__module__", "") or "")
+    module = sys.modules.get(module_name) if module_name else None
+    if module is not None:
+        return module
+    target = value.split("[", 1)[0].strip().split(":", 1)[0].strip()
+    if not target:
+        return None
+    try:
+        return importlib.import_module(target)
+    except Exception:  # noqa: BLE001 - reported by the caller with the entry name
+        return None
 
 
 def _entry_point_attr(value: str) -> str:

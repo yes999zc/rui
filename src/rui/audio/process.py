@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import itertools
 import logging
 import math
 import os
@@ -27,6 +28,7 @@ import tempfile
 import time
 import wave
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -34,7 +36,15 @@ import numpy as np
 from .. import secrets
 from ..config import Config, load_config
 from ..device import build_adapters
-from ..device.contract import AudioFrame, Capability, DeviceAdapter, DeviceWake
+from ..device.contract import (
+    AudioFrame,
+    Capability,
+    DeviceAdapter,
+    DeviceInfo,
+    DeviceWake,
+    effective_capabilities,
+    wake_validation_error,
+)
 from ..env import get as env_get
 from ..log_setup import setup_logging
 from ..trace import now_ms
@@ -42,6 +52,7 @@ from .ack import render_cached as render_ack
 from .aec import AecChain, AecUnavailable
 from .decimate import Decimator
 from .kws import KwsUnavailable, WakeHit, WakeProbe, WakeWord
+from .probe import safe_probe
 from .protocol import (
     CONTROL,
     DeviceVolume,
@@ -124,6 +135,26 @@ DEVICE_WAKE_MAX_INVALID = 10
 # log line (or a validation attempt) every 20 ms.
 DEVICE_WAKE_ERROR_LOG_S = 30.0
 DEVICE_WAKE_MAX_CONSECUTIVE_ERRORS = 5
+# P2-1: a broken adapter can return a list of 100 k events (or an endless iterator) from
+# one drain_wakes()/drain_signals() call. Only this many are acted on per frame tick; the
+# overflow is counted and logged (once per interval), and the frame loop stays on time.
+MAX_DRAIN_EVENTS = 64
+# For a non-sequence iterator there is no length to truncate against; consume at most this
+# many items so an endless generator cannot hang capture. The rest is counted as dropped.
+MAX_DRAIN_SCAN = 2 * MAX_DRAIN_EVENTS
+DRAIN_DROP_LOG_S = 30.0
+# A vendor signal's text is diagnostic; 512 chars is what the log line already shows and
+# keeps a chatty adapter from pushing a 64 KiB control frame through the socket (P2-8).
+MAX_SIGNAL_TEXT = 512
+# P1-2/P1-3: an adapter whose frames()/probe()/drain_signals() fails must not leave a
+# "running but deaf" plane. Capture retries a bounded number of times with backoff; when
+# that budget is spent the plane reports an Error and closes the control socket so the
+# supervisor rebuilds it (a fresh adapter/process is the only reliable reopen for an
+# inbound device that lost its socket).
+CAPTURE_MAX_RESTARTS = 3
+CAPTURE_RESTART_BACKOFF_S = 0.25
+CAPTURE_RESTART_BACKOFF_MAX_S = 2.0
+CAPTURE_ERROR_LOG_S = 30.0
 # A lead that goes negative by less than this is scheduler jitter (the loop wakes a few
 # ms late, the device still has audio), not an audible underrun. The issue's gap is
 # ~400 ms, an order of magnitude above the floor.
@@ -256,6 +287,79 @@ def _dbfs(samples) -> float:
     return 20.0 * math.log10(max(peak, 1e-5))
 
 
+@dataclass(frozen=True)
+class _VendorEvent:
+    """One validated, bounded `drain_signals()` item.
+
+    The adapter's own object is not passed on: it may be malformed or mutable, and the
+    capture loop only needs these three fields.
+    """
+
+    kind: str
+    text: str
+    ts: float
+
+
+@dataclass(frozen=True)
+class _WakePolicy:
+    """What the configured device's plug allows for device_wake (P1-5/P1-6/P2-4).
+
+    ``present`` distinguishes "no manifest at all" (the documented dev case, where the
+    probe is authoritative) from "a manifest was found/requested". For the latter the
+    manifest is the upper bound: its capabilities are intersected with the probe's,
+    ``wake.barge_via_device`` is ANDed with the capability, and a third-party plug is
+    treated as sidecar-equivalent for wake (no standardised wake RPC).
+    """
+
+    source: str | None = None        # "device" | "rui" | "sidecar" | None (no manifest)
+    present: bool = False            # a manifest resolved (or an explicit plug failed)
+    trusted: bool = True             # builtin/trusted, or no manifest (dev adapter)
+    barge_enabled: bool = False      # manifest `wake.barge_via_device`
+    capabilities: frozenset[Capability] = frozenset()
+    error: str = ""
+
+
+def _capability_set(values: object) -> frozenset[Capability]:
+    """Manifest capability strings -> the contract enum; unknown values are ignored."""
+    out: set[Capability] = set()
+    for value in values or ():
+        try:
+            out.add(Capability(str(value)))
+        except ValueError:
+            continue
+    return frozenset(out)
+
+
+def _bounded_drain(pending: object, cap: int) -> tuple[list, int]:
+    """At most ``cap`` items from an adapter drain, plus how many were dropped.
+
+    For a sequence the newest ``cap`` win (an overflow means the adapter produced a
+    backlog; the freshest events describe the room now). A generator cannot be sliced
+    without consuming it, so at most ``MAX_DRAIN_SCAN`` items are read and the excess is
+    reported as dropped - enough to keep a hostile adaptive iterator from hanging the
+    frame loop.
+    """
+    if pending is None:
+        return [], 0
+    if isinstance(pending, (list, tuple)):
+        if len(pending) <= cap:
+            return list(pending), 0
+        return list(pending[-cap:]), len(pending) - cap
+    try:
+        iterator = iter(pending)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise TypeError(
+            f"drain returned {type(pending).__name__}, which is not iterable"
+        ) from exc
+    scanned = list(itertools.islice(iterator, max(cap + 1, MAX_DRAIN_SCAN)))
+    if len(scanned) <= cap:
+        return scanned, 0
+    # The exact overflow of an iterator is unknowable without draining it; one is the
+    # honest lower bound, and the counter still makes the defect visible.
+    return scanned[:cap], len(scanned) - cap
+
+
+
 class AudioPlane:
     def __init__(self, cfg: Config, device_id: str, socket_path: Path) -> None:
         self.cfg = cfg
@@ -291,12 +395,36 @@ class AudioPlane:
         self.device_wake_no_vad = 0
         self.device_wake_fallbacks = 0
         self.device_wake_degraded = False
+        # P2-1: events dropped because one drain exceeded MAX_DRAIN_EVENTS.
+        self.device_wake_dropped = 0
+        # P1-7: a device wake whose replay anchor was older than the retained history.
+        self.device_wake_replay_missed = 0
         self.device_wake_last_score: float | None = None
         self._device_wake_invalid_streak = 0
         self._device_wake_error_streak = 0
         self._device_wake_error_logged = 0.0
+        self._drain_drop_logged = 0.0
         self._last_accepted_wake_ts: float | None = None
         self._device_wake_accept_times: deque[float] = deque()
+        # P1-2/P1-3: capture supervision. `capture_degraded` means frames are (or just
+        # were) failing to arrive; `capture_last_error` is why. A successful frame clears
+        # it, so the console never reports an old failure as current.
+        self.capture_degraded = False
+        self.capture_errors = 0
+        self.capture_restarts = 0
+        self.capture_last_error = ""
+        self._capture_fail_streak = 0
+        self._capture_error_logged = 0.0
+        # A side task (metrics/send-audio/speak) that dies while the socket is open is a
+        # partial outage; this makes it visible instead of an unretrieved exception.
+        self.task_errors = 0
+        self.task_last_error = ""
+        # P1-2: drain_signals() failures/oversize are contained like drain_wakes().
+        self.signal_errors = 0
+        self.signal_dropped = 0
+        self.signal_invalid = 0
+        self.signal_last_error = ""
+        self._signal_error_logged = 0.0
         # Wall-clock end of the cue/echo hold opened by the last accepted wake: a barge
         # hint inside this window is our own audio, not a person (§5 "ACK mute/gate hold").
         self._wake_hold_until = 0.0
@@ -414,8 +542,11 @@ class AudioPlane:
         self._stop = asyncio.Event()
         # Pre-wake audio. The streaming KWS reports a hit ~0.5 s after the wake word ends,
         # so "你好小瑞，现在几点" said in one breath loses 现在几点 unless the ring is
-        # replayed into the gate. Kept as int16 voice-rate blocks, oldest first.
-        self._preroll: deque[bytes] = deque()
+        # replayed into the gate. Kept as (monotonic ts_ms, int16 voice-rate block),
+        # oldest first. The history is longer than `wake_preroll_ms` because a device
+        # wake may be delivered up to DEVICE_WAKE_STALE_MS late (P1-7); the replay window
+        # is selected by timestamp from this deque.
+        self._preroll: deque[tuple[float, bytes]] = deque()
         self._preroll_samples = 0
         self.preroll_replayed_ms = 0.0
         self.preroll_replays = 0
@@ -551,15 +682,63 @@ class AudioPlane:
             self._peak_hold = max(self._peak_hold, peak)
         return np.clip(mono * 32768.0, -32768, 32767).astype("<i2").tobytes()
 
-    async def _capture(self, connected: asyncio.Event, writer: asyncio.StreamWriter) -> None:
+    async def _capture(
+        self,
+        connected: asyncio.Event,
+        writer: asyncio.StreamWriter,
+        info: DeviceInfo | None = None,
+    ) -> None:
+        """The frame loop, supervised: adapter failures degrade, they never go silent.
+
+        `handle()` already probed the adapter for `Ready`; reuse that answer instead of
+        probing twice (P1-3). Any exception out of `frames()` - or a generator that ends
+        without a stop - is retried a bounded number of times with backoff. When the
+        retry budget is spent the control socket gets an `Error` and is closed: the
+        supervisor then rebuilds the plane (P1-2/P1-3) instead of leaving a process that
+        looks healthy but hears nothing.
+        """
         assert self.adapter is not None
-        info = await self.adapter.probe()
+        if info is None:
+            result = await safe_probe(self.adapter)
+            if not result.ok:
+                raise RuntimeError(f"device probe failed ({result.as_error()})")
+            info = result.info
         self._writer = writer
         self._connected = connected
         self._build_aec(info.mic_channels, info.ref_channels)
         self._build_kws()
         self._build_vad()
         self._configure_device_wake(info)
+        while not self._stop.is_set():
+            try:
+                await self._capture_frames(info, connected, writer)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - adapter input is untrusted
+                if self._stop.is_set():
+                    return
+                refreshed = await self._recover_capture(exc, writer, info)
+                if refreshed is None:
+                    return
+                info = refreshed
+            else:
+                if self._stop.is_set():
+                    return
+                # A generator that simply ends while the plane is supposed to be up is
+                # the same deafness as one that raises; retry/surface it the same way.
+                refreshed = await self._recover_capture(
+                    RuntimeError("adapter.frames() ended without a stop"), writer, info
+                )
+                if refreshed is None:
+                    return
+                info = refreshed
+
+    async def _capture_frames(
+        self,
+        info: DeviceInfo,
+        connected: asyncio.Event,
+        writer: asyncio.StreamWriter,
+    ) -> None:
         decimator = Decimator(
             factor=max(1, info.sample_rate // self.cfg.audio.voice.rate),
             channels=info.channels,
@@ -567,7 +746,8 @@ class AudioPlane:
         last_ts: float | None = None
         async for frame in self.adapter.frames():
             if self._stop.is_set():
-                break
+                return
+            self._note_capture_frame()
             t0 = time.perf_counter()
             self.frames_in += 1
             self.audio_s += frame.duration_ms / 1000.0
@@ -590,7 +770,7 @@ class AudioPlane:
             # counted and dropped instead of producing a second turn.
             vendor_wake = False
             for vendor in self._drain_signals():
-                if getattr(vendor, "kind", "") == "wake":
+                if vendor.kind == "wake":
                     vendor_wake = True
                     # Mirror the control plane's VendorWindow locally: a device barge
                     # hint inside it must not stop our playback (§5). Our own accepted
@@ -601,7 +781,7 @@ class AudioPlane:
                 if connected.is_set():
                     try:
                         writer.write(encode_json(VendorSignalMsg(
-                            kind=vendor.kind, text=vendor.text, ts_ms=float(vendor.ts)
+                            kind=vendor.kind, text=vendor.text, ts_ms=vendor.ts
                         )))
                         await writer.drain()
                     except (ConnectionResetError, BrokenPipeError):
@@ -625,25 +805,217 @@ class AudioPlane:
                 self.frames_dropped += 1
             self.cpu_s += time.perf_counter() - t0
 
-    def _drain_signals(self) -> list:
-        """Vendor events the adapter saw (or none, for adapters that cannot report them)."""
+    def _note_capture_frame(self) -> None:
+        """A frame arrived: clear a previous capture-degraded state (and log recovery)."""
+        if self.capture_degraded:
+            log.info("capture recovered after %d failure(s)", self._capture_fail_streak)
+        self.capture_degraded = False
+        self._capture_fail_streak = 0
+
+    async def _recover_capture(
+        self,
+        exc: BaseException,
+        writer: asyncio.StreamWriter,
+        info: DeviceInfo,
+    ) -> DeviceInfo | None:
+        """Retry capture, or surface the failure and return None when out of budget."""
+        self.capture_errors += 1
+        self._capture_fail_streak += 1
+        self.capture_last_error = f"{type(exc).__name__}: {exc}"[:300]
+        now = time.monotonic()
+        if now - self._capture_error_logged >= CAPTURE_ERROR_LOG_S:
+            self._capture_error_logged = now
+            log.warning(
+                "capture: %s; retry %d/%d",
+                self.capture_last_error, self._capture_fail_streak,
+                CAPTURE_MAX_RESTARTS,
+            )
+        if self._capture_fail_streak > CAPTURE_MAX_RESTARTS:
+            self.capture_degraded = True
+            self._fail_plane(
+                f"capture failed {self._capture_fail_streak} times: "
+                f"{self.capture_last_error}",
+                writer,
+            )
+            return None
+        self.capture_degraded = True
+        delay = min(
+            CAPTURE_RESTART_BACKOFF_S * (2 ** (self._capture_fail_streak - 1)),
+            CAPTURE_RESTART_BACKOFF_MAX_S,
+        )
+        await asyncio.sleep(delay)
+        if self._stop.is_set():
+            return None
+        self.capture_restarts += 1
+        # Refresh the layout on a retry: a reconnect can change channels/rate. A probe
+        # failure is not fatal here - frames() may still work with the old layout.
+        result = await safe_probe(self.adapter)
+        return result.info if result.ok else info
+
+    def _fail_plane(self, reason: str, writer: asyncio.StreamWriter | None = None) -> None:
+        """Surface an unrecoverable plane failure to the control plane, then stop.
+
+        The supervisor treats a closed control socket as "the plane died" and rebuilds
+        it; the alternative - a live process with a dead capture task - is the silent
+        deafness this fix exists to remove.
+        """
+        if self._stop.is_set():
+            return
+        self.capture_degraded = True
+        self.capture_last_error = reason[:300]
+        log.error("audio plane degraded: %s; stopping so the supervisor rebuilds it", reason)
+        target = writer if writer is not None else self._writer
+        if target is not None:
+            try:
+                target.write(encode_json(Error(message=f"audio plane degraded: {reason}")))
+            except (ConnectionResetError, BrokenPipeError, OSError):
+                pass
+            close = getattr(target, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except (OSError, RuntimeError):
+                    pass
+        self._stop.set()
+
+    def _watch_task(
+        self,
+        name: str,
+        task: asyncio.Task,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Done-callback supervision for the side tasks (metrics, send-audio, speak).
+
+        A side task that dies while the control socket is open is the same class of
+        failure as a dead capture task: the plane keeps answering but some part of the
+        pipeline is gone. Report it instead of letting the exception sit unretrieved.
+        """
+
+        def _done(finished: asyncio.Task) -> None:
+            if finished.cancelled() or self._stop.is_set():
+                return
+            exc = finished.exception()
+            self.task_errors += 1
+            detail = (
+                f"{type(exc).__name__}: {exc}" if exc is not None
+                else "exited unexpectedly"
+            )
+            self.task_last_error = f"{name}: {detail}"[:300]
+            self._fail_plane(f"{name} task {detail}", writer)
+
+        task.add_done_callback(_done)
+
+    def _drain_signals(self) -> list[_VendorEvent]:
+        """Vendor events the adapter saw, validated and bounded (P1-2/P2-8).
+
+        Adapter input is untrusted: an exception, a non-sequence, a malformed item, a
+        non-finite timestamp or an oversized text is counted and dropped here so the
+        frame loop (and RUI KWS) keeps running.
+        """
         drain = getattr(self.adapter, "drain_signals", None)
-        return list(drain()) if callable(drain) else []
+        if not callable(drain):
+            return []
+        try:
+            pending = drain()
+        except Exception as exc:  # noqa: BLE001 - adapter input is untrusted
+            self.signal_errors += 1
+            self.signal_last_error = f"{type(exc).__name__}: {exc}"[:300]
+            now = time.monotonic()
+            if now - self._signal_error_logged >= DEVICE_WAKE_ERROR_LOG_S:
+                self._signal_error_logged = now
+                log.warning(
+                    "drain_signals() failed (%s); capture and RUI KWS continue",
+                    self.signal_last_error,
+                )
+            return []
+        try:
+            events, dropped = _bounded_drain(pending, MAX_DRAIN_EVENTS)
+        except TypeError as exc:
+            self.signal_invalid += 1
+            self.signal_last_error = str(exc)[:300]
+            log.debug("drain_signals: %s", exc)
+            return []
+        if dropped:
+            self.signal_dropped += dropped
+            self._log_drain_drop("drain_signals", dropped)
+        out: list[_VendorEvent] = []
+        for item in events:
+            kind = getattr(item, "kind", None)
+            text = getattr(item, "text", "")
+            ts = getattr(item, "ts", 0.0)
+            if not isinstance(kind, str) or not kind:
+                self.signal_invalid += 1
+                continue
+            if not isinstance(text, str):
+                self.signal_invalid += 1
+                continue
+            if not self._finite(ts):
+                self.signal_invalid += 1
+                continue
+            out.append(_VendorEvent(
+                kind=kind[:64], text=text[:MAX_SIGNAL_TEXT], ts=float(ts)
+            ))
+        return out
+
+    def _log_drain_drop(self, what: str, dropped: int) -> None:
+        now = time.monotonic()
+        if now - self._drain_drop_logged < DRAIN_DROP_LOG_S:
+            return
+        self._drain_drop_logged = now
+        log.warning(
+            "%s returned too many events: dropped %d (per-tick cap %d)",
+            what, dropped, MAX_DRAIN_EVENTS,
+        )
+
 
     # ------------------------------------------------- device_wake (v1 §5)
     def _configure_device_wake(self, info: object) -> None:
-        """Decide once, from probe() + the adapter's methods, whether v1 is usable.
+        """Decide once, from manifest ∩ probe + the adapter's methods, whether v1 is usable.
 
-        Manifest validation has already rejected an illegal combination (plugins loader);
-        this is the runtime half of §4.3: capability present, adapter method present.
-        Any miss falls back to RUI KWS with one warning - it must never look like a
-        device that simply cannot hear.
+        Three independent gates, all required (P1-5/P1-6/P2-4):
+
+        * a resolvable, trusted (in-process) plug that declares `wake.source: device`;
+        * effective capabilities are the intersection of the manifest's declaration and
+          what `probe()` actually reports;
+        * a callable `drain_wakes()`.
+
+        `wake.barge_via_device` is ANDed with the `barge_via_device` capability and
+        `playback`: a capability says the device *can*, the wake block says this plug
+        *enables* it. Any miss falls back to RUI KWS with one warning - it must never
+        look like a device that simply cannot hear.
         """
         self.device_wake_configured = True
-        capabilities = getattr(info, "capabilities", frozenset())
-        manifest_source = self._manifest_wake_source()
-        if Capability.DEVICE_WAKE not in capabilities:
-            if manifest_source == "device":
+        probe_caps = set(getattr(info, "capabilities", frozenset()) or ())
+        policy = self._wake_policy()
+        effective = effective_capabilities(
+            policy.capabilities if policy.present else None, probe_caps
+        )
+        if policy.present and not policy.trusted:
+            # Q8: v1 only supports device_wake for in-process/trusted adapters. `trust`
+            # is self-declared metadata, not authorization, but a third-party manifest is
+            # still a signal the operator asked for a sidecar; do not run its wake path
+            # in-process merely because an env adapter advertises the capability.
+            if Capability.DEVICE_WAKE in probe_caps:
+                self.device_wake_fallbacks += 1
+                log.warning(
+                    "device_wake: third-party plug requests wake.source=device, but "
+                    "v1 only supports that for trusted/in-process adapters (Q8); "
+                    "falling back to RUI KWS (%s)",
+                    policy.error or "trust=third-party",
+                )
+            return
+        if Capability.DEVICE_WAKE not in effective:
+            if Capability.DEVICE_WAKE in probe_caps:
+                # The manifest is the upper bound (§2). This covers both a v0/builtin
+                # manifest without the capability and a manifest whose intersection
+                # removed it; the probe alone is not enough (P2-3).
+                self.device_wake_fallbacks += 1
+                log.warning(
+                    "device_wake: probe advertises it but the plug manifest does not "
+                    "(effective capabilities are manifest ∩ probe); falling back to "
+                    "RUI KWS"
+                )
+            elif policy.source == "device":
                 # The manifest declared it but probe() did not verify it: runtime
                 # downgrade, one warning, KWS unchanged (§4.3).
                 self.device_wake_fallbacks += 1
@@ -652,16 +1024,14 @@ class AudioPlane:
                     "does not advertise it; falling back to RUI KWS"
                 )
             return
-        if manifest_source == "rui":
-            # Manifest is the upper bound (§2): an adapter that can report wakes does
-            # not get to use them unless the plug declared `wake.source: device`.
+        if policy.source == "rui":
             self.device_wake_fallbacks += 1
             log.warning(
                 "device_wake: probe advertises it but the device's plug manifest does "
                 "not; falling back to RUI KWS"
             )
             return
-        if manifest_source == "sidecar":
+        if policy.source == "sidecar":
             # Frozen Q8: v1 only supports device_wake for in-process/trusted adapters.
             # A sidecar has no standardised wake RPC yet, so it degrades to KWS rather
             # than pretending an unverified proxy channel is authoritative.
@@ -681,8 +1051,37 @@ class AudioPlane:
             )
             return
         self.device_wake_active = True
-        barge = Capability.BARGE_VIA_DEVICE in capabilities
-        if barge and Capability.PLAYBACK not in capabilities:
+        barge = Capability.BARGE_VIA_DEVICE in effective
+        if barge and policy.present and not policy.barge_enabled:
+            # P1-5: capability = can, wake block = enables. A plug that explicitly left
+            # the hint off must not get it through a probe-only capability.
+            log.warning(
+                "device_wake: manifest wake.barge_via_device=false; the probe's "
+                "barge capability does not enable barge hints"
+            )
+            barge = False
+        elif (
+            policy.present
+            and policy.barge_enabled
+            and Capability.BARGE_VIA_DEVICE not in probe_caps
+        ):
+            # The inverse: the manifest enables a hint the probe does not verify.
+            log.warning(
+                "device_wake: manifest enables barge_via_device but probe() does not "
+                "advertise it; barge hints disabled"
+            )
+            barge = False
+        elif (
+            policy.present
+            and Capability.BARGE_VIA_DEVICE in probe_caps
+            and Capability.BARGE_VIA_DEVICE not in effective
+        ):
+            log.warning(
+                "device_wake: barge_via_device is probe-only and absent from the "
+                "manifest's capability list; barge hints disabled"
+            )
+            barge = False
+        if barge and Capability.PLAYBACK not in effective:
             log.warning(
                 "device_wake: barge_via_device declared without playback; "
                 "barge hints will not be honoured"
@@ -694,31 +1093,69 @@ class AudioPlane:
             barge,
         )
 
-    def _manifest_wake_source(self) -> str | None:
-        """The configured device's manifest ``wake.source``, or None without a manifest.
+    def _wake_policy(self) -> _WakePolicy:
+        """Resolve the configured device's plug into the wake upper bound (P1-5/P1-6).
 
-        The adapter is built from config, not from the manifest, so this is the one
-        place the plane can still enforce "manifest is the upper bound". A device with
-        no resolvable plug (the mock adapter, a dev/in-process adapter) has no manifest
-        to contradict. Reading the catalog here is once per connection, not per event.
+        ``present=False`` is the documented dev case: no manifest was configured or a
+        manifest simply does not exist, so the probe is authoritative. If a manifest was
+        explicitly requested but cannot be resolved/loaded, the policy fails closed
+        (`source="rui"`) instead of silently letting the probe enable device wake (P2-4).
+        Reading the catalog here is once per connection, not per event.
         """
         device = next((item for item in self.cfg.devices if item.id == self.device_id), None)
         if device is None:
-            return None
+            return _WakePolicy()
+        params = getattr(device, "params", None)
+        requested = (
+            str(params.get("plug_id") or "").strip() if isinstance(params, dict) else ""
+        )
         try:
             from ..plugins.resolve import resolve_device_plug
 
             resolved = resolve_device_plug(device, self.cfg.system.data_dir)
         except Exception as exc:  # noqa: BLE001 - a broken plug must not block a mic
-            log.info("device_wake: could not resolve the plug manifest: %s", exc)
-            return None
+            error = f"plug_resolve_failed: {type(exc).__name__}: {exc}"[:200]
+            log.warning("device_wake: could not resolve the plug manifest: %s", error)
+            if requested:
+                # An explicitly requested plug that cannot be read is not "no manifest":
+                # fail closed to RUI KWS instead of letting the probe enable device wake.
+                return _WakePolicy(
+                    source="rui", present=True, trusted=True, error=error
+                )
+            return _WakePolicy(error=error)
         if resolved is None:
-            return None
+            if requested:
+                log.warning(
+                    "device_wake: plug %r is missing or invalid; failing closed to "
+                    "RUI KWS",
+                    requested,
+                )
+                return _WakePolicy(
+                    source="rui", present=True, trusted=True, error="plug_unresolved"
+                )
+            return _WakePolicy()
         runtime = getattr(resolved.device, "runtime", None)
         if runtime is not None and str(getattr(runtime, "mode", "")) == "sidecar":
             # Q8: no standardised wake RPC inside a sidecar yet.
-            return "sidecar"
-        return str(getattr(resolved.device, "wake_source", "rui"))
+            source = "sidecar"
+        else:
+            source = str(getattr(resolved.device, "wake_source", "rui"))
+        trust = str(getattr(resolved.plugin, "trust", "third-party"))
+        return _WakePolicy(
+            source=source,
+            present=True,
+            trusted=trust in ("builtin", "trusted"),
+            barge_enabled=bool(
+                getattr(resolved.device, "barge_via_device_enabled", False)
+            ),
+            capabilities=_capability_set(
+                getattr(resolved.device, "capabilities", ())
+            ),
+        )
+
+    def _manifest_wake_source(self) -> str | None:
+        """Compatibility seam: the manifest ``wake.source``, or None without one."""
+        return self._wake_policy().source
 
     async def _drain_device_wakes(
         self, *, vendor_wake: bool, writer: asyncio.StreamWriter,
@@ -759,7 +1196,7 @@ class AudioPlane:
         if pending is None:
             return
         try:
-            events = list(pending)
+            events, dropped = _bounded_drain(pending, MAX_DRAIN_EVENTS)
         except TypeError:
             # A bad adapter returning a bare DeviceWake (or a scalar) must not take the
             # frame loop down; count it as an invalid event and keep KWS running.
@@ -767,6 +1204,11 @@ class AudioPlane:
                 f"drain_wakes returned {type(pending).__name__}, not a list"
             )
             return
+        if dropped:
+            # P2-1: act on a bounded number per tick; the excess is counted (the freshest
+            # events won for a sequence) instead of stalling the 20 ms frame loop.
+            self.device_wake_dropped += dropped
+            self._log_drain_drop("drain_wakes", dropped)
         for event in events:
             await self._handle_device_wake(
                 event, vendor_wake=vendor_wake, writer=writer, connected=connected
@@ -774,34 +1216,27 @@ class AudioPlane:
 
     @staticmethod
     def _finite(value: object) -> bool:
-        return isinstance(value, (int, float)) and math.isfinite(float(value))
+        # bool is an int in Python: `score=True` must be invalid, not 1.0 (P2-2).
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+        )
 
     def _device_wake_problem(self, wake: DeviceWake) -> str:
-        """Why this event cannot be acted on (§5 "无效条件"), or "" when it can."""
-        if not self._finite(wake.ts_ms):
-            return "ts_ms is not finite"
-        if not self._finite(wake.score):
-            return "score is not finite"
-        if not self._finite(wake.threshold):
-            return "threshold is not finite"
-        if wake.level is not None and not self._finite(wake.level):
-            return "level is not finite"
-        if wake.source != "device":
-            return f"source is {wake.source!r}, not 'device'"
-        if not 0.0 <= float(wake.score) <= 1.0:
-            return f"score {wake.score!r} is outside 0-1"
-        if float(wake.threshold) <= 0.0:
-            return f"threshold {wake.threshold!r} is not > 0"
-        if float(wake.score) < float(wake.threshold):
-            return f"score {wake.score:.3f} is below threshold {wake.threshold:.3f}"
-        age = now_ms() - float(wake.ts_ms)
-        if age > DEVICE_WAKE_STALE_MS:
-            return f"stale by {age:.0f} ms"
-        if age < -DEVICE_WAKE_FUTURE_MS:
-            return f"{abs(age):.0f} ms in the future"
-        if wake.barge and not self.device_wake_barge_active:
-            return "barge hint without the barge_via_device capability"
-        return ""
+        """Why this event cannot be acted on (§5 "无效条件"), or "" when it can.
+
+        Shape/type/range/staleness live in the contract helper so the adapter kit and
+        the plane agree on what "invalid" means (P2-2). A barge hint when barge is
+        disabled is *not* invalid here: the playback branch suppresses it and counts
+        `device_wake_barge_suppressed`, while the idle wake may still be valid (P1-5).
+        """
+        return wake_validation_error(
+            wake,
+            now_ms=now_ms(),
+            stale_ms=DEVICE_WAKE_STALE_MS,
+            future_ms=DEVICE_WAKE_FUTURE_MS,
+        ) or ""
 
     def _device_wake_is_debounced(self, wake: DeviceWake) -> bool:
         last = self._last_accepted_wake_ts
@@ -961,19 +1396,61 @@ class AudioPlane:
             connected.clear()
 
     # ---------------------------------------------------- wake, preroll, ack
+    def _preroll_history_ms(self) -> int:
+        """How much timestamped audio to retain for wake replay (P1-7).
+
+        A device wake may arrive up to `DEVICE_WAKE_STALE_MS` late, so the history has to
+        reach back past the event timestamp; the replay window itself is still
+        `wake_preroll_ms` long and is selected from this deque by timestamp.
+        """
+        preroll_ms = max(0, int(self.cfg.audio.voice.wake_preroll_ms))
+        if not self.device_wake_active:
+            return preroll_ms
+        return max(preroll_ms, int(DEVICE_WAKE_STALE_MS) + preroll_ms)
+
     def _keep_preroll(self, pcm: bytes, ts_ms: float) -> None:
-        """Hold the last `wake_preroll_ms` of voice-rate audio for the next wake.
+        """Hold timestamped voice-rate audio for the next wake.
 
         The frame timestamp travels with the block: a replay that stamps every block with
-        the wake time erases the timeline the trace needs.
+        the wake time erases the timeline the trace needs. With device wakes enabled the
+        ring is longer than `wake_preroll_ms` (see `_preroll_history_ms`).
         """
-        limit = int(self.cfg.audio.voice.rate * self.cfg.audio.voice.wake_preroll_ms / 1000)
+        limit = int(self.cfg.audio.voice.rate * self._preroll_history_ms() / 1000)
         if limit <= 0:
             return
         self._preroll.append((ts_ms, pcm))
         self._preroll_samples += len(pcm) // 2
         while self._preroll_samples > limit and len(self._preroll) > 1:
             self._preroll_samples -= len(self._preroll.popleft()[1]) // 2
+
+    def _take_preroll(
+        self, anchor_ts: float, preroll_ms: int, *, fallback_all: bool
+    ) -> tuple[list[tuple[float, bytes]], bool]:
+        """Drain the history and select the replay window anchored at `anchor_ts`.
+
+        P1-7: the old code replayed the newest `wake_preroll_ms` at handling time, so an
+        event accepted 1.5 s late replayed the wrong audio and lost the onset it exists
+        to protect. Here the window starts at `anchor_ts - preroll_ms`, so a late event
+        replays the audio around its own timestamp (and the intervening live audio), not
+        "the last N ms from now".
+
+        Returns ``(blocks, missed)``. ``missed`` means the anchor is older than every
+        retained block; the caller counts it rather than silently mis-replaying the
+        newest window. `fallback_all` keeps the KWS path's historical "replay what
+        remains" behavior.
+        """
+        history = list(self._preroll)
+        self._preroll.clear()
+        self._preroll_samples = 0
+        if not history:
+            return [], False
+        lower = float(anchor_ts) - max(0, int(preroll_ms))
+        selected = [(ts, block) for ts, block in history if ts >= lower]
+        if selected:
+            return selected, False
+        if fallback_all:
+            return history, False
+        return [], True
 
     async def _on_wake(
         self, hit: WakeHit, writer: asyncio.StreamWriter, connected: asyncio.Event
@@ -1136,12 +1613,26 @@ class AudioPlane:
             self._followup_capture = False
             self._followup_tail.clear()
             self._followup_samples = 0
+            # P1-7: anchor the replay at this event's own timestamp. A device wake can
+            # be up to DEVICE_WAKE_STALE_MS late; replaying "the last N ms from now"
+            # would hand the gate the wrong audio and lose the onset the preroll exists
+            # to protect. The KWS path keeps its "replay what remains" fallback.
+            blocks, missed = self._take_preroll(
+                float(ts_ms),
+                max(0, int(self.cfg.audio.voice.wake_preroll_ms)),
+                fallback_all=source != "device",
+            )
+            if missed:
+                self.device_wake_replay_missed += 1
+                log.warning(
+                    "device_wake: ts_ms=%.0f is older than the retained audio; "
+                    "replay skipped instead of mis-aligned",
+                    float(ts_ms),
+                )
             replayed = 0
-            for ts, block in list(self._preroll):
+            for ts, block in blocks:
                 await self._feed_gate(block, ts, writer, connected)
                 replayed += len(block) // 2
-            self._preroll.clear()
-            self._preroll_samples = 0
             self.preroll_replayed_ms = round(replayed * 1000.0 / self.cfg.audio.voice.rate, 1)
             self.preroll_replays += 1
             # From here on it is live audio, and the cue may still be sounding. The cue's
@@ -2004,7 +2495,21 @@ class AudioPlane:
             device_wake_no_vad=self.device_wake_no_vad,
             device_wake_fallbacks=self.device_wake_fallbacks,
             device_wake_degraded=self.device_wake_degraded,
+            device_wake_dropped=self.device_wake_dropped,
+            device_wake_replay_missed=self.device_wake_replay_missed,
             device_wake_last_score=self.device_wake_last_score,
+            # Capture/signal supervision (P1-2/P1-3): a plane that is "running" but no
+            # longer capturing must be visible in /health, not only in its stderr.
+            capture_degraded=self.capture_degraded,
+            capture_errors=self.capture_errors,
+            capture_restarts=self.capture_restarts,
+            capture_last_error=self.capture_last_error,
+            signal_errors=self.signal_errors,
+            signal_dropped=self.signal_dropped,
+            signal_invalid=self.signal_invalid,
+            signal_last_error=self.signal_last_error,
+            task_errors=self.task_errors,
+            task_last_error=self.task_last_error,
             kws_enabled=self.wake is not None,
             kws_error=self.kws_error,
             vad_enabled=self.gate is not None,
@@ -2121,7 +2626,12 @@ class AudioPlane:
         tasks: list[asyncio.Task] = []
         try:
             self.adapter = await self._open_adapter()
-            info = await self.adapter.probe()
+            # One probe for both Ready and capture: probing a second time in _capture
+            # was an unguarded adapter call on the critical path (P1-3).
+            probe = await safe_probe(self.adapter)
+            if not probe.ok:
+                raise RuntimeError(f"device probe failed ({probe.as_error()})")
+            info = probe.info
             writer.write(
                 encode_json(
                     Ready(
@@ -2138,12 +2648,18 @@ class AudioPlane:
             await writer.drain()
             connected.set()
             self._ctl_writer, self._ctl_connected = writer, connected
+            capture = asyncio.create_task(
+                self._capture(connected, writer, info), name="capture"
+            )
             tasks = [
-                asyncio.create_task(self._capture(connected, writer), name="capture"),
+                capture,
                 asyncio.create_task(self._send_audio(writer, connected), name="send-audio"),
                 asyncio.create_task(self._metrics_loop(writer, connected), name="metrics"),
                 asyncio.create_task(self._speak_loop(), name="speak"),
             ]
+            # P1-2/P1-3: a task that dies must not leave the process looking healthy.
+            for task in tasks:
+                self._watch_task(task.get_name(), task, writer)
             while not self._stop.is_set():
                 kind, payload = await read_frame(reader)
                 if kind is FrameType.PLAY_PCM:

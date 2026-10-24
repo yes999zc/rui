@@ -36,7 +36,7 @@ params:
   - {key: wake_words, label: "Wake words", type: list, default: ["你好小瑞"], max: 3}
 compatibility:
   rui_min: "0.2.0"
-  tested_with: ["0.2.2"]
+  tested_with: ["0.2.2", "0.3.2"]
   notes: "v0 reference: the LX06 wakes through RUI KWS (wake.source: rui), not device_wake. Capabilities mirror the built-in manifest; the core fallback remains the default through 0.3, and extraction is planned for 0.4."
 acceptance:
   verified: false

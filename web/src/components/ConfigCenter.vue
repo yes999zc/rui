@@ -35,6 +35,10 @@ const props = defineProps<{
   warning?: LocalizedText | string
 }>()
 
+/** Inline use (PanelHost `config` block) needs to refresh the panel registry after
+ * enabling a service, because `enabled`/`enabled_reason` live in the PanelSpec. */
+const emit = defineEmits<{ saved: [{ applied: string[]; restart: boolean }] }>()
+
 type Value = unknown
 
 const doc = ref<CatalogDoc | null>(null)
@@ -527,6 +531,7 @@ async function save(): Promise<void> {
       restartFields: result.restart_fields ?? [],
       warnings: result.warnings ?? [],
     }
+    emit('saved', { applied, restart: Boolean(result.restart_required) })
     baseline.value = clone(draft.value)
     void load(true)
     await nextTick()

@@ -13,13 +13,17 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from rui.audio.process import (
     DEVICE_WAKE_MAX_INVALID,
     DEVICE_WAKE_RATE_MAX,
+    MAX_DRAIN_EVENTS,
     AudioPlane,
+    _WakePolicy,
 )
 from rui.audio.protocol import Wake
-from rui.config import Config
+from rui.config import Config, DeviceConfig
 from rui.device.contract import Capability, DeviceInfo, DeviceWake
 from rui.device.mock import MockAdapter
 from rui.trace import TurnTrace, now_ms
@@ -60,12 +64,17 @@ class FakeGate:
         self.idle_events = 0
         self.arm_calls: list[dict] = []
         self.hold_calls: list[tuple[float, float]] = []
+        self.fed: list[tuple[float, int]] = []
         self.cfg = SimpleNamespace(max_wait_ms=5000)
 
     def arm(self, **kwargs) -> None:
         self.armed = True
         self.speaking = False
         self.arm_calls.append(kwargs)
+
+    def feed(self, pcm: bytes, ts_ms: float = 0.0) -> None:
+        self.fed.append((ts_ms, len(pcm)))
+        return None
 
     def hold(self, ms: float, skip_ms: float = 0.0) -> None:
         self.hold_calls.append((ms, skip_ms))
@@ -351,6 +360,14 @@ def test_metrics_expose_the_device_wake_counters() -> None:
     assert metrics.device_wake_invalid == 0
     assert metrics.device_wake_suppressed == 0
     assert metrics.device_wake_fallbacks == 0
+    assert metrics.device_wake_dropped == 0
+    assert metrics.device_wake_replay_missed == 0
+    # P1-2/P1-3 supervision is part of the same snapshot, so /health can show a
+    # "running but deaf" plane even when no wake ever arrives.
+    assert metrics.capture_degraded is False
+    assert metrics.capture_errors == 0
+    assert metrics.signal_errors == 0
+    assert metrics.task_errors == 0
     assert metrics.device_wake_last_score == 0.9
     assert metrics.wake_count == 0, "wake_count stays the RUI KWS counter"
 
@@ -410,7 +427,18 @@ def test_manifest_declares_device_wake_but_probe_does_not(
     plane = AudioPlane(cfg, "living", Path("/tmp/device-wake.sock"))
     adapter = WakeAdapter(frozenset({Capability.PLAYBACK}))
     plane.adapter = adapter  # type: ignore[assignment]
-    monkeypatch.setattr(AudioPlane, "_manifest_wake_source", lambda self: "device")
+    monkeypatch.setattr(
+        AudioPlane,
+        "_wake_policy",
+        lambda self: _WakePolicy(
+            source="device",
+            present=True,
+            trusted=True,
+            capabilities=frozenset(
+                {Capability.DEVICE_WAKE, Capability.PLAYBACK}
+            ),
+        ),
+    )
 
     plane._configure_device_wake(adapter.info)
 
@@ -427,7 +455,18 @@ def test_a_sidecar_manifest_degrades_to_kws(monkeypatch) -> None:
     adapter = WakeAdapter()
     plane.adapter = adapter  # type: ignore[assignment]
     plane.gate = FakeGate()  # type: ignore[assignment]
-    monkeypatch.setattr(AudioPlane, "_manifest_wake_source", lambda self: "sidecar")
+    monkeypatch.setattr(
+        AudioPlane,
+        "_wake_policy",
+        lambda self: _WakePolicy(
+            source="sidecar",
+            present=True,
+            trusted=True,
+            capabilities=frozenset(
+                {Capability.DEVICE_WAKE, Capability.BARGE_VIA_DEVICE}
+            ),
+        ),
+    )
 
     plane._configure_device_wake(adapter.info)
 
@@ -448,3 +487,221 @@ def test_a_barge_hint_inside_the_vendor_quiet_window_is_suppressed() -> None:
     assert all(frame["type"] != "wake" for frame in frames)
     assert adapter.stops == 0
     assert plane.device_wake_barge_suppressed == 1
+
+
+# --- P1-5/P1-6/P2-4: manifest ∩ probe, trust, and the barge flag ---------------------
+
+
+def _write_wake_plug(
+    tmp_path: Path, *, trust: str = "builtin", barge: bool = True
+) -> None:
+    """A minimal v1 device_wake plug under ``<data_dir>/plugs``."""
+    root = tmp_path / "plugs" / "dot2-plug"
+    (root / "devices").mkdir(parents=True)
+    (root / "plugin.yaml").write_text(
+        "schema: rui-plugin/v0\n"
+        "id: dot2-plug\n"
+        "name: Dot2 Plug\n"
+        "version: 1.0.0\n"
+        'rui_compat: ">=0.2.0 <0.4.0"\n'
+        "license: MIT\n"
+        "maintainer: Test <test@example.invalid>\n"
+        f"trust: {trust}\n"
+        "devices:\n"
+        "  - devices/dot2.yaml\n",
+        encoding="utf-8",
+    )
+    (root / "devices" / "dot2.yaml").write_text(
+        "schema: rui-device/v1\n"
+        "id: dot2\n"
+        "name: Dot2 Speaker\n"
+        "vendor: Test Inc.\n"
+        "class: A\n"
+        "transport: outbound\n"
+        "protocol: {kind: ws, version: '1'}\n"
+        "capabilities: [mic_array, playback, device_wake, barge_via_device]\n"
+        f"wake: {{source: device, barge_via_device: {str(barge).lower()}}}\n"
+        "params: []\n",
+        encoding="utf-8",
+    )
+
+
+def make_manifest_plane(
+    tmp_path: Path,
+    *,
+    trust: str = "builtin",
+    barge: bool = True,
+    probe_caps: frozenset[Capability] = WAKE_CAPS,
+    plug_id: str = "",
+) -> tuple[AudioPlane, WakeAdapter]:
+    _write_wake_plug(tmp_path, trust=trust, barge=barge)
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    cfg.ack.mode = "none"
+    cfg.audio.aec.enabled = False
+    cfg.devices = [
+        DeviceConfig(
+            id="living", adapter="dot2", host="192.0.2.10",
+            params={"plug_id": plug_id} if plug_id else {},
+        )
+    ]
+    plane = AudioPlane(cfg, "living", Path("/tmp/device-wake.sock"))
+    adapter = WakeAdapter(probe_caps)
+    plane.adapter = adapter  # type: ignore[assignment]
+    plane.gate = FakeGate()  # type: ignore[assignment]
+    plane._configure_device_wake(adapter.info)
+    return plane, adapter
+
+
+def test_manifest_barge_false_is_not_overridden_by_the_probe(tmp_path: Path) -> None:
+    # P1-5: capability = can, wake block = enables. A plug that explicitly left the
+    # barge hint off must not get it from a probe-only capability.
+    plane, adapter = make_manifest_plane(tmp_path, barge=False)
+    assert plane.device_wake_active is True
+    assert plane.device_wake_barge_active is False
+    plane._speak_queued_s = 1.0
+    adapter.inject_wake(barge=True)
+
+    frames = drain(plane)
+
+    assert all(frame["type"] != "wake" for frame in frames)
+    assert adapter.stops == 0
+    assert plane.device_wake_barge_suppressed == 1
+    assert plane.device_wake_invalid == 0, "a disabled hint is suppressed, not invalid"
+
+
+def test_manifest_barge_true_but_probe_missing_turns_it_off(
+    tmp_path: Path, caplog
+) -> None:
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="rui.audio.process")
+    caps = WAKE_CAPS - {Capability.BARGE_VIA_DEVICE}
+    plane, _ = make_manifest_plane(tmp_path, barge=True, probe_caps=frozenset(caps))
+
+    assert plane.device_wake_active is True
+    assert plane.device_wake_barge_active is False
+    assert any("probe() does not advertise" in r.getMessage() for r in caplog.records)
+
+
+def test_third_party_manifest_cannot_enable_device_wake(tmp_path: Path) -> None:
+    # P1-6: trust is metadata, but a third-party manifest is treated as
+    # sidecar-equivalent for the wake path (Q8); an env adapter must not smuggle it in.
+    plane, _ = make_manifest_plane(tmp_path, trust="third-party")
+
+    assert plane.device_wake_active is False
+    assert plane.device_wake_barge_active is False
+    assert plane.device_wake_fallbacks == 1
+
+
+def test_trusted_manifest_with_the_same_fields_activates(tmp_path: Path) -> None:
+    plane, _ = make_manifest_plane(tmp_path, trust="trusted")
+    assert plane.device_wake_active is True
+    assert plane.device_wake_fallbacks == 0
+
+
+def test_a_requested_but_missing_plug_fails_closed(tmp_path: Path) -> None:
+    # P2-4: "no manifest" is a dev exception; "a plug was requested but is invalid"
+    # must not fall back to the probe and silently enable device_wake.
+    plane, _ = make_manifest_plane(tmp_path, plug_id="does-not-exist")
+    assert plane.device_wake_active is False
+    assert plane.device_wake_fallbacks == 1
+
+
+# --- P2-1/P2-2: bounded drains and strict event types -------------------------------
+
+
+def test_drain_wakes_flood_is_bounded_per_tick() -> None:
+    class Flood(WakeAdapter):
+        def __init__(self, count: int) -> None:
+            self.count = count
+            super().__init__()
+
+        def drain_wakes(self) -> list[DeviceWake]:
+            ts = now_ms()
+            return [
+                DeviceWake(ts_ms=ts, score=0.9, threshold=0.5)
+                for _ in range(self.count)
+            ]
+
+    plane, _ = make_plane(gate=FakeGate())
+    flood = Flood(10_000)
+    plane.adapter = flood  # type: ignore[assignment]
+    plane._configure_device_wake(flood.info)
+
+    started = time.monotonic()
+    drain(plane)
+    elapsed = time.monotonic() - started
+
+    assert plane.device_wakes == MAX_DRAIN_EVENTS
+    assert plane.device_wake_dropped == 10_000 - MAX_DRAIN_EVENTS
+    assert plane.device_wake_turns == 1, "only the first (unde-bounced) event turns"
+    assert elapsed < 1.0, f"a 10 k-event drain stalled the frame loop for {elapsed:.2f}s"
+
+
+def _raw_wake(**overrides) -> DeviceWake:
+    """A DeviceWake whose fields bypass the constructor's own type check."""
+    wake = DeviceWake.__new__(DeviceWake)
+    object.__setattr__(wake, "ts_ms", now_ms())
+    object.__setattr__(wake, "score", 0.9)
+    object.__setattr__(wake, "threshold", 0.5)
+    object.__setattr__(wake, "barge", False)
+    object.__setattr__(wake, "level", None)
+    object.__setattr__(wake, "source", "device")
+    for key, value in overrides.items():
+        object.__setattr__(wake, key, value)
+    return wake
+
+
+def test_non_bool_barge_is_invalid_and_never_stops_playback() -> None:
+    # P2-2: the contract rejects a non-bool at construction, but the plane must not
+    # trust an object that reached it another way; "false"/1/None must never be truthy.
+    plane, adapter = make_plane(gate=FakeGate())
+    plane._speak_queued_s = 1.0
+    for bad in ("false", 1, None):
+        adapter.inject_wake_event(_raw_wake(barge=bad))
+
+    frames = drain(plane)
+
+    assert all(frame["type"] != "wake" for frame in frames)
+    assert adapter.stops == 0
+    assert plane.device_wake_invalid == 3
+    assert plane.device_wake_barges == 0
+
+
+# --- P1-7: replay is anchored at ts_ms, not "the last N ms from now" -----------------
+
+
+def test_device_wake_replay_window_is_anchored_at_the_event_timestamp() -> None:
+    gate = FakeGate()
+    plane, adapter = make_plane(gate=gate)
+    plane.cfg.audio.voice.wake_preroll_ms = 500
+    base = now_ms() - 1000.0
+    block = b"\x01\x00" * 320  # 20 ms of 16 kHz mono
+    for i in range(50):  # 1 s of history
+        plane._keep_preroll(block, ts_ms=base + i * 20)
+
+    adapter.inject_wake(ts_ms=base + 800.0)
+    drain(plane)
+
+    # Window starts at ts - wake_preroll_ms (base+300), not at "now - 500 ms".
+    assert len(gate.fed) == 35
+    assert gate.fed[0][0] == pytest.approx(base + 300.0, abs=0.1)
+    assert gate.fed[-1][0] == pytest.approx(base + 980.0, abs=0.1)
+    assert plane.preroll_replayed_ms == pytest.approx(700.0, abs=1.0)
+    assert plane.device_wake_replay_missed == 0
+
+
+def test_an_anchor_older_than_the_history_is_a_counted_miss() -> None:
+    plane, _ = make_plane()
+    plane._preroll.append((100.0, b"\x00\x00" * 320))
+    plane._preroll_samples = 320
+    blocks, missed = plane._take_preroll(1000.0, 500, fallback_all=False)
+
+    assert blocks == []
+    assert missed is True
+    # The KWS path keeps the historical fallback instead of losing the onset.
+    plane._preroll.append((100.0, b"\x00\x00" * 320))
+    blocks, missed = plane._take_preroll(1000.0, 500, fallback_all=True)
+    assert len(blocks) == 1
+    assert missed is False

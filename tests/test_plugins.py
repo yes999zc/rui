@@ -5,6 +5,7 @@ contract (plugin.yaml + devices/*.yaml) rather than the Python models alone.
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -107,7 +108,7 @@ def _device_doc(*, device_class: str = "A", capabilities: list[str] | None = Non
 
 def _write_plugin(tmp_path: Path, *, plugin: dict | None = None, devices: dict[str, dict] | None = None) -> Path:
     root = tmp_path / "rui-plugin-example"
-    root.mkdir()
+    root.mkdir(parents=True)
     _write(root / "plugin.yaml", plugin if plugin is not None else _plugin_doc())
     for relative, device in (devices or {}).items():
         _write(root / relative, device)
@@ -532,3 +533,160 @@ def test_a_v0_manifest_cannot_declare_the_v1_model_field(tmp_path: Path) -> None
     with pytest.raises(PluginError) as error:
         load_plugin(_single(tmp_path, device=device))
     assert "rui-device/v1 only" in str(error.value)
+
+
+# --- v1 §3.2/§3.3: DeviceSide, params, acceptance and builtin parity ---------------
+
+
+def _device_side(**overrides) -> dict:
+    doc = _device_doc(device_class=overrides.pop("device_class", "A"))
+    side = dict(doc["device_side"])
+    side.update(overrides)
+    doc["device_side"] = side
+    return doc
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["file:///etc/passwd", "ftp://example.invalid/client", "https://", "not a url"],
+)
+def test_device_side_source_must_be_http_or_https(tmp_path: Path, source: str) -> None:
+    root = _single(tmp_path, device=_device_side(source=source))
+
+    with pytest.raises(PluginError) as error:
+        load_plugin(root)
+
+    message = str(error.value)
+    assert "device_side.source" in message
+    assert "http" in message
+
+
+def test_device_side_source_must_not_contain_credentials(tmp_path: Path) -> None:
+    root = _single(tmp_path, device=_device_side(source="https://user:pass@example.invalid/x"))
+
+    with pytest.raises(PluginError) as error:
+        load_plugin(root)
+
+    assert "username or password" in str(error.value)
+
+
+def test_device_side_install_steps_are_bounded(tmp_path: Path) -> None:
+    root = _single(tmp_path, device=_device_side(install_steps=["x"] * 21))
+
+    with pytest.raises(PluginError) as error:
+        load_plugin(root)
+
+    assert "install_steps" in str(error.value)
+
+
+def test_device_side_step_length_is_bounded(tmp_path: Path) -> None:
+    root = _single(tmp_path, device=_device_side(install_steps=["x" * 501]))
+
+    with pytest.raises(PluginError) as error:
+        load_plugin(root)
+
+    message = str(error.value)
+    assert "install_steps" in message
+    assert "500" in message
+
+
+def test_a_class_b_device_needs_a_rollback(tmp_path: Path) -> None:
+    root = _single(
+        tmp_path, device=_device_side(device_class="B", rollback="   ")
+    )
+
+    with pytest.raises(PluginError) as error:
+        load_plugin(root)
+
+    message = str(error.value)
+    assert "rollback" in message
+    assert "class B" in message
+
+
+def test_a_class_a_device_may_omit_the_rollback(tmp_path: Path) -> None:
+    plugin = load_plugin(_single(tmp_path, device=_device_side(rollback="")))
+    assert plugin.devices[0].device_side is not None
+
+
+def test_list_max_must_cover_the_default(tmp_path: Path) -> None:
+    device = _device_doc(
+        params=[
+            {
+                "key": "wake_words",
+                "label": "Wake words",
+                "type": "list",
+                "default": ["a", "b", "c", "d"],
+                "max": 3,
+            }
+        ]
+    )
+    root = _single(tmp_path, device=device)
+
+    with pytest.raises(PluginError) as error:
+        load_plugin(root)
+
+    message = str(error.value)
+    assert "wake_words" in message
+    assert "max is 3" in message
+
+
+def test_verified_acceptance_needs_a_date(tmp_path: Path) -> None:
+    root = _single(
+        tmp_path,
+        device=_device_doc(acceptance={"verified": True, "last_verified": ""}),
+    )
+
+    with pytest.raises(PluginError) as error:
+        load_plugin(root)
+
+    assert "last_verified" in str(error.value)
+
+
+def test_builtin_and_reference_ranges_match_the_v0_matrix() -> None:
+    builtin = builtin_plugin("xiaoai-lx06")
+    assert builtin is not None
+    # One matrix for the v0 line: the plugin range is a superset of the device floor
+    # and both accept the running 0.3.2 build.
+    assert builtin.rui_compat == ">=0.2.0 <0.4.0"
+    device = builtin.devices[0]
+    assert device.schema == DEVICE_SCHEMA
+    assert device.compatibility is not None
+    assert device.compatibility.rui_min == "0.2.0"
+    plugin_range = parse_range(builtin.rui_compat)
+    minimum = parse_version(device.compatibility.rui_min, allow_partial=True)
+    assert plugin_range.matches(str(minimum))
+    assert plugin_range.matches(__version__)
+
+
+def test_the_example_v1_plugin_uses_the_v1_version_matrix() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    example = load_plugin(repo / "examples" / "plugin-example")
+    assert example.rui_compat == ">=0.3.0 <0.4.0"
+    device = example.devices[0]
+    assert device.schema == DEVICE_SCHEMA_V1
+    assert device.compatibility is not None
+    assert device.compatibility.rui_min == "0.3.0"
+    assert parse_range(example.rui_compat).matches(__version__)
+
+
+def test_a_v0_manifest_cannot_declare_device_wake_or_barge(tmp_path: Path) -> None:
+    for capability in ("device_wake", "barge_via_device"):
+        device = _device_doc(capabilities=["playback", capability])
+        with pytest.raises(PluginError) as error:
+            load_plugin(_single(tmp_path / capability, device=device))
+        message = str(error.value)
+        assert capability in message
+        assert "rui-device/v1" in message
+
+
+def test_v0_load_warns_once_per_path(tmp_path: Path, caplog) -> None:
+    root = _single(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="rui.plugins.loader"):
+        load_plugin(root)
+        load_plugin(root)
+    messages = [
+        record.message for record in caplog.records
+        if "uses rui-device/v0" in record.message
+    ]
+    assert len(messages) == 1
+    assert "0.5.0" in messages[0]

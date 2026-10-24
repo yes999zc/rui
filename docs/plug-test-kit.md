@@ -42,7 +42,7 @@ python -m rui plug-test path/to/rui-plugin-dot2 \
 # 固定补丁 tag；下面 0.3.x 只是示意，生产请写具体版本（如 0.3.0）
 FROM ghcr.io/yes999zc/rui:0.3.x
 
-# 插件代码随镜像发布；不要从用户/设备可控路径动态导入
+# 插件代码**和 manifest** 随镜像发布；不要从用户/设备可控路径动态导入
 COPY my_plugin /opt/rui-plugins/my_plugin
 
 ENV PYTHONPATH=/opt/rui-plugins
@@ -50,9 +50,17 @@ ENV PYTHONPATH=/opt/rui-plugins
 ENV RUI_ADAPTER_PLUGINS=my_plugin.adapter:build
 ```
 
+**manifest（必需）**：0.3.2 起 env/entry point 是 manifest-gated。`plugin.yaml` 必须
+随 adapter 模块/包放在同一目录（`_module_plugin_roots` 会向上找一层），或安装到
+`<data_dir>/plugs/*` 并设置 `RUI_DATA_DIR=<data_dir>`；manifest 的 `trust` 必须是
+`builtin` 或 `trusted`。没有 manifest 的 entry 只记 warning、不注册；`third-party`
+不得 in-process；`xiaoai`/`mock` 等内置名字不可覆盖。
+
 `devices[].adapter` 必须与注册名一致。上例未写 `name=`，注册名就是模块名
 `my_plugin.adapter`；推荐写成 `ENV RUI_ADAPTER_PLUGINS=dot2=my_plugin.adapter:build`，
 配置里用 `adapter: dot2`。builder 签名与内置相同：`build(dev, cfg) -> DeviceAdapter`。
+`build(dev=None, cfg=None)` 这种“所有参数都有默认值”的 callable 仍是 per-device
+builder，启动时不会被调用；只有零参数（或显式 `factory` 角色）才是工厂。
 
 构建/升级：
 
@@ -63,9 +71,10 @@ docker compose up -d          # compose 里把 image 换成这个 tag
 
 **manifest / 信任**：adapter 在 RUI 进程内导入，等价于允许执行代码，`RUI_ADAPTER_PLUGINS`
 只能由 root/容器运维方设置，**不得**接受用户输入或 `devices[].params`；插件能读到容器
-环境变量（含密钥），镜像与插件必须由你方审计、维护。manifest 声明
-`trust: trusted`（或 `builtin`）；`third-party` 仍不得 in-process。插件目录里仍应有
-`plugin.yaml` / `devices/*.yaml`，`rui plug-test` 会验收 manifest 与 adapter 表面：
+环境变量（含密钥），镜像与插件必须由你方审计、维护。manifest 的 `trust` 是自述元数据，
+真正的门是“运维方把代码+manifest 放进镜像/数据目录”；0.3.2 的机械门要求 manifest
+存在且 `trust: builtin|trusted`，`third-party` 不得 in-process，内置名不可覆盖。
+`rui plug-test` 会验收 manifest 与 adapter 表面：
 
 ```bash
 python -m rui plug-test /opt/rui-plugins/my_plugin \
@@ -73,7 +82,9 @@ python -m rui plug-test /opt/rui-plugins/my_plugin \
 ```
 
 0.4 会把该钩子收敛为正式插件加载（trusted in-process entrypoint / third-party
-sidecar）；当前 env 是 0.3.x 的稳定过渡接口。
+sidecar runner）；当前 env 是 0.3.x 的稳定过渡接口。**0.3.x 不能运行 sidecar**：
+`runtime.mode: sidecar` 能通过 manifest 校验，但向导和 `build_adapters()` 都会返回
+明确错误，不会静默改成 in-process。
 
 本仓库自带一个能跑通的参考插头：
 
@@ -111,7 +122,7 @@ adapter 无法读取/加载。
 | `manifest.runtime` | FAIL/WARN | third-party 不得 in-process；sidecar 需 image；in-process 需 entrypoint |
 | `adapter.import` | FAIL | 懒加载 `module:attr` / `path/to/file.py:attr` |
 | `adapter.construct` | FAIL | 支持 `build()`、`build(device)`、`build(device, config)` |
-| `adapter.methods` | FAIL | `probe/open/close/frames/play/stop_playback/set_volume/set_led/drain_signals/drain_wakes`；两个 drain 必须同步 |
+| `adapter.methods` | FAIL | `probe/open/close/frames/play/stop_playback/set_volume/set_led/drain_signals/drain_wakes`；两个 drain 必须同步。音量：`set_volume` 0–100；`services.set_volume/read_volume` 0–255（kit 目前只检查方法存在，生产以 `services` 为准） |
 | `device.ready` | FAIL | `probe()` 返回有效 id/channels/sample_rate |
 | `device.probe_layout` | FAIL/WARN | `channels == mic_channels + ref_channels`、manifest ∩ probe 降级提示 |
 | `device.open` | FAIL | `open()` 可完成 |

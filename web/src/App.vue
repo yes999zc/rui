@@ -37,7 +37,7 @@ let timer: number | undefined
 
 /** Server-driven setup state (`GET /api/v1/setup/step`), cached briefly. */
 let setupCache: { at: number; complete: boolean } | null = null
-let setupComplete = false
+const setupComplete = ref(false)
 const SETUP_CACHE_MS = 30_000
 let nudgeBusy = false
 let lastNudge = Date.now()
@@ -71,9 +71,12 @@ async function refreshSignal(): Promise<void> {
     /* the ledger shows what it has; the page shows the error */
   }
   booted.value = true
+  // The rail hides the wizard once setup is complete, so keep the shared state fresh
+  // (the 30 s cache means at most one tiny GET per half minute, not a poll loop).
+  void refreshSetup(false)
   // While setup is incomplete, keep nudging at most once a minute (cached result);
   // once complete, stop asking.
-  if (!setupComplete && Date.now() - lastNudge >= 60_000) void nudgeSetup(false)
+  if (!setupComplete.value && Date.now() - lastNudge >= 60_000) void nudgeSetup(false)
 }
 
 async function setupIsComplete(force: boolean): Promise<boolean> {
@@ -83,8 +86,17 @@ async function setupIsComplete(force: boolean): Promise<boolean> {
   }
   const state = await api.setupStepState()
   setupCache = { at: Date.now(), complete: state.complete }
-  setupComplete = state.complete
+  setupComplete.value = state.complete
   return state.complete
+}
+
+/** Fetch the setup state even when the current page is not eligible for a nudge. */
+async function refreshSetup(force: boolean): Promise<void> {
+  try {
+    setupComplete.value = await setupIsComplete(force)
+  } catch {
+    // 401/offline: leave the last known state; the wizard itself reports the error.
+  }
 }
 
 /**
@@ -166,10 +178,13 @@ watch(tokenOpen, async (open) => {
 
 // A later navigation back to the landing page is checked fresh (cached results are
 // only for the periodic refresh): after finishing setup there must be no bounce.
+// Other destinations refresh the rail's setup state so the wizard entry disappears
+// as soon as the last step is done, wherever the operator lands.
 watch(
   () => route.path,
   (path) => {
     if (path === '/' || path === '/panel/overview') void nudgeSetup(true)
+    else void refreshSetup(true)
   },
 )
 
@@ -201,6 +216,7 @@ onUnmounted(() => {
       :version="version"
       :online="online"
       :token-needed="needToken"
+      :setup-complete="setupComplete"
       @navigate="drawerOpen = false"
       @open-token="tokenOpen = true"
     />

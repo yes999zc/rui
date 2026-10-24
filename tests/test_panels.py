@@ -24,13 +24,25 @@ from rui.web.api.app import create_app
 BLOCK_TYPES = {
     "stats", "now", "actions", "list", "form", "table", "log", "memory", "say", "volume",
     "credentials",  # music credentials form (write-only url/user/password)
+    "config",       # inline catalog group (music enable/source while the page is off)
 }
 
 CONSOLE_ROUTES = [
     "/", "/panel/overview", "/panel/devices", "/panel/turns", "/panel/logs",
-    "/panel/memory", "/panel/settings", "/panel/music",
+    "/panel/memory", "/panel/settings", "/panel/music", "/panel/assistant-session",
+    "/panel/speaker", "/panel/devices-admin", "/panel/providers", "/panel/tools",
+    "/panel/phrases", "/panel/mcp", "/panel/foundation",
     "/assistant", "/voice", "/models", "/tools", "/secrets", "/diagnostics", "/logs",
+    "/setup", "/channels",
 ]
+
+# The IA change hides some destinations but must not delete their routes/panel ids
+# for one release (audit §3 "保留与兼容", §5 Phase 1).
+LEGACY_PANEL_IDS = {
+    "overview", "devices", "turns", "logs", "memory", "music",
+    "assistant-session", "speaker", "devices-admin", "providers", "tools",
+    "phrases", "mcp", "foundation",
+}
 
 SETTINGS_FIELDS = {
     "name", "persona", "system_prompt",
@@ -189,6 +201,21 @@ def test_every_panel_has_an_english_title() -> None:
     """The console is bilingual; the backend supplies both titles (task-6 renders them)."""
     for panel in panels(client()).values():
         assert panel.get("title_en"), panel["id"]
+
+
+def test_legacy_panel_ids_stay_declared_for_one_release() -> None:
+    """Hiding a rail entry is a frontend decision; the panel id/route is the contract.
+
+    The two-group rail merges assistant-session+phrases, devices+speaker+devices-admin
+    and tools+mcp. Old bookmarks and external links must keep resolving for a release.
+    """
+    found = panels(client())
+    c = client()
+    assert LEGACY_PANEL_IDS <= set(found)
+    for panel_id in LEGACY_PANEL_IDS:
+        response = c.get(f"/panel/{panel_id}")
+        assert response.status_code == 200, panel_id
+        assert response.headers["content-type"].startswith("text/html"), panel_id
 
 
 def test_the_console_declares_the_tools_the_review_found_missing() -> None:

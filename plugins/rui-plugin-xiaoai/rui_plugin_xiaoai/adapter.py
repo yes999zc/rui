@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from rui.config.schema import Config, DeviceConfig
-from rui.device.contract import DeviceAdapter
+from rui.device.contract import DeviceAdapter, percent_to_device_volume
 from rui.device.xiaoai import build as build_xiaoai
 
 __all__ = ["KIT_LIVE_DEVICE_REASON", "build"]
@@ -46,10 +46,34 @@ def build(spec: object | None = None, config: object | None = None) -> DeviceAda
     device = _device_config(spec)
     runtime = config if hasattr(config, "audio") else Config()
     adapter = build_xiaoai(device, runtime)
+    _apply_volume_contract(adapter)
     # Kit-only annotations; ``DeviceAdapter`` itself stays unchanged.
     adapter.kit_live_device_required = True  # type: ignore[attr-defined]
     adapter.kit_live_device_reason = KIT_LIVE_DEVICE_REASON  # type: ignore[attr-defined]
     return adapter
+
+
+def _apply_volume_contract(adapter: DeviceAdapter) -> None:
+    """Map the high-level 0-100 volume method onto the LX06's 0-255 mixer.
+
+    The core LX06 implementation predates the v1 two-unit contract and passes
+    `set_volume` straight through to `services` (0-255). The reference plug is the
+    package third parties copy, so it must expose the documented adapter surface:
+    `set_volume(percent: 0-100)` maps here, while `services.set_volume/read_volume`
+    stay in device units (0-255). The audio plane calls `services` directly, so this
+    does not change production behaviour.
+    """
+    if getattr(adapter, "services", None) is None:  # pragma: no cover - LX06 always has it
+        return
+
+    async def set_volume(percent: int) -> None:
+        # Resolve at call time so a device/test may swap the services object.
+        services = getattr(adapter, "services", None)
+        if services is None:  # pragma: no cover - defensive
+            raise RuntimeError("this adapter has no volume services")
+        await services.set_volume(percent_to_device_volume(percent))
+
+    adapter.set_volume = set_volume  # type: ignore[method-assign]
 
 
 def _device_config(spec: object | None) -> DeviceConfig:

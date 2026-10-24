@@ -48,7 +48,7 @@ schema: rui-plugin/v0
 id: example-plugin            # 全局唯一，[a-z0-9-]
 name: "Example Speaker Plug"
 version: 1.2.0                # semver
-rui_compat: ">=0.1 <0.3"      # RUI 版本范围
+rui_compat: ">=0.2.0 <0.4.0"  # v0 矩阵；v1 用 >=0.3.0 <0.4.0（见 socket-plug-v1.md §7）
 license: MIT                  # 插头自身许可证
 maintainer: "name <contact>"  # 可公开的联系方式
 homepage: "https://example.invalid/plugin"
@@ -58,8 +58,9 @@ devices:
   - devices/example-b.yaml
 ```
 
-- `trust`：`builtin`（RUI 仓库自带）、`trusted`（审核/签名过）、`third-party`。
-- RUI 只加载 `rui_compat` 命中的插件；不匹配时向导显示“不兼容”，不静默尝试。
+- `trust`：`builtin`（RUI 仓库自带）、`trusted`（运维方审核）、`third-party`。**`trust` 是 manifest 自述的元数据，不是签名/授权边界**；0.3.x 没有 allowlist/签名，`local` 不是合法值。
+- RUI 只加载 `rui_compat` 命中的插件；不匹配时向导显示“不兼容”，不静默尝试。版本矩阵见 `socket-plug-v1.md` §7。
+- in-process adapter 的 env/entry point 入口必须由 `builtin|trusted` manifest 背书（`socket-plug-v1.md` §4.4）；没有 manifest 不注册，`third-party` 不得 in-process。
 
 ## 5. 机型 manifest（`devices/<model>.yaml`）
 
@@ -79,7 +80,7 @@ capabilities:                 # 与 core Capability 对齐；没有的能力必�
   - playback
   - led
   - keys
-  - volume
+  - volume                  # config/UI 0–100；adapter `services` 混音器 0–255
 device_side:                  # 用户需要在音箱上做的事
   artifact: client            # firmware | client | app | none
   name: "open-xiaoai client"
@@ -93,8 +94,8 @@ runtime:                      # adapter 怎么跑
   mode: in-process            # in-process | sidecar
   entrypoint: "rui_plugin_example:build"   # in-process 必填
   image: "ghcr.io/example/rui-plugin-example:1.2.0"  # sidecar 必填
-  listen_port: 4412           # inbound 设备端口（默认 4412）
-  token_env: RUI_DEVICE_TOKEN   # 连接令牌的环境变量名
+  listen_port: 4412           # inbound 端口缺省值（config 显式设置时以 config 为准）
+  token_env: RUI_DEVICE_TOKEN   # 连接令牌环境变量缺省值
 params:                       # 向导要渲染的表单（用户可填）
   - key: host
     label: "音箱地址"
@@ -129,7 +130,7 @@ acceptance:                   # 插头作者自己的验收记录（人读 + 向
 - `class`、`capabilities`、`transport`、`params` 必填；`device_side`、`runtime` 视情况。
 - 能力缺省即降级：例如无 `led` 不显示灯效配置；无 `reference` 不能承诺放歌打断。
 - 参数类型：`string | int | bool | list | secret | choice`；`secret` 只写不读，日志不回显，且 manifest 不得写 `default`（只能由用户或 RUI 写入）；`choice` 必须提供非空 `options`，`default` 必须在其中。
-- 端口/令牌默认值来自 RUI 约定（`listen_port: 4412`、`token_env: RUI_DEVICE_TOKEN`），manifest 可覆盖但要在向导里显式提示。
+- 端口/令牌缺省值来自 RUI 约定（`listen_port: 4412`、`token_env: RUI_DEVICE_TOKEN`）；manifest 可作为设备配置未显式设置时的缺省值（`build_adapters()` 应用），但向导要显式提示。
 
 ## 6. 安装向导契约（RUI 读 manifest 后渲染）
 
@@ -159,7 +160,7 @@ acceptance:                   # 插头作者自己的验收记录（人读 + 向
 | 代价 | 简单、无额外镜像 | NAS 多一个镜像/端口/健康检查 |
 | 安全 | 需要 allowlist/签名 | 默认更安全，仍建议签名 |
 
-规则：`trust=third-party` 默认 sidecar；`builtin/trusted` 可 in-process。向导必须在安装前展示“将运行第三方代码”的警告与信任依据。
+规则：`trust=third-party` 默认 sidecar；`builtin/trusted` 可 in-process。向导必须在安装前展示“将运行第三方代码”的警告与信任依据。**0.3.x 没有 sidecar runner**：sidecar manifest 可通过校验，但向导返回 `sidecar_not_supported`、设备构建返回明确错误；第三方插头在 0.3.x 不可运行，0.4 才提供 runner/RPC。
 
 v0 loader 策略（`rui.plugins.load_plugin`）：
 - `runtime.mode` 省略时按信任级别解析：`third-party` → `sidecar`，`builtin/trusted` → `in-process`；`sidecar` 必须有 `image`，`in-process` 必须有 `entrypoint`。

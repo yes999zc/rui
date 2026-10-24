@@ -2435,6 +2435,9 @@ onBeforeUnmount(stopWait)
         <div class="setup-step-head">
           <div class="setup-step-title">
             <h2>{{ stepTitle(step.id) }}</h2>
+            <span v-if="step.id === 'keys'" class="setup-step-sub mono">
+              {{ t('setup.keys.subtitle') }}
+            </span>
             <span class="badge" :class="statusClass(step)">{{ statusLabel(step) }}</span>
             <span v-if="step.id === 'verify'" class="badge badge-muted">{{ t('setup.v2.optional') }}</span>
             <span v-if="step.status === 'error' && state.plane_error" class="badge badge-fail">
@@ -3445,6 +3448,14 @@ onBeforeUnmount(stopWait)
   align-items: center;
   gap: var(--s2);
   flex-wrap: wrap;
+}
+
+/* Step 01 is LLM + ASR + TTS, not just "keys"; the subtitle keeps the scope visible. */
+.setup-step-sub {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 .setup-evidence-line {

@@ -505,3 +505,21 @@ def test_sys_path_is_not_polluted_by_path_import(capsys, tmp_path: Path) -> None
     adapter = _write_broken_adapter(tmp_path, "play = None")
     _run(capsys, str(root), "--adapter", f"{adapter}:build")
     assert sys.path == before
+
+
+def test_example_adapter_implements_the_volume_contract() -> None:
+    module = _load_example_adapter()
+    adapter = module.build()
+
+    asyncio.run(adapter.set_volume(100))
+    assert adapter.volume == 255
+    assert asyncio.run(adapter.read_volume()) == 255
+    asyncio.run(adapter.set_volume(0))
+    assert adapter.volume == 0
+    # services is the low-level 0-255 surface the 0.3 plane calls.
+    asyncio.run(adapter.services.set_volume(128))
+    assert adapter.volume == 128
+    with pytest.raises(ValueError):
+        asyncio.run(adapter.services.set_volume(256))
+    with pytest.raises(ValueError):
+        asyncio.run(adapter.set_volume(101))

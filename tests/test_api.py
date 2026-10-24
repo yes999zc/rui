@@ -243,3 +243,61 @@ def test_auth_failure_is_logged_without_the_token(caplog) -> None:  # noqa: ANN0
     text = caplog.text
     assert "console auth failed" in text
     assert "s3cret" not in text and "wrong-token" not in text
+
+
+# ---------------------------------------------------------------- music panel IA
+def _music_panel(c: TestClient) -> dict:
+    return next(p for p in c.get("/api/v1/panels").json()["panels"] if p["id"] == "music")
+
+
+def test_music_panel_is_configurable_while_disabled() -> None:
+    """Music off must not be a dead end (audit §2.1/§5 Phase 1).
+
+    The page keeps the enable toggle + source (the `music` catalog group) and the
+    write-only credentials block, so turning music on no longer requires finding
+    the Tools panel first.
+    """
+    c = client()
+    music = _music_panel(c)
+    assert music["enabled"] is False
+    assert "music.enabled" in music["enabled_reason"]
+    blocks = {block["type"]: block for block in music["blocks"]}
+    assert "config" in blocks and "credentials" in blocks
+    assert blocks["config"]["groups"] == ["music"]
+    assert blocks["config"]["tier"] == 4
+    catalog = c.get("/api/v1/config/catalog").json()
+    paths = {field["path"] for field in catalog["fields"]}
+    assert {"music.enabled", "music.source"} <= paths
+
+
+def test_music_source_field_is_a_select_with_navidrome() -> None:
+    """Typing a source by hand was how an unsupported adapter got saved silently."""
+    catalog = client().get("/api/v1/config/catalog").json()
+    field = next(f for f in catalog["fields"] if f["path"] == "music.source")
+    assert field["kind"] == "select"
+    assert "navidrome" in field["options"]
+
+
+def test_an_unknown_music_source_is_not_reported_as_enabled() -> None:
+    """`enabled` means "the runtime can assemble it", not just the config flag."""
+    cfg = Config()
+    cfg.music.enabled = True
+    cfg.music.source = "jellyfin"  # no adapter in this release
+    cfg.music.secrets_path = "/tmp/rui-test-music.json"
+    c = client(cfg)
+    music = _music_panel(c)
+    assert music["enabled"] is False
+    assert "jellyfin" in music["enabled_reason"]
+    assert "不受支持" in music["enabled_reason"]
+    # The music API agrees: no service was built, so there is nothing "enabled".
+    assert c.get("/api/v1/music").json()["enabled"] is False
+
+
+def test_a_supported_music_source_stays_enabled() -> None:
+    cfg = Config()
+    cfg.music.enabled = True
+    cfg.music.source = "navidrome"
+    cfg.music.secrets_path = "/tmp/rui-test-music.json"
+    music = _music_panel(client(cfg))
+    assert music["enabled"] is True
+    assert music["enabled_reason"] == ""

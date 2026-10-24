@@ -47,6 +47,18 @@ def _rgb(value: str) -> tuple[int, int, int]:
 
 DEFAULT_LISTEN_PORT = 4412  # 4399/4400 belong to the old deployment
 PLAY_CHUNK_MS = 100
+# P1-8: the inbound websocket used to pass `max_size=None`, i.e. no frame limit at all.
+# A token-bearing (or, with allow_no_token, any LAN) peer could make websockets buffer a
+# multi-hundred-MB JSON/binary frame and then have it decoded/copied. 2 MiB is far above
+# any legitimate message: a 40 ms record frame at 48 kHz x 8 ch is ~30 KiB, and its JSON
+# expansion is still under ~150 KiB.
+MAX_WS_MESSAGE_BYTES = 2 * 1024 * 1024
+# Text events are log/diagnostic metadata. Cap before json.loads so a chatty peer cannot
+# turn one event into a 2 MiB parse + a formatted log line.
+MAX_TEXT_CHARS = 256 * 1024
+# The frame queue is bounded by bytes, not just entries: 64 LX06 record frames are
+# ~2 MiB, and a wider/odd layout must not get proportionally more.
+MAX_FRAME_QUEUE_BYTES = 2 * 1024 * 1024
 
 # Pausing 小爱's own player. There is no player_stop / player_pause on this box
 # (rc=3, firmware 1.94.13); the vendor's own mphelper pauses through
@@ -74,7 +86,19 @@ class XiaoaiAdapter(DeviceAdapter):
         self.token = secrets.get(dev.token_env)
         self._server: Server | None = None
         self._conn: ServerConnection | None = None
-        self._frames: asyncio.Queue[AudioFrame] = asyncio.Queue(maxsize=64)
+        # `start_recording_payload` asks for a `frame_ms` period but a 2x buffer, i.e.
+        # the client sends two capture periods per websocket frame. Anything larger than
+        # that is rejected before queuing so a hostile/buggy sender cannot grow memory
+        # through the decoder path (P1-8).
+        period_bytes = max(
+            2,
+            (capture.rate * max(1, voice.frame_ms) // 1000) * capture.channels * 2,
+        )
+        self._max_record_bytes = period_bytes * 2
+        queue_frames = max(
+            2, min(64, MAX_FRAME_QUEUE_BYTES // max(1, self._max_record_bytes))
+        )
+        self._frames: asyncio.Queue[AudioFrame] = asyncio.Queue(maxsize=queue_frames)
         self._seq = 0
         self._signals: list[protocol.VendorSignal] = []
         # Request/Response correlation. The client answers every Request with a Response
@@ -95,6 +119,7 @@ class XiaoaiAdapter(DeviceAdapter):
         self.frames_received = 0
         self.frames_dropped = 0
         self.bad_frames = 0
+        self.bad_text = 0
         self.rejected = 0
         self.connected_at = 0.0
         self.last_error = ""
@@ -151,7 +176,9 @@ class XiaoaiAdapter(DeviceAdapter):
             self._handle,
             "0.0.0.0",
             self.listen_port,
-            max_size=None,
+            # P1-8: never `None`. The inbound peer is not trusted; the library rejects an
+            # oversized frame with close code 1009 before it is buffered/decoded.
+            max_size=MAX_WS_MESSAGE_BYTES,
             ping_interval=20,
             ping_timeout=20,
         )
@@ -350,9 +377,21 @@ class XiaoaiAdapter(DeviceAdapter):
         try:
             async for message in conn:
                 if isinstance(message, str):
-                    self._on_text(message)
+                    try:
+                        self._on_text(message)
+                    except Exception as exc:  # noqa: BLE001 - one bad event is not a disconnect
+                        # P2-8: malformed vendor JSON used to end the connection ("the
+                        # speaker dropped"); count the message and keep the socket.
+                        self.bad_text += 1
+                        log.debug("xiaoai: malformed event dropped: %s: %s",
+                                  type(exc).__name__, exc)
                 else:
-                    self._on_audio(message)
+                    try:
+                        self._on_audio(message)
+                    except Exception as exc:  # noqa: BLE001 - one bad frame is not a disconnect
+                        self.bad_frames += 1
+                        log.debug("xiaoai: malformed audio frame dropped: %s: %s",
+                                  type(exc).__name__, exc)
         except ConnectionClosed as exc:
             # A speaker that goes away is normal (wifi, reboot, the user moved it).
             log.info("xiaoai: speaker disconnected (%s)", exc)
@@ -378,6 +417,16 @@ class XiaoaiAdapter(DeviceAdapter):
         return hmac.compare_digest(got, self.token)
 
     def _on_text(self, message: str) -> None:
+        # P2-8/P1-8: cap before parsing. The websocket `max_size` already bounds bytes;
+        # this keeps the JSON parse and the log line from turning a 2 MiB event into
+        # work proportional to it.
+        if len(message) > MAX_TEXT_CHARS:
+            self.bad_text += 1
+            log.warning(
+                "xiaoai: event frame too large (%d chars > %d); dropped",
+                len(message), MAX_TEXT_CHARS,
+            )
+            return
         reply = protocol.parse_reply(message)
         if reply is None:
             return
@@ -442,6 +491,15 @@ class XiaoaiAdapter(DeviceAdapter):
         if not pcm or len(pcm) % expected:
             self.bad_frames += 1
             return
+        if len(pcm) > self._max_record_bytes:
+            # At most the 2x capture buffer we asked the client for. A larger payload is
+            # rejected before it becomes an AudioFrame / queue entry (P1-8).
+            self.bad_frames += 1
+            log.debug(
+                "xiaoai: record frame of %d bytes exceeds %d",
+                len(pcm), self._max_record_bytes,
+            )
+            return
         self._seq += 1
         self.frames_received += 1
         frame = AudioFrame(
@@ -473,6 +531,9 @@ class XiaoaiAdapter(DeviceAdapter):
             "frames_received": self.frames_received,
             "frames_dropped": self.frames_dropped,
             "bad_frames": self.bad_frames,
+            "bad_text": self.bad_text,
+            "max_message_bytes": MAX_WS_MESSAGE_BYTES,
+            "max_record_bytes": self._max_record_bytes,
             "rejected": self.rejected,
             "last_error": self.last_error,
             "vendor_playing": self.vendor_playing,

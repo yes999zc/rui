@@ -131,7 +131,26 @@ class Metrics(BaseModel):
     device_wake_no_vad: int = 0
     device_wake_fallbacks: int = 0
     device_wake_degraded: bool = False
+    # P2-1: events a single drain_wakes() returned beyond the per-tick cap, and device
+    # wakes whose replay anchor was older than the retained history (P1-7).
+    device_wake_dropped: int = 0
+    device_wake_replay_missed: int = 0
     device_wake_last_score: float | None = None
+    # P1-2/P1-3: capture supervision. `capture_degraded` is true while frames are failing
+    # (or immediately before the plane asks the supervisor to rebuild it); the counters
+    # never reset, so a recovered burst still shows in the history.
+    capture_degraded: bool = False
+    capture_errors: int = 0
+    capture_restarts: int = 0
+    capture_last_error: str = ""
+    # P1-2: contained `drain_signals()` failures, malformed items and per-tick overflow.
+    signal_errors: int = 0
+    signal_dropped: int = 0
+    signal_invalid: int = 0
+    signal_last_error: str = ""
+    # A side task (metrics/send-audio/speak) died while the control socket was open.
+    task_errors: int = 0
+    task_last_error: str = ""
     kws_enabled: bool = False
     kws_error: str = ""
     vad_enabled: bool = False

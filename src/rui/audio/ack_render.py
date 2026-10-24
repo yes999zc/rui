@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from ..config.schema import Config
-from ..providers.chain import tts_chain
+from ..providers.chain import log_provider_failure, log_stage_failure, tts_chain
 from .ack import ack_wav_path
 from .wav import trim_silence, write_wav_mono
 
@@ -57,7 +57,9 @@ async def render_ack_wav(cfg: Config) -> Path | None:
     stamp_path = path.parent / STAMP_FILE
     chain = tts_chain(cfg.providers, cfg.audio.playback.rate)
     if not chain:
-        log.warning("ack: mode is tts but no tts provider is configured")
+        # The chain builder already logged the one actionable ERROR/INFO. Keep this line
+        # INFO so "mode is tts but nothing ready" is visible without a second warning.
+        log.info("ack: no ready tts provider; the plane will use its tone")
         return None
 
     errors: list[str] = []
@@ -73,7 +75,7 @@ async def render_ack_wav(cfg: Config) -> Path | None:
             pcm = b"".join([chunk async for chunk in provider.synthesize(cfg.ack.text, voice)])
         except Exception as exc:  # noqa: BLE001 - the next provider may work
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
-            log.warning("ack: %s failed: %s", name, exc)
+            log_provider_failure("tts", name, exc)
             continue
         if not pcm:
             errors.append(f"{name}: empty audio")
@@ -92,7 +94,7 @@ async def render_ack_wav(cfg: Config) -> Path | None:
         log.info("ack: rendered %r -> %s (%.2f s, %d Hz)", cfg.ack.text, path.name,
                  duration_ms / 1000, rate)
         return path
-    log.warning("ack: every tts provider failed: %s", errors)
+    log_stage_failure("tts", f"ack: every ready provider failed: {errors}")
     return None
 
 
@@ -108,7 +110,12 @@ async def render_filler_pcm(cfg: Config, text: str | None = None) -> bytes:
     text = (text if text is not None else cfg.assistant.filler_text or "").strip()
     if not text or cfg.assistant.filler_after_s <= 0:
         return b""
-    for name, provider in tts_chain(cfg.providers, cfg.audio.voice.rate):
+    chain = tts_chain(cfg.providers, cfg.audio.voice.rate)
+    if not chain:
+        # Readiness already logged the one actionable line; three filler phrases must not
+        # turn that into three warnings.
+        return b""
+    for name, provider in chain:
         try:
             buf = bytearray()
             async with contextlib.aclosing(provider.synthesize(text, "")) as stream:
@@ -116,14 +123,16 @@ async def render_filler_pcm(cfg: Config, text: str | None = None) -> bytes:
                     if chunk:
                         buf.extend(chunk)
         except Exception as exc:  # noqa: BLE001 - a filler is never worth an outage
-            log.warning("filler: %s failed: %s", name, exc)
+            log_provider_failure("tts", name, exc)
             continue
         if buf:
             pcm = trim_silence(bytes(buf), cfg.audio.voice.rate)
             log.info("filler: rendered %r with %s (%.2f s)", text, name,
                      len(pcm) / 2 / cfg.audio.voice.rate)
             return pcm
-    log.warning("filler: no provider produced audio; the gap stays")
+    # Three filler phrases are warmed at startup; the rate-limited stage line keeps that
+    # from becoming three warnings for the same missing provider.
+    log_stage_failure("tts", "filler: no ready provider produced audio; the gap stays")
     return b""
 
 

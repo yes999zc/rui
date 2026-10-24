@@ -265,7 +265,9 @@ def test_missing_key_fails_the_stage_with_a_reason(monkeypatch) -> None:
     trace = TurnTrace(device_id="living")
     result = asyncio.run(TurnRunner(cfg.providers).run(b"\x00\x00" * 800, speak, trace))
     assert result.transcript == ""
-    assert result.error == "empty transcript"   # ASR failed, so the turn had nothing to say
+    # The runtime chain is filtered at build time, so the turn fails fast with the
+    # actionable reason instead of calling a provider that has no key every turn.
+    assert result.error == "asr: no ready provider"
 
 
 def test_a_flaky_provider_is_retried_before_the_next_one(monkeypatch) -> None:

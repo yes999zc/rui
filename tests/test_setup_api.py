@@ -615,8 +615,9 @@ def test_providers_save_writes_chain_voice_and_keeps_other_config(tmp_path, monk
                    for stage in payload.values() for value in stage["keys"].values())
 
     configured = load_config(path)
-    assert configured.providers.asr.chain == ["volc_asr"]
-    assert configured.providers.tts.chain == ["volc_tts"]
+    # Selected first, existing fallbacks kept after it (asr already had volc_asr first).
+    assert configured.providers.asr.chain == ["volc_asr", "local_asr"]
+    assert configured.providers.tts.chain == ["volc_tts", "xfyun_tts"]
     assert configured.providers.llm.chain == ["deepseek_llm"]
     assert configured.providers.catalog["volc_tts"].voice == "zh_female_vv_uranus_bigtts"
     assert configured.assistant.name == "保留我"
@@ -699,8 +700,67 @@ def test_keys_step_is_satisfied_by_any_provider_in_a_fallback_chain(
         "payload": {"tts": {"provider": "volc_tts",
                             "keys": {"VOLC_API_KEY": "volc-selected-key"}}}})
     assert response.status_code == 200, response.text
-    assert _step(response.json(), "keys")["status"] == "done"
-    assert load_config(path).providers.tts.chain == ["volc_tts"]
+    keys_step = _step(response.json(), "keys")
+    assert keys_step["status"] == "done"
+    # The selected provider moved first; the unconfigured 讯飞 entry is preserved as a
+    # fallback instead of being silently dropped by the save.
+    assert load_config(path).providers.tts.chain == ["volc_tts", "xfyun_tts"]
+    assert keys_step["evidence"]["chains"]["tts"] == ["volc_tts", "xfyun_tts"]
+
+
+def test_providers_save_keeps_previous_fallbacks_across_saves(
+        tmp_path, monkeypatch) -> None:
+    """Selecting a new primary must not throw away the one it replaces.
+
+    The wizard is re-runnable; a save used to write `chain=[selected]`, so the working
+    fallback silently disappeared after the second run. The order is now "selected first,
+    the rest in their previous order", deduped.
+    """
+    client, path, _tmp = _provider_client(tmp_path, monkeypatch)
+    first = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "providers.save",
+        "payload": {"tts": {"provider": "volc_tts",
+                            "keys": {"VOLC_API_KEY": "volc-key-for-tts"}}}})
+    assert first.status_code == 200, first.text
+    assert load_config(path).providers.tts.chain == ["volc_tts", "xfyun_tts"]
+
+    second = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "providers.save",
+        "payload": {"tts": {
+            "provider": "xfyun_tts",
+            "keys": {
+                "XFYUN_APPID": "xfyun-appid",
+                "XFYUN_API_KEY": "xfyun-key",
+                "XFYUN_API_SECRET": "xfyun-secret",
+            },
+        }}})
+    assert second.status_code == 200, second.text
+    configured = load_config(path)
+    assert configured.providers.tts.chain == ["xfyun_tts", "volc_tts"]
+
+    body = second.json()
+    keys_step = _step(body, "keys")
+    assert keys_step["evidence"]["chains"]["tts"] == ["xfyun_tts", "volc_tts"]
+    stage_state = keys_step["evidence"]["stage_state"]["tts"]
+    assert stage_state["ready"] == ["xfyun_tts", "volc_tts"]
+    assert stage_state["not_ready"] == []
+
+    rows = {(row["stage"], row["name"]): row
+            for row in client.get("/api/v1/setup/providers").json()["providers"]}
+    assert rows[("tts", "xfyun_tts")]["ready"] is True
+    assert rows[("tts", "volc_tts")]["ready"] is True
+    assert rows[("tts", "xfyun_tts")]["ready_reason"] == ""
+
+
+def test_providers_endpoint_badges_a_missing_provider_as_not_ready(
+        tmp_path, monkeypatch) -> None:
+    client, _path, _tmp = _provider_client(tmp_path, monkeypatch)
+    body = client.get("/api/v1/setup/providers").json()
+    rows = {(row["stage"], row["name"]): row for row in body["providers"]}
+    assert rows[("tts", "xfyun_tts")]["ready"] is False
+    assert rows[("tts", "xfyun_tts")]["ready_reason"] == "missing_key"
+    assert body["stage_state"]["tts"]["ready"] == []
+    assert body["stage_state"]["tts"]["not_ready"] == ["xfyun_tts", "volc_tts"]
 
 
 def test_keys_step_local_sherpa_fallback_is_usable_without_a_cloud_key(

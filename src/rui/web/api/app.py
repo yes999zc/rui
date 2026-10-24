@@ -34,6 +34,7 @@ from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
 from ...audio.client import AudioPlaneSupervisor
 from ...audio.kws import KwsUnavailable, keyword_meta, model_files, write_keywords_file
+from ...audio.probe import safe_probe
 from ...audio.protocol import PlayFile, StopAudio
 from ...channels.supervisor import ChannelSupervisor
 from ...channels.weixin import WeixinAdapter
@@ -292,6 +293,16 @@ def _outbound_policy(cfg: Config) -> OutboundPolicy:
     return OutboundPolicy.from_config(cfg.security)
 
 
+# Sources that actually have a runtime builder. `music.source` may hold another
+# name for a future adapter, but until that adapter exists the service cannot start;
+# the panel below must not claim otherwise (IA audit §2.1/§5 Phase 1).
+SUPPORTED_MUSIC_SOURCES = frozenset({"navidrome"})
+
+
+def _music_source_supported(source: str) -> bool:
+    return source in SUPPORTED_MUSIC_SOURCES
+
+
 def _new_music_service(cfg: Config, sender: object) -> MusicService | None:
     """Assemble the music service for the configured source.
 
@@ -299,7 +310,7 @@ def _new_music_service(cfg: Config, sender: object) -> MusicService | None:
     service owns the source, history, aliases and name resolver, and registering the
     nine tools is what makes the model able to play anything.
     """
-    if cfg.music.source != "navidrome":
+    if not _music_source_supported(cfg.music.source):
         log.warning("music: source %r has no runtime builder; leaving music off",
                     cfg.music.source)
         return None
@@ -349,6 +360,18 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
     use the `config-center` escape hatch with `component_args.groups`, so the same
     catalog drives five panels and a new field needs no frontend change.
     """
+    # "Enabled" must mean "the service can actually be assembled": a hand-typed
+    # source with no adapter used to leave the music panel green while the runtime
+    # refused to start (audit §2.1). The page still opens: it is where you fix it.
+    music_source_ok = _music_source_supported(music_source)
+    music_panel_enabled = music_enabled and music_source_ok
+    if not music_enabled:
+        music_reason = f"music.enabled 未开启（配置的源：{music_source}）"
+    elif not music_source_ok:
+        music_reason = (
+            f"音乐源 {music_source!r} 不受支持：服务不会启动（当前仅支持 navidrome）")
+    else:
+        music_reason = ""
     return [
         {
             "id": "overview", "title": "概览", "title_en": "Overview",
@@ -537,9 +560,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         {
             "id": "music", "title": "音乐", "title_en": "Music",
             "icon": "♪", "group": "living", "order": 30,
-            "enabled": music_enabled,
-            "enabled_reason": "" if music_enabled
-            else f"music.enabled 未开启（配置的源：{music_source}）",
+            "enabled": music_panel_enabled,
+            "enabled_reason": music_reason,
             "source": "/api/v1/music", "refresh_s": 4,
             "blocks": [
                 {"type": "stats", "cards": [
@@ -570,6 +592,12 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                 {"type": "list", "title": "最近爱听", "items": "$.top",
                  "item_title": "$.artist", "item_sub": "$.plays 次",
                  "empty": "还没有播放记录", "max": 5},
+                # The enable toggle and source live in the catalog, not in a music-only
+                # API. Rendering that one group inline means the music page is also the
+                # place to turn music on when it is off (audit §2.1: no dead end).
+                {"type": "config",
+                 "title": {"zh": "音乐配置", "en": "Music settings"},
+                 "groups": ["music"], "tier": 4},
                 # Credentials are write-only: the block shows `credentials_present` and
                 # posts url/user/password to PUT /api/v1/music/credentials; Test calls
                 # POST /api/v1/music/test. Never renders a stored value.
@@ -999,9 +1027,16 @@ async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
         link = {"status": "disabled", "connected": False,
                 "last_seen": None, "latency_ms": None}
     elif adapter is not None:
-        info = await adapter.probe()
+        probe = await safe_probe(adapter, device_id=device.id, adapter_name=device.adapter)
+        info = probe.info
         link = _device_link(info, adapter, plane)
         capabilities.update(str(capability) for capability in info.capabilities)
+        if probe.error:
+            # P1-4: one raising probe must not 500 the whole status page. The row says
+            # `probe_failed` and stays actionable (disable/remove) instead of vanishing.
+            link["status"] = "error"
+            link["error"] = probe.error
+            errors.append(probe.error)
     else:
         errors.append("adapter_unavailable")
     if not device.enabled:
@@ -3318,9 +3353,16 @@ def create_app(
                                                                if resolved is not None else [])}
             adapter = adapters.adapters.get(dev.id)
             if adapter is not None:
-                info = await adapter.probe()
+                probe = await safe_probe(
+                    adapter, device_id=dev.id, adapter_name=dev.adapter
+                )
+                info = probe.info
                 link = _device_link(info, adapter, plane)
                 capabilities.update(str(capability) for capability in info.capabilities)
+                if probe.error:
+                    # P1-4: a broken adapter renders as a degraded row with a stable
+                    # code; the other devices and the enable/disable controls stay usable.
+                    link["status"] = "error"
                 row = {
                     "id": info.id,
                     "adapter": info.adapter,
@@ -3330,6 +3372,8 @@ def create_app(
                     "transport": info.transport.value,
                     **link,
                 }
+                if probe.error:
+                    row["error"] = probe.error
             elif not dev.enabled:
                 # A disabled device is still configured: the console must show it so it
                 # can be enabled again. It is not an error and has no live link.
@@ -3783,7 +3827,10 @@ def create_app(
             live = {"status": "disabled", "connected": False,
                     "last_seen": None, "latency_ms": None}
         elif adapter is not None:
-            info = await adapter.probe()
+            probe = await safe_probe(
+                adapter, device_id=device.id, adapter_name=device.adapter
+            )
+            info = probe.info
             plane = _plane_snapshot(app)
             capabilities = {str(capability) for capability in info.capabilities}
             if resolved is not None:
@@ -3791,6 +3838,9 @@ def create_app(
             live = {"model": info.model, "transport": info.transport.value,
                     **_device_link(info, adapter, plane),
                     "capabilities": sorted(capabilities)}
+            if probe.error:
+                live["status"] = "error"
+                live["error"] = probe.error
         payload = device.model_dump(mode="json")
         payload["params"] = params
         warnings = _device_warnings(cfg_now, _active_device_id(app, cfg_now))

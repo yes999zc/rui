@@ -345,7 +345,7 @@ npm run build
 - 设计/控制台契约：[docs/console.md](docs/console.md) · [docs/brand.md](docs/brand.md)
 - 音频时延与调参：[docs/audio-latency.md](docs/audio-latency.md) · [docs/audio-pipeline.md](docs/audio-pipeline.md)
 - Socket & Plug v1 参考插头：[plugins/rui-plugin-xiaoai](plugins/rui-plugin-xiaoai/README.md)（LX06，v0/RUI KWS）。0.4 才把核心 adapter 提取进插件包；当前 `src/rui/device/xiaoai/` 与内置 manifest 仍是默认回退。
-- Downstream adapter 钩子（issue #7 Q1）：`RUI_ADAPTER_PLUGINS=dot2=module:build`（或 `rui.adapters` entry points）在启动时注册 adapter，不需要 `sitecustomize` / fork 核心；镜像配方与信任要求见 [docs/socket-plug-v1.md](docs/socket-plug-v1.md) §4.4、[docs/plug-test-kit.md](docs/plug-test-kit.md)。
+- Downstream adapter 钩子（issue #7 Q1）：`RUI_ADAPTER_PLUGINS=dot2=module:build`（或 `rui.adapters` entry points）在启动时注册 adapter，不需要 `sitecustomize` / fork 核心。0.3.2 起该通道**必须由随 adapter 交付的 `plugin.yaml`（trust `builtin|trusted`）背书**，内置名不可覆盖；镜像配方与信任要求见 [docs/socket-plug-v1.md](docs/socket-plug-v1.md) §4.4、[docs/plug-test-kit.md](docs/plug-test-kit.md)。
 
 ### 安全与隐私
 
@@ -621,7 +621,7 @@ npm run typecheck
 npm run build
 ```
 
-Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md) · [docs/security.md](docs/security.md). Audio latency notes: [docs/audio-latency.md](docs/audio-latency.md). Console contract: [docs/console.md](docs/console.md). Socket & Plug v1 reference plug: [plugins/rui-plugin-xiaoai](plugins/rui-plugin-xiaoai/README.md) (LX06, v0/RUI KWS). The core adapter moves into the package in 0.4; `src/rui/device/xiaoai/` and the in-code builtin manifest remain the default fallback. Downstream adapter hook (issue #7 Q1): `RUI_ADAPTER_PLUGINS=dot2=module:build` (or the `rui.adapters` entry-point group) registers an adapter at startup without `sitecustomize` or a core fork; see [docs/socket-plug-v1.md](docs/socket-plug-v1.md) §4.4 and [docs/plug-test-kit.md](docs/plug-test-kit.md).
+Deploy/ops: [docs/deploy.md](docs/deploy.md) · [docs/runbook.md](docs/runbook.md) · [docs/security.md](docs/security.md). Audio latency notes: [docs/audio-latency.md](docs/audio-latency.md). Console contract: [docs/console.md](docs/console.md). Socket & Plug v1 reference plug: [plugins/rui-plugin-xiaoai](plugins/rui-plugin-xiaoai/README.md) (LX06, v0/RUI KWS). The core adapter moves into the package in 0.4; `src/rui/device/xiaoai/` and the in-code builtin manifest remain the default fallback. Downstream adapter hook (issue #7 Q1): `RUI_ADAPTER_PLUGINS=dot2=module:build` (or the `rui.adapters` entry-point group) registers an adapter at startup without `sitecustomize` or a core fork. Since 0.3.2 the channel is manifest-gated: the adapter must ship a `plugin.yaml` with `trust: builtin|trusted`, and builtin names cannot be replaced; see [docs/socket-plug-v1.md](docs/socket-plug-v1.md) §4.4 and [docs/plug-test-kit.md](docs/plug-test-kit.md).
 
 ### Security and privacy
 

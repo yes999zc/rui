@@ -364,7 +364,13 @@ def test_changing_the_music_source_autofills_its_paths(tmp_path) -> None:
         assert load_config(path).music.secrets_path.endswith("lan_media.json")
 
 
-def test_unknown_music_source_keeps_manual_paths_and_warns(tmp_path) -> None:
+def test_unsupported_music_source_is_refused_by_the_catalog(tmp_path) -> None:
+    """The source is a select now, not free text.
+
+    A typo used to be saved and then leave the panel green while the runtime kept
+    music off. The catalog refuses an id without an adapter; a hand-edited YAML can
+    still carry one, and that case is reported by the panel as disabled (test_api).
+    """
     cfg, path = _config(tmp_path)
     cfg.music.secrets_path = "/manual/creds.json"
     cfg.music.cache_dir = "/manual/cache"
@@ -372,10 +378,13 @@ def test_unknown_music_source_keeps_manual_paths_and_warns(tmp_path) -> None:
     with _app(cfg, path) as http:
         response = http.put("/api/v1/config/values", json={
             "values": {"music.source": "some-new-service"}})
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert any("未知音源" in warning for warning in body["warnings"])
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail[0]["loc"] == ["music.source"]
+        assert "navidrome" in detail[0]["msg"]
+        # Nothing was written: the previous source and its manual paths are intact.
         values = http.get("/api/v1/config/catalog").json()["values"]
+        assert values["music.source"] == "navidrome"
         assert values["music.secrets_path"] == "/manual/creds.json"
         assert values["music.cache_dir"] == "/manual/cache"
 

@@ -16,16 +16,22 @@ import logging
 from ..audio.ack import ack_wav_path
 from ..audio.wav import trim_silence, write_wav_mono
 from ..config.schema import Config
-from ..providers.chain import tts_chain
+from ..providers.chain import log_provider_failure, tts_chain
 
 log = logging.getLogger(__name__)
 
 
 async def synthesize(cfg: Config, text: str) -> tuple[bytes, int, str]:
-    """(pcm, rate, provider) from the first TTS provider that produces audio."""
+    """(pcm, rate, provider) from the first *ready* TTS provider that produces audio.
+
+    `tts_chain` already filtered out unconfigured providers (and logged them once), so
+    this loop only pays for providers that can actually answer. A runtime failure still
+    falls through to the next one, but its log line is rate-limited per provider.
+    """
     rate = cfg.audio.voice.rate
     attempts: list[str] = []
-    for name, provider in tts_chain(cfg.providers, rate):
+    chain = tts_chain(cfg.providers, rate)
+    for name, provider in chain:
         chunks: list[bytes] = []
         try:
             async for chunk in provider.synthesize(text, ""):
@@ -33,13 +39,13 @@ async def synthesize(cfg: Config, text: str) -> tuple[bytes, int, str]:
                     chunks.append(chunk)
         except Exception as exc:  # noqa: BLE001 - the chain exists for exactly this
             attempts.append(f"{name}: {type(exc).__name__}: {exc}")
-            log.warning("ack tts: %s failed: %s", name, exc)
+            log_provider_failure("tts", name, exc)
             continue
         if chunks:
             # Vendor padding is not part of the cue: measure the speech, not the silence.
             return trim_silence(b"".join(chunks), rate), rate, name
         attempts.append(f"{name}: no audio")
-    raise RuntimeError("; ".join(attempts) or "no tts provider configured")
+    raise RuntimeError("; ".join(attempts) or "no ready tts provider configured")
 
 
 async def ensure_ack_wav(cfg: Config) -> str:
@@ -52,7 +58,10 @@ async def ensure_ack_wav(cfg: Config) -> str:
     except RuntimeError as exc:
         with contextlib.suppress(OSError):
             path.unlink(missing_ok=True)
-        log.warning("ack: %s", exc)
+        # The chain builder already logged the actionable line (one INFO per missing
+        # provider, or one ERROR when the stage has nothing ready); repeat it at INFO so
+        # the console retains the "tone instead" note without a second WARNING.
+        log.info("ack: %s", exc)
         return f"tts failed, plane will use a tone: {exc}"
     duration_ms = len(pcm) / 2.0 * 1000.0 / rate
     if duration_ms > cfg.ack.max_ms:

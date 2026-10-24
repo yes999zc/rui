@@ -15,7 +15,9 @@ Security posture (deliberate, documented in ``docs/socket-plug.md`` §7):
 """
 from __future__ import annotations
 
+import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
@@ -40,6 +42,10 @@ __all__ = ["PluginScan", "discover_plugins", "load_plugin", "running_version"]
 
 _MAX_MANIFEST_BYTES = 1 << 20  # manifests are kilobytes; refuse a hostile 1 GiB read
 _MAX_ERRORS = 8
+
+log = logging.getLogger(__name__)
+_DEPRECATION_SEEN: set[str] = set()
+_DEPRECATION_LOCK = threading.Lock()
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -83,6 +89,8 @@ def load_plugin(path: Path) -> Plugin:
             raise PluginError(f"{device_file}: duplicate device id {device.id!r}")
         seen_ids.add(device.id)
         devices.append(device)
+        if device.schema == "rui-device/v0":
+            _warn_v0_once(plugin_file, device_file)
 
     data = manifest.model_dump()
     data.pop("devices", None)  # replaced by the validated DeviceManifest objects
@@ -234,6 +242,27 @@ def _resolve_device(
     except ValidationError as exc:
         raise PluginError(_format_validation(exc, device_file, prefix="runtime")) from None
     return device.model_copy(update={"runtime": resolved})
+
+
+def _warn_v0_once(plugin_file: Path, device_file: Path) -> None:
+    """Visible deprecation notice (v1 §7), once per manifest path per process.
+
+    A v0 manifest keeps working through 0.3.x, but the spec requires a warning at
+    least one minor before removal (earliest 0.5.0). Logging once avoids a warning
+    flood from per-request catalog reads.
+    """
+    key = str(device_file)
+    with _DEPRECATION_LOCK:
+        if key in _DEPRECATION_SEEN:
+            return
+        _DEPRECATION_SEEN.add(key)
+    log.warning(
+        "socket/plug: %s (%s) uses rui-device/v0; v0 is deprecated and will be "
+        "removed no earlier than 0.5.0. Publish rui-device/v1 to keep device_wake "
+        "available; omit wake to stay on RUI KWS.",
+        device_file,
+        plugin_file,
+    )
 
 
 def _brief(exc: Exception) -> str:

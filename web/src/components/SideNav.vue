@@ -10,11 +10,31 @@ import { RouterLink, useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import BrandMark from './BrandMark.vue'
 import { usePanels } from '../composables/usePanels'
-import { GROUP_ORDER, panelNavGroup, type PanelSpec } from '../panels'
-import { groupTitle, locale, localizeBackend, panelTitle, setLocale, t } from '../i18n'
+import {
+  HIDDEN_NAV_PANELS,
+  NAV_ACTIVE_ALIASES,
+  NAV_GROUPS,
+  type PanelSpec,
+} from '../panels'
+import {
+  groupTitle,
+  locale,
+  localizeBackend,
+  panelTitle,
+  setLocale,
+  t,
+  type MsgKey,
+} from '../i18n'
 import { setThemePref, themePref } from '../theme'
 
-const props = defineProps<{ version: string; online: boolean; tokenNeeded: boolean; open?: boolean }>()
+const props = defineProps<{
+  version: string
+  online: boolean
+  tokenNeeded: boolean
+  /** The wizard is a first-run destination, not a permanent one (IA audit §2.6). */
+  setupComplete?: boolean
+  open?: boolean
+}>()
 const emit = defineEmits<{ navigate: []; 'open-token': [] }>()
 
 /** On a phone the rail is an off-canvas drawer: when it is closed it must leave
@@ -86,34 +106,65 @@ function iconFor(panel: PanelSpec): string {
 }
 
 /** The rail and the page kicker share this placement (panels.ts). */
-function groupOf(panel: PanelSpec): string {
-  return panelNavGroup(panel)
+type NavItem =
+  | { kind: 'panel'; key: string; panel: PanelSpec }
+  | { kind: 'route'; key: string; path: string; labelKey: MsgKey; icon: string }
+
+interface UtilityNav {
+  path: string
+  labelKey: MsgKey
+  icon: string
+  /** Render after this primary panel; the utilities are part of the task order. */
+  after: string
+  /** First-run only: hidden once `GET /api/v1/setup/step` reports complete. */
+  setupOnly?: boolean
 }
 
-/** Groups in the designed order, then any unknown group the backend sends. */
+/**
+ * Hand-written destinations. `/secrets` is deliberately absent: it is a
+ * write-only credential ledger linked from the pages that consume keys, not a
+ * daily destination (IA audit §2.3). `/setup` disappears after the wizard passes.
+ */
+const UTILITIES: UtilityNav[] = [
+  { path: '/channels', labelKey: 'nav.channels', icon: 'chat', after: 'tools' },
+  { path: '/diagnostics', labelKey: 'nav.diagnostics', icon: 'activity', after: 'tools' },
+  { path: '/setup', labelKey: 'nav.setup', icon: 'compass', after: 'foundation', setupOnly: true },
+]
+
+function utilityVisible(item: UtilityNav): boolean {
+  return !item.setupOnly || !props.setupComplete
+}
+
+/** Two groups in the designed order; unknown new panels land under Configure. */
 const groups = computed(() => {
-  const buckets = new Map<string, PanelSpec[]>()
-  for (const panel of [...panels.value].sort((a, b) => a.order - b.order)) {
-    const id = groupOf(panel)
-    const list = buckets.get(id) ?? []
-    list.push(panel)
-    buckets.set(id, list)
-  }
-  const order = [...GROUP_ORDER, ...[...buckets.keys()].filter((id) => !(GROUP_ORDER as readonly string[]).includes(id))]
-  return order
-    .filter((id) => buckets.has(id))
-    .map((id) => ({ id, title: groupTitle(id), items: buckets.get(id) ?? [] }))
+  const byId = new Map(panels.value.map((panel) => [panel.id, panel]))
+  const placed = new Set(NAV_GROUPS.flatMap((group) => group.panelIds))
+  const extras = [...panels.value]
+    .filter((panel) => !placed.has(panel.id) && !HIDDEN_NAV_PANELS.has(panel.id))
+    .sort((a, b) => a.order - b.order)
+  return NAV_GROUPS.map((group) => {
+    const items: NavItem[] = []
+    for (const panelId of group.panelIds) {
+      const panel = byId.get(panelId)
+      if (panel) items.push({ kind: 'panel', key: `panel:${panel.id}`, panel })
+      for (const utility of UTILITIES) {
+        if (utility.after === panelId && utilityVisible(utility)) {
+          items.push({ kind: 'route', key: `route:${utility.path}`, ...utility })
+        }
+      }
+    }
+    if (group.id === 'configure') {
+      for (const panel of extras) {
+        items.push({ kind: 'panel', key: `panel:${panel.id}`, panel })
+      }
+    }
+    return { id: group.id, title: groupTitle(group.id), items }
+  }).filter((group) => group.items.length > 0)
 })
 
-const utilities = [
-  { path: '/channels', labelKey: 'nav.channels', icon: 'chat' },
-  { path: '/secrets', labelKey: 'nav.secrets', icon: 'key' },
-  { path: '/diagnostics', labelKey: 'nav.diagnostics', icon: 'activity' },
-  { path: '/setup', labelKey: 'nav.setup', icon: 'compass' },
-] as const
-
 function panelActive(panel: PanelSpec): boolean {
-  return route.path === `/panel/${panel.id}` || route.path.startsWith(`/panel/${panel.id}/`)
+  const current = typeof route.params.id === 'string' ? route.params.id : ''
+  return current === panel.id || (NAV_ACTIVE_ALIASES[panel.id] ?? []).includes(current)
 }
 
 function utilityActive(path: string): boolean {
@@ -161,22 +212,20 @@ watch(
       <nav ref="navEl" class="nav" :aria-label="t('nav.menu')" @scroll="onNavScroll">
       <template v-for="group in groups" :key="group.id">
         <div class="nav-label">{{ group.title }}</div>
-        <RouterLink
-          v-for="panel in group.items"
-          :key="panel.id"
-          :to="`/panel/${panel.id}`"
-          class="nav-item"
-          :class="{ active: panelActive(panel), disabled: !panel.enabled }"
-          :title="panel.enabled ? undefined : localizeBackend(panel.enabled_reason) || t('nav.disabledReason')"
-        >
-          <AppIcon :name="iconFor(panel)" :size="16" />
-          <span class="nav-text">{{ panelTitle(panel) }}</span>
-          <span v-if="!panel.enabled" class="nav-off">{{ t('common.disabled') }}</span>
-        </RouterLink>
-        <template v-if="group.id === 'maintain'">
+        <template v-for="item in group.items" :key="item.key">
           <RouterLink
-            v-for="item in utilities"
-            :key="item.path"
+            v-if="item.kind === 'panel'"
+            :to="`/panel/${item.panel.id}`"
+            class="nav-item"
+            :class="{ active: panelActive(item.panel), disabled: !item.panel.enabled }"
+            :title="item.panel.enabled ? undefined : localizeBackend(item.panel.enabled_reason) || t('nav.disabledReason')"
+          >
+            <AppIcon :name="iconFor(item.panel)" :size="16" />
+            <span class="nav-text">{{ panelTitle(item.panel) }}</span>
+            <span v-if="!item.panel.enabled" class="nav-off">{{ t('common.disabled') }}</span>
+          </RouterLink>
+          <RouterLink
+            v-else
             :to="item.path"
             class="nav-item"
             :class="{ active: utilityActive(item.path) }"

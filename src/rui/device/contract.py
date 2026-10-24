@@ -14,7 +14,10 @@ we verified over SSH, never an optimistic guess.
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import math
+import threading
+from collections import deque
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
@@ -41,6 +44,126 @@ class Transport(StrEnum):
     INBOUND = "inbound"              # the device dials us
 
 
+#: Capabilities where ``probe()`` can verify what the manifest declares. The
+#: documented rule (Socket & Plug v1 §2) is manifest ∩ probe: a capability that
+#: either side does not claim is not effective. The other three capability values
+#: (``led``/``keys``/``volume``) are backed by ``DeviceServices`` calls instead, so
+#: the manifest is authoritative for them and a probe that omits them must not
+#: downgrade a working LX06.
+PROBE_BOUND_CAPABILITIES: frozenset[Capability] = frozenset(
+    {
+        Capability.MIC_ARRAY,
+        Capability.REFERENCE,
+        Capability.PLAYBACK,
+        Capability.DEVICE_WAKE,
+        Capability.BARGE_VIA_DEVICE,
+    }
+)
+
+
+def effective_capabilities(
+    manifest: Iterable[Capability] | None,
+    probe: Iterable[Capability] | None,
+) -> frozenset[Capability]:
+    """The capabilities the core may act on: the manifest is the upper bound.
+
+    ``manifest`` is what the plug's device manifest declares; ``probe`` is what the
+    adapter reported. For :data:`PROBE_BOUND_CAPABILITIES` the result is the
+    intersection (both sides must back the claim). For ``led``/``keys``/``volume``
+    the manifest wins, because :class:`DeviceServices` is the actual runtime
+    evidence and a v0 LX06 probe deliberately does not list them.
+
+    ``manifest=None`` means "no manifest resolved" (the documented dev/mock case):
+    the probe is then authoritative for every capability, exactly as before v1.
+    Probe-only values outside the manifest are never promoted.
+    """
+    probed = frozenset(probe or ())
+    if manifest is None:
+        return probed
+    effective: set[Capability] = set()
+    for cap in frozenset(manifest):
+        if cap not in PROBE_BOUND_CAPABILITIES or cap in probed:
+            effective.add(cap)
+    return frozenset(effective)
+
+
+def probe_only_capabilities(
+    manifest: Iterable[Capability] | None,
+    probe: Iterable[Capability] | None,
+) -> frozenset[Capability]:
+    """Probe claims the manifest does not declare (reported, never effective)."""
+    if manifest is None:
+        return frozenset()
+    return frozenset(probe or ()) - frozenset(manifest)
+
+
+#: Config/UI volume is a percentage; the device mixer is 0-255. These are the two
+#: unit boundaries of the canonical volume contract (Socket & Plug v1 §4.1).
+VOLUME_PERCENT_MIN = 0
+VOLUME_PERCENT_MAX = 100
+DEVICE_VOLUME_MIN = 0
+DEVICE_VOLUME_MAX = 255
+
+
+def percent_to_device_volume(percent: int) -> int:
+    """Map a 0-100 config/UI percentage to the adapter's 0-255 mixer value."""
+    if isinstance(percent, bool) or not isinstance(percent, int):
+        raise ValueError(f"volume percent must be an int in 0..100 (got {percent!r})")
+    if not VOLUME_PERCENT_MIN <= percent <= VOLUME_PERCENT_MAX:
+        raise ValueError(f"volume percent must be in 0..100 (got {percent!r})")
+    return round(percent * DEVICE_VOLUME_MAX / VOLUME_PERCENT_MAX)
+
+
+def device_volume_to_percent(value: int) -> int:
+    """Map an adapter/mixer 0-255 value back to a 0-100 config/UI percentage."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"device volume must be an int in 0..255 (got {value!r})")
+    if not DEVICE_VOLUME_MIN <= value <= DEVICE_VOLUME_MAX:
+        raise ValueError(f"device volume must be in 0..255 (got {value!r})")
+    return round(value * VOLUME_PERCENT_MAX / DEVICE_VOLUME_MAX)
+
+
+#: Adapters should bound their own queue (v1 §4.2); this is the shared default.
+MAX_PENDING_WAKES = 32
+
+
+class BoundedWakeQueue:
+    """Thread-safe, drop-oldest queue for :meth:`DeviceAdapter.drain_wakes`.
+
+    The contract asks the adapter to keep a bounded queue (v1 §4.2). Producing from a
+    device thread and draining from the audio plane's frame loop is the normal shape,
+    so every operation is guarded by one lock. ``dropped`` lets an adapter expose the
+    overflow in its own diagnostics; RUI never relies on it for policy.
+    """
+
+    def __init__(self, maxlen: int = MAX_PENDING_WAKES) -> None:
+        if maxlen < 1:
+            raise ValueError("maxlen must be >= 1")
+        self._items: deque[DeviceWake] = deque(maxlen=int(maxlen))
+        self._lock = threading.Lock()
+        self.dropped = 0
+
+    def push(self, wake: DeviceWake) -> None:
+        with self._lock:
+            if len(self._items) == self._items.maxlen:
+                self.dropped += 1
+            self._items.append(wake)
+
+    def drain(self) -> list[DeviceWake]:
+        with self._lock:
+            pending = list(self._items)
+            self._items.clear()
+            return pending
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._items)
+
+
 @dataclass(frozen=True)
 class DeviceInfo:
     id: str
@@ -60,6 +183,22 @@ class DeviceInfo:
         return cap in self.capabilities
 
     def missing_for_barge_in(self) -> list[Capability]:
+        """What still blocks barge-in, honouring both documented paths.
+
+        A device can support barge either through RUI's own AEC (``reference`` +
+        ``playback``) or by detecting the interruption itself (``device_wake`` +
+        ``barge_via_device`` + ``playback``). Reporting the reference path as
+        "missing" for a device that has the second path was audit finding P1-3.
+        The manifest's ``wake.barge_via_device`` enable flag is still checked
+        separately by the audio policy; this method answers the capability question.
+        """
+        device_path = {
+            Capability.DEVICE_WAKE,
+            Capability.BARGE_VIA_DEVICE,
+            Capability.PLAYBACK,
+        }
+        if device_path <= self.capabilities:
+            return []
         need = [Capability.REFERENCE, Capability.PLAYBACK]
         return [c for c in need if c not in self.capabilities]
 
@@ -76,6 +215,17 @@ class DeviceWake:
     so the plane can reject a stale or future event. `score` is normalised 0-1 by the
     adapter; `threshold` is the device's own gate at decision time (advisory, recorded
     for the trace). `level` (dBFS) is diagnostic only.
+
+    The event deliberately carries **only** these six fields. ``device_id`` is implied
+    by the one-plane-per-device model; ``room``/``playing``/``last_active`` are not part
+    of v1 (0.4 will add a separate arbitration event or optional fields). RUI enriches
+    the trace from the plane it already owns, so an adapter must not try to smuggle
+    them into the dataclass (it would be a ``TypeError``).
+
+    ``barge`` is validated here because the truthiness of a non-bool value (``"false"``,
+    ``1``) would otherwise stop playback against the adapter's intent. The remaining
+    numeric/range/staleness rules live in :func:`wake_validation_error` because they
+    depend on policy constants and the current clock.
     """
 
     ts_ms: float
@@ -84,6 +234,59 @@ class DeviceWake:
     barge: bool = False
     level: float | None = None
     source: Literal["device"] = "device"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.barge, bool):
+            raise TypeError(f"DeviceWake.barge must be a bool (got {type(self.barge).__name__})")
+        if self.source != "device":
+            raise ValueError(f"DeviceWake.source must be 'device' (got {self.source!r})")
+
+
+def wake_validation_error(
+    wake: object,
+    *,
+    now_ms: float | None = None,
+    stale_ms: float = 1500.0,
+    future_ms: float = 500.0,
+) -> str | None:
+    """Return the v1 §5 reason an event is invalid, or ``None`` when it is usable.
+
+    This is the contract-level counterpart to the audio plane's policy check: adapters
+    and the contract kit can validate an event without importing the audio process, and
+    the plane can share the exact same wording. ``now_ms`` is optional so a pure shape
+    check is possible; when given, stale/future events are rejected with the documented
+    defaults (1500 ms late / 500 ms early).
+    """
+    if not isinstance(wake, DeviceWake):
+        return f"not a DeviceWake ({type(wake).__name__})"
+    if not isinstance(wake.barge, bool):
+        return f"barge must be a bool (got {wake.barge!r})"
+    if wake.source != "device":
+        return f"source must be 'device' (got {wake.source!r})"
+    for name, value in (("ts_ms", wake.ts_ms), ("score", wake.score),
+                        ("threshold", wake.threshold)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return f"{name} must be a finite number (got {value!r})"
+        if not math.isfinite(value):
+            return f"{name} must be finite (got {value!r})"
+    if not 0.0 <= wake.score <= 1.0:
+        return f"score must be in 0..1 (got {wake.score!r})"
+    if wake.threshold <= 0.0:
+        return f"threshold must be > 0 (got {wake.threshold!r})"
+    if wake.score < wake.threshold:
+        return f"score {wake.score!r} is below threshold {wake.threshold!r}"
+    if wake.level is not None:
+        if isinstance(wake.level, bool) or not isinstance(wake.level, (int, float)):
+            return f"level must be a finite number or None (got {wake.level!r})"
+        if not math.isfinite(wake.level):
+            return f"level must be finite or None (got {wake.level!r})"
+    if now_ms is not None:
+        age = now_ms - wake.ts_ms
+        if age > stale_ms:
+            return f"event is stale by {age:.0f} ms (limit {stale_ms:.0f} ms)"
+        if age < -future_ms:
+            return f"event is {-age:.0f} ms in the future (limit {future_ms:.0f} ms)"
+    return None
 
 
 @dataclass
@@ -133,15 +336,19 @@ class DeviceServices(Protocol):
     async def shell(self, script: str, timeout: float = 3.0) -> str: ...
 
     async def read_volume(self) -> int | None:
-        """0-255 mixer value, or None when the device cannot report one."""
+        """Device mixer value, **0-255**, or None when the device cannot report one."""
         ...
 
-    @property
-    def services(self) -> DeviceServices:
-        """Shell/mixer/light. Defaults to nothing rather than to a vendor guess."""
-        return NullServices()
+    async def set_volume(self, volume: int) -> None:
+        """Write the device mixer in its low-level **0-255** unit.
 
-    async def set_volume(self, volume: int) -> None: ...
+        The config/UI percentage (0-100) is mapped before it reaches this method with
+        :func:`percent_to_device_volume`. Implementations must reject values outside
+        0-255 rather than clamping silently. ``0`` is in range but may be reserved for
+        "leave it to the vendor" (the LX06's services rejects a 0 write); core never
+        sends 0 because config ``volume = 0`` means "do not manage".
+        """
+        ...
 
     async def set_led(self, effect: str, color: str = "", *, repaint: bool = False) -> None:
         """Paint the light ring, if the device has one. Fire-and-forget."""
@@ -167,6 +374,12 @@ class NullServices:
 class DeviceAdapter(Protocol):
     """Async contract every speaker adapter implements."""
 
+    #: Shell/mixer/light. Optional: adapters without one leave it unset (or assign
+    #: :class:`NullServices`) and must not advertise VOLUME/LED. It is an attribute,
+    #: not a property, because an adapter may assign a vendor-specific object in
+    #: ``__init__`` (the LX06 does).
+    services: DeviceServices
+
     async def probe(self) -> DeviceInfo: ...
 
     async def open(self) -> None: ...
@@ -183,7 +396,29 @@ class DeviceAdapter(Protocol):
         """Fade out and flush, including whatever the device has already buffered."""
         ...
 
-    async def set_volume(self, volume: int) -> None: ...
+    async def set_volume(self, percent: int) -> None:
+        """High-level volume, **0-100**, same unit as config/UI.
+
+        Optional: an adapter with VOLUME may implement it (mapping to its own mixer),
+        and core may call it instead of the low-level ``services.set_volume``. The
+        actual 0.3 plane uses ``services.set_volume`` (0-255) when present; both must
+        agree on the mapping. See :func:`percent_to_device_volume`.
+        """
+        ...
+
+    async def read_volume(self) -> int | None:
+        """Device mixer value in **0-255**, delegated to ``services`` by default.
+
+        A contract-only adapter (no vendor object) still reports through
+        ``services.read_volume``; returning ``None`` means "cannot report".
+        """
+        services = getattr(self, "services", None)
+        if services is None:
+            return None
+        try:
+            return await services.read_volume()
+        except NotImplementedError:
+            return None
 
     def drain_signals(self) -> list:
         """Non-audio events the device reported since the last call (vendor wake, keys).

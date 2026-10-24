@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Iterable
 
 from .contract import (
+    MAX_PENDING_WAKES,
     AudioFrame,
+    BoundedWakeQueue,
     Capability,
     DeviceAdapter,
     DeviceInfo,
@@ -21,7 +22,7 @@ from .contract import (
 )
 
 # Bounded like the v1 contract asks: a leaked producer must not grow without limit.
-MAX_PENDING_WAKES = 32
+__all__ = ["MAX_PENDING_WAKES", "MockAdapter", "MockServices", "build"]
 
 DEFAULT_CAPABILITIES = frozenset(
     {Capability.MIC_ARRAY, Capability.REFERENCE, Capability.PLAYBACK, Capability.LED, Capability.VOLUME}
@@ -85,7 +86,7 @@ class MockAdapter(DeviceAdapter):
         # Device-side wake injection for tests / the contract harness. Bounded so a test
         # that injects in a loop cannot grow memory; oldest wins the drop, like an adapter
         # that cannot keep up.
-        self._wakes: deque[DeviceWake] = deque(maxlen=MAX_PENDING_WAKES)
+        self._wakes = BoundedWakeQueue(MAX_PENDING_WAKES)
 
     async def probe(self) -> DeviceInfo:
         return self.info
@@ -119,18 +120,16 @@ class MockAdapter(DeviceAdapter):
             barge=bool(barge),
             level=level,
         )
-        self._wakes.append(wake)
+        self._wakes.push(wake)
         return wake
 
     def inject_wake_event(self, wake: DeviceWake) -> DeviceWake:
         """Queue an already-built event (lets a test send an invalid one on purpose)."""
-        self._wakes.append(wake)
+        self._wakes.push(wake)
         return wake
 
     def drain_wakes(self) -> list[DeviceWake]:
-        pending = list(self._wakes)
-        self._wakes.clear()
-        return pending
+        return self._wakes.drain()
 
     async def frames(self, frame_ms: int = 20) -> AsyncIterator[AudioFrame]:
         """Silence at a fixed cadence, in the real channel layout and rate."""

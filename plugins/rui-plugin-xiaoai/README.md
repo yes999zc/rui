@@ -14,9 +14,9 @@ in-code manifest in `src/rui/plugins/builtin.py` and the adapter in
 
 | File | Purpose |
 |---|---|
-| `plugin.yaml` | `rui-plugin/v0`, id `xiaoai-lx06`, trust `builtin`, `rui_compat: ">=0.2 <0.4"` |
+| `plugin.yaml` | `rui-plugin/v0`, id `xiaoai-lx06`, trust `builtin`, `rui_compat: ">=0.2.0 <0.4.0"` |
 | `devices/lx06.yaml` | `rui-device/v0`, class A, inbound, `ws`, in-process; capabilities `mic_array`, `reference`, `playback`, `led`, `keys`, `volume`; params `host`, `room`, `wake_words` |
-| `rui_plugin_xiaoai/adapter.py` | `build(spec, config)` → delegates to `rui.device.xiaoai.build` |
+| `rui_plugin_xiaoai/adapter.py` | `build(spec, config)` → delegates to `rui.device.xiaoai.build`; `set_volume(0–100)` maps to `services.set_volume(0–255)` |
 | `README.md` | this file |
 
 The manifest is deliberately **v0**: the LX06 wakes through RUI's own KWS

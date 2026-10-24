@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .. import secrets
-from ..config.schema import STAGES, Config, ProviderConfig
+from ..config.schema import STAGES, Config, ProviderConfig, ProvidersConfig
 from .volc_voices import VOLC_TTS_VOICES
 
 __all__ = [
@@ -33,6 +33,7 @@ __all__ = [
     "credential_names",
     "provider_catalog",
     "provider_entries",
+    "provider_readiness",
     "provider_ready",
     "sherpa_model_ready",
     "stage_provider_names",
@@ -133,6 +134,10 @@ class ProviderEntry:
     selected: bool = False
     available: bool = True
     required: bool = True
+    # Whether the runtime chain would keep this provider. `configured` only says the
+    # declared env values exist; `ready` also covers a local model / missing base_url.
+    ready: bool = False
+    ready_reason: str = ""
     voices: list[dict] = field(default_factory=list)
     default_voice: str = ""
 
@@ -162,6 +167,8 @@ class ProviderEntry:
             "selected": self.selected,
             "available": self.available,
             "required": self.required,
+            "ready": self.ready,
+            "ready_reason": self.ready_reason,
             "voices": list(self.voices),
             "default_voice": self.default_voice,
         }
@@ -336,9 +343,17 @@ def stage_provider_names(cfg: Config, stage: str) -> list[str]:
     return offered
 
 
-def credential_names(cfg: Config, stage: str, name: str) -> list[str]:
+def _providers_of(cfg: Config | ProvidersConfig) -> ProvidersConfig:
+    """Accept either a full Config or its providers section (the runtime has the latter)."""
+    value = getattr(cfg, "providers", None)
+    return value if isinstance(value, ProvidersConfig) else cfg  # type: ignore[return-value]
+
+
+def credential_names(
+    cfg: Config | ProvidersConfig, stage: str, name: str,
+) -> list[str]:
     """The env names this provider declares as fields (empty = keyless provider)."""
-    provider = cfg.providers.catalog.get(name)
+    provider = _providers_of(cfg).catalog.get(name)
     if provider is None:
         return []
     return [str(item) for item in (
@@ -392,6 +407,7 @@ def _entry(stage: str, name: str, provider: ProviderConfig, cfg: Config) -> Prov
     voices = voice_options(stage, provider)
     default_voice = next((item["id"] for item in voices if item["default"]), "")
     zh, en = display_names(name, provider)
+    ready, _missing, ready_reason = provider_readiness(cfg, stage, name)
     return ProviderEntry(
         stage=stage,
         name=name,
@@ -404,6 +420,8 @@ def _entry(stage: str, name: str, provider: ProviderConfig, cfg: Config) -> Prov
         selected=_first_ready(cfg, stage) == name,
         available=serves_stage(provider, stage),
         required=True,
+        ready=ready,
+        ready_reason=ready_reason,
         voices=voices,
         default_voice=default_voice,
     )
@@ -423,26 +441,43 @@ def sherpa_model_ready(model: str) -> bool:
     )
 
 
-def provider_ready(cfg: Config, stage: str, name: str) -> tuple[bool, list[str]]:
-    """(usable, missing env names) for one chain entry.
+def provider_readiness(
+    cfg: Config | ProvidersConfig, stage: str, name: str,
+) -> tuple[bool, list[str], str]:
+    """(usable, missing env names, reason) for one chain entry.
 
     A provider is usable when every credential it declares resolves *and* it can
     actually run: a local model's files exist, a built-in vendor endpoint needs no
     ``base_url``, and an OpenAI-compatible entry needs its endpoint configured.
+
+    ``reason`` is a stable machine word rather than prose, so the console can badge a
+    provider without parsing a message: ``""`` (ready), ``missing_key``, ``local_model``,
+    ``base_url`` or ``unknown_provider``.
     """
-    provider = cfg.providers.catalog.get(name)
+    providers = _providers_of(cfg)
+    provider = providers.catalog.get(name)
     if provider is None:
-        return False, []
-    names = credential_names(cfg, stage, name)
-    missing = [name for name in names if secrets.resolve(name) is None]
+        return False, [], "unknown_provider"
+    names = credential_names(providers, stage, name)
+    missing = [item for item in names if secrets.resolve(item) is None]
     if missing:
-        return False, missing
+        return False, missing, "missing_key"
     kind = _norm(provider.kind)
     if kind == "sherpa":
-        return sherpa_model_ready(str(provider.model or "")), []
+        ready = sherpa_model_ready(str(provider.model or ""))
+        return ready, [], "" if ready else "local_model"
     if kind in ("volc_asr", "volc_tts", "xfyun"):
-        return True, []
-    return bool(str(provider.base_url or "").strip()), []
+        return True, [], ""
+    ready = bool(str(provider.base_url or "").strip())
+    return ready, [], "" if ready else "base_url"
+
+
+def provider_ready(
+    cfg: Config | ProvidersConfig, stage: str, name: str,
+) -> tuple[bool, list[str]]:
+    """(usable, missing env names) for one chain entry; see :func:`provider_readiness`."""
+    ready, missing, _reason = provider_readiness(cfg, stage, name)
+    return ready, missing
 
 
 def _first_ready(cfg: Config, stage: str) -> str:
@@ -480,6 +515,9 @@ def stage_state(cfg: Config) -> dict[str, dict]:
         chain = list(getattr(cfg.providers, stage).chain)
         selected = _first_ready(cfg, stage)
         satisfied, missing = stage_satisfied(cfg, stage)
+        readiness = {
+            name: provider_readiness(cfg, stage, name)[0] for name in chain
+        }
         out[stage] = {
             "selected": selected,
             "selected_id": f"{stage}:{selected}" if selected else "",
@@ -488,6 +526,10 @@ def stage_state(cfg: Config) -> dict[str, dict]:
             "providers": stage_provider_names(cfg, stage),
             "satisfied": satisfied,
             "missing": missing,
+            # Runtime starts only these; the rest stay in `chain` as configured intent
+            # and are skipped (see providers/chain.py). Additive: badges read this.
+            "ready": [name for name in chain if readiness.get(name)],
+            "not_ready": [name for name in chain if not readiness.get(name)],
         }
     return out
 

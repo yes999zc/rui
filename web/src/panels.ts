@@ -53,6 +53,9 @@ export interface PanelBlock {
   item_sub?: string
   section?: string
   apply?: string
+  /** `config` block: catalog groups rendered inline by ConfigCenter. */
+  groups?: string[]
+  tier?: number
   fields?: PanelField[]
   columns?: PanelColumn[]
   follow?: boolean
@@ -156,25 +159,26 @@ export function enabledWhen(expr: string | undefined, data: unknown): boolean {
 }
 
 /**
- * The four navigation groups (docs/console-redesign.md §3). Panel groups come
- * from the backend; legacy names map onto the new ones so an older control plane
- * still lands in the right place. Unknown groups are appended, never dropped.
+ * The two navigation groups (docs/console-ia-audit.md §2.6/§3). The console moved
+ * from four task-less buckets to "what is happening now" vs "what I configure or
+ * maintain". Backend groups are still the fallback for panels that predate this
+ * manifest; legacy names map onto the two groups so an older control plane lands
+ * in the right place.
  */
-export const GROUP_ORDER = ['run', 'life', 'config', 'maintain'] as const
-
 const LEGACY_GROUPS: Record<string, string> = {
   status: 'run',
-  living: 'life',
-  system: 'maintain',
-  config: 'config',
+  living: 'run',
+  life: 'run',
+  system: 'run',
+  config: 'configure',
+  maintain: 'configure',
   run: 'run',
-  life: 'life',
-  maintain: 'maintain',
+  configure: 'configure',
 }
 
 export function navGroup(group: string | undefined): string {
   if (!group) return 'run'
-  return LEGACY_GROUPS[group] ?? group
+  return LEGACY_GROUPS[group] ?? 'configure'
 }
 
 /**
@@ -186,20 +190,54 @@ export function navGroup(group: string | undefined): string {
 export const PANEL_NAV_GROUPS: Record<string, string> = {
   overview: 'run',
   turns: 'run',
+  memory: 'run',
   logs: 'run',
-  music: 'life',
-  memory: 'life',
-  'assistant-session': 'config',
-  speaker: 'config',
-  providers: 'config',
-  tools: 'config',
-  foundation: 'config',
-  devices: 'maintain',
-  'devices-admin': 'maintain',
-  phrases: 'maintain',
-  mcp: 'maintain',
+  'assistant-session': 'configure',
+  devices: 'configure',
+  music: 'configure',
+  providers: 'configure',
+  tools: 'configure',
+  foundation: 'configure',
+  // Legacy ids stay reachable by URL (one release of compatibility) but are not
+  // separate destinations: their task is already represented by a combined entry.
+  speaker: 'configure',
+  'devices-admin': 'configure',
+  phrases: 'configure',
+  mcp: 'configure',
 }
 
 export function panelNavGroup(panel: { id: string; group: string }): string {
   return PANEL_NAV_GROUPS[panel.id] ?? navGroup(panel.group)
 }
+
+/**
+ * Panels that stay routes but leave the rail: their job is now part of a
+ * combined destination. Old links keep working (PanelHost aliases + router);
+ * this is the P0 "hide, do not delete" contract from the IA audit.
+ */
+export const HIDDEN_NAV_PANELS = new Set([
+  'speaker',          // 设备与音频 → /panel/devices
+  'devices-admin',    // 设备与音频 → /panel/devices (full merge is Phase 2)
+  'phrases',          // 语音助手 → /panel/assistant-session
+  'mcp',              // 工具与集成 → /panel/tools
+])
+
+/** Which destination lights up while a legacy panel is open. */
+export const NAV_ACTIVE_ALIASES: Record<string, string[]> = {
+  'assistant-session': ['assistant-session', 'phrases'],
+  devices: ['devices', 'speaker', 'devices-admin'],
+  tools: ['tools', 'mcp'],
+}
+
+/**
+ * The rail order. Only panels listed here are primary destinations; anything a
+ * newer backend adds and this build does not know yet is appended to the
+ * configure group rather than silently dropped.
+ */
+export const NAV_GROUPS: { id: 'run' | 'configure'; panelIds: string[] }[] = [
+  { id: 'run', panelIds: ['overview', 'turns', 'memory', 'logs'] },
+  {
+    id: 'configure',
+    panelIds: ['assistant-session', 'devices', 'music', 'providers', 'tools', 'foundation'],
+  },
+]

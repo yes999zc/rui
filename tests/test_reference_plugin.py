@@ -77,12 +77,13 @@ def test_reference_manifest_matches_the_builtin_capabilities() -> None:
     assert [param.key for param in reference.params] == [
         param.key for param in builtin_device.params
     ]
-    # The package is intentionally loadable through the 0.3 line; core keeps the
-    # older in-code range until the 0.4 extraction.
-    assert plugin.rui_compat == ">=0.2 <0.4"
+    # v0 version matrix (v1 §7): one range for the whole 0.2/0.3 line. The in-code
+    # builtin declares the same range and validates it against rui.__version__.
+    assert plugin.rui_compat == ">=0.2.0 <0.4.0"
+    assert builtin.rui_compat == ">=0.2.0 <0.4.0"
     compat = parse_range(plugin.rui_compat)
     assert compat.matches("0.2.2")
-    assert compat.matches("0.3.0")
+    assert compat.matches("0.3.2")
     assert not compat.matches("0.4.0")
 
 
@@ -139,6 +140,57 @@ def test_reference_adapter_builder_returns_the_core_adapter(monkeypatch) -> None
         Capability.PLAYBACK,
         Capability.LED,
     } <= info.capabilities
+
+
+def test_reference_adapter_exposes_the_volume_contract(monkeypatch) -> None:
+    from rui.device.contract import (
+        DEVICE_VOLUME_MAX,
+        device_volume_to_percent,
+        percent_to_device_volume,
+    )
+
+    monkeypatch.syspath_prepend(str(PLUGIN))
+    module = importlib.import_module("rui_plugin_xiaoai.adapter")
+    adapter = module.build(SimpleNamespace(id="xiaoai", adapter="xiaoai",
+                                           host="127.0.0.1", params={}))
+
+    # Both boundaries exist: the adapter surface is percent, the low-level services
+    # object is the 0-255 mixer the 0.3 plane actually calls.
+    assert callable(adapter.set_volume)
+    assert callable(adapter.read_volume)
+    assert callable(adapter.services.set_volume)
+    assert callable(adapter.services.read_volume)
+    assert percent_to_device_volume(0) == 0
+    assert percent_to_device_volume(100) == DEVICE_VOLUME_MAX
+    assert device_volume_to_percent(DEVICE_VOLUME_MAX) == 100
+    for bad in (101, -1, True):
+        try:
+            percent_to_device_volume(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"percent_to_device_volume({bad!r}) must be rejected")
+
+
+def test_reference_adapter_maps_percent_volume_to_the_mixer(monkeypatch) -> None:
+    monkeypatch.syspath_prepend(str(PLUGIN))
+    module = importlib.import_module("rui_plugin_xiaoai.adapter")
+    adapter = module.build(SimpleNamespace(id="xiaoai", adapter="xiaoai",
+                                           host="127.0.0.1", params={}))
+    seen: list[int] = []
+
+    class FakeServices:
+        async def set_volume(self, volume: int) -> None:
+            seen.append(volume)
+
+        async def read_volume(self) -> int | None:
+            return seen[-1] if seen else None
+
+    adapter.services = FakeServices()
+    asyncio.run(adapter.set_volume(100))
+    asyncio.run(adapter.set_volume(50))
+    asyncio.run(adapter.set_volume(0))
+    assert seen == [255, 128, 0]
+    assert asyncio.run(adapter.read_volume()) == 0
 
 
 def test_reference_plugin_passes_the_contract_kit(capsys) -> None:

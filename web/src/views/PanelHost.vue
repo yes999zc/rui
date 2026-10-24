@@ -29,6 +29,12 @@ import BlockSay from '../components/BlockSay.vue'
 import BlockVolume from '../components/BlockVolume.vue'
 import BlockCredentials from '../components/BlockCredentials.vue'
 
+/**
+ * The catalog editor is already a lazy route (panelComponents.ts); import it the
+ * same way here so an inline `config` block does not pull it into the shell chunk.
+ */
+const InlineConfig = defineAsyncComponent(() => import('../components/ConfigCenter.vue'))
+
 const route = useRoute()
 const router = useRouter()
 const { panels, ready, error: registryError, reload } = usePanels()
@@ -39,6 +45,19 @@ const extras = ref<Record<string, unknown>>({})
 const error = ref('')
 const loaded = ref(false)
 let timer: number | undefined
+
+/**
+ * Configuration blocks stay usable when a panel is disabled. The music page is the
+ * case the audit found: turning music on used to require finding a different page,
+ * so "off" was a dead end. Configuration always renders before playback.
+ */
+const SETUP_BLOCKS = new Set(['config', 'credentials'])
+const setupBlocks = computed(() => {
+  const rank: Record<string, number> = { config: 0, credentials: 1 }
+  return (panel.value?.blocks ?? [])
+    .filter((block) => SETUP_BLOCKS.has(block.type))
+    .sort((a, b) => (rank[a.type] ?? 9) - (rank[b.type] ?? 9))
+})
 
 /** Renamed pages stay reachable against a control plane from either release. */
 const ALIASES: Record<string, string> = {
@@ -164,7 +183,33 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
       </div>
     </div>
 
-    <template v-else>
+    <!-- A disabled panel is not a dead end: its configuration blocks remain editable
+         so the operator can fix the reason here (music enable toggle + source + keys). -->
+    <div v-if="!panel.enabled && setupBlocks.length" class="blocks blocks-setup">
+      <p class="note setup-before-enable">{{ t('page.configBeforeEnable') }}</p>
+      <div
+        v-for="(block, index) in setupBlocks"
+        :key="`setup-${block.type}-${index}`"
+        class="block-slot"
+        :class="`b-${block.type}`"
+      >
+        <InlineConfig
+          v-if="block.type === 'config'"
+          :groups="block.groups"
+          :tier="block.tier"
+          :panel-id="panel.id"
+          @saved="reload()"
+        />
+        <BlockCredentials
+          v-else
+          :block="block"
+          :data="dataFor(block)"
+          :refresh="poll"
+        />
+      </div>
+    </div>
+
+    <template v-if="panel.enabled">
       <div v-if="error" class="banner banner-fail panel-error">
         <AppIcon name="alert" :size="16" class="banner-icon" />
         <span>
@@ -197,6 +242,13 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
           <BlockMemory v-else-if="block.type === 'memory'" :block="block" :data="dataFor(block)" :refresh="poll" />
           <BlockSay v-else-if="block.type === 'say'" :block="block" :data="dataFor(block)" />
           <BlockVolume v-else-if="block.type === 'volume'" :block="block" :data="dataFor(block)" />
+          <InlineConfig
+            v-else-if="block.type === 'config'"
+            :groups="block.groups"
+            :tier="block.tier"
+            :panel-id="panel.id"
+            @saved="reload()"
+          />
           <BlockCredentials
             v-else-if="block.type === 'credentials'"
             :block="block"
@@ -223,6 +275,15 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
 
 .panel-error {
   margin-bottom: var(--s5);
+}
+
+/* Disabled panels keep their configuration visible (music: enable + source + keys). */
+.blocks-setup {
+  margin-top: var(--s4);
+}
+
+.setup-before-enable {
+  margin-bottom: var(--s2);
 }
 
 .skeleton-line + .skeleton-line {

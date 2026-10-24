@@ -17,12 +17,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import rui
+
 from .models import (
     DEVICE_SCHEMA,
     PLUGIN_SCHEMA,
     DeviceManifest,
     Plugin,
 )
+from .semver import parse_range
 
 __all__ = ["BUILTIN_PLUGINS", "LX06_PLUG_ID", "builtin_plugin", "builtin_plugins"]
 
@@ -93,7 +96,7 @@ _XIAOAI_LX06 = {
     ],
     "compatibility": {
         "rui_min": "0.2.0",
-        "tested_with": ["0.2.0"],
+        "tested_with": ["0.2.0", "0.3.2"],
         # Socket & Plug v1: the LX06 is a closed device (open-xiaoai client only), so
         # there is no device-side RUI wake model. The built-in manifest stays v0, which
         # means `wake.source: rui` by the v0 default; it must never declare device_wake.
@@ -112,7 +115,10 @@ _XIAOAI_LX06_PLUGIN = {
     "id": LX06_PLUG_ID,
     "name": "Xiaomi AI Speaker Pro (LX06)",
     "version": "0.2.0",
-    "rui_compat": ">=0.2.0 <0.3.0",
+    # v0 matrix (docs/socket-plug-v1.md §7): a v0 manifest stays loadable on the
+    # whole 0.2/0.3 line. The builtins bypass ``load_plugin``'s compat check, so this
+    # is also asserted in ``_build`` below and in tests/test_plugins.py.
+    "rui_compat": ">=0.2.0 <0.4.0",
     "license": "MIT",
     "maintainer": "rui maintainers",
     "homepage": "https://github.com/coderzc/open-xiaoai",
@@ -121,6 +127,14 @@ _XIAOAI_LX06_PLUGIN = {
 
 
 def _build() -> tuple[Plugin, ...]:
+    # A builtin bypasses load_plugin()'s compat gate, so check its own range here: an
+    # image whose manifest excludes its own version is a release bug, not a warning.
+    if not parse_range(_XIAOAI_LX06_PLUGIN["rui_compat"]).matches(rui.__version__):
+        raise RuntimeError(
+            f"builtin plug {_XIAOAI_LX06_PLUGIN['id']!r} declares rui_compat "
+            f"{_XIAOAI_LX06_PLUGIN['rui_compat']!r}, which excludes this build "
+            f"({rui.__version__})"
+        )
     device = DeviceManifest.model_validate(_XIAOAI_LX06)
     plugin = Plugin.model_validate(
         {**_XIAOAI_LX06_PLUGIN, "devices": [device], "source_dir": _SOURCE_DIR}

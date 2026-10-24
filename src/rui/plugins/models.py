@@ -20,7 +20,8 @@ import warnings
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -135,7 +136,13 @@ class ProtocolSpec(BaseModel):
 
 
 class DeviceSide(BaseModel):
-    """What the user must do on the speaker before RUI can talk to it."""
+    """What the user must do on the speaker before RUI can talk to it.
+
+    Rules are normative in v1 §3.2/§3.3: ``source`` is an http(s) URL with no
+    credentials, ``install_steps`` is bounded (≤20 steps, each ≤500 chars) and a
+    class-B device must declare a rollback path. Content is displayed only, never
+    executed, so these checks are about safe presentation and honest documentation.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -143,8 +150,40 @@ class DeviceSide(BaseModel):
     name: str = ""
     source: str = ""
     version_min: str = ""
-    install_steps: list[str] = Field(default_factory=list)
+    install_steps: list[Annotated[str, Field(max_length=500)]] = Field(
+        default_factory=list, max_length=20
+    )
     rollback: str = ""
+
+    @field_validator("source")
+    @classmethod
+    def _source_url(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return value
+        parsed = urlsplit(value)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                "device_side.source must be an http(s) URL or empty (only the link is "
+                "displayed, never executed)"
+            )
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError(
+                "device_side.source must not contain a username or password "
+                "(manifest has no secret values)"
+            )
+        if any(char.isspace() for char in value):
+            raise ValueError("device_side.source must not contain whitespace")
+        return value
+
+    @field_validator("install_steps")
+    @classmethod
+    def _steps_are_presentable(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        for index, value in enumerate(cleaned):
+            if not value:
+                raise ValueError(f"device_side.install_steps[{index}] must not be empty")
+        return cleaned
 
 
 class RuntimeSpec(BaseModel):
@@ -269,6 +308,16 @@ class ParamSpec(BaseModel):
             raise ValueError(
                 f"param {self.key!r}: default {self.default!r} is not one of {self.options!r}"
             )
+        if (
+            kind is ParamType.LIST
+            and self.max is not None
+            and isinstance(self.default, list)
+            and len(self.default) > self.max
+        ):
+            raise ValueError(
+                f"param {self.key!r}: default has {len(self.default)} items but max is "
+                f"{self.max}"
+            )
         return self
 
 
@@ -320,6 +369,15 @@ class Acceptance(BaseModel):
         except ValueError:
             raise ValueError("acceptance.last_verified must be YYYY-MM-DD") from None
         return value
+
+    @model_validator(mode="after")
+    def _verified_needs_a_date(self) -> Acceptance:
+        if self.verified and not self.last_verified:
+            raise ValueError(
+                "acceptance.verified: true requires acceptance.last_verified "
+                "(YYYY-MM-DD); a claim without a date is not evidence"
+            )
+        return self
 
 
 # Pydantic warns that a field named `schema` shadows BaseModel.schema(). The key
@@ -380,6 +438,15 @@ with warnings.catch_warnings():
         @model_validator(mode="after")
         def _wake_contract(self) -> DeviceManifest:
             """Enforce the v1 dependency table (docs/socket-plug-v1.md §2)."""
+            if (
+                self.device_class is DeviceClass.B
+                and self.device_side is not None
+                and not self.device_side.rollback.strip()
+            ):
+                raise ValueError(
+                    "device_side.rollback: a class B device must declare the recovery "
+                    "path (the guide may not leave a high-privilege install unrollbackable)"
+                )
             caps = set(self.capabilities)
             wake = self.wake
             if self.schema == DEVICE_SCHEMA:
@@ -390,13 +457,15 @@ with warnings.catch_warnings():
                     )
                 if wake is not None:
                     raise ValueError(
-                        "wake: the wake block is rui-device/v1 only; "
-                        "a v0 manifest must not declare it"
+                        "wake: the wake block is rui-device/v1 only; a v0 manifest cannot "
+                        "declare wake, even {source: rui}. Publish rui-device/v1, or omit "
+                        "wake and use RUI KWS"
                     )
                 for cap in (Capability.DEVICE_WAKE, Capability.BARGE_VIA_DEVICE):
                     if cap in caps:
                         raise ValueError(
-                            f"capabilities: {cap.value!r} requires schema rui-device/v1"
+                            f"capabilities: {cap.value!r} is rui-device/v1 only; a v0 "
+                            "manifest cannot declare it (publish rui-device/v1)"
                         )
                 return self
 

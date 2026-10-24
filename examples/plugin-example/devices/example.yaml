@@ -27,9 +27,9 @@ params:
   - {key: room, label: "Room", type: string, default: "Living room"}
   - {key: wake_words, label: "Wake words", type: list, default: ["你好小瑞"], max: 3}
 compatibility:
-  rui_min: "0.2.0"
-  tested_with: ["0.2.2"]
-  notes: "Reference example for the P3.1 contract kit; a production v1 plug should raise rui_min to 0.3.0."
+  rui_min: "0.3.0"
+  tested_with: ["0.3.2"]
+  notes: "Reference example for the P3.1 contract kit; v1 requires RUI >= 0.3.0."
 acceptance:
   verified: false
   last_verified: ""

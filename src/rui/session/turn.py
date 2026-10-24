@@ -25,6 +25,8 @@ from ..providers.chain import (
     asr_chain,
     call_stage,
     llm_chain,
+    log_provider_failure,
+    log_stage_failure,
     tts_chain,
 )
 from ..tools.contract import ToolResult
@@ -256,7 +258,7 @@ async def open_stream_stage(
             first = await anext(stream)
         except Exception as exc:  # noqa: BLE001 - that is what the chain is for
             attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
-            log.warning("%s: %s failed to start: %s", stage, name, exc)
+            log_provider_failure(stage, name, exc)
             continue
         attempts.append({"provider": name, "error": ""})
         return (name, first, stream), StageReport(
@@ -495,12 +497,16 @@ class TurnRunner:
 
     async def transcribe(self, pcm: bytes, trace: TurnTrace) -> tuple[str, StageReport | None]:
         trace.mark("end_of_speech")
+        if not self._asr:
+            # The readiness pass already logged the one actionable ERROR at startup;
+            # a per-turn copy of it would be the noise this change removes.
+            return "", None
         try:
             transcript, report = await call_stage(
                 "asr", self._asr, "transcribe", pcm, self.sample_rate
             )
         except StageFailure as exc:
-            log.warning("turn: %s", exc)
+            log_stage_failure("asr", f"turn: {exc}")
             return "", None
         trace.mark("asr_done")
         return transcript.text, report
@@ -525,6 +531,8 @@ class TurnRunner:
         speakable = prepare_for_speech(text)
         if not speakable:
             return "", 0, None, ""
+        if not chain:
+            return "", 0, None, "tts: no ready provider"
         text = speakable
         attempts: list[dict] = []
         for name, provider in chain:
@@ -564,10 +572,9 @@ class TurnRunner:
                 except Exception as exc:  # noqa: BLE001 - fall through to the next vendor
                     attempts.append({"provider": name,
                                      "error": f"{type(exc).__name__}: {exc}"})
-                    # The 16:41 volc failure logged an empty message, which told us
-                    # nothing; always include the type.
-                    log.warning("tts: %s failed (%s): %s",
-                                name, type(exc).__name__, exc)
+                    # MissingKey: one INFO per provider per process. A real vendor
+                    # failure: one WARNING per provider per window, never per sentence.
+                    log_provider_failure("tts", name, exc)
                     if spoken:
                         return name, spoken, None, ""
                     if attempt < retries:
@@ -634,6 +641,10 @@ class TurnRunner:
         self._trace = trace
         self._hint = hint
         if transcript is None:
+            if not self._asr:
+                # One ERROR was logged when the chain was built; do not repeat it per turn.
+                result.error = "asr: no ready provider"
+                return result
             spoken_text, asr_report = await self.transcribe(pcm, trace)
             if asr_report is not None:
                 result.stages["asr"] = asr_report
@@ -643,6 +654,9 @@ class TurnRunner:
         result.transcript = transcript
         if not transcript.strip():
             result.error = "empty transcript"
+            return result
+        if not self._llm:
+            result.error = "llm: no ready provider"
             return result
 
         # The reply ceiling for this turn. Applied while the answer streams (below), not
@@ -687,6 +701,11 @@ class TurnRunner:
             # The model's reply and history are assembled elsewhere; skipping `say`
             # leaves audio_bytes at zero and keeps the same tool/session behavior.
             if not audio:
+                return
+            if not self._tts:
+                # Readiness already logged the one ERROR; per-sentence attempts (and
+                # per-sentence errors) are exactly the noise this replaces.
+                result.error = result.error or "tts: no ready provider"
                 return
             # Everything that leaves the speaker is remembered, filler included: the old
             # build's self-echo incident was exactly its own 「我想想」 coming back.
@@ -1087,6 +1106,8 @@ class TurnRunner:
         the session ended, and nothing was said.
         """
         self._abort.clear()
+        if not self._tts:
+            return 0
         chain = list(self._tts)
         if self.spoken is not None:
             self.spoken.remember(text)

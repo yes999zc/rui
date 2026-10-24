@@ -229,13 +229,21 @@
 4. 日志面板做重复行聚合/计数，而不是新增 hide 规则；真错误仍要出现。
 5. 加测试：链 `[xfyun, fake_fallback]` + 3 句，断言 0 条 per-sentence WARNING、1 条 fallback INFO、音频来自 fallback；全链未就绪断言 1 条 ERROR。
 
+> 实施状态（2026-10-25，RUI 0.3.2）：1/2/5 已落地。运行时链由 `build_runtime_stage` 按
+> `keycheck.provider_readiness` 过滤（`MissingKey`/本地模型/`base_url` 三种原因），未就绪者每进程
+> 一条 INFO，整条 stage 无 ready 时一条 ERROR 且不再逐句尝试；运行期真故障（含 `ProviderError`）
+> 一条 WARNING / provider / 60 s。`session/ack.py`、`audio/ack_render.py`（ack 与 filler）走同一策略。
+> 向导 `providers.save` 改为 selected 首位 + 保留旧 fallback（去重），`GET /api/v1/setup/providers`
+> 增加 `ready` / `ready_reason`、`stage_state.ready` / `not_ready` 供 Models 页徽章使用。3 的
+> “设为主用/移除”动作与 4 的日志聚合仍属前端/后续项。
+
 ## 7. Backlog（P0/P1/P2）
 | 优先 | 事项 | 文件区域 | 验收 |
 |---|---|---|---|
-| P0 | xfyun 就绪过滤 + 单次日志 | `providers/chain.py`、`keycheck.py`、`session/turn.py`、`session/ack.py`、`audio/ack_render.py` | caplog：3 句 0 warning，1 info；全失败 1 error |
+| P0 | xfyun 就绪过滤 + 单次日志（已实现） | `providers/chain.py`、`keycheck.py`、`session/turn.py`、`session/ack.py`、`audio/ack_render.py` | caplog：3 句 0 warning，1 info；全失败 1 error |
 | P0 | 两分组导航 + 标签 + 向导条件显示 | `web/src/panels.ts`、`SideNav.vue`、`i18n.ts`、`App.vue` | 旧路由 200；2 组；390px 无溢出 |
 | P0 | 音乐禁用页死路 / source 校验 / enabled 诚实性 | `app.py:537-598`、`PanelHost.vue`、`catalog.py:1114-1140` | 关闭状态也能配置；未知 source 不显示 enabled |
-| P0 | 向导 01 文案 + 不丢 fallback | `SetupView.vue`、`i18n.ts`、`setup_api.py:739-801` | 重跑向导后 fallback 仍在 |
+| P0 | 向导 01 文案 + 不丢 fallback（后端已实现） | `SetupView.vue`、`i18n.ts`、`setup_api.py:739-801` | 重跑向导后 fallback 仍在 |
 | P1 | 合并设备三视图 | `app.py`、`DeviceManager.vue`、`ConfigCenter.vue`、新 `DevicesView.vue` | 状态/音量/管理/音频都可到；旧 URL redirect |
 | P1 | 合并 Tools + MCP/HA + `/tools` | `app.py`、`ConfigCenter.vue`、`McpManager.vue`、`ToolsView.vue`、新 `IntegrationsView.vue` | 一个入口；两个热写路径不冲突 |
 | P1 | 合并音乐播放 + 音源 + 凭据 | `app.py:537-598`、新 `MusicView.vue`、`BlockCredentials.vue` | 一页完成播放/开关/凭据/测试 |

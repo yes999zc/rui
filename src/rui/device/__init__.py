@@ -1,16 +1,51 @@
-from .contract import AudioFrame, Capability, DeviceAdapter, DeviceInfo, DeviceWake, Transport
+from .contract import (
+    DEVICE_VOLUME_MAX,
+    MAX_PENDING_WAKES,
+    PROBE_BOUND_CAPABILITIES,
+    VOLUME_PERCENT_MAX,
+    AudioFrame,
+    BoundedWakeQueue,
+    Capability,
+    DeviceAdapter,
+    DeviceInfo,
+    DeviceWake,
+    Transport,
+    device_volume_to_percent,
+    effective_capabilities,
+    percent_to_device_volume,
+    probe_only_capabilities,
+    wake_validation_error,
+)
 from .mock import MockAdapter
-from .registry import AdapterSet, AdapterUnavailable, build_adapters
+from .registry import (
+    BUILTIN_NAMES,
+    AdapterSet,
+    AdapterUnavailable,
+    BuiltinAdapterName,
+    build_adapters,
+)
 
 __all__ = [
     "AdapterSet",
     "AdapterUnavailable",
     "AudioFrame",
+    "BUILTIN_NAMES",
+    "BoundedWakeQueue",
+    "BuiltinAdapterName",
     "Capability",
+    "DEVICE_VOLUME_MAX",
     "DeviceAdapter",
     "DeviceInfo",
     "DeviceWake",
+    "MAX_PENDING_WAKES",
     "MockAdapter",
+    "PROBE_BOUND_CAPABILITIES",
     "Transport",
+    "VOLUME_PERCENT_MAX",
     "build_adapters",
+    "device_volume_to_percent",
+    "effective_capabilities",
+    "percent_to_device_volume",
+    "probe_only_capabilities",
+    "wake_validation_error",
 ]
