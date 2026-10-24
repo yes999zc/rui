@@ -52,6 +52,9 @@
 
 ## D. 体验 / 控制台
 
+- **灯效默认关闭（2026-10-24 真机）**：新装 config template `led.enabled: false`，用户装完发现音箱不亮；旧实例为 true。
+  0.2.1 决定：LX06（有 led 能力）模板默认 `enabled: true`，并在向导「音箱参数」里显式提供灯效开关/亮度。
+
 15. 对话页手机卡片化（表格在 390px 仍挤）；overview 信息重复/空块可再收。
 16. ProvidersView 阶段标题仍 22px（其余控制台已 17px）；手机个别 provider 控件 <44px；
     桌面 provider 输入框 32px，可选提到 40px。
