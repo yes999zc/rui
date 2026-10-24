@@ -199,8 +199,8 @@ docker compose ps && docker compose exec -T house-ear house-ear doctor
 | 检查 | 期望 | 结果 |
 |---|---|---|
 | 归档权限 | 归档/sha256/manifest 均 0600 | ✅ 2026-10-24 10:47 生成，31,160 KiB，sha256 `35d5061d…`，均 0600 |
-| 归档校验 | 默认生成 `.sha256`；restore 校验通过 | ⬜ restore 校验待跑 |
-| 临时恢复 | config/data/.env 齐全；models 默认不恢复 | ⬜ 待跑 |
+| 归档校验 | 默认生成 `.sha256`；restore 校验通过 | ✅ restore 校验通过（`checksum ok`） |
+| 临时恢复 | config/data/.env 齐全；models 默认不恢复 | ✅ 恢复到 `/tmp/house-ear-restore-smoke` 成功，config/data/.env 齐全、权限 600 |
 | 真恢复 | healthy + doctor + 设备在线；旧树留 `.pre-restore-*` | ☐ |
 | 换机 | 新机器 install → restore → `fetch-models` 补模型 | ☐ |
 
