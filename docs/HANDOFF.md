@@ -130,6 +130,11 @@ docker compose exec -T house-ear house-ear config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
+- 10-24 傍晚：0.1.1 打 tag（CI 多架构构建中，arm64 QEMU 编译 ffmpeg 很慢）；为不阻塞验证，用同一 Dockerfile
+  在 Mac 上构建 amd64 并 `docker save/scp/load` 到 NAS，先部署 0.1.1（revision 74c6c42），再构建/部署
+  0.1.2（含向导 UI、设备管理 UI、播放节奏 P2.9，revision ee772dd）。官方镜像完成后应把 `.env` 切回
+  `ghcr.io/yes999zc/rui:0.1.2` 并清理 `*-local` tag。
+
 - 10-24 傍晚：P1 全部落地（空 config 恢复、旧 key 兼容、下载超时、验收落盘、发布测试门禁、LGPL ffmpeg）；
   P2.1 Socket & Plug 标准 + manifest loader、P2.2 向导设计 + 后端切片（plugs/setup-step/params）完成；准备 0.1.1。
 
