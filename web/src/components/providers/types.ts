@@ -133,7 +133,7 @@ const KIND_KEYS: Record<string, MsgKey> = {
 
 export function kindLabel(kind: string): string {
   const key = KIND_KEYS[kind]
-  return key ? t(key) : kind || t('providers.kind.unknown')
+  return key ? t(key) : t('providers.kind.unknown')
 }
 
 const STAGE_BY_KIND: Record<string, Stage> = {

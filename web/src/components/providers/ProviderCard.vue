@@ -110,11 +110,11 @@ const prosody = computed(() => {
 
     <div v-if="modelSummary || voiceSummary" class="p-summary">
       <span v-if="modelSummary" class="p-summary-item">
-        <span class="p-summary-k mono">MODEL</span>
+        <span class="p-summary-k">{{ t('providers.summary.model') }}</span>
         <code>{{ modelSummary }}</code>
       </span>
       <span v-if="voiceSummary" class="p-summary-item">
-        <span class="p-summary-k mono">VOICE</span>
+        <span class="p-summary-k">{{ t('providers.summary.voice') }}</span>
         <span>{{ voiceSummary }}</span>
       </span>
     </div>

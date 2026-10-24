@@ -530,7 +530,7 @@ onMounted(load)
           <span class="mcp-v mono">{{ state.ha.latency_ms == null ? '—' : state.ha.latency_ms.toFixed(1) + ' ms' }}</span>
         </div>
         <div class="mcp-stat">
-          <span class="mcp-k">{{ t('mcp.token', { env: state.ha.token_env }) }}</span>
+          <span class="mcp-k">{{ t('mcp.token') }}</span>
           <span class="mcp-v" :class="state.ha.has_token ? 'ok' : 'warn'">
             {{ state.ha.has_token ? t('mcp.tokenConfigured') : t('mcp.tokenMissing') }}
           </span>
@@ -548,12 +548,18 @@ onMounted(load)
       </div>
       <div class="field-row">
         <div class="field-meta">
-          <label class="field-label" for="mcp-token">{{ t('mcp.token', { env: state.ha.token_env }) }}</label>
+          <label class="field-label" for="mcp-token">{{ t('mcp.token') }}</label>
+          <p class="field-hint">{{ t('mcp.tokenHelp') }}</p>
         </div>
         <div class="field-control">
           <input id="mcp-token" v-model="token" type="password" autocomplete="off" :placeholder="t('mcp.tokenPlaceholder')" />
         </div>
       </div>
+
+      <details class="mcp-advanced">
+        <summary>{{ t('mcp.advanced') }}</summary>
+        <p class="field-hint mono">{{ t('mcp.tokenEnvHint', { env: state.ha.token_env || '—' }) }}</p>
+      </details>
 
       <div class="actions" style="margin-top: var(--s4)">
         <button type="button" class="btn" :disabled="busy !== ''" @click="testHa">
@@ -771,6 +777,40 @@ onMounted(load)
 
 .health-surface {
   margin-bottom: var(--s6);
+}
+
+.mcp-advanced {
+  margin-top: var(--s3);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mcp-advanced summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.mcp-advanced summary::before {
+  content: '＋';
+  font-size: 10px;
+}
+
+.mcp-advanced[open] summary::before {
+  content: '－';
+}
+
+.mcp-advanced code {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .mcp-stats {

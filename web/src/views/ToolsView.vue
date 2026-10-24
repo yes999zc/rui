@@ -7,7 +7,7 @@
 import { onMounted, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
 import { api, type Config } from '../api'
-import { t } from '../i18n'
+import { exposeLabel, t, toolLabel } from '../i18n'
 
 const names = ref<string[]>([])
 const cfg = ref<Config | null>(null)
@@ -47,7 +47,7 @@ onMounted(async () => {
     </div>
     <div class="row">
       <span class="k">{{ t('tools.expose') }}</span>
-      <span class="v mono">{{ cfg.tools.expose }}</span>
+      <span class="v">{{ exposeLabel(cfg.tools.expose) }}</span>
     </div>
     <div class="row">
       <span class="k">{{ t('tools.whitelist') }}</span>
@@ -67,7 +67,10 @@ onMounted(async () => {
     </div>
     <p v-if="!names.length" class="empty">{{ t('tools.empty') }}</p>
     <div class="tool-grid">
-      <code v-for="name in names" :key="name" class="tool-name mono">{{ name }}</code>
+      <div v-for="name in names" :key="name" class="tool-name">
+        <span class="tool-label">{{ toolLabel(name) }}</span>
+        <code class="tool-id mono">{{ name }}</code>
+      </div>
     </div>
   </section>
 </template>
@@ -86,9 +89,23 @@ onMounted(async () => {
 .tool-name {
   background: var(--surface);
   padding: 7px 10px;
-  font-size: 11.5px;
-  color: var(--ink-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   overflow-wrap: anywhere;
+}
+
+.tool-label {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.tool-id {
+  font-size: 10px;
+  color: var(--muted);
+  background: none;
+  padding: 0;
 }
 
 @media (max-width: 720px) {

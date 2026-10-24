@@ -305,6 +305,25 @@ interface ParamRow {
   masked: boolean
 }
 
+/**
+ * Plug manifests are third-party data; their label is already human copy.
+ * Built-in keys get a translated fallback, and an unlabelled key never becomes
+ * the main label (it stays as a small technical hint instead).
+ */
+function paramLabel(key: string, manifestLabel?: string): string {
+  if (manifestLabel) return manifestLabel
+  switch (key) {
+    case 'volume_max':
+      return t('dm.param.volumeMax')
+    case 'mic_gain_db':
+      return t('dm.param.micGain')
+    case 'listen_port':
+      return t('dm.param.listenPort')
+    default:
+      return t('dm.param.other')
+  }
+}
+
 function paramRows(device: {
   adapter?: string
   plug_id?: string | null
@@ -319,13 +338,13 @@ function paramRows(device: {
     if (RESERVED_PARAMS.has(spec.key) || spec.key === 'plug_id') continue
     seen.add(spec.key)
     if (spec.type === 'secret' || looksSecret(spec.key)) {
-      rows.push({ key: spec.key, label: spec.label || spec.key, value: '••••', masked: true })
+      rows.push({ key: spec.key, label: paramLabel(spec.key, spec.label), value: '••••', masked: true })
       continue
     }
     if (stored[spec.key] === undefined) continue
     rows.push({
       key: spec.key,
-      label: spec.label || spec.key,
+      label: paramLabel(spec.key, spec.label),
       value: formatParamValue(stored[spec.key]),
       masked: false,
     })
@@ -334,7 +353,7 @@ function paramRows(device: {
     if (seen.has(key) || RESERVED_PARAMS.has(key) || key === 'plug_id') continue
     rows.push({
       key,
-      label: key,
+      label: paramLabel(key),
       value: looksSecret(key) ? '••••' : formatParamValue(stored[key]),
       masked: looksSecret(key),
     })
@@ -1166,6 +1185,7 @@ onMounted(() => {
           <div v-for="row in detailParamRows" :key="row.key" class="dm-param">
             <span class="dm-label">{{ row.label }}</span>
             <span class="mono" :class="{ masked: row.masked }">{{ row.value }}</span>
+            <code class="dm-param-key mono">{{ row.key }}</code>
           </div>
         </div>
         <p class="field-hint">{{ t('dm.params.note') }}</p>
@@ -1463,9 +1483,10 @@ onMounted(() => {
               :class="{ invalid: fieldErrors[`param:${spec.key}`] }"
             >
               <div class="field-meta">
-                <label class="field-label" :for="`dm-param-${spec.key}`">{{ spec.label || spec.key }}</label>
+                <label class="field-label" :for="`dm-param-${spec.key}`">{{ paramLabel(spec.key, spec.label) }}</label>
                 <span v-if="spec.required" class="badge badge-muted">{{ t('dm.param.required') }}</span>
                 <p v-if="spec.help" class="field-hint">{{ spec.help }}</p>
+                <p v-else-if="!spec.label" class="field-hint mono">{{ t('dm.param.technical', { key: spec.key }) }}</p>
               </div>
               <div class="field-control">
                 <select
@@ -1764,6 +1785,13 @@ onMounted(() => {
 .dm-param {
   padding: 8px 0;
   border-top: 1px solid var(--line);
+}
+
+.dm-param-key {
+  font-size: 9.5px;
+  color: var(--muted);
+  background: none;
+  padding: 0;
 }
 
 .masked {

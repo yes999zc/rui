@@ -6,7 +6,7 @@
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppIcon from '../AppIcon.vue'
-import { t } from '../../i18n'
+import { secretLabel, t } from '../../i18n'
 import type { SecretMeta } from './types'
 
 const props = defineProps<{ secrets: [string, SecretMeta][] }>()
@@ -39,7 +39,10 @@ function usedBy(meta: SecretMeta): string {
           :title="usedBy(meta)"
         >
           <span class="dot" :class="meta.has_value ? 'ok' : 'warn'" />
-          <code class="mono">{{ name }}</code>
+          <span class="p-key-copy">
+            <span class="p-key-name">{{ secretLabel(name) || t('secrets.name.other') }}</span>
+            <code class="mono">{{ name }}</code>
+          </span>
           <span class="p-key-state">{{ meta.has_value ? t('providers.key.configured') : t('providers.key.missing') }}</span>
         </RouterLink>
       </div>
@@ -123,10 +126,25 @@ function usedBy(meta: SecretMeta): string {
 }
 
 .p-key-chip code {
-  font-size: 10.5px;
+  display: block;
+  font-size: 9.5px;
+  color: var(--muted);
   overflow-wrap: anywhere;
   background: none;
   padding: 0;
+}
+
+.p-key-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.p-key-name {
+  font-size: 11px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
 }
 
 .p-key-state {

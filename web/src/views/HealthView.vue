@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
 import { api, type AudioStatus, type BillingQuota, type DoctorReport } from '../api'
-import { formatCount, t, type MsgKey } from '../i18n'
+import { formatCount, healthCheckLabel, t, type MsgKey } from '../i18n'
 
 const report = ref<DoctorReport | null>(null)
 const audio = ref<AudioStatus | null>(null)
@@ -220,8 +220,11 @@ onMounted(run)
       <span class="meta">{{ report.checks.length }}</span>
     </div>
     <div v-for="check in report.checks" :key="check.name" class="row">
-      <span class="k mono">{{ check.name }}</span>
-      <span class="v" :class="check.status">{{ check.value }}</span>
+      <span class="k check-name">
+        {{ healthCheckLabel(check.name) }}
+        <code class="check-id mono">{{ check.name }}</code>
+      </span>
+      <code class="v check-value mono" :class="check.status">{{ check.value }}</code>
       <span v-if="check.hint" class="tag">{{ check.hint }}</span>
     </div>
   </section>
@@ -275,6 +278,26 @@ onMounted(run)
 .health-v.measured {
   font-size: 12px;
   color: var(--ink-2);
+}
+
+.check-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.check-id {
+  font-size: 9.5px;
+  color: var(--muted);
+  background: none;
+  padding: 0;
+}
+
+.check-value {
+  font-size: 12px;
+  line-height: 1.45;
+  font-family: var(--font-mono);
 }
 
 .health-basis {

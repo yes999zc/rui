@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
 import { api, ApiError, type CatalogDoc, type Config, type SecretPutResult } from '../api'
-import { formatClock, t, type MsgKey } from '../i18n'
+import { formatClock, secretConsumerLabel, secretHint, secretLabel, t, type MsgKey } from '../i18n'
 
 /**
  * The secrets page (docs/config-catalog-contract.md §1).
@@ -20,6 +20,8 @@ interface Kind {
 const KINDS: { re: RegExp; kind: Kind; order: number }[] = [
   { re: /XFYUN_APPID|XFYUN_API_SECRET/i, order: 30, kind: { labelKey: 'secrets.kind.tts.label', hintKey: 'secrets.kind.tts.hint' } },
   { re: /XFYUN|TTS/i, order: 30, kind: { labelKey: 'secrets.kind.tts.label', hintKey: 'secrets.kind.tts.hint' } },
+  { re: /VOLC/i, order: 25, kind: { labelKey: 'secrets.name.volc', hintKey: 'secrets.hint.volc' } },
+  { re: /SILICONFLOW/i, order: 25, kind: { labelKey: 'secrets.name.siliconflow', hintKey: 'secrets.hint.siliconflow' } },
   { re: /ASR|SILICON/i, order: 20, kind: { labelKey: 'secrets.kind.asr.label', hintKey: 'secrets.kind.asr.hint' } },
   { re: /LLM|DEEPSEEK|OPENAI|ANTHROPIC|MODEL/i, order: 10, kind: { labelKey: 'secrets.kind.llm.label', hintKey: 'secrets.kind.llm.hint' } },
   { re: /HASS|HOME|HA_/i, order: 40, kind: { labelKey: 'secrets.kind.ha.label', hintKey: 'secrets.kind.ha.hint' } },
@@ -39,6 +41,7 @@ function kindOf(name: string): Kind & { order: number } {
 interface Slot {
   name: string
   label: string
+  kindLabel: string
   hint: string
 }
 
@@ -63,8 +66,23 @@ const loadError = ref('')
 const slots = computed<Slot[]>(() =>
   [...names.value]
     .sort((a, b) => kindOf(a).order - kindOf(b).order || a.localeCompare(b))
-    .map((name) => ({ name, label: t(kindOf(name).labelKey), hint: t(kindOf(name).hintKey) })),
+    .map((name) => {
+      const kind = kindOf(name)
+      const kindLabel = t(kind.labelKey)
+      return {
+        name,
+        label: secretLabel(name) || kindLabel,
+        kindLabel,
+        hint: secretHint(name) || t(kind.hintKey),
+      }
+    }),
 )
+
+/** Consumer ids are config identifiers; the visible line uses human wording. */
+function consumerNames(name: string): string {
+  const list = consumers[name]
+  return list?.length ? list.map(secretConsumerLabel).join('、') : t('secrets.nobody')
+}
 
 const configuredCount = computed(() => names.value.filter((name) => hasKey[name]).length)
 
@@ -255,13 +273,15 @@ onMounted(load)
 
       <div v-for="slot in slots" :key="slot.name" class="secret-row">
         <div class="secret-head">
-          <code class="secret-name mono">{{ slot.name }}</code>
-          <span class="badge">{{ slot.label }}</span>
+          <div class="secret-title">
+            <h3>{{ slot.label }}</h3>
+            <span v-if="slot.label !== slot.kindLabel" class="badge">{{ slot.kindLabel }}</span>
+          </div>
           <span class="badge" :class="hasKey[slot.name] ? 'badge-ok' : 'badge-warn'">
             {{ hasKey[slot.name] ? t('secrets.configured') : t('secrets.missing') }}
           </span>
           <span class="secret-consumer">
-            {{ t('secrets.usedBy', { names: consumers[slot.name]?.join(', ') || t('secrets.nobody') }) }}
+            {{ t('secrets.usedBy', { names: consumerNames(slot.name) }) }}
           </span>
         </div>
         <p class="field-hint">
@@ -270,7 +290,7 @@ onMounted(load)
         </p>
 
         <div class="secret-entry">
-          <label class="sr-only" :for="'key-' + slot.name">{{ slot.name }}</label>
+          <label class="sr-only" :for="'key-' + slot.name">{{ slot.label }}</label>
           <input
             :id="'key-' + slot.name"
             v-model="rows[slot.name].value"
@@ -310,6 +330,15 @@ onMounted(load)
           </span>
         </div>
 
+        <details class="secret-tech">
+          <summary>{{ t('secrets.advanced') }}</summary>
+          <div class="secret-tech-body">
+            <span>{{ t('secrets.envName') }}</span>
+            <code class="mono">{{ slot.name }}</code>
+            <span>{{ t('secrets.usedByRaw', { names: consumers[slot.name]?.join(', ') || t('secrets.nobody') }) }}</span>
+          </div>
+        </details>
+
         <p v-if="rows[slot.name].phase === 'error'" class="note fail" role="alert">{{ rows[slot.name].detail }}</p>
         <p v-if="rows[slot.name].phase === 'cleared' && hasKey[slot.name]" class="note warn">
           {{ t('secrets.clearedEnv') }}
@@ -348,9 +377,57 @@ onMounted(load)
   flex-wrap: wrap;
 }
 
-.secret-name {
-  font-size: 12.5px;
+.secret-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.secret-title h3 {
+  font-family: var(--font-ui);
+  font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.secret-tech {
+  margin-top: var(--s2);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.secret-tech summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.secret-tech summary::-webkit-details-marker {
+  display: none;
+}
+
+.secret-tech summary::before {
+  content: '＋';
+  font-size: 10px;
+}
+
+.secret-tech[open] summary::before {
+  content: '－';
+}
+
+.secret-tech-body {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.secret-tech-body code {
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 

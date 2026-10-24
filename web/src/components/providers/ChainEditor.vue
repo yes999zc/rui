@@ -135,7 +135,7 @@ function add(): void {
       <label class="sr-only" :for="`chain-add-${stage}`">{{ t('providers.chain.add') }}</label>
       <select :id="`chain-add-${stage}`" v-model="addChoice" :disabled="disabled || !options.length">
         <option value="">{{ t('providers.chain.addPlaceholder') }}</option>
-        <option v-for="name in options" :key="name" :value="name">{{ name }}</option>
+        <option v-for="name in options" :key="name" :value="name">{{ providerName(name) }}</option>
       </select>
       <button type="button" class="btn btn-sm" :disabled="disabled || !addChoice" @click="add">
         <AppIcon name="plus" :size="13" />

@@ -15,7 +15,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import { onBeforeRouteLeave } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import { api, ApiError, type CatalogDoc, type CatalogField, type CatalogGroup, type LocalizedText } from '../api'
-import { isEnglish, localizeBackend, localizeIssue, pickLocalized, t } from '../i18n'
+import { isEnglish, localizeBackend, localizeIssue, pickLocalized, providerName, secretLabel, t } from '../i18n'
 import {
   readAuditionOutput,
   requestAudition,
@@ -259,8 +259,31 @@ const canRestartAudio = computed(
 const restartFieldsShown = computed(() => restartFields.value.slice(0, 12))
 const restartFieldsMore = computed(() => Math.max(0, restartFields.value.length - 12))
 
+/**
+ * The catalog prefixes device/provider settings with their raw id
+ * (`lx06 · listen port`, `volc-tts · voice`). Replace that prefix with the
+ * human name; the exact dotted path stays available in technical details.
+ */
 function fieldLabel(field: CatalogField): string {
-  return pickLocalized(field.label) || field.path
+  const text = pickLocalized(field.label) || field.path
+  const prefixed = text.match(/^([a-z0-9_.-]+)\s*·\s*(.+)$/i)
+  if (!prefixed) return text
+  const rest = prefixed[2]
+  if (field.path.startsWith('providers.catalog.')) {
+    const providerId = field.path.split('.')[2]
+    if (providerId) return `${providerName(providerId)} · ${rest}`
+  }
+  if (field.path.startsWith('devices.')) {
+    const index = Number(field.path.split('.')[1])
+    const ordinal = Number.isFinite(index) ? index + 1 : 1
+    return `${t('config.deviceOrdinal', { n: ordinal })} · ${rest}`
+  }
+  return text
+}
+
+/** Human name for a write-only credential row; the env name is shown as detail. */
+function secretDisplayName(name: string): string {
+  return secretLabel(name) || t('secrets.name.other')
 }
 
 function fieldHint(field: CatalogField): string {
@@ -897,8 +920,12 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
             <div class="field-meta">
               <div class="field-label">
                 <AppIcon name="lock" :size="14" />
-                <code class="mono">{{ secret.name }}</code>
+                <span>{{ secretDisplayName(secret.name) }}</span>
               </div>
+              <p class="field-hint">
+                {{ t('secrets.envName') }}:
+                <code class="mono">{{ secret.name }}</code>
+              </p>
             </div>
             <div class="field-control">
               <div class="secret-line">
@@ -912,7 +939,7 @@ onBeforeRouteLeave(() => (isDirty.value ? window.confirm(t('config.unsavedLeave'
                   autocomplete="new-password"
                   spellcheck="false"
                   :placeholder="t('secrets.placeholder')"
-                  :aria-label="secret.name"
+                  :aria-label="secretDisplayName(secret.name)"
                   @keyup.enter="saveSecret(secret.name)"
                 />
                 <button

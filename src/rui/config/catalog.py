@@ -740,7 +740,7 @@ def _provider_fields(cfg: Config) -> list[dict]:
         ("kind", "text", "类型", "Provider kind", None, None, None, False, None),
         ("base_url", "text", "API 地址", "Base URL", None, None, None, False, None),
         ("model", "text", "模型名", "Model", None, None, None, False, None),
-        ("api_key_env", "text", "密钥变量名", "API key variable", None, None, None, False, None),
+        ("api_key_env", "text", "密钥变量名", "API key variable", None, None, None, True, None),
         ("timeout_s", "number", "超时", "Timeout", None, 0.1, 120, False, _t("秒", "s")),
         ("retries", "number", "重试次数", "Retries", None, 0, 3, True, _t("次", "times")),
         ("threads", "number", "线程数", "Threads", None, 1, 16, True, None),
@@ -964,13 +964,13 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "Search API endpoint. Change it for another vendor/proxy; applies on the "
                   "next call.")),
         _field("tools.search.api_key_env", "tools.search", "text",
-               _t("搜索密钥变量名", "Search key variable"),
-               _t("搜索密钥所在的环境变量名（不是密钥）。密钥值去「密钥」页填。"
-                  "只读：env 名决定哪个 secret 被发往哪里，不在控制台改。",
+               _t("搜索密钥变量（只读）", "Search key variable (read-only)"),
+               _t("搜索密钥所在的变量名（不是密钥本身）。密钥值去「密钥」页填。"
+                  "只读：变量名决定哪个凭据被发往哪里，不在控制台改。",
                   "Variable name holding the search key (not the key). Fill the value on "
-                  "the Secrets page. Read-only: an env name decides which secret is sent "
-                  "where, so it is not editable from the console."),
-               writable=False),
+                  "the Secrets page. Read-only: the variable name decides which credential "
+                  "is sent where, so it is not editable from the console."),
+               advanced=True, writable=False),
         _field("tools.search.count", "tools.search", "number",
                _t("结果条数", "Result count"),
                _t("一次搜索取几条结果（1–10）。条数多给模型更多资料，也更占提示词。"
@@ -985,18 +985,18 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "the answer is not held hostage. Applies on the next call."),
                unit=_t("秒", "s"), minimum=2, maximum=60, advanced=True),
         _field("tools.ha.base_url", "tools.ha", "text",
-               _t("HA 地址", "HA URL"),
-               _t("Home Assistant 的 MCP 地址。填好保存会立刻重连并注册 HA 工具，不用重启；"
-                  "留空 = 不启用 HA。",
-                  "Home Assistant MCP endpoint. Saving reconnects and registers the HA "
-                  "tools live, no restart; empty = HA off.")),
+               _t("家庭助理地址", "Home Assistant address"),
+               _t("家庭助理（Home Assistant）的 MCP 地址。填好保存会立刻重连并注册家庭助理工具，"
+                  "不用重启；留空 = 不启用家庭助理。",
+                  "Home Assistant MCP endpoint. Saving reconnects and registers the Home "
+                  "Assistant tools live, no restart; empty = Home Assistant off.")),
         _field("tools.ha.token_env", "tools.ha", "text",
-               _t("HA token 变量名", "HA token variable"),
-               _t("HA 长期令牌所在的环境变量名（不是令牌）。值去「密钥」页或 MCP / HA 管理页填。"
-                  "只读：env 名决定哪个 secret 被发往哪里。",
-                  "Variable name holding the HA long-lived token (not the token). Fill the "
-                  "value on the Secrets or MCP / HA page. Read-only: an env name decides "
-                  "which secret is sent where."),
+               _t("家庭助理令牌变量（只读）", "Home Assistant token variable (read-only)"),
+               _t("家庭助理长期令牌所在的变量名（不是令牌本身）。值去「密钥」页或家庭助理管理页填。"
+                  "只读：变量名决定哪个凭据被发往哪里。",
+                  "Variable name holding the Home Assistant long-lived token (not the token). "
+                  "Fill the value on the Secrets or Home Assistant page. Read-only: the "
+                  "variable name decides which credential is sent where."),
                advanced=True, writable=False),
         _field("tools.mcp_servers", "tools.mcp", "list",
                _t("MCP 服务器列表", "MCP servers"),
@@ -1215,13 +1215,13 @@ def _device_fields(cfg: Config) -> list[dict]:
                    effect="restart", minimum=1, maximum=65535, advanced=True,
                    nullable=True),
             _field(f"{prefix}.token_env", "devices", "text",
-                   {"zh": f"{name} · token 变量名", "en": f"{name} · token variable"},
-                   _t("设备 token 所在的环境变量名（不是 token 值）。改完重启音频面。",
-                      "Environment variable holding the device token (not the token). "
+                   {"zh": f"{name} · 设备令牌变量（只读）", "en": f"{name} · device token variable (read-only)"},
+                   _t("设备访问令牌所在的变量名（不是令牌本身）。改完重启音频面。",
+                      "Variable holding the device access token (not the token itself). "
                       "Restart the audio plane."),
                    effect="restart", advanced=True),
             _field(f"{prefix}.allow_no_token", "devices", "bool",
-                   {"zh": f"{name} · 允许无 token", "en": f"{name} · allow no token"},
+                   {"zh": f"{name} · 允许无令牌连接", "en": f"{name} · allow tokenless connections"},
                    _t("允许不带 token 的局域网连接：同网段任何人都能打开麦克风。只在音箱客户端"
                       "改不了 URL 时临时用，平时保持关闭。改完重启音频面。",
                       "Allow tokenless LAN connections: anyone on the LAN could open the "
