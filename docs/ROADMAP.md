@@ -83,7 +83,7 @@
 | P3.3 ✅ | 第二台设备/示例插头：`examples/plugin-example` + 契约测试；无需改核心 | 契约工具可本地跑通 |
 | P3.4 ✅ | 设备管理增强：status/启停/token 轮换/端口冲突/多设备显式 warning + 控制台 | 0.3.0 交付 |
 | P3.5 ✅ | 安全三项：SSRF 出站守卫、非 root 容器（read_only/cap_drop/state 迁移）、CVE CI（pip-audit/Trivy/SARIF） | 0.3.2 交付；扫描 green（16 条 Debian 已知 CVE 日期化 allowlist） |
-| P3.6 ✅ | 发布：v0.3.0 / v0.3.1 / v0.3.2；生产 0.3.1 运行，0.3.2 镜像 CI 构建中 | tag/Release 已推 |
+| P3.6 ✅ | 发布：v0.3.0 / v0.3.1 / v0.3.2；生产已升级 0.3.2（非 root；本机构建镜像，官方 0.3.2 镜像 CI 仍在构建） | tag/Release 已推 |
 
 ### P4 · 使用后统一打磨（等 9 哥 用几天再排）
 音乐真实凭据/收藏/续歌、控制台手机化（390 px/44 px/CJK/Logo）、微信 QR 取消、咖啡链接、其它体验债。

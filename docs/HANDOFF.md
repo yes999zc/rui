@@ -131,7 +131,7 @@ docker compose exec -T rui rui config restore --last-good
 ## 6. 最近时间线（细节在归档）
 
 - 10-25 凌晨：0.3.2 P3.5 安全：SSRF 出站守卫、非 root 容器 + 状态/属主迁移、pip-audit/Trivy CI；
-  生产升级需一次 chown + 新 compose（文档已写）。
+  生产已升级 0.3.2（非 root uid1000、read_only/cap_drop；一次性 chown + 新 compose；本机构建镜像因 CI 多架构慢，官方 0.3.2 镜像仍在构建）。
 
 - 10-25 凌晨：0.3.1：官方 downstream adapter 钩子（环境变量/entry points，fail-soft），dot2 issue #7 的 Q1–Q6 已答复；
   生产已升级 0.3.1（官方镜像；adapter 钩子/契约/设备管理）。
