@@ -89,7 +89,8 @@ flowchart LR
 #### 一条命令（推荐）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
+# 网络不通/卡住时：HOUSE_EAR_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main #   curl -4 -fsSL "$HOUSE_EAR_RAW/deploy/install.sh" | sh
 ```
 
 安装脚本做五件事：

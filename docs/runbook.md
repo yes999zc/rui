@@ -367,7 +367,21 @@ docker compose restart house-ear
 | NAS 断电后全链路自起 | 没有 NAS 停机窗口；本机验了「进程退出→自动重启」和「手动 restart」 | 结论依赖 Docker daemon 开机自启 + restart policy，属推断 |
 | 真音箱重连时序（Wi-Fi 抖动、换 IP、耗时） | 本轮不动真机（声音资源归 Lead） | 用假音箱验了协议层 connected/disconnected；真机时序未测 |
 | 3 天长稳观察 | P15 时间窗不足 | 启动/自愈已验，长稳后续看 |
-| x86_64 NAS 上运行 | 本机是 arm64；CI 多架构 workflow 未实跑 | 首次 NAS 冷装确认 |
-| 真实模型下载（hf-mirror / GitHub release） | 本机容器到 hf-mirror、GitHub release 均 TLS 握手超时；冷装排练用了预置模型 | 下载**路径/解包布局**已用本地假镜像与 Lead 本机下载验证；真实网络耗时在 NAS 首次安装时确认（KWS tarball 32.9 MB / 解包 39 MB / Lead 本机 597.7 s） |
-| `install.sh` 一条命令（`curl \| sh`） | `raw.githubusercontent.com/yes999zc/rui/main` 本机返回 404（仓库当前不可匿名访问）；排练时预置了 compose/config.example | 仓库公开后应可直接跑；发布前必须确认 raw 可匿名访问，否则 C1 一键装不可用 |
+| x86_64 NAS 上运行 | 本机是 arm64；CI 多架构 workflow 未实跑 | ✅ 2026-10-24 NAS 冷装通过（`e3ea158`，423 s 到第一句） |
+| 真实模型下载（hf-mirror / GitHub release） | 本机容器到 hf-mirror、GitHub release 均 TLS 握手超时；冷装排练用了预置模型 | ✅ 2026-10-24 NAS 冷装真实下载成功（ASR 239 MB / VAD 643,854 B / KWS 39 MB）；国内网络需镜像 fallback |
+| `install.sh` 一条命令（`curl \| sh`） | raw 匿名可读已确认；NAS 到 GitHub 偶发 TLS stall | ✅ 2026-10-24 NAS 一键安装通过（install.sh 234 s）；脚本已加超时/IPv4/`HOUSE_EAR_RAW` 换源 |
 | 容器内音乐真机出声 | 需要真实音箱（声音归 Lead） | resolve/转码已验，播放未验 |
+
+## 13. 冷装网络与并发接入排障（2026-10-24 验收日记录）
+
+- **`raw.githubusercontent.com` 卡住**：表现为 `curl` 连上后 TLS 不返回、install.sh 停在 `[1/5]` 无输出。
+  install.sh 已加 `--connect-timeout 10 --max-time 120 --retry 3` 并强制 IPv4；仍不稳定时用
+  `HOUSE_EAR_RAW=https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main`。
+  注意代理可能缓存旧 `install.sh`/`docker-compose.yml`，冷装前确认内容是最新（`container_name`、脚本版本）。
+- **模型下载**：ASR 走 hf-mirror；VAD/KWS 的 GitHub release 有 `ghproxy.net` / `gh-proxy.com` fallback
+  （`fetch-models` 按顺序试，日志会打印 `mirror failed`）。
+- **同一 4412 入口只能有一个音箱客户端**：如果另一台设备（或另一套调试桥）也用同一个 NAS `4412`
+  连进来，日志会出现 `replacing existing speaker connection`，表现为反复断连、唤醒失灵、播放卡顿。
+  排查：`ss -tnp | grep 4412` 只应有一个 ESTAB；停掉多余客户端后客户端会自动重连恢复。
+- **recovery 缺口（待修）**：config 被清空成 0 字节时不会走 last-good，会用 schema defaults →
+  `insecure_bind` 拒绝 → crash loop。手改配置前先 `scripts/backup.sh`。

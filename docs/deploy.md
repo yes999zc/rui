@@ -63,7 +63,14 @@ HOUSE_EAR_HOME=~/house-ear          # 安装目录
 HOUSE_EAR_REPO=yes999zc/rui   # fork
 HOUSE_EAR_REF=main                  # 分支/tag
 HOUSE_EAR_IMAGE=ghcr.io/yes999zc/rui:0.0.1   # 生产建议固定 tag 或 digest
+HOUSE_EAR_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
+                                    # 可选：raw 不通时换成镜像前缀，例如
+                                    # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main
 ```
+
+> **中国大陆网络**：脚本的 fetch 已加超时/重试并强制 IPv4；如果 `raw.githubusercontent.com`
+> 仍不稳定，用 `HOUSE_EAR_RAW` 指到镜像前缀（注意有些代理会缓存旧文件，冷装前确认拿到的是 main）。
+> 模型下载走 hf-mirror；VAD/KWS 的 GitHub release 有 `ghproxy.net` / `gh-proxy.com` fallback。
 
 ## 3. 冷装：到第一句回应
 

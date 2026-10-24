@@ -252,8 +252,21 @@ docker compose ps && docker compose exec -T house-ear house-ear doctor
 4. install.sh 的网络抖动：第 1/2 次尝试失败（SSL 超时 / 拉镜像失败后 git clone 被 reset），第 3 次成功；
    单次命令在该网络下不够稳定，建议 install.sh 增加重试或在文档写明。
 
+### 9.2b 2026-10-24 补充发现（验收后对齐）
+
+5. **install.sh 卡死（已修）**：`raw.githubusercontent.com` 在 NAS 上会出现“TCP 连上但 TLS 不返回”的 stall，
+   install.sh 的 curl 没有超时 → 卡 8 分钟无输出。已加 `--connect-timeout/--max-time/--retry`、强制 IPv4、
+   支持 `HOUSE_EAR_RAW` 换镜像源（`39af43f`/`4aa8f9e`）。
+6. **模板与旧 secrets 的 key 命名差异**：新模板 LLM 读 `HOUSE_EAR_LLM_KEY`，老生产 `secrets.yaml` 是
+   `DEEPSEEK_API_KEY`；冷装测试复制旧 secrets 时会“唤醒后不回答”。真实用户走 Setup 向导不受影响；
+   迁移/复用旧 secrets 时的提示已在 remaining-work 记录。
+7. **空 config 的 recovery 缺口**：config 为 0 字节时静默使用 schema defaults → `insecure_bind` 拒绝 → crash loop，
+   未触发 last-good。已记录为后续修复（不阻塞本次判据）。
+
 ### 9.3 现场镜像与版本
 
 - 生产（验收 2/3/Telegram 用）：`f2abcef`（本地 tag `acceptance-f2abcef`，`.env` 暂时指向它，防误拉新版）
-- 冷装验证：`f0dde20`（含 VAD fallback 修复）
-- 代码：`main@f0dde20`，748 passed / 17 skipped（无模型环境），ruff clean；模型环境 764/1
+- 冷装验证：`e3ea158`（含 VAD/KWS 镜像 fallback）
+- GHCR `:latest`：`afaabe7`（docs commit；运行代码与 `e3ea158` 相同；amd64 digest `sha256:03bdc1f3…`）
+- 代码：`main@afaabe7`，748 passed / 17 skipped（无模型环境；`HOUSE_EAR_TEST_MODELS` 时 764/1），ruff clean，
+  web typecheck/build 绿
