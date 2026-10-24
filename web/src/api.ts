@@ -290,6 +290,7 @@ export interface Config {
   }
 }
 
+/** Legacy five-step shape; kept for `GET /api/v1/setup` and its existing callers. */
 export interface SetupStep {
   id: string
   title: string
@@ -297,7 +298,7 @@ export interface SetupStep {
   detail: Record<string, unknown>
 }
 
-/** The install wizard's state: computed on the server from files and keys. */
+/** The legacy install-wizard state: computed on the server from files and keys. */
 export interface SetupState {
   next_step: string
   complete: boolean
@@ -309,6 +310,159 @@ export interface SetupState {
   keywords_file: string
   keywords_exists: boolean
   models_command: string
+}
+
+/* — plugs + eight-step wizard (POST/GET /api/v1/setup/step) ————————————— */
+
+export type SetupStepStatus = 'pending' | 'running' | 'done' | 'error' | 'skipped'
+export type SetupParamType = 'string' | 'int' | 'bool' | 'list' | 'secret' | 'choice'
+
+/** One row of `GET /api/v1/plugs` (`class` is the list summary's own key). */
+export interface SetupPlugSummary {
+  /** Null only for a broken user manifest, which is listed as data, not a 500. */
+  id: string | null
+  name: string | null
+  version: string | null
+  trust: string | null
+  class: string | null
+  adapter: string | null
+  transport: string | null
+  source: string
+  available: boolean
+  error: string | null
+  devices: string[]
+}
+
+/** A manifest form field (`rui-device/v0` `params[]`). */
+export interface SetupParamSpec {
+  key: string
+  label: string
+  type: SetupParamType | string
+  required: boolean
+  default?: string | number | boolean | string[] | null
+  placeholder: string
+  help: string
+  max?: number | null
+  options: string[]
+}
+
+export interface SetupDeviceSide {
+  artifact: string
+  name: string
+  source: string
+  version_min: string
+  install_steps: string[]
+  rollback: string
+}
+
+export interface SetupRuntimeSpec {
+  mode?: string | null
+  entrypoint?: string
+  image?: string
+  listen_port?: number
+  token_env?: string
+}
+
+export interface SetupDeviceManifest {
+  schema?: string
+  id: string
+  name: string
+  vendor: string
+  /** Pydantic dumps the aliased `class` field as `device_class` on `/plugs/{id}`. */
+  class?: string
+  device_class?: string
+  transport: string
+  protocol?: { kind?: string; version?: string }
+  capabilities: string[]
+  device_side?: SetupDeviceSide | null
+  runtime?: SetupRuntimeSpec | null
+  params: SetupParamSpec[]
+  compatibility?: {
+    rui_min?: string
+    tested_with?: string[]
+    notes?: string
+  } | null
+  acceptance?: {
+    verified?: boolean
+    last_verified?: string
+    evidence?: string
+  } | null
+}
+
+export interface SetupResolvedDevice {
+  id: string
+  adapter: string
+  transport: string
+  runtime_mode: string | null
+  listen_port: number | null
+  token_env: string
+}
+
+export interface SetupPlugDetail {
+  manifest: {
+    id: string
+    name: string
+    version: string
+    trust: string
+    devices: SetupDeviceManifest[]
+    [key: string]: unknown
+  }
+  devices: SetupDeviceManifest[]
+  available: boolean
+  error: string | null
+  resolved: { source: string; devices: SetupResolvedDevice[] }
+}
+
+/** One of the eight server-driven steps; `actions` is the server's allowlist. */
+export interface SetupStepState {
+  id: string
+  status: SetupStepStatus
+  evidence: Record<string, unknown>
+  detail: Record<string, unknown>
+  actions: string[]
+}
+
+export interface SetupStepResponse {
+  plug: SetupPlugSummary
+  steps: SetupStepState[]
+  next_step: string | null
+  complete: boolean
+  verified: boolean
+  blocked: { code: string; message: string } | null
+  plane_error: string
+}
+
+/** The request body `POST /api/v1/setup/step` accepts. */
+export interface SetupStepPayload {
+  plug?: string
+  step: string
+  action: string
+  values?: Record<string, unknown>
+}
+
+/** A new-style setup/plug error: `detail` is `{code, message, details}`. */
+export interface ApiErrorObject {
+  code: string
+  message: string
+  details: Record<string, unknown>
+}
+
+/** Read the object shape new setup endpoints put in FastAPI's `detail`. */
+export function apiErrorObject(exc: unknown): ApiErrorObject | null {
+  if (!(exc instanceof ApiError)) return null
+  const detail = exc.detail
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null
+  const raw = detail as Record<string, unknown>
+  if (typeof raw.code !== 'string') return null
+  const details =
+    raw.details && typeof raw.details === 'object' && !Array.isArray(raw.details)
+      ? (raw.details as Record<string, unknown>)
+      : {}
+  return {
+    code: raw.code,
+    message: typeof raw.message === 'string' ? raw.message : '',
+    details,
+  }
 }
 
 export interface PhraseKey {
@@ -346,6 +500,8 @@ export interface DeviceDoc {
   wake_words: string[]
   volume: number
   listen_port: number | null
+  /** Non-secret, plug-declared values (never a `secret` param). */
+  params?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -743,6 +899,74 @@ export const api = {
       hint: string
       ssh: { port_open: boolean; banner: boolean; ms?: number; error?: string }
     }>('/api/v1/setup/probe', { method: 'POST', body: JSON.stringify({ host }) }),
+
+  /* — plug picker + eight-step wizard (server-computed evidence) ————————— */
+
+  /** Built-in plus user plugs; a broken manifest is data with `available=false`. */
+  plugs: () => request<{ plugs: SetupPlugSummary[] }>('/api/v1/plugs'),
+  /** Manifest detail for the selected plug: device_side, params[], capabilities. */
+  plug: (id: string) =>
+    request<SetupPlugDetail>(`/api/v1/plugs/${encodeURIComponent(id)}`),
+  /** `GET /api/v1/setup/step`; `plug` selects the manifest that supplies the slots. */
+  setupStepState: (plug?: string) =>
+    request<SetupStepResponse>(
+      `/api/v1/setup/step${plug ? `?plug=${encodeURIComponent(plug)}` : ''}`,
+    ),
+  /**
+   * Run one allowlisted step action. The body field is `values` (the backend also
+   * accepts the legacy `payload` alias); `action` must come from `step.actions`.
+   */
+  setupStep: (payload: SetupStepPayload) =>
+    request<SetupStepResponse>('/api/v1/setup/step', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  /**
+   * Backend reality: there is no `/setup/test-connection`. The test step's
+   * allowlisted `device.test` action returns the recomputed setup state, whose
+   * `detail.checks` carries the result.
+   */
+  setupTestConnection: (plug: string, deviceId?: string) =>
+    request<SetupStepResponse>('/api/v1/setup/step', {
+      method: 'POST',
+      body: JSON.stringify({
+        plug,
+        step: 'test',
+        action: 'device.test',
+        values: deviceId ? { device_id: deviceId } : {},
+      }),
+    }),
+  /**
+   * Backend reality: there is no `/setup/try`. `try.run` returns the setup state
+   * (audio_bytes evidence); the reply is read from `GET /api/v1/turns?limit=1`.
+   */
+  setupTry: (plug: string, text: string) =>
+    request<SetupStepResponse>('/api/v1/setup/step', {
+      method: 'POST',
+      body: JSON.stringify({ plug, step: 'verify', action: 'try.run', values: { text } }),
+    }),
+  /** Persist the `prepare` / `verify` manual confirmation in `data/setup.json`. */
+  setupConfirm: (
+    plug: string,
+    step: 'prepare' | 'verify',
+    confirmed: boolean,
+    rollbackAck = false,
+  ) =>
+    request<SetupStepResponse>('/api/v1/setup/step', {
+      method: 'POST',
+      body: JSON.stringify({
+        plug,
+        step,
+        action: 'manual.confirm',
+        values: { confirmed, rollback_ack: rollbackAck },
+      }),
+    }),
+  /** Read-only `connect.inspect`: returns the state with live plane evidence. */
+  setupInspect: (plug: string) =>
+    request<SetupStepResponse>('/api/v1/setup/step', {
+      method: 'POST',
+      body: JSON.stringify({ plug, step: 'connect', action: 'connect.inspect', values: {} }),
+    }),
   setDeviceVolume: (value: number) =>
     request<{ volume: number }>('/api/v1/device/volume', { method: 'PUT', body: JSON.stringify({ value }) }),
 
