@@ -234,15 +234,15 @@ def test_url_env_absent_keeps_the_builtin_mirrors(monkeypatch) -> None:
     assert _asr_urls(base) == ((f"{base}/model.int8.onnx",), (f"{base}/tokens.txt",))
 
 
-def test_vad_download_falls_back_when_the_hf_mirror_breaks(monkeypatch, tmp_path) -> None:
-    """Regression 2026-10-24: the HF repo behind hf-mirror vanished; fetch-models then
-    aborted before the KWS tarball, so a cold install could not hear its wake word."""
+def test_vad_download_falls_back_when_the_first_mirror_breaks(monkeypatch, tmp_path) -> None:
+    """Regression 2026-10-24: the HF repo behind hf-mirror vanished (401), so the mirror
+    list now starts at ghproxy; a dead first mirror must still fall through to GitHub."""
     calls: list[str] = []
 
     def fake_download(url: str, target: Path, *, force: bool = False) -> int:
         calls.append(url)
-        if "hf-mirror.com" in url:
-            raise RuntimeError("404 Not Found")
+        if url == VAD_URLS[0]:
+            raise RuntimeError("mirror unavailable")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"vad")
         return 3
@@ -250,7 +250,7 @@ def test_vad_download_falls_back_when_the_hf_mirror_breaks(monkeypatch, tmp_path
     monkeypatch.setattr("house_ear.__main__._download_to", fake_download)
     target = tmp_path / "silero_vad.onnx"
     assert _download_first(VAD_URLS, target) == 3
-    assert calls[0].startswith("https://hf-mirror.com/")
+    assert calls == [VAD_URLS[0], VAD_URLS[1]]
     assert "github.com" in calls[-1]
     assert target.read_bytes() == b"vad"
 
