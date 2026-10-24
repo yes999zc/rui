@@ -114,7 +114,9 @@ RUN apt-get update \
     && test -f "/seed/kws/$KWS_REPO/joiner-epoch-13-avg-2-chunk-8-left-64.int8.onnx" \
     && test -f "/seed/kws/$KWS_REPO/decoder-epoch-13-avg-2-chunk-8-left-64.onnx"
 
-FROM python:3.12-slim
+# Pin the Debian release: plain python:3.12-slim moved from bookworm to trixie,
+# where libspeexdsp1 is no longer available and the image build breaks.
+FROM python:3.12-slim-bookworm
 ARG VERSION=dev
 ARG APT_MIRROR=
 ARG PIP_INDEX_URL=
