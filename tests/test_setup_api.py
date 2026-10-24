@@ -286,7 +286,8 @@ def test_unknown_step_and_action_are_rejected_with_an_object(wizard) -> None:
     detail = rejected.json()["detail"]
     assert detail["code"] == "unknown_action"
     assert detail["details"]["step"] == "keys"
-    assert detail["details"]["allowed"] == ["keys.save", "keys.test"]
+    assert detail["details"]["allowed"] == [
+        "keys.save", "keys.test", "providers.save"]
 
 
 def test_legacy_validators_become_object_errors_on_the_new_endpoint(wizard) -> None:
@@ -509,6 +510,172 @@ def test_setup_providers_catalog_shape_state_and_no_values(tmp_path, monkeypatch
     assert keys_step["evidence"]["stages"] == {"asr": True, "tts": True, "llm": True}
     assert {row["name"] for row in keys_step["evidence"]["providers"]} == {
         "volc_asr", "local_asr", "xfyun_tts", "volc_tts", "deepseek_llm"}
+
+
+def test_providers_table_has_selection_voices_and_required_flags(tmp_path, monkeypatch) -> None:
+    client, _path, _tmp = _provider_client(tmp_path, monkeypatch)
+    body = client.get("/api/v1/setup/providers").json()
+    stage_state = body["stage_state"]
+    assert stage_state["asr"]["selected"] == "volc_asr"
+    assert stage_state["asr"]["selected_id"] == "asr:volc_asr"
+    assert stage_state["asr"]["chain"] == ["volc_asr", "local_asr"]
+    assert stage_state["tts"]["selected"] == "xfyun_tts"
+    assert stage_state["llm"]["selected"] == "deepseek_llm"
+    assert all(item["required"] is True for item in stage_state.values())
+    assert "volc_tts" in stage_state["tts"]["providers"]
+
+    rows = {(row["stage"], row["name"]): row for row in body["providers"]}
+    assert rows[("asr", "volc_asr")]["selected"] is True
+    assert rows[("asr", "local_asr")]["selected"] is False
+    assert rows[("asr", "volc_asr")]["required"] is True
+    assert rows[("asr", "volc_asr")]["voices"] == []
+    assert rows[("asr", "volc_asr")]["default_voice"] == ""
+
+    volc_tts = rows[("tts", "volc_tts")]
+    assert volc_tts["default_voice"] == "zh_female_xiaohe_uranus_bigtts"
+    assert {voice["id"] for voice in volc_tts["voices"]} >= {
+        "zh_female_xiaohe_uranus_bigtts", "zh_female_vv_uranus_bigtts"}
+    for voice in volc_tts["voices"]:
+        assert set(voice) >= {"id", "name", "language", "default"}
+        assert voice["language"] == "zh-CN"
+    assert [voice["id"] for voice in volc_tts["voices"] if voice["default"]] == [
+        volc_tts["default_voice"]]
+
+    # 讯飞 has no curated subset here, so its configured vcn is the one option.
+    xfyun = rows[("tts", "xfyun_tts")]
+    assert [voice["id"] for voice in xfyun["voices"]] == ["x4_lingxiaowan_boy"]
+    assert xfyun["default_voice"] == "x4_lingxiaowan_boy"
+
+
+def test_providers_table_offers_a_catalog_provider_not_in_the_chain(tmp_path, monkeypatch) -> None:
+    for name in (*PROVIDER_SECRETS, "RUI_DEVICE_TOKEN", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.providers.catalog = {
+        "local_asr": ProviderConfig(kind="sherpa", model=str(tmp_path / "asr")),
+        "volc_asr": ProviderConfig(kind="volc_asr", api_key_env="VOLC_API_KEY"),
+        "deepseek_llm": ProviderConfig(
+            kind="openai_compat", base_url="https://api.deepseek.com",
+            model="deepseek-chat", api_key_env="RUI_LLM_KEY"),
+    }
+    cfg.providers.asr = StageConfig(chain=["local_asr"])
+    cfg.providers.llm = StageConfig(chain=["deepseek_llm"])
+    path = tmp_path / "config.yaml"
+    save_config(path, cfg)
+    client = TestClient(create_app(cfg, config_path=path))
+    body = client.get("/api/v1/setup/providers").json()
+    rows = {(row["stage"], row["name"]): row for row in body["providers"]}
+    # Not in the asr chain, but the kind and name identify it as an ASR provider.
+    assert ("asr", "volc_asr") in rows
+    assert rows[("asr", "volc_asr")]["selected"] is False
+    assert rows[("asr", "local_asr")]["selected"] is True
+    assert body["stage_state"]["asr"]["providers"] == ["local_asr", "volc_asr"]
+
+
+def test_providers_save_writes_chain_voice_and_keeps_other_config(tmp_path, monkeypatch) -> None:
+    client, path, _tmp = _provider_client(tmp_path, monkeypatch)
+    # A value the keys step does not own must survive the provider write.
+    on_disk = load_config(path)
+    on_disk.assistant.name = "保留我"
+    on_disk.audio.voice.vad_end_silence_ms = 777
+    save_config(path, on_disk)
+
+    payload = {
+        "llm": {"provider": "deepseek_llm",
+                "keys": {"RUI_LLM_KEY": "sk-save-llm-should-not-echo"}},
+        "asr": {"provider": "asr:volc_asr",
+                "keys": {"VOLC_API_KEY": "volc-save-asr-should-not-echo"}},
+        "tts": {"provider": "volc_tts", "voice": "zh_female_vv_uranus_bigtts",
+                "keys": {"VOLC_API_KEY": "volc-save-tts-should-not-echo"}},
+    }
+    response = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "providers.save", "payload": payload})
+    assert response.status_code == 200, response.text
+    assert not any(value in response.text
+                   for stage in payload.values() for value in stage["keys"].values())
+
+    configured = load_config(path)
+    assert configured.providers.asr.chain == ["volc_asr"]
+    assert configured.providers.tts.chain == ["volc_tts"]
+    assert configured.providers.llm.chain == ["deepseek_llm"]
+    assert configured.providers.catalog["volc_tts"].voice == "zh_female_vv_uranus_bigtts"
+    assert configured.assistant.name == "保留我"
+    assert configured.audio.voice.vad_end_silence_ms == 777
+    assert secrets_module.resolve("RUI_LLM_KEY").value == \
+        "sk-save-llm-should-not-echo"
+    assert secrets_module.resolve("VOLC_API_KEY").value == \
+        "volc-save-tts-should-not-echo"
+    config_text = path.read_text(encoding="utf-8")
+    assert "sk-save-llm-should-not-echo" not in config_text
+    assert "volc-save-tts-should-not-echo" not in config_text
+
+    state = response.json()
+    keys_step = _step(state, "keys")
+    assert keys_step["status"] == "done"
+    assert keys_step["evidence"]["selected"] == {
+        "asr": "volc_asr", "tts": "volc_tts", "llm": "deepseek_llm"}
+    assert keys_step["evidence"]["missing"] == []
+    catalog = client.get("/api/v1/setup/providers").json()
+    rows = {(row["stage"], row["name"]): row for row in catalog["providers"]}
+    assert rows[("tts", "volc_tts")]["selected"] is True
+    assert rows[("tts", "volc_tts")]["default_voice"] == "zh_female_vv_uranus_bigtts"
+    assert rows[("tts", "xfyun_tts")]["configured"] is False
+
+
+def test_providers_save_rejects_unknown_wrong_stage_and_foreign_keys(tmp_path, monkeypatch) -> None:
+    client, path, _tmp = _provider_client(tmp_path, monkeypatch)
+    before = path.read_bytes()
+    for payload in (
+        {"asr": {"provider": "deepseek_llm"}},
+        {"tts": {"provider": "local_asr"}},
+        {"llm": {"provider": "not-a-provider"}},
+    ):
+        response = client.post("/api/v1/setup/step", json={
+            "step": "keys", "action": "providers.save", "payload": payload})
+        assert response.status_code == 422, (payload, response.text)
+        detail = response.json()["detail"]
+        assert detail["code"] == "unknown_provider"
+        assert detail["details"]["stage"] in {"asr", "tts", "llm"}
+
+    foreign_key = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "providers.save",
+        "payload": {"llm": {"provider": "deepseek_llm",
+                            "keys": {"VOLC_API_KEY": "not-this-provider"}}}})
+    assert foreign_key.status_code == 422
+    assert foreign_key.json()["detail"]["code"] == "invalid_values"
+    assert path.read_bytes() == before
+
+
+def test_keys_step_only_requires_the_selected_provider_of_a_chain(tmp_path, monkeypatch) -> None:
+    client, path, _tmp = _provider_client(tmp_path, monkeypatch)
+    # Only the fallback TTS provider has a key; the selected primary (讯飞) is missing.
+    client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.save",
+        "payload": {"values": {
+            "RUI_LLM_KEY": "sk-selected-llm",
+            "VOLC_API_KEY": "volc-selected-key",
+        }}})
+    state = client.get("/api/v1/setup/step").json()
+    keys_step = _step(state, "keys")
+    assert keys_step["evidence"]["stages"]["tts"] is False
+    assert "XFYUN_API_KEY" in keys_step["evidence"]["missing"]
+
+    # Select the provider whose key is present; the unconfigured fallback no longer
+    # blocks the step and no 讯飞 secret is needed.
+    response = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "providers.save",
+        "payload": {"tts": {"provider": "volc_tts",
+                            "keys": {"VOLC_API_KEY": "volc-selected-key"}}}})
+    assert response.status_code == 200, response.text
+    keys_step = _step(response.json(), "keys")
+    assert keys_step["status"] == "done"
+    assert keys_step["evidence"]["stages"] == {"asr": True, "tts": True, "llm": True}
+    assert keys_step["evidence"]["missing"] == []
+    assert load_config(path).providers.tts.chain == ["volc_tts"]
+    rows = {(row["stage"], row["name"]): row
+            for row in client.get("/api/v1/setup/providers").json()["providers"]}
+    assert rows[("tts", "xfyun_tts")]["configured"] is False
 
 
 def test_setup_providers_endpoint_requires_the_console_token(tmp_path, monkeypatch) -> None:

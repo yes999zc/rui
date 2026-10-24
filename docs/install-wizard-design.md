@@ -30,7 +30,7 @@
 
 | # | step id | 类型 | 一句话 | 位置理由 |
 |---|---|---|---|---|
-| 0 | `keys` | 通用 | LLM/ASR/TTS 链路可用 | 没有 key，真实 turn 无法验证 |
+| 0 | `keys` | 通用 | 每种用途（LLM/ASR/TTS）选一个 provider 并填它的凭据 | 没有 key，真实 turn 无法验证 |
 | 1 | `models` | 通用 | ASR/VAD/KWS 文件齐全 | 只检查，不代下；下载走 `fetch-models` |
 | 2 | `prepare` | 插头 | 用户在音箱上装 client/固件 | 先让设备具备拨入/被拨能力 |
 | 3 | `params` | 插头 | 地址、房间、manifest 参数 | 先写 `devices[]`，后面才有设备 id |
@@ -63,7 +63,7 @@
 
 | step | 服务端证据 | 失败 `code` |
 |---|---|---|
-| `keys` | 现有 `stage_ok`：ASR/TTS/LLM 每条链至少一个 provider key 存在且 endpoint/model 可用（`app.py` L3096-3146） | `missing_keys` |
+| `keys` | 每种用途的 `chain[0]`（选中 provider）存在且它声明的必填 secret 都能解析；无密钥 provider（sherpa）直接算满足；**不要求 fallback/其它 provider 配置**。LLM 必填；ASR/TTS 各由一个 provider 满足 | `missing_keys` |
 | `models` | ASR 有 `tokens.txt` + `model.int8.onnx`/`model.onnx`；VAD 文件存在；KWS 四件套齐（`app.py` L3084-3160、`audio/kws.py` L93-104） | `missing_models` |
 | `prepare` | A：内存 `manual.confirm`，或同插头 `test` 已过；B 额外要 `rollback_ack=true`；`artifact=none` 自动 skipped | `prepare_not_confirmed` / `rollback_not_acknowledged` |
 | `params` | `devices[]` 有目标设备；`adapter` 与 manifest 一致；`host` 非空；required 参数齐；`enabled=true`；且 `plane_error==""` | `invalid_params` / `plane_restart_failed` |
@@ -73,6 +73,8 @@
 | `verify` | `app.state.first_answer` 存在且 `audio_bytes>0`；只由 `POST /setup/try` 写入 | `no_audio` |
 
 key 存在 ≠ 链路可用：schema 默认 provider 无 endpoint 时仍算未完成（`test_keys_are_stored_but_never_echoed` 已固定）。`connect` 只查 token 是否配置，不假装知道设备端状态；真正证据是 `test`。`verify` 可选，`first_answer` 在内存，重启回 pending（§9）。
+
+keys 步骤是**一张 provider 表**：每个 use 一个下拉（`llm` / `asr` / `tts`），只渲染选中 provider 的 1–2 个凭据字段；TTS 额外给默认音色下拉。`providers.save` 把该 use 的 `chain` 写成 `[selected]`，因此未选中的 fallback 即使没配也不阻塞。legacy 多 provider 链照常加载，但只有 `chain[0]` 参与完成度。
 
 ### 3.3 幂等与续跑
 
@@ -94,6 +96,7 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 | step | action | 前置 | 写什么 |
 |---|---|---|---|
 | `keys` | `keys.save` | 无 | `secrets.yaml`（`secrets.put`，L64-93） |
+| `keys` | `providers.save` | 无 | `secrets.yaml`（只写选中 provider 的字段）+ `config.yaml`（`providers.<stage>.chain=[selected]`，TTS 写 `providers.catalog.<name>.voice`） |
 | `prepare` | `manual.confirm` | 无 | 仅内存 `confirmed`/`rollback_ack` |
 | `params` | `device.upsert` | `prepare` done/skipped | `config.yaml` + `keywords.txt` + 重启平面 |
 | `wake` | `wake.set` | 设备存在 | `config.yaml` + `keywords.txt` + 重启平面 |
@@ -125,6 +128,7 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 | `GET /api/v1/plugs/{id}` | — | `{manifest, available, error, resolved}` | 详情；manifest 不含 secret；`resolved` 含默认 `listen_port`/`token_env` |
 | `GET /api/v1/setup?plug=<id>` | query 可选 | `SetupState`（8 步） | 扩展现有端点；不带 `plug` 走默认解析 |
 | `GET /api/v1/setup/step` | `?plug=&step=` | `{plug, step, next_step, blocked}` | 单步查询；不执行动作 |
+| `GET /api/v1/setup/providers` | — | `{providers[], stages{}, stage_state{}}` | keys 表的渲染模型：每个 provider 一行（`fields`/`selected`/`available`/`required`/`voices`/`default_voice`），每个 use 的 `selected`/`selected_id`/`chain`/`required`/`satisfied`/`missing`；永不含值 |
 | `POST /api/v1/setup/step` | `{plug, step, values?}` | `SetupState` | 执行 §3.4 的 allowlist 动作 |
 | `POST /api/v1/setup/test-connection` | `{plug, device_id?}` | `{ok, device_id, checks[], error?}` | 不写配置；200 表示测试完成，`ok` 表示结果 |
 | `POST /api/v1/setup/try` | `{text}` | `{ok, reply, audio_bytes, error?}` | 复用 `debug/say` 的 turn 路径；`audio_bytes>0` 写 `first_answer` |
@@ -152,6 +156,18 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 {"plug":"xiaoai","step":"params","values":{"host":"<speaker-ip>","room":"客厅",
  "wake_words":["你好小瑞"],"params":{"volume_max":100}}}
 ```
+
+keys 步骤的 provider 表提交（阶段都可省略，但至少一个；`provider` 省略时沿用当前 `chain[0]`）：
+
+```json
+{"step":"keys","action":"providers.save","payload":{
+ "llm":{"provider":"deepseek_llm","keys":{"RUI_LLM_KEY":"<write-only>"}},
+ "asr":{"provider":"volc_asr","keys":{"VOLC_API_KEY":"<write-only>"}},
+ "tts":{"provider":"volc_tts","voice":"zh_female_xiaohe_uranus_bigtts",
+        "keys":{"VOLC_API_KEY":"<write-only>"}}}}
+```
+
+响应仍是完整 `SetupState`；`secrets.yaml` 与 `config.yaml` 的值不回显。未知 provider、错误 stage、非该 provider 声明的 key 字段都是 422。
 
 `prepare` 的 values 为 `{"confirmed":true,"rollback_ack":true}`（B 类必填）。`test-connection` 响应：
 
@@ -194,7 +210,7 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 
 | # | 用户做什么 | RUI 做什么 | 文案 zh | Copy en |
 |---|---|---|---|---|
-| 0 `keys` | 填当前链路的 LLM/ASR/TTS key | 写 `secrets.yaml`，只显示已配置 | “只列当前链路用到的密钥；保存后任何页面都读不回原文。” | “Only keys used by the active chains. Saved values can never be read back.” |
+| 0 `keys` | 每个用途（LLM/ASR/TTS）选一个 provider，填它的凭据；TTS 再选默认音色 | 写 `secrets.yaml` 和选中 provider 的链/音色，只显示已配置 | “每种用途只需一个 provider；只显示它的凭据。保存后任何页面都读不回原文。” | “One provider per use; only its fields are shown. Saved values can never be read back.” |
 | 1 `models` | 运行命令下载或确认已下载；点重新检查 | 检查 ASR/VAD/KWS 文件，不代下 | “模型不在这步下载；缺什么会列出来，下载后点重新检查。” | “Models are not downloaded here. Missing files are listed; re-check after fetching.” |
 | 2 `prepare` | 按说明在音箱装 client（A）或固件（B），勾选 | 展示链接/最低版本/回滚；不执行设备命令 | “按说明完成设备侧准备；RUI 不会远程执行命令。” | “Prepare the device following the plug’s instructions. RUI runs nothing on it.” |
 | 3 `params` | 填地址、房间和插头参数 | 按 manifest 校验，merge 写 `config.yaml`，重启平面 | “地址用局域网地址或主机名；保存会重启音频面。” | “Use a LAN address or hostname. Saving restarts the audio plane.” |
@@ -286,7 +302,7 @@ devices:
 
 | 路径 | 内容 | 权限 | 写入者 |
 |---|---|---|---|
-| `<config-dir>/config.yaml` | `devices[]`、wake_words、params | **0600**，原子替换，5 份备份 | `save_config`（`config/store.py` L133-158） |
+| `<config-dir>/config.yaml` | `devices[]`、wake_words、params；keys 步还写 `providers.<stage>.chain=[selected]` 和 `providers.catalog.<tts>.voice` | **0600**，原子替换，5 份备份 | `save_config`（`config/store.py` L133-158） |
 | `<data-dir>/secrets.yaml` | key 值、`type: secret` 参数、device token | **0600**，原子替换 | `secrets.put`（`secrets.py` L64-93） |
 | `<config-dir>/keywords.txt` | `<pinyin> :2.00 #0.15 @<word>` | 0644（非 secret；实际按 umask） | `write_keywords_file`（`audio/kws.py` L71-90） |
 | `.env` | 部署方写入的 key / device token | 0600（`install.sh` chmod） | **向导不写**；环境变量优先于 secrets（`secrets.py` L52-57） |
@@ -309,6 +325,7 @@ devices:
 | 8 | `test_test_connection_reports_disconnected_without_writing` / `test_diagnostics_payload_has_no_secret_and_masks_host` | `ok=false`、`code=device_not_connected`、mtime 不变；诊断不含 token/完整 host |
 | 9 | `test_try_marks_first_answer_only_with_audio` | `audio_bytes=0` 不置 done；`>0` 置 done |
 | 10 | `test_plane_error_keeps_params_and_wake_not_done` / `test_concurrent_step_returns_409` | 200 + `plane_error`；两 step `error`；持锁时第二个请求 409 |
+| 11 | `test_providers_save_*` / `test_keys_step_only_requires_the_selected_provider_of_a_chain` | 选择写 `chain=[selected]` + TTS voice；值只写不读；未知/错 stage/key 字段 422；未选 fallback 不阻塞 keys done |
 
 ### 8.2 console 测试
 

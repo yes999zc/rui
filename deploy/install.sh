@@ -209,7 +209,7 @@ echo
 echo "done. open http://${IP:-127.0.0.1}:${PORT}/"
 echo "  doctor:  docker compose exec rui rui doctor"
 echo "  logs:    docker compose logs -f rui"
-echo "  keys:    fill in $DIR/.env, then: docker compose up -d"
+echo "  keys:    open the console -> Setup -> Keys (one provider per use), or fill $DIR/.env"
 echo "  speaker: open the console -> Setup -> Speaker connection to copy the ws URL + device token"
 echo "           (step-by-step: docs/open-xiaoai-client.md)"
 echo "  pin:     image is pinned in $DIR/.env ($IMAGE); edit that line to change version"

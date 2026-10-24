@@ -19,13 +19,18 @@ import {
   api,
   ApiError,
   apiErrorObject,
-  type CatalogDoc,
+  type Config,
   type DeviceConnectInfo,
   type DeviceDoc,
+  type Provider,
   type SetupDeviceManifest,
   type SetupParamSpec,
   type SetupPlugDetail,
   type SetupPlugSummary,
+  type SetupProviderEntry,
+  type SetupProviderField,
+  type SetupProviderVoice,
+  type SetupProvidersDoc,
   type SetupStepResponse,
   type SetupStepState,
   type SetupStepStatus,
@@ -35,34 +40,62 @@ import {
   localizeBackend,
   localizeIssue,
   pickLocalized,
-  providerName,
   t,
   type MsgKey,
 } from '../i18n'
 
 type Stage = 'llm' | 'asr' | 'tts'
-type KeyFieldRole = 'api_key' | 'app_id' | 'api_secret'
+type KeyFieldRole = 'api_key' | 'app_id' | 'api_secret' | string
 type KeyTestStatus = 'ok' | 'fail' | 'error'
 
-interface SetupKey {
+/** One credential input inside a provider row; `env` is shown as secondary text. */
+interface KeyFieldView {
   name: string
   role: KeyFieldRole
-  stage: Stage
-  provider: string
-  hasValue: boolean
+  label: string
   hint: string
-  missing: boolean
+  env: string
+  configured: boolean
+  docsUrl: string
 }
 
-interface SetupKeyGroup {
-  id: string
-  stage: Stage
-  provider: string
-  product: string
+interface VoiceView {
+  value: string
   label: string
-  fields: SetupKey[]
+  isDefault: boolean
+}
+
+/** One selectable provider for a stage, with only the fields that provider needs. */
+interface ProviderView {
+  id: string
+  name: string
+  stage: Stage
+  displayName: string
+  hint: string
+  docsUrl: string
   configured: boolean
-  missing: boolean
+  missing: string[]
+  fields: KeyFieldView[]
+  voices: VoiceView[]
+  defaultVoice: string
+  selected: boolean
+}
+
+/** One fixed table row: use | provider | credentials | voice (TTS only). */
+interface ProviderRowView {
+  stage: Stage
+  providers: ProviderView[]
+  selectedName: string
+  selectedProvider: ProviderView | null
+  fields: KeyFieldView[]
+  voices: VoiceView[]
+  voice: string
+  configured: boolean
+}
+
+interface ProviderBaseline {
+  provider: string
+  voice: string
 }
 
 interface KeyTestResult {
@@ -117,20 +150,11 @@ const STAGE_USE_LABELS: Record<Stage, MsgKey> = {
   tts: 'setup.v2.keys.use.tts',
 }
 
-const KEY_ROLE_LABELS: Record<KeyFieldRole, MsgKey> = {
+const KEY_ROLE_LABELS: Record<string, MsgKey> = {
   api_key: 'setup.v2.keys.field.apiKey',
   app_id: 'setup.v2.keys.field.appId',
   api_secret: 'setup.v2.keys.field.apiSecret',
 }
-
-/** Product names for the group heading; unknown ids fall back to providerName(). */
-const PRODUCT_RULES: Array<{ re: RegExp; key: MsgKey }> = [
-  { re: /deepseek|^ds-/i, key: 'setup.v2.keys.product.deepseek' },
-  { re: /volc|doubao/i, key: 'setup.v2.keys.product.volc' },
-  { re: /xfyun|iflytek/i, key: 'setup.v2.keys.product.xfyun' },
-  { re: /siliconflow|silicon|^sf-/i, key: 'setup.v2.keys.product.siliconflow' },
-  { re: /local|sherpa/i, key: 'setup.v2.keys.product.local' },
-]
 
 /** Generic device-side checklist used only when the plug manifest has no steps. */
 const PREPARE_FALLBACK_KEYS: MsgKey[] = [
@@ -266,7 +290,18 @@ const issues = ref<Record<string, StepIssue>>({})
 const expanded = ref<Record<string, boolean>>({})
 const retryFns: Record<string, () => Promise<unknown>> = {}
 
-const catalog = ref<CatalogDoc | null>(null)
+const providerDoc = ref<SetupProvidersDoc | null>(null)
+const providerFallback = ref(false)
+const providerError = ref('')
+const providerLoading = ref(false)
+const providerSelections = ref<Record<Stage, string>>({ llm: '', asr: '', tts: '' })
+const voiceDrafts = ref<Record<Stage, string>>({ llm: '', asr: '', tts: '' })
+const providerBaseline = ref<Record<Stage, ProviderBaseline>>({
+  llm: { provider: '', voice: '' },
+  asr: { provider: '', voice: '' },
+  tts: { provider: '', voice: '' },
+})
+const keySaveError = ref('')
 const keyDrafts = ref<Record<string, string>>({})
 const keyTestBusy = ref('')
 const keyTestResults = ref<Record<string, KeyTestResult>>({})
@@ -414,172 +449,189 @@ const doneCount = computed(
 )
 const totalCount = computed(() => steps.value.length)
 
-const missingKeyNames = computed<string[]>(() => {
-  const raw = evidence(keysStep.value).missing
-  return Array.isArray(raw) ? raw.map(String) : []
-})
+/** Chain order wins; the backend returns `stages[stage]` in priority order. */
+function stageEntries(doc: SetupProvidersDoc | null, stage: Stage): SetupProviderEntry[] {
+  if (!doc) return []
+  const entries = (doc.providers ?? []).filter((entry) => entry && entry.stage === stage)
+  const chain = doc.stages?.[stage]?.length
+    ? doc.stages[stage]
+    : entries.find((entry) => Array.isArray(entry.chain) && entry.chain.length > 0)?.chain ?? []
+  if (!chain.length) return entries
+  const rank = new Map<string, number>()
+  chain.forEach((id, index) => {
+    rank.set(id, index)
+    const bare = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id
+    if (bare) rank.set(bare, index)
+  })
+  return [...entries].sort((left, right) => {
+    const leftRank = rank.get(left.id ?? '') ?? rank.get(left.name) ?? 99
+    const rightRank = rank.get(right.id ?? '') ?? rank.get(right.name) ?? 99
+    return leftRank - rightRank
+  })
+}
 
-const stageOk = computed<Record<string, boolean>>(() => {
-  const raw = evidence(keysStep.value).stages
-  const out: Record<string, boolean> = {}
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-    for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
-      out[name] = Boolean(value)
+/** The active chain entry: explicit `selected`, then a stage-level map, then chain[0]. */
+function entrySelected(entry: SetupProviderEntry, doc: SetupProvidersDoc | null, index: number): boolean {
+  if (typeof entry.selected === 'boolean') return entry.selected
+  if (typeof entry.selected === 'string' && entry.selected.trim()) {
+    return entry.selected === entry.name || entry.selected === (entry.id ?? '')
+  }
+  const stageSelected = doc?.stage_state?.[entry.stage]?.selected
+  if (typeof stageSelected === 'string' && stageSelected.trim()) {
+    return stageSelected === entry.name || stageSelected === (entry.id ?? '')
+  }
+  const selected = doc?.selected
+  if (typeof selected === 'string' && selected.trim()) {
+    return selected === entry.name || selected === (entry.id ?? '')
+  }
+  if (selected && typeof selected === 'object') {
+    const value = (selected as Record<string, unknown>)[entry.stage]
+    if (typeof value === 'string' && value.trim()) {
+      return value === entry.name || value === (entry.id ?? '')
     }
+  }
+  return index === 0
+}
+
+function keyRoleLabel(role: KeyFieldRole): string {
+  const key = KEY_ROLE_LABELS[role]
+  return key ? t(key) : role
+}
+
+function toFieldView(field: SetupProviderField): KeyFieldView {
+  const name = String(field.name ?? '').trim()
+  return {
+    name,
+    role: String(field.role ?? ''),
+    label: pickLocalized(field.label_i18n) || String(field.label ?? '') || keyRoleLabel(String(field.role ?? '')),
+    hint: pickLocalized(field.hint_i18n) || String(field.hint ?? ''),
+    env: name,
+    configured: field.configured === true,
+    docsUrl: String(field.docs_url ?? ''),
+  }
+}
+
+function toVoiceViews(entry: SetupProviderEntry): VoiceView[] {
+  const raw = Array.isArray(entry.voices) ? entry.voices : []
+  const fallback = String(entry.default_voice ?? '').trim()
+  const views: VoiceView[] = []
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      if (item.trim()) views.push({ value: item, label: item, isDefault: item === fallback })
+      continue
+    }
+    if (!item || typeof item !== 'object') continue
+    const voice = item as SetupProviderVoice
+    const value = String(voice.value ?? voice.id ?? voice.name ?? '').trim()
+    if (!value) continue
+    views.push({
+      value,
+      label:
+        pickLocalized(voice.name_i18n) ||
+        pickLocalized(voice.label) ||
+        String(voice.name ?? '') ||
+        value,
+      isDefault: voice.default === true || value === fallback,
+    })
+  }
+  if (!views.length && fallback) views.push({ value: fallback, label: fallback, isDefault: true })
+  return views
+}
+
+function toProviderView(
+  entry: SetupProviderEntry,
+  doc: SetupProvidersDoc | null,
+  index: number,
+): ProviderView {
+  const voices = toVoiceViews(entry)
+  const fields = (entry.fields ?? []).map(toFieldView)
+  const defaultVoice =
+    String(entry.default_voice ?? '').trim() ||
+    voices.find((voice) => voice.isDefault)?.value ||
+    voices[0]?.value ||
+    ''
+  return {
+    id: String(entry.id ?? `${entry.stage}:${entry.name}`),
+    name: entry.name,
+    stage: entry.stage as Stage,
+    displayName:
+      pickLocalized({
+        zh: entry.display_name || entry.name,
+        en: entry.display_name_en || entry.display_name || entry.name,
+      }) || entry.name,
+    hint: pickLocalized(entry.hint_i18n) || String(entry.hint ?? ''),
+    docsUrl: String(entry.docs_url ?? ''),
+    configured: entry.configured === true,
+    missing: Array.isArray(entry.missing) ? entry.missing.map(String) : [],
+    fields,
+    voices,
+    defaultVoice,
+    selected: entrySelected(entry, doc, index),
+  }
+}
+
+/** The three fixed rows; a row keeps its provider even when the catalog reloads. */
+const providersByStage = computed<Record<Stage, ProviderView[]>>(() => {
+  const out = { llm: [], asr: [], tts: [] } as Record<Stage, ProviderView[]>
+  for (const stage of STAGES) {
+    out[stage] = stageEntries(providerDoc.value, stage).map((entry, index) =>
+      toProviderView(entry, providerDoc.value, index),
+    )
   }
   return out
 })
 
-function keyRoleFromSuffix(path: string): KeyFieldRole {
-  if (path.endsWith('app_id_env')) return 'app_id'
-  if (path.endsWith('api_secret_env')) return 'api_secret'
-  return 'api_key'
-}
-
-function keyRoleFromEnv(name: string): KeyFieldRole {
-  if (/APP_?ID|APPID/i.test(name)) return 'app_id'
-  if (/SECRET/i.test(name)) return 'api_secret'
-  return 'api_key'
-}
-
-/** Best-effort provider id when the catalog cannot tell us which chain owns an env. */
-function providerFromEnv(name: string): string {
-  if (/^VOLC/i.test(name)) return 'volc'
-  if (/^XFYUN/i.test(name)) return 'xfyun'
-  if (/DEEPSEEK|LLM_KEY/i.test(name)) return 'deepseek'
-  if (/SILICON|RUI_ASR|RUI_TTS/i.test(name)) return 'siliconflow'
-  return ''
-}
-
-/** Short, human product name; never the raw env var or provider id. */
-function keyProductName(provider: string): string {
-  for (const rule of PRODUCT_RULES) {
-    if (rule.re.test(provider)) return t(rule.key)
-  }
-  if (provider) return providerName(provider)
-  return t('setup.v2.keys.product.unknown')
-}
-
-function keyFieldHint(role: KeyFieldRole, stage: Stage, provider: string): string {
-  const product = keyProductName(provider)
-  if (role === 'app_id') return t('setup.v2.keys.hint.appId', { provider: product })
-  if (role === 'api_secret') return t('setup.v2.keys.hint.apiSecret', { provider: product })
-  return t('setup.v2.keys.hint.apiKey', {
-    provider: product,
-    use: t(STAGE_USE_LABELS[stage]),
-  })
-}
-
-function keyTestLabel(status: KeyTestStatus): string {
-  if (status === 'ok') return t('setup.v2.keys.testOk')
-  if (status === 'fail') return t('setup.v2.keys.testFail')
-  return t('setup.v2.keys.testError')
-}
-
-function keyTestClass(status: KeyTestStatus): string {
-  if (status === 'ok') return 'badge-ok'
-  if (status === 'fail') return 'badge-fail'
-  return 'badge-warn'
-}
-
-/** A changed draft invalidates the previous smoke-test result for that group. */
-function clearKeyTest(groupId: string): void {
-  if (!keyTestResults.value[groupId]) return
-  const next = { ...keyTestResults.value }
-  delete next[groupId]
-  keyTestResults.value = next
-}
-
-/**
- * Keys the wizard must show, grouped by provider + use (LLM/ASR/TTS). Every row
- * knows its human field label, one-line hint and configured state; only presence
- * is known, no value is ever read back.
- */
-const keyGroups = computed<SetupKeyGroup[]>(() => {
-  const missing = new Set(missingKeyNames.value)
-  const doc = catalog.value
-  const groups = new Map<string, SetupKeyGroup>()
-  const known = new Set<string>()
-
-  const remember = (
-    env: string,
-    stage: Stage,
-    provider: string,
-    role: KeyFieldRole,
-    hasValue: boolean,
-  ) => {
-    known.add(env)
-    const id = `${stage}:${provider || 'unknown'}`
-    let group = groups.get(id)
-    if (!group) {
-      const product = keyProductName(provider)
-      group = {
-        id,
-        stage,
-        provider,
-        product,
-        label: `${t(STAGE_USE_LABELS[stage])} · ${product}`,
-        fields: [],
-        configured: false,
-        missing: true,
-      }
-      groups.set(id, group)
-    }
-    if (group.fields.some((field) => field.name === env)) return
-    group.fields.push({
-      name: env,
-      role,
+const providerRows = computed<ProviderRowView[]>(() =>
+  STAGES.map((stage) => {
+    const providers = providersByStage.value[stage]
+    const picked = providerSelections.value[stage]
+    const selectedProvider =
+      providers.find((provider) => provider.name === picked) ??
+      providers.find((provider) => provider.selected) ??
+      providers[0] ??
+      null
+    return {
       stage,
-      provider,
-      hasValue,
-      hint: keyFieldHint(role, stage, provider),
-      missing: missing.has(env) || !hasValue,
-    })
-  }
-
-  if (doc) {
-    for (const stage of STAGES) {
-      const rawChain = doc.values[`providers.${stage}.chain`]
-      const chain = Array.isArray(rawChain) ? rawChain.map(String) : []
-      for (const provider of chain) {
-        const prefix = `providers.catalog.${provider}.`
-        for (const field of doc.fields) {
-          if (!field.path.startsWith(prefix)) continue
-          if (!/(api_key_env|app_id_env|api_secret_env)$/.test(field.path)) continue
-          const env = String(doc.values[field.path] ?? '').trim()
-          if (!env) continue
-          const meta = doc.secrets?.[env]
-          remember(env, stage, provider, keyRoleFromSuffix(field.path), Boolean(meta?.has_value))
-        }
-      }
+      providers,
+      selectedName: selectedProvider?.name ?? '',
+      selectedProvider,
+      fields: selectedProvider?.fields ?? [],
+      voices: selectedProvider?.voices ?? [],
+      voice: voiceDrafts.value[stage] || selectedProvider?.defaultVoice || '',
+      configured: selectedProvider?.configured ?? false,
     }
-  }
+  }),
+)
 
-  // The server can report an env that is not in the catalog (broken/partial
-  // config). Keep it visible, but in a readable group rather than a raw row.
-  for (const name of missing) {
-    if (known.has(name)) continue
-    const stage = STAGES.find((item) => !stageOk.value[item]) ?? 'llm'
-    remember(name, stage, providerFromEnv(name), keyRoleFromEnv(name), false)
-  }
+/** Drafts are namespaced by stage + provider so switching back does not lose typing. */
+function keyDraftId(stage: Stage, provider: string, env: string): string {
+  return `${stage}:${provider}:${env}`
+}
 
-  const order = new Map(STAGES.map((stage, index) => [stage, index]))
-  return [...groups.values()]
-    .map((group) => {
-      const configured = group.fields.length > 0 && group.fields.every((field) => field.hasValue)
-      return { ...group, configured, missing: !configured }
-    })
-    .filter((group) => group.fields.length > 0)
-    .sort(
-      (left, right) =>
-        (order.get(left.stage) ?? 99) - (order.get(right.stage) ?? 99) ||
-        left.label.localeCompare(right.label),
-    )
+/** A save is worthwhile when keys were typed, a provider switched, or a voice changed. */
+const keyDirty = computed(() => {
+  if (Object.values(keyDrafts.value).some((value) => value.trim())) return true
+  return providerRows.value.some((row) => {
+    const base = providerBaseline.value[row.stage]
+    if (!base) return Boolean(row.selectedName)
+    if (row.selectedName && row.selectedName !== base.provider) return true
+    return row.stage === 'tts' && Boolean(row.voice) && row.voice !== base.voice
+  })
 })
 
-const anyKeyInput = computed(() =>
-  Object.values(keyDrafts.value).some((value) => value.trim()),
-)
+function providerOptionLabel(provider: ProviderView): string {
+  return provider.configured
+    ? `${provider.displayName} · ${t('setup.keys.configured')}`
+    : provider.displayName
+}
+
+/** A changed draft invalidates the previous smoke-test result for that row. */
+function clearKeyTest(stage: Stage): void {
+  if (!keyTestResults.value[stage]) return
+  const next = { ...keyTestResults.value }
+  delete next[stage]
+  keyTestResults.value = next
+}
 
 const missingParams = computed<string[]>(() => {
   const raw = evidence(paramsStep.value).missing
@@ -1444,13 +1496,139 @@ async function refreshState(
   }
 }
 
+function fallbackProviderName(name: string, provider: Provider): string {
+  const kind = String(provider.kind ?? '').toLowerCase()
+  if (kind === 'volc_asr' || kind === 'volc_tts') return t('setup.v2.keys.product.volc')
+  if (kind === 'xfyun') return t('setup.v2.keys.product.xfyun')
+  if (kind === 'sherpa') return t('setup.v2.keys.product.local')
+  const host = String(provider.base_url ?? '').toLowerCase()
+  if (host.includes('deepseek') || name.toLowerCase().includes('deepseek')) return 'DeepSeek'
+  if (host.includes('siliconflow') || name.toLowerCase().includes('silicon')) {
+    return t('setup.v2.keys.product.siliconflow')
+  }
+  return name
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+/**
+ * Minimal provider rows from the legacy `GET /api/v1/config` document used only
+ * when `/setup/providers` is unavailable. Presence comes from `has_key`; AppID
+ * and API Secret cannot be checked from the legacy shape.
+ */
+function deriveProviderDoc(cfg: Config): SetupProvidersDoc {
+  const providers: SetupProviderEntry[] = []
+  const stages: Record<string, string[]> = {}
+  for (const stage of STAGES) {
+    const chain = cfg.providers?.[stage]?.chain ?? []
+    stages[stage] = []
+    chain.forEach((name, index) => {
+      const provider = cfg.providers?.catalog?.[name]
+      if (!provider) return
+      const display = fallbackProviderName(name, provider)
+      const fields: SetupProviderField[] = []
+      const add = (env: string | undefined, role: string, label: string, configured: boolean) => {
+        const value = String(env ?? '').trim()
+        if (!value) return
+        const hint =
+          role === 'api_key'
+            ? t('setup.v2.keys.hint.apiKey', {
+                provider: display,
+                use: t(STAGE_USE_LABELS[stage]),
+              })
+            : role === 'app_id'
+              ? t('setup.v2.keys.hint.appId', { provider: display })
+              : t('setup.v2.keys.hint.apiSecret', { provider: display })
+        fields.push({ name: value, role, label, hint, configured })
+      }
+      add(provider.api_key_env, 'api_key', t('setup.v2.keys.field.apiKey'), provider.has_key === true)
+      add(provider.app_id_env, 'app_id', t('setup.v2.keys.field.appId'), false)
+      add(provider.api_secret_env, 'api_secret', t('setup.v2.keys.field.apiSecret'), false)
+      const id = `${stage}:${name}`
+      providers.push({
+        id,
+        stage,
+        name,
+        kind: String(provider.kind ?? ''),
+        display_name: display,
+        display_name_en: display,
+        hint: t('setup.v2.keys.fallbackHint'),
+        configured: fields.every((field) => field.configured),
+        missing: fields.filter((field) => !field.configured).map((field) => field.name),
+        selected: index === 0,
+        chain: [...chain],
+        fields,
+        voices: provider.voice ? [provider.voice] : [],
+        default_voice: String(provider.voice ?? ''),
+      })
+      stages[stage].push(id)
+    })
+  }
+  return { providers, stages }
+}
+
+/** Push a catalog into state without discarding a still-valid user selection. */
+function applyProviderDoc(doc: SetupProvidersDoc, fallback: boolean): void {
+  providerDoc.value = doc
+  providerFallback.value = fallback
+  const selections = { ...providerSelections.value }
+  const voices = { ...voiceDrafts.value }
+  for (const stage of STAGES) {
+    const views = stageEntries(doc, stage).map((entry, index) =>
+      toProviderView(entry, doc, index),
+    )
+    const picked =
+      views.find((view) => view.name === selections[stage]) ??
+      views.find((view) => view.selected) ??
+      views[0] ??
+      null
+    selections[stage] = picked?.name ?? ''
+    const previousVoice = voices[stage]
+    const stillOffered = picked?.voices.some((voice) => voice.value === previousVoice) ?? false
+    voices[stage] = stillOffered
+      ? previousVoice
+      : picked?.defaultVoice || picked?.voices[0]?.value || ''
+  }
+  providerSelections.value = selections
+  voiceDrafts.value = voices
+  const baseline = {} as Record<Stage, ProviderBaseline>
+  for (const stage of STAGES) {
+    baseline[stage] = { provider: selections[stage], voice: voices[stage] }
+  }
+  providerBaseline.value = baseline
+}
+
+/** `GET /setup/providers`, with a legacy-config fallback and an inline hint. */
+async function loadProviderCatalog(): Promise<void> {
+  providerLoading.value = true
+  providerError.value = ''
+  try {
+    applyProviderDoc(await api.setupProviders(), false)
+  } catch (exc) {
+    providerError.value = describeError(exc).message
+    let cfg: Config | null = null
+    try {
+      cfg = await api.config()
+    } catch {
+      cfg = null
+    }
+    if (cfg) {
+      applyProviderDoc(deriveProviderDoc(cfg), true)
+    } else {
+      providerDoc.value = null
+      providerFallback.value = false
+    }
+  } finally {
+    providerLoading.value = false
+  }
+}
+
 async function loadInitial(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const [list, doc] = await Promise.all([api.plugs(), api.catalog().catch(() => null)])
+    const [list] = await Promise.all([api.plugs(), loadProviderCatalog()])
     plugs.value = Array.isArray(list.plugs) ? list.plugs : []
-    catalog.value = doc
     const next = await api.setupStepState()
     await applyState(next, { force: true, prefill: true, forceConnect: true })
   } catch (exc) {
@@ -1512,19 +1690,109 @@ function retryStep(stepId: string): void {
   else void refreshState({ force: true })
 }
 
-async function saveKeys(): Promise<void> {
-  const values: Record<string, string> = {}
-  for (const [name, value] of Object.entries(keyDrafts.value)) {
-    if (value.trim()) values[name] = value.trim()
+function keyTestLabel(status: KeyTestStatus): string {
+  if (status === 'ok') return t('setup.v2.keys.testOk')
+  if (status === 'fail') return t('setup.v2.keys.testFail')
+  return t('setup.v2.keys.testError')
+}
+
+function keyTestClass(status: KeyTestStatus): string {
+  if (status === 'ok') return 'badge-ok'
+  if (status === 'fail') return 'badge-fail'
+  return 'badge-warn'
+}
+
+/** Switch provider without losing the drafts typed for the previous one. */
+function onProviderChange(stage: Stage, event: Event): void {
+  const name = (event.target as HTMLSelectElement).value
+  const provider = providersByStage.value[stage].find((item) => item.name === name)
+  providerSelections.value = { ...providerSelections.value, [stage]: name }
+  voiceDrafts.value = {
+    ...voiceDrafts.value,
+    [stage]: provider?.defaultVoice || provider?.voices[0]?.value || '',
   }
-  if (!Object.keys(values).length) return
-  if (keyTestBusy.value) return
-  const ok = await runStep('keys', 'keys.save', { values }, { retry: saveKeys })
-  if (ok) {
+  keySaveError.value = ''
+  clearKeyTest(stage)
+}
+
+function onKeyInput(stage: Stage, provider: string, env: string, event: Event): void {
+  keyDrafts.value = {
+    ...keyDrafts.value,
+    [keyDraftId(stage, provider, env)]: (event.target as HTMLInputElement).value,
+  }
+  keySaveError.value = ''
+  clearKeyTest(stage)
+}
+
+function onVoiceChange(stage: Stage, event: Event): void {
+  voiceDrafts.value = {
+    ...voiceDrafts.value,
+    [stage]: (event.target as HTMLSelectElement | HTMLInputElement).value,
+  }
+  keySaveError.value = ''
+}
+
+/**
+ * `{llm:{provider,keys}, asr:{provider,keys}, tts:{provider,voice,keys}}`.
+ * Only changed stages are sent, and empty key drafts are omitted so an empty
+ * input never overwrites a stored secret.
+ */
+function buildProviderPayload(): Record<string, unknown> {
+  const payload: Record<string, unknown> = {}
+  for (const row of providerRows.value) {
+    if (!row.selectedProvider) continue
+    const keys: Record<string, string> = {}
+    for (const field of row.fields) {
+      const value = (keyDrafts.value[keyDraftId(row.stage, row.selectedName, field.name)] ?? '').trim()
+      if (value) keys[field.name] = value
+    }
+    const base = providerBaseline.value[row.stage]
+    const providerChanged = row.selectedName !== (base?.provider ?? '')
+    const voiceChanged =
+      row.stage === 'tts' && Boolean(row.voice) && row.voice !== (base?.voice ?? '')
+    if (!Object.keys(keys).length && !providerChanged && !voiceChanged) continue
+    const entry: Record<string, unknown> = { provider: row.selectedName }
+    if (Object.keys(keys).length) entry.keys = keys
+    if (row.stage === 'tts' && row.voice.trim()) entry.voice = row.voice.trim()
+    payload[row.stage] = entry
+  }
+  return payload
+}
+
+async function saveKeys(): Promise<void> {
+  if (busyStep.value || busyGlobal.value || keyTestBusy.value) return
+  keySaveError.value = ''
+  const values = buildProviderPayload()
+  if (!Object.keys(values).length) {
+    keySaveError.value = t('setup.v2.keys.nothingToSave')
+    return
+  }
+  busyStep.value = 'keys'
+  expanded.value = { ...expanded.value, keys: true }
+  try {
+    const response = await api.setupStep({
+      plug: selectedPlug.value,
+      step: 'keys',
+      action: 'providers.save',
+      values,
+    })
+    if (Array.isArray((response as unknown as Record<string, unknown>).steps)) {
+      await applyState(response)
+    } else {
+      await refreshState({ silent: true })
+    }
     keyDrafts.value = {}
     keyTestResults.value = {}
-    catalog.value = await api.catalog().catch(() => catalog.value)
+    await loadProviderCatalog()
     notice.value = t('setup.v2.keys.saved')
+  } catch (exc) {
+    const issue = describeError(exc)
+    const notReady = ['unknown_action', 'http_400', 'http_404', 'http_405'].includes(issue.code)
+    keySaveError.value = notReady
+      ? t('setup.v2.keys.saveUnavailable', { code: issue.code })
+      : t('setup.v2.keys.saveFailed', { message: issue.message })
+  } finally {
+    busyStep.value = ''
   }
 }
 
@@ -1538,10 +1806,12 @@ function keyTestCheckName(check: unknown, index: number): string {
 }
 
 /**
- * Parse a key-test result without assuming one backend shape: the step detail,
- * the step evidence, or the top-level response may carry `{ok, message, checks}`.
+ * Parse a key-test result without assuming one backend shape: the current API
+ * returns `{ok, stage, provider, message, details}`, while older shapes wrap the
+ * result in the step detail/evidence or the whole setup state.
  */
-function parseKeyTestResult(response: unknown, group: SetupKeyGroup): KeyTestResult {
+function parseKeyTestResult(response: unknown, row: ProviderRowView): KeyTestResult {
+  const product = row.selectedProvider?.displayName ?? row.stage
   const record =
     response && typeof response === 'object'
       ? (response as Record<string, unknown>)
@@ -1553,7 +1823,7 @@ function parseKeyTestResult(response: unknown, group: SetupKeyGroup): KeyTestRes
   const detail = (keysStep?.detail ?? {}) as Record<string, unknown>
   const stepEvidence = (keysStep?.evidence ?? {}) as Record<string, unknown>
   const candidates = [
-    // The backend currently answers keys.test with the result itself.
+    // The backend answers keys.test with the result itself.
     record,
     detail.keys_test,
     detail.key_test,
@@ -1593,8 +1863,8 @@ function parseKeyTestResult(response: unknown, group: SetupKeyGroup): KeyTestRes
       return {
         status: ok ? 'ok' : 'fail',
         message: ok
-          ? t('setup.v2.keys.testPass', { provider: group.product })
-          : t('setup.v2.keys.testFailMessage', { provider: group.product }),
+          ? t('setup.v2.keys.testPass', { provider: product })
+          : t('setup.v2.keys.testFailMessage', { provider: product }),
         details: details || message || undefined,
       }
     }
@@ -1603,8 +1873,8 @@ function parseKeyTestResult(response: unknown, group: SetupKeyGroup): KeyTestRes
       return {
         status: ok ? 'ok' : 'fail',
         message: ok
-          ? t('setup.v2.keys.testPass', { provider: group.product })
-          : t('setup.v2.keys.testFailMessage', { provider: group.product }),
+          ? t('setup.v2.keys.testPass', { provider: product })
+          : t('setup.v2.keys.testFailMessage', { provider: product }),
         details,
       }
     }
@@ -1613,34 +1883,26 @@ function parseKeyTestResult(response: unknown, group: SetupKeyGroup): KeyTestRes
   return { status: 'error', message: t('setup.v2.keys.testNoResult') }
 }
 
-async function testKeyGroup(group: SetupKeyGroup): Promise<void> {
-  if (busyStep.value || busyGlobal.value || keyTestBusy.value) return
-  keyTestBusy.value = group.id
-  const remaining = { ...keyTestResults.value }
-  delete remaining[group.id]
-  keyTestResults.value = remaining
+async function testProviderRow(row: ProviderRowView): Promise<void> {
+  if (!row.selectedProvider || busyStep.value || busyGlobal.value || keyTestBusy.value) return
+  keyTestBusy.value = row.stage
+  clearKeyTest(row.stage)
   expanded.value = { ...expanded.value, keys: true }
   try {
     const response = await api.setupStep({
       plug: selectedPlug.value,
       step: 'keys',
       action: 'keys.test',
-      // No secret values leave the browser: only the provider/use and env names.
-      values: {
-        stage: group.stage,
-        provider: group.provider,
-        names: group.fields.map((field) => field.name),
-      },
+      // The existing contract tests stored credentials; no draft value leaves here.
+      values: { stage: row.stage, provider: row.selectedName },
     })
-    const result = parseKeyTestResult(response, group)
-    // Current backend returns the test result itself; older/newer shapes return
-    // the whole SetupState. Recompute state in the former case, apply it in the latter.
     if (Array.isArray((response as unknown as Record<string, unknown>).steps)) {
       await applyState(response)
-    } else {
-      await refreshState({ silent: true })
     }
-    keyTestResults.value = { ...keyTestResults.value, [group.id]: result }
+    keyTestResults.value = {
+      ...keyTestResults.value,
+      [row.stage]: parseKeyTestResult(response, row),
+    }
   } catch (exc) {
     const issue = describeError(exc)
     const unavailable = [
@@ -1653,7 +1915,7 @@ async function testKeyGroup(group: SetupKeyGroup): Promise<void> {
     ].includes(issue.code)
     keyTestResults.value = {
       ...keyTestResults.value,
-      [group.id]: {
+      [row.stage]: {
         status: 'error',
         message: unavailable
           ? t('setup.v2.keys.testUnavailable', { code: issue.code })
@@ -1987,89 +2249,178 @@ onBeforeUnmount(stopWait)
             </div>
           </div>
 
-          <!-- keys: grouped by provider + use, each group testable -->
+          <!-- keys: one provider per use; only that provider's fields are shown -->
           <template v-if="step.id === 'keys'">
-            <p class="field-hint">{{ t('setup.keys.lede') }}</p>
-            <div v-if="keyGroups.length" class="setup-key-groups">
-              <section v-for="group in keyGroups" :key="group.id" class="setup-key-group">
-                <header class="setup-key-group-head">
-                  <div class="setup-key-group-title">
-                    <h3>{{ group.label }}</h3>
-                    <span class="badge" :class="group.configured ? 'badge-ok' : 'badge-warn'">
-                      {{ group.configured ? t('setup.keys.configured') : t('setup.keys.missing') }}
-                    </span>
+            <p class="field-hint">{{ t('setup.v2.keys.providersLede') }}</p>
+            <p v-if="providerLoading" class="field-hint">{{ t('setup.v2.keys.catalogLoading') }}</p>
+            <p v-if="providerFallback" class="field-hint setup-provider-fallback">
+              {{ t('setup.v2.keys.catalogFallback') }}
+              <span v-if="providerError" class="mono"> ({{ providerError }})</span>
+            </p>
+            <p v-else-if="providerError && !providerDoc" class="field-hint fail">
+              {{ t('setup.v2.keys.catalogFailed') }}
+            </p>
+
+            <div
+              v-if="providerDoc"
+              class="setup-provider-table"
+              role="table"
+              :aria-label="t('setup.v2.keys.providersLede')"
+            >
+              <div class="setup-provider-row setup-provider-head" role="row">
+                <span role="columnheader">{{ t('setup.v2.keys.table.use') }}</span>
+                <span role="columnheader">{{ t('setup.v2.keys.table.provider') }}</span>
+                <span role="columnheader">{{ t('setup.v2.keys.table.credentials') }}</span>
+                <span role="columnheader">{{ t('setup.v2.keys.table.voice') }}</span>
+                <span role="columnheader">{{ t('setup.v2.keys.table.actions') }}</span>
+              </div>
+              <div
+                v-for="row in providerRows"
+                :key="row.stage"
+                class="setup-provider-row"
+                :class="`is-${row.stage}`"
+                role="row"
+              >
+                <div class="setup-provider-use" role="rowheader">
+                  <strong>{{ t(STAGE_USE_LABELS[row.stage]) }}</strong>
+                  <span
+                    v-if="row.selectedProvider"
+                    class="badge"
+                    :class="row.configured ? 'badge-ok' : 'badge-warn'"
+                  >
+                    {{ row.configured ? t('setup.keys.configured') : t('setup.keys.missing') }}
+                  </span>
+                </div>
+
+                <div class="setup-provider-pick" role="cell">
+                  <select
+                    v-if="row.providers.length"
+                    :value="row.selectedName"
+                    :aria-label="t('setup.v2.keys.chooseProvider')"
+                    :disabled="busyStep !== '' || busyGlobal !== ''"
+                    @change="onProviderChange(row.stage, $event)"
+                  >
+                    <option v-for="provider in row.providers" :key="provider.name" :value="provider.name">
+                      {{ providerOptionLabel(provider) }}
+                    </option>
+                  </select>
+                  <p v-else class="field-hint">{{ t('setup.v2.keys.noProvider') }}</p>
+                  <template v-if="row.selectedProvider">
+                    <p v-if="row.selectedProvider.hint" class="field-hint">
+                      {{ row.selectedProvider.hint }}
+                    </p>
+                    <a
+                      v-if="safeHref(row.selectedProvider.docsUrl)"
+                      :href="safeHref(row.selectedProvider.docsUrl)"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="setup-provider-docs"
+                    >
+                      {{ t('setup.v2.keys.docs') }} <AppIcon name="external" :size="12" />
+                    </a>
+                  </template>
+                </div>
+
+                <div class="setup-provider-creds" role="cell">
+                  <p v-if="row.selectedProvider && !row.fields.length" class="field-hint">
+                    {{ t('setup.v2.keys.noFields') }}
+                  </p>
+                  <div v-for="field in row.fields" :key="field.name" class="setup-provider-field">
+                    <div class="setup-provider-field-label">
+                      <label class="field-label" :for="`setup-key-${row.stage}-${field.name}`">
+                        {{ field.label || keyRoleLabel(field.role) }}
+                      </label>
+                      <span class="badge" :class="field.configured ? 'badge-ok' : 'badge-warn'">
+                        {{ field.configured ? t('setup.keys.configured') : t('setup.keys.missing') }}
+                      </span>
+                    </div>
+                    <p v-if="field.hint" class="field-hint">{{ field.hint }}</p>
+                    <code class="setup-key-env mono">
+                      {{ t('setup.v2.keys.envLabel') }}: {{ field.env }}
+                    </code>
+                    <input
+                      :id="`setup-key-${row.stage}-${field.name}`"
+                      :value="keyDrafts[keyDraftId(row.stage, row.selectedName, field.name)] ?? ''"
+                      type="password"
+                      autocomplete="off"
+                      spellcheck="false"
+                      :placeholder="t('secrets.placeholder')"
+                      @input="onKeyInput(row.stage, row.selectedName, field.name, $event)"
+                    />
                   </div>
+                </div>
+
+                <div class="setup-provider-voice" role="cell">
+                  <template v-if="row.stage === 'tts' && row.selectedProvider">
+                    <select
+                      v-if="row.voices.length"
+                      :value="row.voice"
+                      :aria-label="t('setup.v2.keys.table.voice')"
+                      :disabled="busyStep !== '' || busyGlobal !== ''"
+                      @change="onVoiceChange(row.stage, $event)"
+                    >
+                      <option v-for="voice in row.voices" :key="voice.value" :value="voice.value">
+                        {{ voice.label }}{{ voice.isDefault ? ` (${t('setup.v2.keys.voiceDefault')})` : '' }}
+                      </option>
+                    </select>
+                    <input
+                      v-else
+                      :value="row.voice"
+                      type="text"
+                      autocomplete="off"
+                      spellcheck="false"
+                      :placeholder="t('setup.v2.keys.voicePlaceholder')"
+                      :aria-label="t('setup.v2.keys.table.voice')"
+                      :disabled="busyStep !== '' || busyGlobal !== ''"
+                      @input="onVoiceChange(row.stage, $event)"
+                    />
+                    <p class="field-hint">{{ t('setup.v2.keys.voiceHint') }}</p>
+                  </template>
+                  <span v-else class="setup-provider-na">{{ t('setup.v2.keys.noVoice') }}</span>
+                </div>
+
+                <div class="setup-provider-actions" role="cell">
                   <button
                     type="button"
                     class="btn btn-sm"
-                    :disabled="busyStep !== '' || busyGlobal !== '' || keyTestBusy !== ''"
-                    @click="testKeyGroup(group)"
+                    :disabled="!row.selectedProvider || busyStep !== '' || busyGlobal !== '' || keyTestBusy !== ''"
+                    @click="testProviderRow(row)"
                   >
-                    {{ keyTestBusy === group.id ? t('setup.v2.keys.testing') : t('setup.v2.keys.test') }}
+                    {{ keyTestBusy === row.stage ? t('setup.v2.keys.testing') : t('setup.v2.keys.test') }}
                   </button>
-                </header>
-                <div class="setup-key-fields">
-                  <div v-for="field in group.fields" :key="field.name" class="setup-key-field">
-                    <div class="setup-key-field-meta">
-                      <div class="setup-key-field-label">
-                        <label class="field-label" :for="`setup-key-${field.name}`">
-                          {{ t(KEY_ROLE_LABELS[field.role]) }}
-                        </label>
-                        <span class="badge" :class="field.missing ? 'badge-warn' : 'badge-ok'">
-                          {{ field.missing ? t('setup.keys.missing') : t('setup.keys.configured') }}
-                        </span>
-                      </div>
-                      <p class="field-hint">{{ field.hint }}</p>
-                      <code class="setup-key-env mono">
-                        {{ t('setup.v2.keys.envLabel') }}: {{ field.name }}
-                      </code>
-                    </div>
-                    <div class="field-control">
-                      <input
-                        :id="`setup-key-${field.name}`"
-                        v-model="keyDrafts[field.name]"
-                        type="password"
-                        autocomplete="off"
-                        spellcheck="false"
-                        :placeholder="t('secrets.placeholder')"
-                        @input="clearKeyTest(group.id)"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div
-                  v-if="keyTestResults[group.id]"
-                  class="setup-key-test"
-                  :class="`is-${keyTestResults[group.id].status}`"
-                  role="status"
-                >
-                  <span
-                    class="badge"
-                    :class="keyTestClass(keyTestResults[group.id].status)"
+                  <p class="field-hint">{{ t('setup.v2.keys.testUsesSaved') }}</p>
+                  <div
+                    v-if="keyTestResults[row.stage]"
+                    class="setup-provider-test"
+                    :class="`is-${keyTestResults[row.stage].status}`"
+                    role="status"
                   >
-                    {{ keyTestLabel(keyTestResults[group.id].status) }}
-                  </span>
-                  <div>
-                    <strong>{{ keyTestResults[group.id].message }}</strong>
-                    <p v-if="keyTestResults[group.id].details" class="field-hint">
-                      {{ keyTestResults[group.id].details }}
-                    </p>
+                    <span class="badge" :class="keyTestClass(keyTestResults[row.stage].status)">
+                      {{ keyTestLabel(keyTestResults[row.stage].status) }}
+                    </span>
+                    <div>
+                      <strong>{{ keyTestResults[row.stage].message }}</strong>
+                      <p v-if="keyTestResults[row.stage].details" class="field-hint">
+                        {{ keyTestResults[row.stage].details }}
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </section>
+              </div>
             </div>
-            <p v-else-if="!catalog" class="field-hint">{{ t('setup.keys.unavailable') }}</p>
-            <p v-else class="field-hint">{{ t('setup.v2.keys.none') }}</p>
-            <div class="actions">
+
+            <div class="actions setup-provider-save">
               <button
                 type="button"
                 class="btn btn-primary"
-                :disabled="busyStep !== '' || busyGlobal !== '' || keyTestBusy !== '' || !anyKeyInput"
+                :disabled="busyStep !== '' || busyGlobal !== '' || keyTestBusy !== '' || !keyDirty"
                 @click="saveKeys"
               >
                 {{ busyStep === 'keys' ? t('common.saving') : t('setup.v2.keys.save') }}
               </button>
+              <span class="field-hint">{{ t('setup.v2.keys.saveHint') }}</span>
             </div>
+            <p v-if="keySaveError" class="note fail" role="alert">{{ keySaveError }}</p>
             <p class="field-hint">{{ t('setup.keys.writeOnly') }}</p>
           </template>
 
@@ -2809,70 +3160,152 @@ onBeforeUnmount(stopWait)
   margin-top: 0;
 }
 
-.setup-key-groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
+.setup-provider-table {
   margin-top: var(--s2);
-}
-
-.setup-key-group {
-  padding: var(--s3);
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  background: var(--surface-2);
+  overflow: hidden;
+  background: var(--surface);
 }
 
-.setup-key-group-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--s2);
-  flex-wrap: wrap;
-}
-
-.setup-key-group-title {
-  display: flex;
-  align-items: center;
-  gap: var(--s2);
-  flex-wrap: wrap;
-}
-
-.setup-key-group-title h3 {
-  margin: 0;
-  font-size: 14px;
-}
-
-.setup-key-fields {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s3);
-  margin-top: var(--s2);
-}
-
-.setup-key-field {
+.setup-provider-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns:
+    minmax(92px, 0.8fr)
+    minmax(150px, 1.1fr)
+    minmax(0, 2fr)
+    minmax(132px, 1fr)
+    minmax(144px, 1.05fr);
   gap: var(--s3);
   align-items: start;
-  padding-top: var(--s2);
+  padding: var(--s3);
   border-top: 1px solid var(--line);
 }
 
-.setup-key-field:first-child {
-  padding-top: 0;
+.setup-provider-row:first-child {
   border-top: 0;
 }
 
-.setup-key-field-meta {
+.setup-provider-head {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.setup-provider-use {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
   min-width: 0;
 }
 
-.setup-key-field-label {
+.setup-provider-use strong {
+  font-size: 13.5px;
+}
+
+.setup-provider-pick,
+.setup-provider-voice,
+.setup-provider-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.setup-provider-pick select,
+.setup-provider-voice select,
+.setup-provider-voice input {
+  width: 100%;
+  max-width: 100%;
+}
+
+.setup-provider-docs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+}
+
+.setup-provider-creds {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  min-width: 0;
+}
+
+.setup-provider-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.setup-provider-field-label {
   display: flex;
   align-items: center;
   gap: var(--s2);
   flex-wrap: wrap;
+}
+
+.setup-provider-field input {
+  width: 100%;
+}
+
+.setup-provider-na {
+  color: var(--muted);
+}
+
+.setup-provider-actions .btn {
+  align-self: flex-start;
+}
+
+.setup-provider-test {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: var(--r-xs);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.setup-provider-test.is-ok {
+  background: var(--ok-soft);
+}
+
+.setup-provider-test.is-fail {
+  background: var(--fail-soft);
+}
+
+.setup-provider-test.is-error {
+  background: var(--warn-soft);
+}
+
+.setup-provider-test p {
+  margin-top: 2px;
+}
+
+.setup-provider-save {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: var(--s3);
+}
+
+.setup-provider-save .field-hint {
+  margin: 0;
+}
+
+.setup-provider-fallback {
+  padding: 6px 8px;
+  border-radius: var(--r-xs);
+  background: var(--warn-soft);
 }
 
 .setup-key-env {
@@ -2881,33 +3314,6 @@ onBeforeUnmount(stopWait)
   color: var(--muted);
   font-size: 10.5px;
   overflow-wrap: anywhere;
-}
-
-.setup-key-test {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--s2);
-  margin-top: var(--s2);
-  padding: 8px 10px;
-  border-radius: var(--r-xs);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.setup-key-test.is-ok {
-  background: var(--ok-soft);
-}
-
-.setup-key-test.is-fail {
-  background: var(--fail-soft);
-}
-
-.setup-key-test.is-error {
-  background: var(--warn-soft);
-}
-
-.setup-key-test p {
-  margin-top: 2px;
 }
 
 .setup-step-lede + .note {
@@ -3343,19 +3749,29 @@ onBeforeUnmount(stopWait)
     flex-wrap: wrap;
   }
 
-  .setup-key-field {
+  .setup-provider-row {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--s2);
   }
 
-  .setup-key-group-head {
-    flex-direction: column;
-    align-items: stretch;
+  .setup-provider-head {
+    display: none;
   }
 
-  .setup-key-group-head .btn {
+  .setup-provider-use {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .setup-provider-actions .btn {
     width: 100%;
     min-height: 40px;
+  }
+
+  .setup-provider-save {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .setup-connect-status {

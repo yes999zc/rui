@@ -130,6 +130,8 @@ export interface Provider {
   base_url: string
   model: string
   api_key_env: string
+  app_id_env?: string
+  api_secret_env?: string
   timeout_s: number
   voice: string
   has_key?: boolean
@@ -448,6 +450,79 @@ export interface SetupStepPayload {
   step: string
   action: string
   values?: Record<string, unknown>
+}
+
+/* — keys step provider catalog (GET /api/v1/setup/providers) ————————————— */
+
+/** One write-only credential slot; `name` is the env var, never its value. */
+export interface SetupProviderField {
+  name: string
+  role: string
+  label: string
+  label_i18n?: LocalizedText | string
+  hint?: string
+  hint_i18n?: LocalizedText | string
+  docs_url?: string
+  secret?: boolean
+  required?: boolean
+  configured?: boolean
+}
+
+/** A selectable TTS voice; plain strings and `{id,name,name_i18n}` are both accepted. */
+export interface SetupProviderVoice {
+  value?: string
+  id?: string
+  name?: string
+  label?: LocalizedText | string
+  name_i18n?: LocalizedText | string
+  language?: string
+  default?: boolean
+}
+
+/** One provider in one stage's chain; carries presence facts, never values. */
+export interface SetupProviderEntry {
+  id?: string
+  name: string
+  stage: string
+  kind?: string
+  display_name: string
+  display_name_en?: string
+  docs_url?: string
+  hint?: string
+  hint_i18n?: LocalizedText | string
+  configured?: boolean
+  missing?: string[]
+  /** The active chain entry: a boolean, or the entry's name/id. */
+  selected?: boolean | string
+  /** Whether this provider kind can actually build this stage. */
+  available?: boolean
+  required?: boolean
+  /** Chain order for this stage; the first entry is the default. */
+  chain?: string[]
+  fields?: SetupProviderField[]
+  voices?: (string | SetupProviderVoice)[]
+  default_voice?: string
+}
+
+/** Per-use selection facts (`stage_state`) when the backend provides them. */
+export interface SetupStageState {
+  selected?: string
+  chain?: string[]
+  providers?: string[]
+  required?: boolean
+  satisfied?: boolean
+  missing?: string[]
+}
+
+/** The keys step's render model: providers grouped by use, values never included. */
+export interface SetupProvidersDoc {
+  providers: SetupProviderEntry[]
+  /** Stage → ordered provider ids (`llm:deepseek_llm`) from the active chain. */
+  stages?: Record<string, string[]>
+  /** Optional stage-level selection map when `providers[].selected` is omitted. */
+  selected?: Record<string, string> | string
+  /** Current primary, full chain and offered providers per use. */
+  stage_state?: Record<string, SetupStageState>
 }
 
 /** A new-style setup/plug error: `detail` is `{code, message, details}`. */
@@ -955,6 +1030,12 @@ export const api = {
     request<SetupStepResponse>(
       `/api/v1/setup/step${plug ? `?plug=${encodeURIComponent(plug)}` : ''}`,
     ),
+  /**
+   * Provider metadata for the keys step: one row per (stage, provider) with
+   * display name, credential fields, optional TTS voices and presence badges.
+   * A credential value is never part of this response.
+   */
+  setupProviders: () => request<SetupProvidersDoc>('/api/v1/setup/providers'),
   /**
    * Run one allowlisted step action. The body field is `values` (the backend also
    * accepts the legacy `payload` alias); `action` must come from `step.actions`.

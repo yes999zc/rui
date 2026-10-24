@@ -72,6 +72,7 @@ def install_setup_routes(
     current: Callable[[], Config],
     plane_snapshot: Callable[[FastAPI], dict],
     write_devices: Callable[[Config], Awaitable[str]],
+    write_config: Callable[[Config], Awaitable[str]],
     probe_host: Callable[[str], Awaitable[dict]],
     run_debug_say: Callable[[str], Awaitable[dict]],
     host_value: Callable[[object], str],
@@ -83,7 +84,7 @@ def install_setup_routes(
     # under <data_dir>/plugs/*/plugin.yaml. A broken user plug is listed with its error,
     # never allowed to stop startup or hide the other plugs.
     _SETUP_ACTIONS: dict[str, set[str]] = {
-        "keys": {"keys.save", "keys.test"},
+        "keys": {"keys.save", "keys.test", "providers.save"},
         "models": set(),
         "prepare": {"manual.confirm"},
         "params": {"device.upsert"},
@@ -243,37 +244,25 @@ def install_setup_routes(
         plane = plane_snapshot(app)
         plane_error = str(getattr(app.state, "plane_error", "") or "")
 
-        # keys: a provider secret exists for every stage (and every required name of
-        # that provider). Values are never read out; only presence is reported.
+        # keys: one selected provider per use. Only that provider's required secrets
+        # count; an unconfigured fallback must not keep the step pending. Values are
+        # never read out, only presence is reported.
         stage_ok: dict[str, bool] = {}
         missing: set[str] = set()
+        selected: dict[str, str] = {}
         for stage in ("asr", "tts", "llm"):
-            ok = False
-            chain = list(getattr(current.providers, stage).chain)
-            for name in chain:
-                provider = current.providers.catalog.get(name)
-                if provider is None:
-                    continue
-                names = [
-                    str(item) for item in (
-                        getattr(provider, "api_key_env", ""),
-                        getattr(provider, "app_id_env", ""),
-                        getattr(provider, "api_secret_env", ""),
-                    ) if item
-                ]
-                if not names:
-                    ok = True
-                    continue
-                present = all(secrets.resolve(item) is not None for item in names)
-                ok = ok or present
-                missing.update(item for item in names if secrets.resolve(item) is None)
+            ok, stage_missing = keycheck.stage_satisfied(current, stage)
             stage_ok[stage] = ok
-        keys_done = bool(stage_ok) and all(stage_ok.values())
+            missing.update(stage_missing)
+            chain = list(getattr(current.providers, stage).chain)
+            selected[stage] = chain[0] if chain else ""
+        keys_done = all(stage_ok.get(stage, False) for stage in ("asr", "tts", "llm"))
         provider_rows = [
             {
                 "stage": entry.stage,
                 "name": entry.name,
                 "display_name": entry.display_name,
+                "selected": entry.selected,
                 "configured": entry.configured,
                 "missing": entry.missing,
             }
@@ -282,13 +271,18 @@ def install_setup_routes(
         last_test = saved.get("keys", {}).get("last_test", {})
         if not isinstance(last_test, dict):
             last_test = {}
+        stage_states = keycheck.stage_state(current)
         keys_step = {
             "id": "keys", "status": "done" if keys_done else "pending",
             "evidence": {"stages": stage_ok, "missing": sorted(missing),
+                         "selected": selected,
+                         "required": {stage: True for stage in ("asr", "tts", "llm")},
+                         "stage_state": stage_states,
                          "providers": provider_rows,
                          "last_test": last_test},
-            "detail": {"stages": stage_ok, "missing": sorted(missing)},
-            "actions": ["keys.save", "keys.test"],
+            "detail": {"stages": stage_ok, "missing": sorted(missing),
+                       "selected": selected},
+            "actions": ["keys.save", "keys.test", "providers.save"],
         }
 
         # models: ASR (sherpa) files, VAD file, and the four KWS files.
@@ -696,6 +690,103 @@ def install_setup_routes(
                         data, ("keys", "last_test"), result),
                 )
                 return result
+            elif action == "providers.save":
+                # The keys step is a provider table: one provider per use. The request
+                # carries no values back; secrets are written only, and the config keeps
+                # every unrelated block intact.
+                current = _load_disk_config()
+                merged = current.model_dump(mode="json")
+                previous_providers = current.providers.model_dump(mode="json")
+                chosen: dict[str, str] = {}
+                secret_updates: dict[str, str] = {}
+                voice_value: str | None = None
+                for stage in STAGES:
+                    if stage not in values:
+                        continue
+                    block = values.get(stage)
+                    if block is None:
+                        continue
+                    if not isinstance(block, dict):
+                        raise _setup_error(422, "invalid_values",
+                                           f"{stage} must be an object")
+                    raw_provider = str(block.get("provider") or "").strip()
+                    if raw_provider.startswith(f"{stage}:"):
+                        raw_provider = raw_provider.split(":", 1)[1].strip()
+                    offered = keycheck.stage_provider_names(current, stage)
+                    provider_name = raw_provider or (offered[0] if offered else "")
+                    if not provider_name or provider_name not in offered:
+                        raise _setup_error(
+                            422, "unknown_provider",
+                            f"provider {raw_provider!r} is not available for {stage}",
+                            {"stage": stage, "provider": raw_provider,
+                             "available": offered},
+                        )
+                    chosen[stage] = provider_name
+                    raw_keys = block.get("keys") or {}
+                    if not isinstance(raw_keys, dict):
+                        raise _setup_error(422, "invalid_values",
+                                           f"{stage}.keys must be an object")
+                    allowed = set(keycheck.credential_names(current, stage, provider_name))
+                    for env_name, value in raw_keys.items():
+                        name = str(env_name).strip()
+                        if name not in allowed:
+                            raise _setup_error(
+                                422, "invalid_values",
+                                f"{name!r} is not a credential of {stage}:{provider_name}",
+                                {"stage": stage, "provider": provider_name,
+                                 "fields": sorted(allowed)},
+                            )
+                        if not isinstance(value, str):
+                            raise _setup_error(422, "invalid_values",
+                                               f"secret {name!r} must be a string")
+                        # providers.save only sets values. Clearing a key stays on
+                        # keys.save / the secrets page, so a blank untouched field in
+                        # the table cannot delete a key another stage shares.
+                        if value:
+                            secret_updates[name] = value
+                    if stage == "tts" and "voice" in block:
+                        voice = block.get("voice")
+                        if not isinstance(voice, str):
+                            raise _setup_error(422, "invalid_values",
+                                               "tts.voice must be a string")
+                        voice_value = voice.strip()
+                    merged["providers"][stage]["chain"] = [provider_name]
+                    if stage == "tts" and voice_value:
+                        merged["providers"]["catalog"][provider_name]["voice"] = voice_value
+                if not chosen:
+                    raise _setup_error(
+                        422, "invalid_values",
+                        "provide at least one of llm, asr or tts",
+                        {"stages": list(STAGES)},
+                    )
+                try:
+                    updated = Config.model_validate(merged)
+                except ValidationError as exc:
+                    raise _setup_error(422, "invalid_values", "invalid config",
+                                       {"errors": [
+                                           {"loc": list(error.get("loc", ())),
+                                            "msg": str(error.get("msg", ""))}
+                                           for error in exc.errors(include_url=False)
+                                       ]}) from exc
+                secrets_changed = False
+                for name, value in secret_updates.items():
+                    existing = secrets.resolve(name)
+                    if existing is not None and existing.value == value:
+                        continue
+                    try:
+                        secrets.put(name, value)
+                    except ValueError as exc:
+                        raise _setup_error(400, "secret_rejected", str(exc)) from exc
+                    secrets_changed = True
+                config_changed = updated.providers.model_dump(mode="json") != previous_providers
+                if config_changed:
+                    await write_config(updated)
+                if config_changed or secrets_changed:
+                    setup_store.update(
+                        data_dir,
+                        lambda data: setup_store.set_value(
+                            data, ("keys", "last_saved_at"), setup_store.iso_now()),
+                    )
             elif action == "manual.confirm":
                 plugin, _source, _error = _select_plugin(current, requested_plug)
                 device = _target_device(current, plugin)
@@ -775,6 +866,12 @@ def install_setup_routes(
                 adapter = str(
                     values.get("adapter") or base.get("adapter") or manifest.id
                 ).strip() or manifest.id
+                # A fresh LX06 has a working 18-LED ring; leaving the schema default off
+                # made a new install look broken ("灯不亮"). New devices with the led
+                # capability start enabled; the config/console can still turn it off.
+                if (existing is None and "led" not in base
+                        and "led" in {str(cap) for cap in manifest.capabilities}):
+                    base["led"] = {"enabled": True}
                 base.update({
                     "id": wanted, "adapter": adapter, "host": host, "room": room,
                     "wake_words": words or ["你好小瑞"], "enabled": True, "params": params,

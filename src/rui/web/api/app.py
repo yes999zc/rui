@@ -67,6 +67,7 @@ from ...music import MusicService, NavidromeSource, PlayHistory
 from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
 from ...plugins import ParamSpec, ParamType, PlugCatalog, ResolvedPlug
+from ...providers import keycheck
 from ...providers.chain import build_stage
 from ...providers.volc_voices import voices_for
 from ...session import phrasebook, phrases, prompts, rules
@@ -3166,37 +3167,24 @@ def create_app(
             return bool(getattr(provider, "base_url", ""))
         stage_ok: dict[str, bool] = {}
         missing_keys: set[str] = set()
+        missing_by_stage: dict[str, list[str]] = {}
         for stage in ("asr", "tts", "llm"):
+            # One provider per use: only the configured primary decides completion.
+            # A fallback with a key must not hide a primary that still needs one.
             chain = list(getattr(cfg_now.providers, stage).chain)
-            usable = [name for name in chain
-                      if provider_usable(cfg_now.providers.catalog.get(name))]
-            stage_ok[stage] = bool(usable)
-            if not usable:
-                for name in chain:
-                    provider = cfg_now.providers.catalog.get(name)
-                    if provider is None:
-                        continue
-                    missing_keys.update(str(n) for n in (
-                        getattr(provider, "api_key_env", ""),
-                        getattr(provider, "app_id_env", ""),
-                        getattr(provider, "api_secret_env", "")) if n and not secrets.has(n))
+            selected_provider = (
+                cfg_now.providers.catalog.get(chain[0]) if chain else None)
+            key_ok, stage_missing = keycheck.stage_satisfied(cfg_now, stage)
+            stage_ok[stage] = bool(
+                key_ok and selected_provider is not None
+                and provider_usable(selected_provider))
+            missing_keys.update(stage_missing)
+            if not stage_ok[stage]:
+                missing_by_stage[stage] = sorted(stage_missing)
         keys = {
             "stages": stage_ok,
             "missing": sorted(missing_keys),
-            "missing_by_stage": {
-                stage: sorted({str(name) for provider_name in
-                               getattr(cfg_now.providers, stage).chain
-                               for name in (
-                                   getattr(cfg_now.providers.catalog.get(provider_name),
-                                           "api_key_env", ""),
-                                   getattr(cfg_now.providers.catalog.get(provider_name),
-                                           "app_id_env", ""),
-                                   getattr(cfg_now.providers.catalog.get(provider_name),
-                                           "api_secret_env", ""))
-                               if name and not secrets.has(str(name))})
-                for stage in ("asr", "tts", "llm")
-                if not stage_ok[stage]
-            },
+            "missing_by_stage": missing_by_stage,
         }
         def kws_ok(directory: Path | None) -> bool:
             if directory is None:
@@ -3362,6 +3350,21 @@ def create_app(
             log.warning("device write saved, but the audio plane did not come back: %s", error)
         return error
 
+    async def _write_config(updated: Config) -> str:
+        """Persist a non-device config edit and reload it into the live object.
+
+        Provider choices do not touch the audio plane, so this deliberately does not
+        call `_write_devices`: that would restart the plane and rewrite keywords for a
+        change that only affects the next turn. `save_config` is the same atomic
+        0600-replace writer; the reload proves the file this process will serve on the
+        next restart matches the object it is using now.
+        """
+        if config_path is None:
+            raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        save_config(Path(config_path), updated)
+        _apply_config(load_config(Path(config_path)))
+        return ""
+
     @app.get("/api/v1/setup", dependencies=[Depends(auth)])
     async def setup_state() -> dict:
         """What the install wizard still needs; computed from files and keys, not claims."""
@@ -3505,6 +3508,7 @@ def create_app(
         current=lambda: getattr(app.state, "cfg", cfg),
         plane_snapshot=_plane_snapshot,
         write_devices=_write_devices,
+        write_config=_write_config,
         probe_host=lambda host: _probe_host(host),
         run_debug_say=_run_debug_say,
         host_value=_host,

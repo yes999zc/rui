@@ -30,16 +30,18 @@ ASR 文档同样把 `X-Api-Key` 列为必选，并注明“同时支持旧版控
 
 ## 3. RUI 推荐字段 schema
 
-### 3.1 语音链路（向导 keys 步骤）
+### 3.1 语音链路（向导 keys 步骤：每种用途选一个 provider）
+
+keys 步骤现在是 **provider 表**：LLM / ASR / TTS 各一个下拉，选中火山后只显示下面这一行，不再同时铺开多个 provider 的字段。ASR 与 TTS 可以各选一次火山，也可以只选其中一个。
 
 | 字段（secrets/env 名） | 适用 stage | 人类标签 | 必填 | 说明 |
 |---|---|---|---|---|
-| `VOLC_API_KEY` | `asr` | API Key | 是（用火山 ASR 时） | 请求头 `X-Api-Key`；控制台 API Key 管理创建 |
-| `VOLC_API_KEY` | `tts` | API Key | 是（用火山 TTS 时） | 同一个 Key 可复用；向导应显示两行、共享配置状态 |
+| `VOLC_API_KEY` | `asr` | API Key | 是（ASR 选火山时） | 请求头 `X-Api-Key`；控制台 API Key 管理创建 |
+| `VOLC_API_KEY` | `tts` | API Key | 是（TTS 选火山时） | 同一个 Key 可复用；两个 use 都选火山时在各自下拉里保存 |
 | （非 secret，config）`providers.catalog.<name>.model` | `asr` / `tts` | 资源 ID | 是 | ASR：`volc.seedasr.sauc.duration`；TTS：`seed-tts-2.0` |
-| （非 secret，config）`providers.catalog.volc_tts.voice` | `tts` | 音色 | 是 | 例如 `zh_female_xiaohe_uranus_bigtts` |
+| （非 secret，config）`providers.catalog.volc_tts.voice` | `tts` | 音色 | 是 | `providers.save` 的 `tts.voice` 写入；默认 `zh_female_xiaohe_uranus_bigtts` |
 
-不向用户索要：`AppID`、`Access Token`、`Secret Key`（语音链路）。
+不向用户索要：`AppID`、`Access Token`、`Secret Key`（语音链路）。选火山后 TTS 下拉的音色来自 `providers/volc_voices.py` 的 2.0 音色表；讯飞则只展示其配置里的 `voice`（vcn）。
 
 ### 3.2 控制台额度卡片（可选，与语音链路分开）
 
@@ -71,7 +73,8 @@ ASR 文档同样把 `X-Api-Key` 列为必选，并注明“同时支持旧版控
 - **AK/SK 继续只服务额度卡片**：`VOLC_ACCESS_KEY_ID` / `VOLC_SECRET_ACCESS_KEY` 仍由 `billing.py` 使用；不把它们提升为语音链路的必填项。
 - **旧版 AppID/Access Token 不被当前代码使用**：如果用户只有旧版凭证，`keys.test` 会真实返回 401，而不是误报成功；迁移路径是新建新版 API Key。
 - **轮换**：控制台禁用/删除旧 Key → 在「密钥」页保存新 `VOLC_API_KEY` → `keys.test` 通过后再删除旧值。密钥只写不读，响应/日志不出现值。
-- **同一 Key 两个 stage**：向导里 ASR 和 TTS 两行都指向 `VOLC_API_KEY`；保存一次即可，`configured` 同时变绿。测试时按 stage 分别调用各自端点，避免“TTS 通过就以为 ASR 也通过”。
+- **同一 Key 两个 stage**：ASR 和 TTS 若都选火山，两张下拉里都填 `VOLC_API_KEY`（同一个值）即可；`providers.save` 会把各自 `providers.<stage>.chain` 写成 `[volc_*]`。保存一次后 `configured` 对两个 use 都变绿；测试时按 stage 分别调用各自端点，避免“TTS 通过就以为 ASR 也通过”。
+- **单 provider 完成度**：每个 use 只检查选中的 `chain[0]`。没选中的 provider（如 fallback 的讯飞/火山另一条）缺 key 不会让 keys 步骤卡住；这取代了“多 provider 链要求全部配置”的旧行为。
 
 ## 6. 参考链接
 

@@ -85,7 +85,7 @@ flowchart LR
 | Docker 权限 | 安装用户需为 root，或已加入 `docker` 组并重新登录（`docker info` 必须能通） |
 | 可写安装目录 | 默认 `~/rui`；`/vol1` 这类 root-only 挂载点需用 root 安装或先 `chown` 给安装用户 |
 | 小爱音箱 Pro（LX06） | 已刷/已装 **open-xiaoai client**，与主机在同一 LAN |
-| LLM 与 TTS 密钥 | 至少一组；ASR 可以先用本地模型 |
+| LLM 与 TTS 密钥 | 每种用途（LLM/ASR/TTS）在向导里选一个 provider；LLM/TTS 需要密钥，ASR 可先用本地模型 |
 | 可选 | Home Assistant、Navidrome、火山/讯飞语音账号 |
 
 #### 一条命令（推荐）
@@ -135,7 +135,7 @@ cd ~/rui
 docker compose exec rui rui token
 ```
 
-打开 `http://<nas-lan-ip>:8080/`，输入控制台 token，按**首次运行向导**完成：密钥 → 模型 → 添加音箱 → 唤醒词 → 试一句。
+打开 `http://<nas-lan-ip>:8080/`，输入控制台 token，按**首次运行向导**完成：选 provider、填密钥 → 模型 → 添加音箱 → 唤醒词 → 试一句。
 
 #### 音箱端（必须单独做）
 
@@ -163,7 +163,7 @@ docker compose up -d
 
 | 区域 | 关键项 | 说明 |
 |---|---|---|
-| AI 供应商 | `providers.catalog` + `providers.{asr,tts,llm}.chain` | 每个 stage 一条有序链；音色/语速/情感可在控制台改并试听 |
+| AI 供应商 | `providers.catalog` + `providers.{asr,tts,llm}.chain` | 向导每个 use 选一个 provider 并写成 `chain=[selected]`；有序 fallback、音色/语速/情感仍可在控制台改并试听 |
 | 音箱 | `devices[]` | adapter、回连端口、房间、唤醒词、音量、LED；v1 仅 LX06 |
 | 音频 | `audio.capture / voice / playback / aec` | 采样率、帧长、VAD、AEC、播放缓冲；改完重启音频面 |
 | 会话 | `session.*` | 空闲超时、结束词、上下文开关、filler 策略 |
@@ -278,7 +278,7 @@ ASR prefers local SenseVoice, with Volc streaming ASR 2.0 and a cloud fallback a
 
 ### Quick start
 
-Requirements: a Docker host (NAS/Linux, amd64 or arm64), an LX06 with the **open-xiaoai client**, and at least one LLM/TTS key. The local SenseVoice ASR does not need a cloud key. The install user must be able to reach the Docker daemon (root or the `docker` group, verified by `docker info`) and write the install directory (`~/rui` by default; root-only mounts such as `/vol1` need root or a prior `chown`).
+Requirements: a Docker host (NAS/Linux, amd64 or arm64), an LX06 with the **open-xiaoai client**, and one provider per use in the wizard. The LLM and TTS providers need keys; the local SenseVoice ASR does not need a cloud key. The install user must be able to reach the Docker daemon (root or the `docker` group, verified by `docker info`) and write the install directory (`~/rui` by default; root-only mounts such as `/vol1` need root or a prior `chown`).
 
 Rolling release (`main` + `:latest`):
 
@@ -328,7 +328,7 @@ Hard rules: only the audio plane touches mic/speaker; playback has a single owne
 
 ### Configuration
 
-Provider order and fields live in `config.yaml`: `providers.catalog` plus one ordered chain per stage (`providers.asr/tts/llm.chain`). Speakers are `devices[]`; the audio plane is `audio.*`; session, music, tools and console/security settings are grouped in the console's four-tier catalog. Everything is editable in the console (422 validation maps back onto fields), or via the CLI/config file. See [docs/config-catalog-contract.md](docs/config-catalog-contract.md) and [docs/deploy.md](docs/deploy.md).
+Provider order and fields live in `config.yaml`: `providers.catalog` plus one ordered chain per stage (`providers.asr/tts/llm.chain`). The setup wizard selects one provider per use and stores it as that stage's chain (`[selected]`), so an unconfigured fallback never blocks first-run completion. Speakers are `devices[]`; the audio plane is `audio.*`; session, music, tools and console/security settings are grouped in the console's four-tier catalog. Everything is editable in the console (422 validation maps back onto fields), or via the CLI/config file. See [docs/config-catalog-contract.md](docs/config-catalog-contract.md) and [docs/deploy.md](docs/deploy.md).
 
 ### Status and known gaps
 

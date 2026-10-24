@@ -25,12 +25,18 @@ from urllib.parse import urlparse
 
 from .. import secrets
 from ..config.schema import STAGES, Config, ProviderConfig
+from .volc_voices import VOLC_TTS_VOICES
 
 __all__ = [
     "KeyCheckError",
+    "credential_names",
     "provider_catalog",
     "provider_entries",
+    "stage_provider_names",
+    "stage_satisfied",
+    "stage_state",
     "test_provider",
+    "voice_options",
 ]
 
 # ---------------------------------------------------------------- catalog metadata
@@ -73,6 +79,19 @@ _FIELD_HINTS = {
 }
 
 
+# Which provider kind can serve which stage, mirroring providers/chain.py. The wizard
+# uses this to reject a provider in the wrong use (e.g. an LLM entry as ASR).
+_STAGE_KINDS: dict[str, frozenset[str]] = {
+    "asr": frozenset({"openai_compat", "sherpa", "volc_asr"}),
+    "tts": frozenset({"openai_compat", "xfyun", "volc_tts"}),
+    "llm": frozenset({"openai_compat"}),
+}
+
+# The only kind that can serve more than one stage. A name without a stage suffix is
+# ambiguous for it, so it is offered only in the chain it already belongs to.
+_MULTI_STAGE_KIND = "openai_compat"
+
+
 @dataclass
 class KeyField:
     name: str
@@ -106,6 +125,13 @@ class ProviderEntry:
     docs_url: str
     hint: dict[str, str]
     fields: list[KeyField] = field(default_factory=list)
+    # The keys step is a provider table: one row per selectable provider, with the
+    # configured chain's primary marked selected. Values are never carried here.
+    selected: bool = False
+    available: bool = True
+    required: bool = True
+    voices: list[dict] = field(default_factory=list)
+    default_voice: str = ""
 
     @property
     def configured(self) -> bool:
@@ -130,6 +156,11 @@ class ProviderEntry:
             "configured": all(item["configured"] for item in fields),
             "missing": [item["name"] for item in fields if not item["configured"]],
             "fields": fields,
+            "selected": self.selected,
+            "available": self.available,
+            "required": self.required,
+            "voices": list(self.voices),
+            "default_voice": self.default_voice,
         }
 
 
@@ -268,6 +299,147 @@ def _fields_for(stage: str, provider: ProviderConfig) -> list[KeyField]:
     return out
 
 
+def _stage_hint(name: str) -> str:
+    """The stage a provider name advertises (`volc_asr` -> asr, `llm` -> llm)."""
+    low = _norm(name)
+    for stage in STAGES:
+        if low == stage or low.endswith(f"_{stage}") or low.endswith(f"-{stage}"):
+            return stage
+    return ""
+
+
+def serves_stage(provider: ProviderConfig, stage: str) -> bool:
+    """Whether this provider kind can actually build the stage (see providers/chain.py)."""
+    return _norm(provider.kind) in _STAGE_KINDS.get(stage, frozenset())
+
+
+def stage_provider_names(cfg: Config, stage: str) -> list[str]:
+    """Providers the keys table offers for one use, chain entries first.
+
+    A chain entry is always offered (it is what a legacy config already runs). Other
+    catalog entries are offered only when their kind can serve the stage and their name
+    says which stage they are for; an un-suffixed ``openai_compat`` entry is ambiguous
+    and stays in the chain it was configured for.
+    """
+    chain = [name for name in getattr(cfg.providers, stage).chain
+             if name in cfg.providers.catalog]
+    offered = list(dict.fromkeys(chain))
+    for name, provider in cfg.providers.catalog.items():
+        if name in offered or not serves_stage(provider, stage):
+            continue
+        hint = _stage_hint(name)
+        if hint == stage or (not hint and _norm(provider.kind) != _MULTI_STAGE_KIND):
+            offered.append(name)
+    return offered
+
+
+def credential_names(cfg: Config, stage: str, name: str) -> list[str]:
+    """The env names this provider declares as fields (empty = keyless provider)."""
+    provider = cfg.providers.catalog.get(name)
+    if provider is None:
+        return []
+    return [str(item) for item in (
+        getattr(provider, "api_key_env", ""),
+        getattr(provider, "app_id_env", ""),
+        getattr(provider, "api_secret_env", ""),
+    ) if item]
+
+
+def voice_options(stage: str, provider: ProviderConfig) -> list[dict]:
+    """Voice choices for a TTS provider: [{id,name,name_i18n,language,default}].
+
+    Volcano 2.0 uses the curated `volc_voices` directory; every other vendor exposes
+    the voice its config already names (讯飞 has no subset here). A configured voice
+    that is not in the curated list is kept as an option so saving another field cannot
+    silently reset it.
+    """
+    if stage != "tts":
+        return []
+    kind = _norm(provider.kind)
+    options: list[dict] = []
+    if kind == "volc_tts":
+        for voice_id, label in VOLC_TTS_VOICES.items():
+            options.append({
+                "id": voice_id,
+                "name": label["en"],
+                "name_i18n": {"zh": label["zh"], "en": label["en"]},
+                "language": "zh-CN",
+                "default": False,
+            })
+    current = str(getattr(provider, "voice", "") or "").strip()
+    if not current and kind == "xfyun":
+        current = str(getattr(provider, "model", "") or "").strip()
+    known = {item["id"] for item in options}
+    if current and current not in known:
+        options.append({
+            "id": current,
+            "name": current,
+            "name_i18n": {"zh": current, "en": current},
+            "language": "zh-CN" if kind in ("volc_tts", "xfyun") else "",
+            "default": False,
+        })
+        known.add(current)
+    default_voice = current if current in known else (options[0]["id"] if options else "")
+    for item in options:
+        item["default"] = item["id"] == default_voice
+    return options
+
+
+def _entry(stage: str, name: str, provider: ProviderConfig, cfg: Config) -> ProviderEntry:
+    chain = list(getattr(cfg.providers, stage).chain)
+    voices = voice_options(stage, provider)
+    default_voice = next((item["id"] for item in voices if item["default"]), "")
+    zh, en = display_names(name, provider)
+    return ProviderEntry(
+        stage=stage,
+        name=name,
+        kind=str(provider.kind),
+        display_name=zh,
+        display_name_en=en,
+        docs_url=_docs_url(stage, provider),
+        hint=_provider_hint(stage, provider),
+        fields=_fields_for(stage, provider),
+        selected=bool(chain and chain[0] == name),
+        available=serves_stage(provider, stage),
+        required=True,
+        voices=voices,
+        default_voice=default_voice,
+    )
+
+
+def stage_satisfied(cfg: Config, stage: str) -> tuple[bool, list[str]]:
+    """(satisfied, missing env names) for the one selected provider of a stage.
+
+    Only the primary chain entry counts: a fallback is optional, so an unconfigured
+    fallback must not keep the keys step pending. A keyless provider (sherpa) is
+    satisfied without a secret.
+    """
+    chain = list(getattr(cfg.providers, stage).chain)
+    if not chain or chain[0] not in cfg.providers.catalog:
+        return False, []
+    names = credential_names(cfg, stage, chain[0])
+    missing = [name for name in names if secrets.resolve(name) is None]
+    return not missing, missing
+
+
+def stage_state(cfg: Config) -> dict[str, dict]:
+    """Per-use selection: the configured primary, the full chain, and what is offered."""
+    out: dict[str, dict] = {}
+    for stage in STAGES:
+        chain = list(getattr(cfg.providers, stage).chain)
+        satisfied, missing = stage_satisfied(cfg, stage)
+        out[stage] = {
+            "selected": chain[0] if chain else "",
+            "selected_id": f"{stage}:{chain[0]}" if chain else "",
+            "chain": chain,
+            "required": True,
+            "providers": stage_provider_names(cfg, stage),
+            "satisfied": satisfied,
+            "missing": missing,
+        }
+    return out
+
+
 def provider_entries(cfg: Config) -> list[ProviderEntry]:
     """One entry per (stage, provider) actually used by a configured chain."""
     entries: list[ProviderEntry] = []
@@ -276,29 +448,27 @@ def provider_entries(cfg: Config) -> list[ProviderEntry]:
             provider = cfg.providers.catalog.get(name)
             if provider is None:
                 continue
-            zh, en = display_names(name, provider)
-            entries.append(ProviderEntry(
-                stage=stage,
-                name=name,
-                kind=str(provider.kind),
-                display_name=zh,
-                display_name_en=en,
-                docs_url=_docs_url(stage, provider),
-                hint=_provider_hint(stage, provider),
-                fields=_fields_for(stage, provider),
-            ))
+            entries.append(_entry(stage, name, provider, cfg))
     return entries
 
 
 def provider_catalog(cfg: Config) -> dict:
-    """The keys step's render model: providers grouped by use, values never included."""
-    entries = [entry.as_dict() for entry in provider_entries(cfg)]
+    """The keys step's render model: one row per selectable provider, never a value."""
+    entries: list[ProviderEntry] = []
+    for stage in STAGES:
+        for name in stage_provider_names(cfg, stage):
+            provider = cfg.providers.catalog.get(name)
+            if provider is None:
+                continue
+            entries.append(_entry(stage, name, provider, cfg))
+    rows = [entry.as_dict() for entry in entries]
     return {
-        "providers": entries,
+        "providers": rows,
         "stages": {
-            stage: [entry["id"] for entry in entries if entry["stage"] == stage]
+            stage: [row["id"] for row in rows if row["stage"] == stage]
             for stage in STAGES
         },
+        "stage_state": stage_state(cfg),
     }
 
 
