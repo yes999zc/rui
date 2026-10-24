@@ -452,8 +452,8 @@ def install_setup_routes(
                 {"plug_id": plugin_id, "available": sorted(entries)},
             )
         plugin, source, error = found
-        devices = [device.model_dump(mode="json") for device in plugin.devices]
-        manifest = plugin.model_dump(mode="json")
+        devices = [device.model_dump(mode="json", by_alias=True) for device in plugin.devices]
+        manifest = plugin.model_dump(mode="json", by_alias=True)
         manifest.pop("source_dir", None)
         manifest["devices"] = devices
         resolved = {
