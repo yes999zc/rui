@@ -8,6 +8,12 @@ name: docker-publish
 #   v1.2.3      -> :1.2.3, :1.2, :latest and :sha-<12 chars>
 #   other refs  -> :edge and :sha-<12 chars>
 # Roll back by deploying a previous tag or its digest; see docs/runbook.md.
+#
+# One job per architecture, each on a runner of that architecture. arm64 used to be
+# emulated on an x86 runner through setup-qemu; this Dockerfile compiles FFmpeg from
+# source, so that leg ran 40+ minutes and was only ever cancelled by the next push.
+# GitHub hosts arm64 runners natively for public repositories (ubuntu-24.04-arm), so
+# each leg builds at native speed and the manifest is assembled afterwards.
 
 on:
   push:
@@ -38,13 +44,81 @@ jobs:
       - run: uv run ruff check src tests
       - run: uv run pytest
 
-  publish:
+  # Each leg pushes a single-platform image by digest; nothing is tagged yet, so a
+  # half-finished matrix never publishes a tag that points at one architecture only.
+  build:
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.title=rui
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+          # Cache is scoped per architecture: an emulated x86 layer must never be served
+          # to the arm64 leg, or the image silently contains the wrong binaries.
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Assemble the tags once every architecture is in the registry. This is the only job
+  # that writes a tag, so a failed leg leaves the previous :latest untouched.
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-*
+          merge-multiple: true
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -69,15 +143,12 @@ jobs:
             org.opencontainers.image.title=rui
             org.opencontainers.image.licenses=MIT
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Create manifest list and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          tag_args=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}')
+          digest_args=$(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+          docker buildx imagetools create $tag_args $digest_args
+
+      - name: Inspect published manifest
+        run: docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}"
