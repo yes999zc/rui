@@ -122,11 +122,11 @@ VAD_REPO = "csukuangfj/sherpa-onnx-vad"
 VAD_FILE = "silero_vad.onnx"
 VAD_URLS = (
     f"https://hf-mirror.com/{VAD_REPO}/resolve/main/{VAD_FILE}",
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
-    # GitHub release assets reset or stall from mainland networks; two proxy mirrors
+    # GitHub release assets reset or stall from mainland networks; the proxy mirrors
     # returned the full 643,854 B file from the NAS when both upstream paths failed.
     "https://ghproxy.net/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
     "asr-models/silero_vad.onnx",
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
     "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
     "asr-models/silero_vad.onnx",
 )
@@ -134,11 +134,13 @@ VAD_URLS = (
 # publishes these; the tarball holds several chunk variants and we use chunk 8.
 KWS_REPO = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 KWS_URLS = (
-    f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/{KWS_REPO}.tar.bz2",
+    # The direct GitHub release asset stalls on this NAS (33 MB partial, then no bytes);
+    # the proxy mirrors served the full tarball. Try the mirror first, GitHub last.
     f"https://ghproxy.net/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
     f"kws-models/{KWS_REPO}.tar.bz2",
     f"https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/"
     f"kws-models/{KWS_REPO}.tar.bz2",
+    f"https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/{KWS_REPO}.tar.bz2",
 )
 DEFAULT_WAKE_WORDS = ("你好小瑞",)
 
