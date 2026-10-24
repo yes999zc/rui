@@ -370,7 +370,8 @@ def test_connect_info_returns_the_token_and_redacts_it_elsewhere(connect, monkey
     assert response.status_code == 200, response.text
     body = response.json()
     assert set(body) == {"device_id", "room", "host", "ws_url", "token", "token_env",
-                         "configured", "allow_no_token", "hint"}
+                         "configured", "allow_no_token", "host_source", "hint"}
+    assert body["host_source"] == "request"
     assert body["device_id"] == "living"
     assert body["room"] == "客厅"
     assert body["host"] == "192.0.2.10"          # the speaker's address, not the console's

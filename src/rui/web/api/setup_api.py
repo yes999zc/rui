@@ -174,6 +174,54 @@ def install_setup_routes(
                     return device
         return candidates[0]
 
+    def _connection_facts(
+        device: DeviceConfig | None, manifest: DeviceManifest, plane: dict,
+    ) -> dict:
+        """One connection verdict shared by the connect step and ``device.test``.
+
+        ``connected`` is the plane's live metric for an inbound speaker; a TCP/SSH
+        probe is diagnostics there, never the pass condition.
+        """
+        outbound = str(manifest.transport) == "outbound"
+        connected = bool(plane.get("speaker_connected"))
+        rejected = int(plane.get("speaker_rejected") or 0)
+        listen_port = (
+            device.listen_port if device is not None and device.listen_port is not None
+            else (manifest.runtime.listen_port if manifest.runtime else None)
+        )
+        token_env = (
+            device.token_env if device is not None
+            else (manifest.runtime.token_env if manifest.runtime else "")
+        )
+        token_configured = bool(secrets.resolve(token_env)) if token_env else False
+        if device is not None and bool(device.allow_no_token):
+            token_configured = True
+        if outbound:
+            message = "not_applicable"
+        elif connected:
+            message = "connected"
+        elif rejected > 0:
+            message = "token_mismatch"
+        elif device is None:
+            message = "waiting_for_client"
+        elif not token_configured:
+            message = "token_mismatch"
+        elif not plane.get("running"):
+            message = "port_blocked"
+        else:
+            message = "waiting_for_client"
+        return {
+            "transport": str(manifest.transport),
+            "outbound": outbound,
+            "connected": connected,
+            "speaker_rejected": rejected,
+            "listen_port": listen_port,
+            "token_env": token_env,
+            "token_configured": token_configured,
+            "connection_message": message,
+            "hint": _CONNECT_HINTS[message],
+        }
+
     def _select_plugin(current: Config, requested: str | None = None
                        ) -> tuple[Plugin, str, str]:
         entries, _failed = _plugin_catalog()
@@ -250,12 +298,12 @@ def install_setup_routes(
         stage_ok: dict[str, bool] = {}
         missing: set[str] = set()
         selected: dict[str, str] = {}
+        stage_states = keycheck.stage_state(current)
         for stage in ("asr", "tts", "llm"):
             ok, stage_missing = keycheck.stage_satisfied(current, stage)
             stage_ok[stage] = ok
             missing.update(stage_missing)
-            chain = list(getattr(current.providers, stage).chain)
-            selected[stage] = chain[0] if chain else ""
+            selected[stage] = str(stage_states[stage]["selected"])
         keys_done = all(stage_ok.get(stage, False) for stage in ("asr", "tts", "llm"))
         provider_rows = [
             {
@@ -271,7 +319,6 @@ def install_setup_routes(
         last_test = saved.get("keys", {}).get("last_test", {})
         if not isinstance(last_test, dict):
             last_test = {}
-        stage_states = keycheck.stage_state(current)
         keys_step = {
             "id": "keys", "status": "done" if keys_done else "pending",
             "evidence": {"stages": stage_ok, "missing": sorted(missing),
@@ -419,65 +466,44 @@ def install_setup_routes(
         # The code below is the clean contract: one message code plus the numbers it was
         # derived from. `token_mismatch` and `port_blocked` are inferences from real
         # evidence (a rejection, or no listener), never guesses from a client claim.
-        outbound = str(manifest.transport) == "outbound"
-        connected = bool(plane.get("speaker_connected"))
-        rejected = int(plane.get("speaker_rejected") or 0)
-        listen_port = (
-            device.listen_port if device is not None and device.listen_port is not None
-            else (manifest.runtime.listen_port if manifest.runtime else None)
-        )
-        token_env = (
-            device.token_env if device is not None
-            else (manifest.runtime.token_env if manifest.runtime else "")
-        )
-        token_configured = bool(secrets.resolve(token_env)) if token_env else False
-        if device is not None and bool(device.allow_no_token):
-            token_configured = True
-        if outbound:
-            connection_message = "not_applicable"
-        elif connected:
-            connection_message = "connected"
-        elif rejected > 0:
-            connection_message = "token_mismatch"
-        elif device is None:
-            connection_message = "waiting_for_client"
-        elif not token_configured:
-            connection_message = "token_mismatch"
-        elif not plane.get("running"):
-            connection_message = "port_blocked"
-        else:
-            connection_message = "waiting_for_client"
+        connection = _connection_facts(device, manifest, plane)
+        outbound = bool(connection["outbound"])
+        connected = bool(connection["connected"])
         connect_step = {
             "id": "connect",
             "status": "skipped" if outbound else ("done" if connected else "pending"),
             "evidence": {
-                "transport": str(manifest.transport),
+                "transport": connection["transport"],
                 "speaker_connected": connected,
-                "listen_port": listen_port,
+                "listen_port": connection["listen_port"],
                 "last_seen": plane.get("last_seen"),
-                "connection_message": connection_message,
-                "hint": _CONNECT_HINTS[connection_message],
-                "token_env": token_env,
-                "token_configured": token_configured,
+                "connection_message": connection["connection_message"],
+                "hint": connection["hint"],
+                "token_env": connection["token_env"],
+                "token_configured": connection["token_configured"],
             },
             "detail": {
                 "plane_running": bool(plane.get("running")),
                 "plane_error": str(plane.get("error") or ""),
-                "speaker_rejected": rejected,
+                "speaker_rejected": connection["speaker_rejected"],
             },
             "actions": [] if outbound else ["connect.inspect"],
         }
 
-        # test: a stored probe result, or the live inbound link as evidence.
+        # test: for inbound speakers only the live link counts (SSH is diagnostics);
+        # an outbound speaker has no inbound link, so its stored probe is the evidence.
         stored_test = saved.get("test", {}).get("device", {}).get("test", {})
         if not isinstance(stored_test, dict):
             stored_test = {}
-        test_done = bool(stored_test.get("ok")) or connected
+        stored_ok = bool(stored_test.get("ok"))
+        test_done = stored_ok if outbound else connected
         test_step = {
             "id": "test", "status": "done" if test_done else "pending",
-            "evidence": {"stored": bool(stored_test.get("ok")),
+            "evidence": {"stored": stored_ok,
                          "at": stored_test.get("at") or "",
-                         "speaker_connected": connected},
+                         "speaker_connected": connected,
+                         "transport": connection["transport"],
+                         "connection_message": connection["connection_message"]},
             "detail": {"checks": stored_test.get("checks") or []},
             "actions": ["device.test"],
         }
@@ -680,15 +706,34 @@ def install_setup_routes(
                         {"stage": stage, "stages": list(STAGES)},
                     )
                 provider = str(values.get("provider") or "").strip() or None
+                # Unsaved values are for this probe only: they never reach secrets.yaml,
+                # the stored last_test result, or the response body.
+                raw_keys = values.get("keys")
+                ephemeral: dict[str, str] | None = None
+                if raw_keys is not None:
+                    if not isinstance(raw_keys, dict):
+                        raise _setup_error(422, "invalid_values",
+                                           "keys must be an object of env name -> value")
+                    ephemeral = {}
+                    for raw_name, raw_value in raw_keys.items():
+                        name = str(raw_name).strip()
+                        if not name or not isinstance(raw_value, str):
+                            raise _setup_error(
+                                422, "invalid_values",
+                                f"secret {raw_name!r} must be a non-empty name and a string",
+                            )
+                        ephemeral[name] = raw_value
                 try:
-                    result = await keycheck.test_provider(current, stage, provider)
+                    result = await keycheck.test_provider(
+                        current, stage, provider, keys=ephemeral)
                 except keycheck.KeyCheckError as exc:
                     raise _setup_error(400, exc.code, str(exc), exc.details) from exc
-                setup_store.update(
-                    data_dir,
-                    lambda data, result=result: setup_store.set_value(
-                        data, ("keys", "last_test"), result),
-                )
+                if ephemeral is None:
+                    setup_store.update(
+                        data_dir,
+                        lambda data, result=result: setup_store.set_value(
+                            data, ("keys", "last_test"), result),
+                    )
                 return result
             elif action == "providers.save":
                 # The keys step is a provider table: one provider per use. The request
@@ -845,6 +890,47 @@ def install_setup_routes(
                 except HTTPException as exc:
                     raise _object_error(exc) from exc
                 params = dict(base.get("params") or {})
+                # The params step now exposes the four controls the manifest copy
+                # promised. They are top-level wizard fields, merged onto the existing
+                # device so a save that only changes one of them keeps the rest.
+                if "volume" in values:
+                    volume = values.get("volume")
+                    if isinstance(volume, bool) or not isinstance(volume, int) \
+                            or not 0 <= volume <= 100:
+                        raise _setup_error(
+                            422, "invalid_values", "volume must be an integer 0..100",
+                            {"field": "volume", "min": 0, "max": 100})
+                    base["volume"] = volume
+                if "led_enabled" in values:
+                    led_enabled = values.get("led_enabled")
+                    if not isinstance(led_enabled, bool):
+                        raise _setup_error(
+                            422, "invalid_values", "led_enabled must be a boolean",
+                            {"field": "led_enabled"})
+                    led = dict(base.get("led") or {})
+                    led["enabled"] = led_enabled
+                    base["led"] = led
+                if "listen_port" in values:
+                    listen_port = values.get("listen_port")
+                    if listen_port is not None and (
+                            isinstance(listen_port, bool)
+                            or not isinstance(listen_port, int)
+                            or not 1 <= listen_port <= 65535):
+                        raise _setup_error(
+                            422, "invalid_values",
+                            "listen_port must be an integer 1..65535 or null",
+                            {"field": "listen_port", "min": 1, "max": 65535})
+                    base["listen_port"] = listen_port
+                mic_gain: float | None = None
+                if "mic_gain_db" in values:
+                    gain = values.get("mic_gain_db")
+                    if isinstance(gain, bool) or not isinstance(gain, (int, float)) \
+                            or not 0 <= float(gain) <= 42:
+                        raise _setup_error(
+                            422, "invalid_values",
+                            "mic_gain_db must be a number 0..42",
+                            {"field": "mic_gain_db", "min": 0, "max": 42})
+                    mic_gain = float(gain)
                 submitted = _coerce_params(values.get("params") or {})
                 # A manifest-declared secret is write-only: it goes to secrets.yaml and
                 # never into the device's params dict or an API response.
@@ -862,6 +948,10 @@ def install_setup_routes(
                     except ValueError as exc:
                         raise _setup_error(400, "secret_rejected", str(exc)) from exc
                 params.update(submitted)
+                if mic_gain is not None:
+                    # DeviceConfig has no scalar for this yet; manifest research defines
+                    # it as a non-secret device param, so it merges into params.
+                    params["mic_gain_db"] = mic_gain
                 params["plug_id"] = plugin.id
                 adapter = str(
                     values.get("adapter") or base.get("adapter") or manifest.id
@@ -929,18 +1019,33 @@ def install_setup_routes(
                 manifest = _device_manifest(plugin, device)
                 plane = plane_snapshot(app)
                 probe = await probe_host(device.host)
-                # The stored probe is evidence in its own right; the live plane is the
-                # stronger signal for an inbound speaker (design §3.2).
-                ok = bool(probe.get("usable")) or bool(plane.get("speaker_connected"))
+                connection = _connection_facts(device, manifest, plane)
+                connected = bool(connection["connected"])
+                probe_ok = bool(probe.get("usable"))
+                # Inbound: a reachable SSH port proves nothing about the client's
+                # inbound link, so only speaker_connected can turn this green. Outbound:
+                # the host probe is the best evidence this build can collect.
+                ok = probe_ok if connection["outbound"] else connected
                 checks = [
-                    {"id": "plane", "ok": bool(plane.get("speaker_connected")),
-                     "detail": {"running": bool(plane.get("running")),
+                    {"id": "plane", "ok": connected,
+                     "status": ("ok" if connected else
+                                "not_applicable" if connection["outbound"] else "fail"),
+                     "detail": {"speaker_connected": connected,
+                                "running": bool(plane.get("running")),
                                 "error": str(plane.get("error") or "")}},
-                    {"id": "host", "ok": bool(probe.get("usable")),
+                    {"id": "host", "ok": probe_ok,
+                     "status": "ok" if probe_ok else "fail",
                      "detail": {"ssh": probe.get("ssh") or {},
                                 "hint": probe.get("hint") or ""}},
+                    {"id": "token", "ok": bool(connection["token_configured"]),
+                     "status": "ok" if connection["token_configured"] else "fail",
+                     "detail": {"configured": bool(connection["token_configured"]),
+                                "token_env": connection["token_env"],
+                                "allow_no_token": bool(device.allow_no_token)}},
                 ]
                 entry = {"ok": ok, "at": setup_store.iso_now(), "device_id": device.id,
+                         "transport": connection["transport"],
+                         "connection_message": connection["connection_message"],
                          "checks": checks}
                 setup_store.update(
                     data_dir,

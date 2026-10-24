@@ -20,6 +20,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -32,6 +33,8 @@ __all__ = [
     "credential_names",
     "provider_catalog",
     "provider_entries",
+    "provider_ready",
+    "sherpa_model_ready",
     "stage_provider_names",
     "stage_satisfied",
     "stage_state",
@@ -386,7 +389,6 @@ def voice_options(stage: str, provider: ProviderConfig) -> list[dict]:
 
 
 def _entry(stage: str, name: str, provider: ProviderConfig, cfg: Config) -> ProviderEntry:
-    chain = list(getattr(cfg.providers, stage).chain)
     voices = voice_options(stage, provider)
     default_voice = next((item["id"] for item in voices if item["default"]), "")
     zh, en = display_names(name, provider)
@@ -399,7 +401,7 @@ def _entry(stage: str, name: str, provider: ProviderConfig, cfg: Config) -> Prov
         docs_url=_docs_url(stage, provider),
         hint=_provider_hint(stage, provider),
         fields=_fields_for(stage, provider),
-        selected=bool(chain and chain[0] == name),
+        selected=_first_ready(cfg, stage) == name,
         available=serves_stage(provider, stage),
         required=True,
         voices=voices,
@@ -407,30 +409,80 @@ def _entry(stage: str, name: str, provider: ProviderConfig, cfg: Config) -> Prov
     )
 
 
-def stage_satisfied(cfg: Config, stage: str) -> tuple[bool, list[str]]:
-    """(satisfied, missing env names) for the one selected provider of a stage.
+def sherpa_model_ready(model: str) -> bool:
+    """The files a local sherpa ASR needs before it can answer at all."""
+    text = str(model or "").strip()
+    if not text:
+        return False
+    directory = Path(text).expanduser()
+    return bool(
+        directory.is_dir()
+        and (directory / "tokens.txt").is_file()
+        and any((directory / name).is_file()
+                for name in ("model.int8.onnx", "model.onnx"))
+    )
 
-    Only the primary chain entry counts: a fallback is optional, so an unconfigured
-    fallback must not keep the keys step pending. A keyless provider (sherpa) is
-    satisfied without a secret.
+
+def provider_ready(cfg: Config, stage: str, name: str) -> tuple[bool, list[str]]:
+    """(usable, missing env names) for one chain entry.
+
+    A provider is usable when every credential it declares resolves *and* it can
+    actually run: a local model's files exist, a built-in vendor endpoint needs no
+    ``base_url``, and an OpenAI-compatible entry needs its endpoint configured.
+    """
+    provider = cfg.providers.catalog.get(name)
+    if provider is None:
+        return False, []
+    names = credential_names(cfg, stage, name)
+    missing = [name for name in names if secrets.resolve(name) is None]
+    if missing:
+        return False, missing
+    kind = _norm(provider.kind)
+    if kind == "sherpa":
+        return sherpa_model_ready(str(provider.model or "")), []
+    if kind in ("volc_asr", "volc_tts", "xfyun"):
+        return True, []
+    return bool(str(provider.base_url or "").strip()), []
+
+
+def _first_ready(cfg: Config, stage: str) -> str:
+    """The first usable provider in the chain, else the configured primary."""
+    chain = list(getattr(cfg.providers, stage).chain)
+    for name in chain:
+        ready, _missing = provider_ready(cfg, stage, name)
+        if ready:
+            return name
+    return chain[0] if chain else ""
+
+
+def stage_satisfied(cfg: Config, stage: str) -> tuple[bool, list[str]]:
+    """(satisfied, missing env names) for *any* provider in a stage's chain.
+
+    A stage is satisfied by one usable provider, not necessarily ``chain[0]``: a fresh
+    install may keep 讯飞 first while only the 火山 fallback has a key. A keyless
+    provider (sherpa) counts only when its model files are present. When nothing is
+    usable, ``missing`` lists every credential that would make one of them usable.
     """
     chain = list(getattr(cfg.providers, stage).chain)
-    if not chain or chain[0] not in cfg.providers.catalog:
-        return False, []
-    names = credential_names(cfg, stage, chain[0])
-    missing = [name for name in names if secrets.resolve(name) is None]
-    return not missing, missing
+    missing_all: list[str] = []
+    for name in chain:
+        ready, missing = provider_ready(cfg, stage, name)
+        if ready:
+            return True, []
+        missing_all.extend(missing)
+    return False, list(dict.fromkeys(missing_all))
 
 
 def stage_state(cfg: Config) -> dict[str, dict]:
-    """Per-use selection: the configured primary, the full chain, and what is offered."""
+    """Per-use selection: the usable provider, the full chain, and what is offered."""
     out: dict[str, dict] = {}
     for stage in STAGES:
         chain = list(getattr(cfg.providers, stage).chain)
+        selected = _first_ready(cfg, stage)
         satisfied, missing = stage_satisfied(cfg, stage)
         out[stage] = {
-            "selected": chain[0] if chain else "",
-            "selected_id": f"{stage}:{chain[0]}" if chain else "",
+            "selected": selected,
+            "selected_id": f"{stage}:{selected}" if selected else "",
             "chain": chain,
             "required": True,
             "providers": stage_provider_names(cfg, stage),
@@ -512,12 +564,49 @@ def _result(
     }
 
 
-def _values_for(provider: ProviderConfig, fields: list[KeyField]) -> dict[str, str]:
+def _values_for(
+    provider: ProviderConfig,
+    fields: list[KeyField],
+    ephemeral: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Effective values for one probe: unsaved overrides first, then saved secrets.
+
+    The returned dict (and an ephemeral payload) is only ever used for the probe; it is
+    never written to disk or included in a result.
+    """
+    supplied = {str(name): str(value) for name, value in (ephemeral or {}).items()}
+    allowed = {item.name for item in fields}
+    unknown = sorted(set(supplied) - allowed)
+    if unknown:
+        raise KeyCheckError(
+            "invalid_values",
+            "unsaved test values must be credentials of this provider: "
+            + ", ".join(unknown),
+            {"fields": sorted(allowed), "unknown": unknown},
+        )
     values: dict[str, str] = {}
     for item in fields:
+        if item.name in supplied:
+            values[item.role] = supplied[item.name]
+            continue
         resolution = secrets.resolve(item.name)
         values[item.role] = resolution.value if resolution else ""
     return values
+
+
+def _note_ephemeral(result: dict, ephemeral: dict[str, str] | None) -> dict:
+    """Mark an unsaved test so the response can say "not saved" without a value."""
+    if not ephemeral:
+        return result
+    details = dict(result.get("details") or {})
+    details["ephemeral"] = True
+    details["saved"] = False
+    message = str(result.get("message") or "")
+    return {
+        **result,
+        "message": f"{message} (tested with unsaved values; not saved)",
+        "details": details,
+    }
 
 
 def _target(cfg: Config, stage: str, provider: str | None) -> tuple[str, ProviderConfig]:
@@ -526,32 +615,43 @@ def _target(cfg: Config, stage: str, provider: str | None) -> tuple[str, Provide
             "unknown_stage", f"no such stage: {stage!r}", {"stage": stage, "stages": list(STAGES)}
         )
     chain = list(getattr(cfg.providers, stage).chain)
+    offered = stage_provider_names(cfg, stage)
     name = (provider or "").strip() or (chain[0] if chain else "")
-    if name not in chain:
+    # A provider the table offers may be tested before it is selected in the chain;
+    # whether the value comes from secrets or an unsaved payload is the caller's choice.
+    if name not in offered:
         raise KeyCheckError(
             "unknown_provider",
-            f"provider {name!r} is not in the {stage} chain",
-            {"stage": stage, "provider": name, "available": chain},
+            f"provider {name!r} is not available for {stage}",
+            {"stage": stage, "provider": name, "available": offered},
         )
     entry = cfg.providers.catalog.get(name)
     if entry is None:  # schema validation already rejects this; keep the API honest.
         raise KeyCheckError(
             "unknown_provider", f"provider {name!r} is not in the catalog",
-            {"stage": stage, "provider": name, "available": chain},
+            {"stage": stage, "provider": name, "available": offered},
         )
     return name, entry
 
 
-async def test_provider(cfg: Config, stage: str, provider: str | None = None) -> dict:
-    """Run the cheapest truthful credential test for one chain entry.
+async def test_provider(
+    cfg: Config,
+    stage: str,
+    provider: str | None = None,
+    *,
+    keys: dict[str, str] | None = None,
+) -> dict:
+    """Run the cheapest truthful credential test for one provider.
 
-    Returns ``{ok, stage, provider, message, details}`` for every outcome, including
-    "no key" and "no safe online test". Bad arguments raise :class:`KeyCheckError`;
-    every network/parse failure is a result with ``ok: false``, never an exception.
+    ``keys`` carries unsaved values for the probe only (write-only semantics still
+    hold: they are neither persisted nor echoed). Returns
+    ``{ok, stage, provider, message, details}`` for every outcome, including "no key"
+    and "no safe online test". Bad arguments raise :class:`KeyCheckError`; every
+    network/parse failure is a result with ``ok: false``, never an exception.
     """
     name, entry = _target(cfg, stage, provider)
     fields = _fields_for(stage, entry)
-    values = _values_for(entry, fields)
+    values = _values_for(entry, fields, keys)
     base_details = {
         "kind": str(entry.kind),
         "docs_url": _docs_url(stage, entry),
@@ -562,26 +662,37 @@ async def test_provider(cfg: Config, stage: str, provider: str | None = None) ->
     }
 
     if not fields:
-        return _result(
+        if _norm(entry.kind) == "sherpa":
+            model = str(entry.model or "")
+            ready = sherpa_model_ready(model)
+            details = {**base_details, "model_dir": model, "models_ready": ready}
+            return _note_ephemeral(_result(
+                ready, stage, name,
+                ("local model files are present; no online credential required"
+                 if ready else
+                 "local model files are missing; fetch the models first (models step)"),
+                check="local_model", details=details,
+            ), keys)
+        return _note_ephemeral(_result(
             False, stage, name,
-            "no safe online test; this provider needs no key (local or keyless provider)",
+            "no safe online test; this keyless provider is not a local model",
             check="none", details=base_details,
-        )
+        ), keys)
 
     missing = [field.name for field in fields if not values[field.role]]
     if missing:
-        return _result(
+        return _note_ephemeral(_result(
             False, stage, name,
             "missing credential: " + ", ".join(missing),
             check="none", details={**base_details, "missing": missing},
-        )
+        ), keys)
     if not _looks_usable(values):
-        return _result(
+        return _note_ephemeral(_result(
             False, stage, name,
             "no safe online test; key format looks invalid "
             "(empty, too short, or contains whitespace)",
             check="format", details=base_details,
-        )
+        ), keys)
 
     secrets_used = [value for value in values.values() if value]
     started = time.perf_counter()
@@ -594,17 +705,17 @@ async def test_provider(cfg: Config, stage: str, provider: str | None = None) ->
             probe = await _probe_asr(entry, values)
     except Exception as exc:  # noqa: BLE001 - a failed probe is data, not a 500
         message = _redact(f"{type(exc).__name__}: {exc}", secrets_used)
-        return _result(
+        return _note_ephemeral(_result(
             False, stage, name, f"test failed: {message}",
             check="network",
             details={**base_details, "elapsed_ms": _elapsed(started)},
-        )
+        ), keys)
     elapsed = _elapsed(started)
     message = _redact(probe.get("message", ""), secrets_used)
     ok = bool(probe.get("ok"))
     if not ok:
         message = f"test failed: {message}" if message else "test failed"
-    return _result(
+    return _note_ephemeral(_result(
         ok, stage, name, message,
         check=str(probe.get("check") or "online"),
         details={
@@ -613,7 +724,7 @@ async def test_provider(cfg: Config, stage: str, provider: str | None = None) ->
             "elapsed_ms": elapsed,
             **(probe.get("details") or {}),
         },
-    )
+    ), keys)
 
 
 def _elapsed(started: float) -> float:

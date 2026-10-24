@@ -65,7 +65,9 @@ keys 步骤现在是 **provider 表**：LLM / ASR / TTS 各一个下拉，选中
 | `tts`（讯飞） | 签名 WebSocket + 单字请求，读第一帧 | 1 字符 |
 | `tts`（OpenAI 兼容） | `POST /audio/speech`，文本「嗯」，读第一块 | 1 字符 |
 
-返回固定 `{ok, stage, provider, message, details}`；401/403 归为凭据失败，超时/网络错误归为网络失败。没有安全在线检查的 provider（如本地 sherpa）返回 `ok: false` + “no safe online test…”，**不会**假装通过。
+返回固定 `{ok, stage, provider, message, details}`；401/403 归为凭据失败，超时/网络错误归为网络失败。本地 sherpa 不做在线调用：模型目录含 `tokens.txt` + `model.int8.onnx`/`model.onnx` 时返回 `ok: true` + “local model …”，缺文件时返回 `ok: false` + “local model files are missing…”，不会假装在线通过。
+
+`keys.test` 还接受 `keys: {ENV: value}` 临时值：只用于本次探测（覆盖已保存值），不写 `secrets.yaml`、不回显、不写入 `last_test`；响应带 `details.ephemeral=true` / `details.saved=false`，`message` 末尾注明 “not saved”。不传 `keys` 时仍只测已保存值。
 
 ## 5. 兼容性与迁移
 
@@ -74,7 +76,7 @@ keys 步骤现在是 **provider 表**：LLM / ASR / TTS 各一个下拉，选中
 - **旧版 AppID/Access Token 不被当前代码使用**：如果用户只有旧版凭证，`keys.test` 会真实返回 401，而不是误报成功；迁移路径是新建新版 API Key。
 - **轮换**：控制台禁用/删除旧 Key → 在「密钥」页保存新 `VOLC_API_KEY` → `keys.test` 通过后再删除旧值。密钥只写不读，响应/日志不出现值。
 - **同一 Key 两个 stage**：ASR 和 TTS 若都选火山，两张下拉里都填 `VOLC_API_KEY`（同一个值）即可；`providers.save` 会把各自 `providers.<stage>.chain` 写成 `[volc_*]`。保存一次后 `configured` 对两个 use 都变绿；测试时按 stage 分别调用各自端点，避免“TTS 通过就以为 ASR 也通过”。
-- **单 provider 完成度**：每个 use 只检查选中的 `chain[0]`。没选中的 provider（如 fallback 的讯飞/火山另一条）缺 key 不会让 keys 步骤卡住；这取代了“多 provider 链要求全部配置”的旧行为。
+- **链内任一 provider 完成度**：每个 use 只要链中**任一** provider 可用即可（不再要求 `chain[0]`）。全新的“讯飞在前、火山在后”配置里，只填 `VOLC_API_KEY` 也能让 TTS 变绿；`stage_state.selected` 显示第一个可用 provider，`chain` 原样保留。没选中的 provider（如 fallback 的讯飞/火山另一条）缺 key 不会让 keys 步骤卡住；这取代了“多 provider 链要求全部配置”的旧行为。
 
 ## 6. 参考链接
 

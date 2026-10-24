@@ -6,11 +6,13 @@ import base64
 import collections
 import contextlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
 import re
 import shutil
+import socket
 import tempfile
 import time
 import uuid
@@ -1099,6 +1101,75 @@ def request_console_host(request: Request) -> str:
         return candidate
     hostname = request.url.hostname or "127.0.0.1"
     return f"[{hostname}]" if ":" in hostname else hostname
+
+
+def is_loopback_host(host: str) -> bool:
+    """True for a host a speaker on the LAN cannot dial back to.
+
+    ``localhost`` and any ``*.localhost`` name count, as do IPv4/IPv6 loopback and
+    unspecified addresses (``127.0.0.1``, ``0.0.0.0``, ``::1``, ``::``).
+    """
+    text = (host or "").strip().lower()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    if not text:
+        return False
+    if text == "localhost" or text.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(text.split("%", 1)[0])
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
+
+
+def server_lan_ipv4() -> str:
+    """The first private, non-loopback IPv4 of this host; "" when none is found.
+
+    Read-only and best-effort: the hostname's addresses first, then the route address
+    the kernel would use (a UDP connect sends no packet). A container's bridge address
+    can be returned by getaddrinfo, so the route address is preferred when it is private.
+    """
+    candidates: list[str] = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            candidates.append(str(info[4][0]))
+    except OSError:
+        pass
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        candidates.insert(0, str(sock.getsockname()[0]))
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    for text in candidates:
+        try:
+            address = ipaddress.ip_address(text)
+        except ValueError:
+            continue
+        if (address.version == 4 and address.is_private
+                and not address.is_loopback and not address.is_link_local
+                and not address.is_unspecified):
+            return str(address)
+    return ""
+
+
+def resolve_connect_host(request: Request) -> tuple[str, str, bool]:
+    """(host a speaker should dial, "request"|"server", loopback was detected).
+
+    A reverse-proxy/request host is preserved unless it is a loopback name: those are
+    reachable from the console's browser only, never from the speaker, so the server's
+    LAN IPv4 is substituted when one exists.
+    """
+    requested = request_console_host(request)
+    if not is_loopback_host(requested):
+        return requested, "request", False
+    lan = server_lan_ipv4()
+    if lan:
+        return lan, "server", True
+    return requested, "request", True
 
 
 def request_ws_scheme(request: Request) -> str:
@@ -3148,36 +3219,15 @@ def create_app(
         kws = Path(voice.kws_model_dir).expanduser() if voice.kws_model_dir else None
         vad = Path(voice.vad_model_path).expanduser() if voice.vad_model_path else None
         keywords = Path(voice.kws_keywords_file).expanduser() if voice.kws_keywords_file else None
-        def provider_usable(provider: object) -> bool:
-            """Can this chain entry actually answer right now?"""
-            kind = str(getattr(provider, "kind", ""))
-            names = [str(n) for n in (getattr(provider, "api_key_env", ""),
-                                      getattr(provider, "app_id_env", ""),
-                                      getattr(provider, "api_secret_env", "")) if n]
-            if not all(secrets.has(name) for name in names):
-                return False
-            if kind == "sherpa":
-                model = str(getattr(provider, "model", "") or "")
-                return bool(model and Path(model).expanduser().exists())
-            # 火山 TTS/ASR and 讯飞 have the vendor endpoint built into the provider:
-            # their base_url is legitimately empty, and demanding one made the setup
-            # wizard claim "keys missing" forever (concurrent providers-v2 test 17:46).
-            if kind in ("volc_tts", "volc_asr", "xfyun"):
-                return True
-            return bool(getattr(provider, "base_url", ""))
         stage_ok: dict[str, bool] = {}
         missing_keys: set[str] = set()
         missing_by_stage: dict[str, list[str]] = {}
+        stage_states = keycheck.stage_state(cfg_now)
         for stage in ("asr", "tts", "llm"):
-            # One provider per use: only the configured primary decides completion.
-            # A fallback with a key must not hide a primary that still needs one.
-            chain = list(getattr(cfg_now.providers, stage).chain)
-            selected_provider = (
-                cfg_now.providers.catalog.get(chain[0]) if chain else None)
+            # Any usable provider in the chain can satisfy a use (a local ASR needs
+            # model files rather than a key); the wizard shows the first usable one.
             key_ok, stage_missing = keycheck.stage_satisfied(cfg_now, stage)
-            stage_ok[stage] = bool(
-                key_ok and selected_provider is not None
-                and provider_usable(selected_provider))
+            stage_ok[stage] = key_ok
             missing_keys.update(stage_missing)
             if not stage_ok[stage]:
                 missing_by_stage[stage] = sorted(stage_missing)
@@ -3185,6 +3235,8 @@ def create_app(
             "stages": stage_ok,
             "missing": sorted(missing_keys),
             "missing_by_stage": missing_by_stage,
+            "selected": {stage: stage_states[stage]["selected"]
+                         for stage in ("asr", "tts", "llm")},
         }
         def kws_ok(directory: Path | None) -> bool:
             if directory is None:
@@ -3577,7 +3629,7 @@ def create_app(
         device = _device_or_404(device_id, cfg_now)
         token = secrets.get(device.token_env) if device.token_env else ""
         port = int(device.listen_port or DEVICE_DEFAULT_LISTEN_PORT)
-        host = request_console_host(request)
+        host, host_source, loopback = resolve_connect_host(request)
         scheme = request_ws_scheme(request)
         # The token is quoted: a generated token is usually hex, but a hand-set one may
         # contain characters that would otherwise split the query string.
@@ -3601,9 +3653,27 @@ def create_app(
                 f"还没有设备 token，音箱连不上。请在密钥页或环境变量里设置 {token_env}，"
                 "或重新运行安装向导生成；设置好之后这里会给出带 token 的完整 ws_url。"
             )
-        log.info("connect info issued for device %s (configured=%s, allow_no_token=%s)",
-                 device.id, configured, allow_no_token)
-        return {
+        host_hint: dict[str, str] | None = None
+        if loopback:
+            if host_source == "server":
+                host_hint = {
+                    "zh": f"控制台是通过本机回环地址打开的；已自动改用服务端局域网地址 "
+                          f"{host}。音箱必须能访问这个地址。",
+                    "en": f"The console was opened through loopback; the server's LAN "
+                          f"address {host} is used instead. The speaker must reach it.",
+                }
+            else:
+                host_hint = {
+                    "zh": "控制台是通过本机回环地址打开的，但没有找到可用的局域网 IPv4。"
+                          "请改用 NAS 的局域网 IP 打开控制台，或把 ws_url 里的主机改成"
+                          "音箱能访问的地址。",
+                    "en": "The console was opened through loopback and no LAN IPv4 was "
+                          "found. Open the console via the NAS's LAN IP, or replace the "
+                          "host in ws_url with an address the speaker can reach.",
+                }
+        log.info("connect info issued for device %s (configured=%s, allow_no_token=%s, "
+                 "host_source=%s)", device.id, configured, allow_no_token, host_source)
+        payload = {
             "device_id": device.id,
             "room": device.room,
             "host": device.host,
@@ -3612,8 +3682,12 @@ def create_app(
             "token_env": device.token_env,
             "configured": configured,
             "allow_no_token": allow_no_token,
+            "host_source": host_source,
             "hint": hint,
         }
+        if host_hint is not None:
+            payload["host_hint"] = host_hint
+        return payload
 
     def _param_error(message: str, **details: object) -> HTTPException:
         """Delete/update validation errors keep the object shape the wizard uses."""
@@ -3819,27 +3893,50 @@ def create_app(
         plane_ok = bool(plane["speaker_connected"]) and plane["speaker_device"] in ("", device.id)
         token_ok = bool(device.token_env and secrets.get(device.token_env)) or bool(
             device.allow_no_token)
+        outbound = bool(resolved is not None and str(resolved.device.transport) == "outbound")
         capabilities = resolved.capabilities if resolved is not None else []
         missing = [name for name in ("reference", "playback") if name not in capabilities]
+        if outbound:
+            connection_message = "not_applicable"
+        elif plane_ok:
+            connection_message = "connected"
+        elif int(plane.get("speaker_rejected") or 0) > 0:
+            connection_message = "token_mismatch"
+        elif not token_ok:
+            connection_message = "token_mismatch"
+        elif not plane["running"]:
+            connection_message = "port_blocked"
+        else:
+            connection_message = "waiting_for_client"
         checks = [
             {"name": "host", "ok": bool(probe.get("usable")),
+             "status": "ok" if probe.get("usable") else "fail",
              "detail": {"ssh": probe.get("ssh") or {}, "hint": probe.get("hint") or ""}},
             {"name": "plane", "ok": plane_ok,
+             "status": ("ok" if plane_ok else
+                        "not_applicable" if outbound else "fail"),
              "detail": {"speaker_connected": bool(plane["speaker_connected"]),
                         "running": bool(plane["running"]),
                         "device_id": plane["speaker_device"],
                         "error": plane["error"]}},
             {"name": "token", "ok": token_ok,
+             "status": "ok" if token_ok else "fail",
              "detail": {"configured": token_ok, "token_env": device.token_env,
                         "allow_no_token": bool(device.allow_no_token)}},
             {"name": "capabilities", "ok": resolved is not None,
+             "status": "ok" if resolved is not None else "fail",
              "detail": {"plug_id": _device_plug_id(device, resolved),
                         "capabilities": capabilities,
                         "missing_for_barge_in": missing if resolved is not None else []}},
         ]
-        ok = all(check["ok"] for check in checks)
-        failed = [check["name"] for check in checks if not check["ok"]]
-        return {"ok": ok, "checks": checks,
+        # An inbound speaker is green only on the live link; SSH is diagnostics. An
+        # outbound speaker has no inbound link, so its checks (minus plane) are the test.
+        gate = [check for check in checks if not (outbound and check["name"] == "plane")]
+        ok = all(check["ok"] for check in gate)
+        failed = [check["name"] for check in gate if not check["ok"]]
+        return {"ok": ok, "connection_message": connection_message,
+                "transport": "outbound" if outbound else "inbound",
+                "checks": checks,
                 "error": "" if ok else f"failed checks: {', '.join(failed)}"}
 
     @app.delete("/api/v1/devices/{device_id}", dependencies=[Depends(auth)])

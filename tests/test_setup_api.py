@@ -70,6 +70,14 @@ def wizard(tmp_path, monkeypatch):
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")
     cfg.providers.catalog["asr"] = ProviderConfig(kind="sherpa", model=str(asr))
+    # A configured endpoint is part of "this provider can answer"; the schema default
+    # empty base_url is deliberately not enough.
+    cfg.providers.catalog["tts"] = ProviderConfig(
+        kind="openai_compat", base_url="https://tts.example/v1", model="tts-1",
+        api_key_env="RUI_TTS_KEY")
+    cfg.providers.catalog["llm"] = ProviderConfig(
+        kind="openai_compat", base_url="https://llm.example/v1", model="chat",
+        api_key_env="RUI_LLM_KEY")
     cfg.audio.voice.kws_model_dir = str(kws)
     cfg.audio.voice.vad_model_path = str(vad)
     cfg.audio.voice.kws_keywords_file = str(tmp_path / "keywords.txt")
@@ -89,6 +97,13 @@ def _make_models(tmp_path) -> None:
     (kws / "tokens.txt").write_text("x", encoding="utf-8")
     for name in KWS_FILES:
         (kws / name).write_bytes(b"fake")
+
+
+def _make_local_asr(tmp_path) -> None:
+    asr = tmp_path / "asr"
+    asr.mkdir(exist_ok=True)
+    (asr / "tokens.txt").write_text("x", encoding="utf-8")
+    (asr / "model.int8.onnx").write_bytes(b"fake")
 
 
 def _step(body: dict, step_id: str) -> dict:
@@ -198,16 +213,19 @@ def test_eight_steps_and_evidence_drives_every_transition(wizard, monkeypatch) -
     assert initial["complete"] is False and initial["verified"] is False
     assert all(step["status"] == "pending" for step in initial["steps"])
 
-    # keys: secrets are present, never echoed.
+    # keys: secrets are present, never echoed. The only ASR is a local sherpa, which
+    # is keyless but stays unusable until its model files exist (models step).
     saved = client.post("/api/v1/setup/step", json={
         "step": "keys", "action": "keys.save", "payload": {"values": KEYS}})
     assert saved.status_code == 200, saved.text
     assert not any(value in saved.text for value in KEYS.values())
-    assert _step(saved.json(), "keys")["status"] == "done"
+    assert _step(saved.json(), "keys")["status"] == "pending"
 
-    # models: files on disk, not a claim.
+    # models: files on disk, not a claim; they also make the local ASR usable.
     _make_models(tmp_path)
-    assert _step(client.get("/api/v1/setup/step").json(), "models")["status"] == "done"
+    state = client.get("/api/v1/setup/step").json()
+    assert _step(state, "models")["status"] == "done"
+    assert _step(state, "keys")["status"] == "done"
 
     # prepare: persisted confirmation.
     assert client.post("/api/v1/setup/step", json={
@@ -341,6 +359,7 @@ def test_device_test_writes_evidence_without_touching_config(wizard, monkeypatch
                 "ssh": {"port_open": True, "banner": True}, "hint": ""}
 
     monkeypatch.setattr(app_module, "_probe_host", fake_probe)
+    client.app.state.audio = _Plane(connected=True)
     response = client.post("/api/v1/setup/step", json={
         "step": "test", "action": "device.test", "payload": {}})
     assert response.status_code == 200, response.text
@@ -647,9 +666,10 @@ def test_providers_save_rejects_unknown_wrong_stage_and_foreign_keys(tmp_path, m
     assert path.read_bytes() == before
 
 
-def test_keys_step_only_requires_the_selected_provider_of_a_chain(tmp_path, monkeypatch) -> None:
+def test_keys_step_is_satisfied_by_any_provider_in_a_fallback_chain(
+        tmp_path, monkeypatch) -> None:
     client, path, _tmp = _provider_client(tmp_path, monkeypatch)
-    # Only the fallback TTS provider has a key; the selected primary (讯飞) is missing.
+    # Only the fallback TTS provider (火山) has a key; the primary (讯飞) is missing.
     client.post("/api/v1/setup/step", json={
         "step": "keys", "action": "keys.save",
         "payload": {"values": {
@@ -658,24 +678,50 @@ def test_keys_step_only_requires_the_selected_provider_of_a_chain(tmp_path, monk
         }}})
     state = client.get("/api/v1/setup/step").json()
     keys_step = _step(state, "keys")
-    assert keys_step["evidence"]["stages"]["tts"] is False
-    assert "XFYUN_API_KEY" in keys_step["evidence"]["missing"]
+    assert keys_step["status"] == "done"
+    assert keys_step["evidence"]["stages"] == {"asr": True, "tts": True, "llm": True}
+    assert keys_step["evidence"]["missing"] == []
+    # The usable fallback is what the table shows, not the unusable chain[0].
+    assert keys_step["evidence"]["selected"] == {
+        "asr": "volc_asr", "tts": "volc_tts", "llm": "deepseek_llm"}
+    catalog = client.get("/api/v1/setup/providers").json()
+    assert catalog["stage_state"]["tts"]["selected"] == "volc_tts"
+    assert catalog["stage_state"]["tts"]["chain"] == ["xfyun_tts", "volc_tts"]
+    rows = {(row["stage"], row["name"]): row for row in catalog["providers"]}
+    assert rows[("tts", "volc_tts")]["selected"] is True
+    assert rows[("tts", "xfyun_tts")]["selected"] is False
+    assert rows[("tts", "xfyun_tts")]["configured"] is False
 
-    # Select the provider whose key is present; the unconfigured fallback no longer
-    # blocks the step and no 讯飞 secret is needed.
+    # Selecting the provider whose key is present makes the intent explicit; the
+    # unconfigured 讯飞 fallback no longer blocks the step.
     response = client.post("/api/v1/setup/step", json={
         "step": "keys", "action": "providers.save",
         "payload": {"tts": {"provider": "volc_tts",
                             "keys": {"VOLC_API_KEY": "volc-selected-key"}}}})
     assert response.status_code == 200, response.text
-    keys_step = _step(response.json(), "keys")
-    assert keys_step["status"] == "done"
-    assert keys_step["evidence"]["stages"] == {"asr": True, "tts": True, "llm": True}
-    assert keys_step["evidence"]["missing"] == []
+    assert _step(response.json(), "keys")["status"] == "done"
     assert load_config(path).providers.tts.chain == ["volc_tts"]
-    rows = {(row["stage"], row["name"]): row
-            for row in client.get("/api/v1/setup/providers").json()["providers"]}
-    assert rows[("tts", "xfyun_tts")]["configured"] is False
+
+
+def test_keys_step_local_sherpa_fallback_is_usable_without_a_cloud_key(
+        tmp_path, monkeypatch) -> None:
+    client, _path, _tmp = _provider_client(tmp_path, monkeypatch)
+    _make_local_asr(tmp_path)
+    client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.save",
+        "payload": {"values": {"RUI_LLM_KEY": "sk-local-fallback-llm"}}})
+    state = client.get("/api/v1/setup/step").json()
+    keys_step = _step(state, "keys")
+    assert keys_step["evidence"]["stages"]["asr"] is True
+    assert keys_step["evidence"]["selected"]["asr"] == "local_asr"
+    stages = client.get("/api/v1/setup/providers").json()["stage_state"]
+    assert stages["asr"]["selected"] == "local_asr"
+    assert stages["asr"]["chain"] == ["volc_asr", "local_asr"]
+    # TTS still needs one provider: no fallback key is configured, so it stays pending
+    # and the primary (讯飞) remains the shown selection.
+    assert keys_step["evidence"]["stages"]["tts"] is False
+    assert keys_step["evidence"]["selected"]["tts"] == "xfyun_tts"
+    assert {"XFYUN_API_KEY", "VOLC_API_KEY"} <= set(keys_step["evidence"]["missing"])
 
 
 def test_setup_providers_endpoint_requires_the_console_token(tmp_path, monkeypatch) -> None:
@@ -736,13 +782,24 @@ def test_keys_test_asr_tts_missing_no_safe_test_and_dispatch(tmp_path, monkeypat
     assert "VOLC_API_KEY" in body["message"]
     assert body["details"]["check"] == "none"
 
-    # A local/keyless provider has no safe online test and must not fake a pass.
+    # A local/keyless provider is green only when its model files exist; the check
+    # never pretends to make an online call.
     response = client.post("/api/v1/setup/step", json={
         "step": "keys", "action": "keys.test",
         "payload": {"stage": "asr", "provider": "local_asr"}})
     body = response.json()
     assert response.status_code == 200 and body["ok"] is False
-    assert "no safe online test" in body["message"]
+    assert "local model files are missing" in body["message"]
+    _make_local_asr(tmp_path)
+    response = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test",
+        "payload": {"stage": "asr", "provider": "local_asr"}})
+    body = response.json()
+    assert response.status_code == 200, body
+    assert body["ok"] is True and body["provider"] == "local_asr"
+    assert "local model" in body["message"]
+    assert body["details"]["check"] == "local_model"
+    assert body["details"]["models_ready"] is True
 
     # With a key, ASR/TTS dispatch to their stage probe (not to the LLM probe).
     client.post("/api/v1/setup/step", json={
@@ -786,6 +843,152 @@ def test_keys_test_asr_tts_missing_no_safe_test_and_dispatch(tmp_path, monkeypat
         "step": "keys", "action": "keys.test", "payload": {"stage": "vision"}})
     assert bad_stage.status_code == 422
     assert bad_stage.json()["detail"]["code"] == "invalid_values"
+
+
+def test_keys_test_accepts_unsaved_values_without_storing_or_echoing(
+        tmp_path, monkeypatch) -> None:
+    client, _path, tmp_path = _provider_client(tmp_path, monkeypatch)
+    ephemeral = "sk-ephemeral-should-not-be-stored"
+    seen: list[str] = []
+
+    async def ok_probe(entry, values):
+        seen.append(values["api_key"])
+        return {"ok": True, "check": "models", "status": 200,
+                "message": "models endpoint accepted the key"}
+
+    monkeypatch.setattr(keycheck, "_probe_llm", ok_probe)
+    response = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test",
+        "payload": {"stage": "llm", "provider": "deepseek_llm",
+                    "keys": {"RUI_LLM_KEY": ephemeral}}})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is True and body["provider"] == "deepseek_llm"
+    assert "not saved" in body["message"]
+    assert body["details"]["ephemeral"] is True and body["details"]["saved"] is False
+    assert seen == [ephemeral]
+    assert ephemeral not in response.text
+    assert secrets_module.resolve("RUI_LLM_KEY") is None
+    assert not (tmp_path / "data" / "secrets.yaml").exists()
+
+    # A value for another provider's credential is a clear 400, never stored.
+    foreign = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test",
+        "payload": {"stage": "llm", "provider": "deepseek_llm",
+                    "keys": {"VOLC_API_KEY": ephemeral}}})
+    assert foreign.status_code == 400
+    assert foreign.json()["detail"]["code"] == "invalid_values"
+    assert ephemeral not in foreign.text
+
+    # The saved-only path still works and is not marked ephemeral.
+    client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.save",
+        "payload": {"values": {"RUI_LLM_KEY": "sk-saved-llm"}}})
+    saved = client.post("/api/v1/setup/step", json={
+        "step": "keys", "action": "keys.test",
+        "payload": {"stage": "llm", "provider": "deepseek_llm"}}).json()
+    assert saved["ok"] is True and "ephemeral" not in saved["details"]
+
+
+def test_device_upsert_accepts_top_level_controls_and_validates_ranges(wizard) -> None:
+    client, path, _tmp = wizard
+    response = client.post("/api/v1/setup/step", json={
+        "step": "params", "action": "device.upsert",
+        "payload": {"id": "living", "host": "speaker.local", "room": "客厅",
+                    "wake_words": ["你好小瑞"], "volume": 35, "led_enabled": False,
+                    "listen_port": 5555, "mic_gain_db": 12.5}})
+    assert response.status_code == 200, response.text
+    device = load_config(path).devices[0]
+    assert device.volume == 35
+    assert device.led.enabled is False
+    assert device.listen_port == 5555
+    assert device.params["mic_gain_db"] == 12.5
+    assert device.params["plug_id"] == "xiaoai-lx06"
+    # The response lists param keys but never their values.
+    params_detail = _step(response.json(), "params")["detail"]
+    assert "params" in params_detail and "mic_gain_db" in params_detail["params"]
+
+    # A later save that only changes the room keeps the controls (existing merged).
+    assert client.post("/api/v1/setup/step", json={
+        "step": "params", "action": "device.upsert",
+        "payload": {"room": "卧室"}}).status_code == 200
+    kept = load_config(path).devices[0]
+    assert (kept.room, kept.volume, kept.led.enabled, kept.listen_port) == (
+        "卧室", 35, False, 5555)
+    assert kept.params["mic_gain_db"] == 12.5
+
+    before = path.read_bytes()
+    for controls in ({"volume": 101}, {"volume": True}, {"led_enabled": "yes"},
+                     {"listen_port": 0}, {"mic_gain_db": 99}):
+        rejected = client.post("/api/v1/setup/step", json={
+            "step": "params", "action": "device.upsert", "payload": controls})
+        assert rejected.status_code == 422, (controls, rejected.text)
+        assert rejected.json()["detail"]["code"] == "invalid_values"
+    assert path.read_bytes() == before
+
+
+def test_device_test_ssh_only_is_not_green_for_an_inbound_speaker(
+        wizard, monkeypatch) -> None:
+    client, _path, tmp_path = wizard
+    client.post("/api/v1/setup/step", json={
+        "step": "params", "action": "device.upsert",
+        "payload": {"host": "speaker.local", "wake_words": ["你好小瑞"]}})
+
+    async def fake_probe(host: str) -> dict:
+        return {"host": host, "usable": True,
+                "ssh": {"port_open": True, "banner": True}, "hint": ""}
+
+    monkeypatch.setattr(app_module, "_probe_host", fake_probe)
+    client.app.state.audio = _Plane(connected=False)
+    state = client.post("/api/v1/setup/step", json={
+        "step": "test", "action": "device.test", "payload": {}}).json()
+    assert _step(state, "test")["status"] == "pending"
+
+    stored = __import__("json").loads(
+        (tmp_path / "data" / "setup.json").read_text(encoding="utf-8"))
+    entry = stored["test"]["device"]["test"]
+    assert entry["ok"] is False
+    assert entry["connection_message"] != "connected"
+    checks = {check["id"]: check for check in entry["checks"]}
+    assert checks["host"]["ok"] is True and checks["host"]["status"] == "ok"
+    assert checks["plane"]["ok"] is False and checks["plane"]["status"] == "fail"
+
+    # The live inbound link (not SSH) is what turns the test green.
+    client.app.state.audio = _Plane(connected=True)
+    state = client.post("/api/v1/setup/step", json={
+        "step": "test", "action": "device.test", "payload": {}}).json()
+    assert _step(state, "test")["status"] == "done"
+
+
+def test_connect_url_uses_the_server_lan_ip_when_opened_via_loopback(
+        wizard, monkeypatch) -> None:
+    client, _path, _tmp = wizard
+    client.post("/api/v1/setup/step", json={
+        "step": "params", "action": "device.upsert",
+        "payload": {"host": "speaker.local", "wake_words": ["你好小瑞"]}})
+    monkeypatch.setattr(app_module, "server_lan_ipv4", lambda: "192.168.5.20")
+    for request_host in ("127.0.0.1:8080", "localhost:8080", "[::1]:8080",
+                         "0.0.0.0:8080"):
+        body = client.get("/api/v1/devices/living/connect",
+                          headers={"host": request_host}).json()
+        assert body["host_source"] == "server", request_host
+        assert body["ws_url"].startswith("ws://192.168.5.20:4412/")
+        assert body["host_hint"]["zh"] and body["host_hint"]["en"]
+
+    # A routed/proxied host is kept, and no loopback hint is added.
+    body = client.get("/api/v1/devices/living/connect",
+                      headers={"host": "nas.local:8080"}).json()
+    assert body["host_source"] == "request"
+    assert body["ws_url"].startswith("ws://nas.local:4412/")
+    assert "host_hint" not in body
+
+    # When no LAN address can be discovered the request host is kept, with the hint.
+    monkeypatch.setattr(app_module, "server_lan_ipv4", lambda: "")
+    body = client.get("/api/v1/devices/living/connect",
+                      headers={"host": "127.0.0.1:8080"}).json()
+    assert body["host_source"] == "request"
+    assert body["ws_url"].startswith("ws://127.0.0.1:4412/")
+    assert "host_hint" in body
 
 
 def test_connect_evidence_has_clean_fields_and_message(wizard, monkeypatch) -> None:

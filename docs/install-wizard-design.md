@@ -63,7 +63,7 @@
 
 | step | 服务端证据 | 失败 `code` |
 |---|---|---|
-| `keys` | 每种用途的 `chain[0]`（选中 provider）存在且它声明的必填 secret 都能解析；无密钥 provider（sherpa）直接算满足；**不要求 fallback/其它 provider 配置**。LLM 必填；ASR/TTS 各由一个 provider 满足 | `missing_keys` |
+| `keys` | 每种用途的 **任一** provider（按链顺序，不要求 `chain[0]`）可用：声明的必填 secret 都能解析，且 provider 真能运行（本地 sherpa 需要模型文件；OpenAI 兼容 provider 需要 `base_url`；火山/讯飞内置端点）。`stage_state.selected` 取链中第一个可用 provider，全部不可用时回退 `chain[0]`。LLM 必填；ASR/TTS 各由一个 provider 满足 | `missing_keys` |
 | `models` | ASR 有 `tokens.txt` + `model.int8.onnx`/`model.onnx`；VAD 文件存在；KWS 四件套齐（`app.py` L3084-3160、`audio/kws.py` L93-104） | `missing_models` |
 | `prepare` | A：内存 `manual.confirm`，或同插头 `test` 已过；B 额外要 `rollback_ack=true`；`artifact=none` 自动 skipped | `prepare_not_confirmed` / `rollback_not_acknowledged` |
 | `params` | `devices[]` 有目标设备；`adapter` 与 manifest 一致；`host` 非空；required 参数齐；`enabled=true`；且 `plane_error==""` | `invalid_params` / `plane_restart_failed` |
@@ -72,9 +72,9 @@
 | `test` | inbound：`plane.speaker_connected==true` 且 `plane_error==""`；outbound：`adapter.probe()` 成功且 registry 有该 adapter | `device_not_connected` / `adapter_unavailable` |
 | `verify` | `app.state.first_answer` 存在且 `audio_bytes>0`；只由 `POST /setup/try` 写入 | `no_audio` |
 
-key 存在 ≠ 链路可用：schema 默认 provider 无 endpoint 时仍算未完成（`test_keys_are_stored_but_never_echoed` 已固定）。`connect` 只查 token 是否配置，不假装知道设备端状态；真正证据是 `test`。`verify` 可选，`first_answer` 在内存，重启回 pending（§9）。
+key 存在 ≠ 链路可用：schema 默认 provider 无 endpoint 时仍算未完成（`test_keys_are_stored_but_never_echoed` 已固定）。本地 sherpa 的“可用”指 `tokens.txt` + `model.int8.onnx`/`model.onnx` 存在；`keys.test` 据此给中性/绿色结果。`connect` 只查 token 是否配置，不假装知道设备端状态；真正证据是 `test`，且 inbound 只认 `speaker_connected`。`verify` 可选，`first_answer` 在内存，重启回 pending（§9）。
 
-keys 步骤是**一张 provider 表**：每个 use 一个下拉（`llm` / `asr` / `tts`），只渲染选中 provider 的 1–2 个凭据字段；TTS 额外给默认音色下拉。`providers.save` 把该 use 的 `chain` 写成 `[selected]`，因此未选中的 fallback 即使没配也不阻塞。legacy 多 provider 链照常加载，但只有 `chain[0]` 参与完成度。
+keys 步骤是**一张 provider 表**：每个 use 一个下拉（`llm` / `asr` / `tts`），只渲染选中 provider 的 1–2 个凭据字段；TTS 额外给默认音色下拉。`providers.save` 把该 use 的 `chain` 写成 `[selected]`，因此未选中的 fallback 即使没配也不阻塞。legacy 多 provider 链照常加载：**任一** provider 满足即可，`stage_state.selected` 展示第一个可用项（回退 `chain[0]`），`chain` 原样保留。
 
 ### 3.3 幂等与续跑
 
@@ -96,9 +96,10 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 | step | action | 前置 | 写什么 |
 |---|---|---|---|
 | `keys` | `keys.save` | 无 | `secrets.yaml`（`secrets.put`，L64-93） |
+| `keys` | `keys.test` | 无 | 不写；可用 `keys:{ENV:value}` 测未保存值，仅在本次探测内使用，响应标 `ephemeral:true`/`saved:false`，不落盘、不回显 |
 | `keys` | `providers.save` | 无 | `secrets.yaml`（只写选中 provider 的字段）+ `config.yaml`（`providers.<stage>.chain=[selected]`，TTS 写 `providers.catalog.<name>.voice`） |
 | `prepare` | `manual.confirm` | 无 | 仅内存 `confirmed`/`rollback_ack` |
-| `params` | `device.upsert` | `prepare` done/skipped | `config.yaml` + `keywords.txt` + 重启平面 |
+| `params` | `device.upsert` | `prepare` done/skipped | `config.yaml` + `keywords.txt` + 重启平面；接受顶层 `volume`（0–100）、`led_enabled`、`listen_port`（1–65535）、`mic_gain_db`（0–42），与已有设备 merge；`mic_gain_db` 存 `params` |
 | `wake` | `wake.set` | 设备存在 | `config.yaml` + `keywords.txt` + 重启平面 |
 | `connect` | `connect.inspect` | 设备存在 | 无；token 仍只由 `GET /devices/{id}/connect` 返回 |
 | `test` | `device.test` | 设备存在 | 无（只探测） |
@@ -115,7 +116,7 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 | `POST /api/v1/setup/device` | 加/改设备、写 keywords、重启平面 | L3362-3406 |
 | `POST /api/v1/setup/wake` | 改第一台设备唤醒词 | L3408-3423 |
 | `POST /api/v1/setup/probe` | TCP 22 + SSH banner | L3425-3428 |
-| `GET /api/v1/devices/{id}/connect` | **唯一**返回 device token 的端点 | L3459-3515 |
+| `GET /api/v1/devices/{id}/connect` | **唯一**返回 device token 的端点；`ws_url` 的 host 若来自回环（`127.0.0.1`/`localhost`/`::1`/`0.0.0.0`）会自动换成服务端局域网 IPv4，响应带 `host_source: request|server`（回环时另有 `host_hint`） | L3459-3515 |
 | `POST /api/v1/debug/say` | 试一句，真实 turn | L2220-2264 |
 
 前端：`web/src/views/SetupView.vue`、`web/src/api.ts` L293-312/L731-745、路由 `/setup`（`router.ts` L18）、未完成自动跳转（`App.vue` L135-136）。
@@ -128,7 +129,7 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 | `GET /api/v1/plugs/{id}` | — | `{manifest, available, error, resolved}` | 详情；manifest 不含 secret；`resolved` 含默认 `listen_port`/`token_env` |
 | `GET /api/v1/setup?plug=<id>` | query 可选 | `SetupState`（8 步） | 扩展现有端点；不带 `plug` 走默认解析 |
 | `GET /api/v1/setup/step` | `?plug=&step=` | `{plug, step, next_step, blocked}` | 单步查询；不执行动作 |
-| `GET /api/v1/setup/providers` | — | `{providers[], stages{}, stage_state{}}` | keys 表的渲染模型：每个 provider 一行（`fields`/`selected`/`available`/`required`/`voices`/`default_voice`），每个 use 的 `selected`/`selected_id`/`chain`/`required`/`satisfied`/`missing`；永不含值 |
+| `GET /api/v1/setup/providers` | — | `{providers[], stages{}, stage_state{}}` | keys 表的渲染模型：每个 provider 一行（`fields`/`selected`/`available`/`required`/`voices`/`default_voice`），每个 use 的 `selected`（链中第一个可用 provider，回退 `chain[0]`）/`selected_id`/`chain`/`required`/`satisfied`/`missing`；永不含值 |
 | `POST /api/v1/setup/step` | `{plug, step, values?}` | `SetupState` | 执行 §3.4 的 allowlist 动作 |
 | `POST /api/v1/setup/test-connection` | `{plug, device_id?}` | `{ok, device_id, checks[], error?}` | 不写配置；200 表示测试完成，`ok` 表示结果 |
 | `POST /api/v1/setup/try` | `{text}` | `{ok, reply, audio_bytes, error?}` | 复用 `debug/say` 的 turn 路径；`audio_bytes>0` 写 `first_answer` |
@@ -154,7 +155,8 @@ action **由服务端按 `(step, plug)` 决定**，客户端和 manifest 不能�
 
 ```json
 {"plug":"xiaoai","step":"params","values":{"host":"<speaker-ip>","room":"客厅",
- "wake_words":["你好小瑞"],"params":{"volume_max":100}}}
+ "wake_words":["你好小瑞"],"volume":35,"led_enabled":true,"listen_port":4412,
+ "mic_gain_db":12.5,"params":{"volume_max":100}}}
 ```
 
 keys 步骤的 provider 表提交（阶段都可省略，但至少一个；`provider` 省略时沿用当前 `chain[0]`）：
@@ -319,13 +321,14 @@ devices:
 | 2 | `test_setup_returns_eight_steps_in_order` | 顺序 `keys,models,prepare,params,wake,connect,test,verify`；旧 `done` 仍在 |
 | 3 | `test_statuses_come_from_evidence_not_claims` | 初始 keys pending；填 key 后仍可能 pending（endpoint 缺失）；模型齐后 done |
 | 4 | `test_prepare_confirmation_and_b_rollback_ack` | A `confirmed` 即 done；B 缺 `rollback_ack` 422 |
-| 5 | `test_params_idempotent_and_merge_preserves_unshown` | 重复提交不增设备、不丢 `listen_port`/volume；同值不重启 |
+| 5 | `test_device_upsert_accepts_top_level_controls_and_validates_ranges` / `test_params_idempotent_and_merge_preserves_unshown` | 顶层 volume/LED/listen_port/mic_gain_db 写入且越界 422；重复提交不增设备、不丢未展示字段 |
 | 6 | `test_unknown_param_type_blocks_without_writing` | 422 `unsupported_param_type`；config mtime 不变 |
 | 7 | `test_secret_param_is_write_only` / `test_setup_never_contains_token_or_key` | 响应无明文；`secrets.yaml` 有值；`/setup`、`/setup/step` 无 token/key |
 | 8 | `test_test_connection_reports_disconnected_without_writing` / `test_diagnostics_payload_has_no_secret_and_masks_host` | `ok=false`、`code=device_not_connected`、mtime 不变；诊断不含 token/完整 host |
 | 9 | `test_try_marks_first_answer_only_with_audio` | `audio_bytes=0` 不置 done；`>0` 置 done |
 | 10 | `test_plane_error_keeps_params_and_wake_not_done` / `test_concurrent_step_returns_409` | 200 + `plane_error`；两 step `error`；持锁时第二个请求 409 |
-| 11 | `test_providers_save_*` / `test_keys_step_only_requires_the_selected_provider_of_a_chain` | 选择写 `chain=[selected]` + TTS voice；值只写不读；未知/错 stage/key 字段 422；未选 fallback 不阻塞 keys done |
+| 11 | `test_providers_save_*` / `test_keys_step_is_satisfied_by_any_provider_in_a_fallback_chain` / `test_keys_step_local_sherpa_fallback_is_usable_without_a_cloud_key` | 选择写 `chain=[selected]` + TTS voice；值只写不读；未知/错 stage/key 字段 422；任一 provider 满足即 keys done，`selected` 指向可用项；本地模型文件齐才算可用 |
+| 12 | `test_keys_test_accepts_unsaved_values_without_storing_or_echoing` / `test_device_test_ssh_only_is_not_green_for_an_inbound_speaker` / `test_connect_url_uses_the_server_lan_ip_when_opened_via_loopback` | 临时 keys 不落盘且响应对应 `not saved`；SSH 通但未回连 test 不绿；回环 Host 换 LAN IP 且 `host_source=server` |
 
 ### 8.2 console 测试
 
