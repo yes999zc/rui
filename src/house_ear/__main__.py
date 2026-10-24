@@ -185,7 +185,12 @@ def _download_to(url: str, target: Path, *, force: bool = False) -> int:
     part = target.with_suffix(target.suffix + ".part")
     print(f"fetching {url}")
     timeout = httpx.Timeout(DOWNLOAD_READ_TIMEOUT_S, connect=DOWNLOAD_CONNECT_TIMEOUT_S)
-    with httpx.stream("GET", url, follow_redirects=True, timeout=timeout) as resp:
+    # The NAS has no global IPv6 route. hf-mirror/GitHub resolve to AAAA records too, and
+    # httpx would then hang the TLS handshake until the connect timeout. Binding the
+    # transport to 0.0.0.0 forces IPv4, which is the only route that works there.
+    transport = httpx.HTTPTransport(local_address="0.0.0.0")
+    with httpx.stream("GET", url, follow_redirects=True, timeout=timeout,
+                      transport=transport) as resp:
         resp.raise_for_status()
         total = int(resp.headers.get("content-length") or 0)
         done = 0

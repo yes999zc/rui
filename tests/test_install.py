@@ -165,6 +165,9 @@ def test_download_uses_bounded_http_timeouts(monkeypatch, tmp_path) -> None:
     assert isinstance(timeout, httpx.Timeout)
     assert timeout.connect == 10.0
     assert timeout.read == 60.0
+    transport = seen["transport"]
+    assert isinstance(transport, httpx.HTTPTransport)
+    assert transport._pool._local_address == "0.0.0.0"
     assert target.read_bytes() == b"data"
 
 
