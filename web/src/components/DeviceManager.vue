@@ -32,8 +32,11 @@ import {
   type Device,
   type DeviceConnectInfo,
   type DeviceDetail,
+  type DeviceStatusInfo,
   type DeviceTestCheck,
   type DeviceTestResult,
+  type DeviceTokenRotation,
+  type DeviceWarning,
   type SetupDeviceManifest,
   type SetupParamSpec,
   type SetupPlugDetail,
@@ -65,6 +68,20 @@ const detailError = ref('')
 let selectSeq = 0
 let connectSeq = 0
 let testSeq = 0
+let statusSeq = 0
+
+// P3.4 status/toggle
+const statusInfo = ref<DeviceStatusInfo | null>(null)
+const statusBusy = ref(false)
+const statusError = ref('')
+const toggleBusyId = ref('')
+
+// token rotation (show-once dialog)
+const rotateOpen = ref(false)
+const rotateBusy = ref(false)
+const rotateError = ref('')
+const rotated = ref<DeviceTokenRotation | null>(null)
+const rotateEnv = ref('')
 
 const testBusy = ref(false)
 const testResult = ref<DeviceTestResult | null>(null)
@@ -90,6 +107,7 @@ const form = reactive({
   adapterId: '',
   plugId: '',
   enabled: true,
+  listenPort: '',
   wakeWords: [''] as string[],
 })
 const paramTexts = reactive<Record<string, string>>({})
@@ -160,6 +178,21 @@ const detailShape = computed(() => {
 })
 const detailCapabilities = computed(() => capabilitiesFor(detailShape.value))
 const detailParamRows = computed(() => paramRows(detailShape.value))
+const detailEnabled = computed(
+  () => detail.value?.device.enabled ?? selectedDevice.value?.enabled ?? true,
+)
+const multiWarning = computed<DeviceWarning | null>(() => {
+  const rows = devices.value.flatMap((device) => device.warnings ?? [])
+  return rows.find((warning) => warning.code === 'multiple_enabled_inbound') ?? null
+})
+const multiWarningBody = computed(() => {
+  const details = multiWarning.value?.details ?? {}
+  const active = String(details.active_device ?? '—')
+  const ignored = Array.isArray(details.ignored_devices)
+    ? details.ignored_devices.map(String).join(', ')
+    : '—'
+  return t('dm.multi.body', { active, ignored })
+})
 const failedChecks = computed(() =>
   (testResult.value?.checks ?? [])
     .filter((check) => !check.ok)
@@ -180,6 +213,8 @@ function statusLabel(status: string | null | undefined): string {
       return t('dm.status.disconnected')
     case 'unavailable':
       return t('dm.status.unavailable')
+    case 'disabled':
+      return t('dm.status.disabled')
     default:
       return t('dm.status.unknown')
   }
@@ -193,6 +228,8 @@ function statusClass(status: string | null | undefined): string {
       return 'badge badge-fail'
     case 'unavailable':
       return 'badge badge-warn'
+    case 'disabled':
+      return 'badge badge-muted'
     default:
       return 'badge badge-muted'
   }
@@ -255,6 +292,56 @@ function checkLabel(name: string): string {
     default:
       return name
   }
+}
+
+/** Stable backend status error codes -> console copy (never a raw secret). */
+function statusErrorLabel(code: string): string {
+  switch (code) {
+    case 'device_disabled':
+      return t('dm.status.err.deviceDisabled')
+    case 'token_missing':
+      return t('dm.status.err.tokenMissing')
+    case 'adapter_unavailable':
+      return t('dm.status.err.adapterUnavailable')
+    case 'plug_unresolved':
+      return t('dm.status.err.plugUnresolved')
+    case 'audio_plane_stopped':
+      return t('dm.status.err.planeStopped')
+    case 'audio_plane_error':
+      return t('dm.status.err.planeError')
+    case 'not_connected':
+      return t('dm.status.err.notConnected')
+    default:
+      return code
+  }
+}
+
+function toggleChecked(event: Event): boolean {
+  return event.target instanceof HTMLInputElement ? event.target.checked : false
+}
+
+function formatLastSeen(value: number | null | undefined): string {
+  if (!value) return t('dm.status.never')
+  return new Date(value * 1000).toLocaleString()
+}
+
+function toggleErrorText(exc: unknown, enabled: boolean): string {
+  const object = apiErrorObject(exc)
+  if (object?.code === 'port_conflict') {
+    const details = object.details ?? {}
+    const port = String(details.port ?? details.listen_port ?? '—')
+    const ids = Array.isArray(details.device_ids)
+      ? details.device_ids.map(String).join(', ')
+      : '—'
+    return t('dm.portConflict', { port, ids })
+  }
+  if (object?.code === 'invalid_values') {
+    return object.message || t('dm.err.validationFailed')
+  }
+  return t('dm.err.toggleFailed', {
+    action: enabled ? t('dm.toggle.enable') : t('dm.toggle.disable'),
+    message: errorText(exc),
+  })
 }
 
 function plugName(plug: SetupPlugSummary | null | undefined): string {
@@ -439,8 +526,13 @@ async function select(id: string): Promise<void> {
   connectInfo.value = null
   connectError.value = ''
   revealed.value = false
+  statusInfo.value = null
+  statusError.value = ''
   testSeq += 1
+  statusSeq += 1
   testBusy.value = false
+  statusBusy.value = false
+  void loadStatus(id)
   try {
     const next = await api.deviceDetail(id)
     if (seq !== selectSeq) return
@@ -495,6 +587,24 @@ async function loadConnect(id: string): Promise<void> {
   }
 }
 
+/** P3.4 status: evidence plus stable error codes; never blocks the detail page. */
+async function loadStatus(id: string): Promise<void> {
+  const seq = ++statusSeq
+  statusBusy.value = true
+  statusError.value = ''
+  try {
+    const next = await api.deviceStatus(id)
+    if (seq !== statusSeq) return
+    statusInfo.value = next
+  } catch (exc) {
+    if (seq !== statusSeq) return
+    statusInfo.value = null
+    statusError.value = errorText(exc)
+  } finally {
+    if (seq === statusSeq) statusBusy.value = false
+  }
+}
+
 async function copyText(value: string | null | undefined, key: string): Promise<void> {
   if (!value) return
   copyFailed.value = false
@@ -545,7 +655,83 @@ async function runTest(): Promise<void> {
   }
 }
 
-// ————————————————————————————————————————————— drawer / form —————
+// ————————————————————————————————————————————— enable / disable —————
+async function setEnabled(id: string, enabled: boolean): Promise<void> {
+  if (!id || toggleBusyId.value) return
+  toggleBusyId.value = id
+  actionError.value = ''
+  try {
+    const updated = await api.setDeviceEnabled(id, enabled)
+    notice.value = enabled
+      ? t('dm.enabledNotice', { id })
+      : t('dm.disabledNotice', { id })
+    if (updated.plane_error) {
+      actionError.value = t('dm.planeError', { error: updated.plane_error })
+    }
+    if (selectedId.value === id) {
+      detail.value = updated
+      void loadStatus(id)
+      void loadConnect(id)
+    }
+    const listError = await refreshListAfterWrite()
+    if (listError) actionError.value = t('dm.err.loadFailed', { message: listError })
+  } catch (exc) {
+    actionError.value = toggleErrorText(exc, enabled)
+    // A failed toggle must not leave the switch showing the un-saved state.
+    await loadDevices().catch(() => undefined)
+    if (selectedId.value === id) void loadStatus(id)
+  } finally {
+    toggleBusyId.value = ''
+  }
+}
+
+// ————————————————————————————————————————————— token rotation —————
+function openRotate(): void {
+  const id = detail.value?.device.id ?? selectedId.value
+  if (!id) return
+  rotateOpen.value = true
+  rotateBusy.value = false
+  rotateError.value = ''
+  rotated.value = null
+  rotateEnv.value = detail.value?.token_env
+    ?? selectedDevice.value?.token_env
+    ?? connectInfo.value?.token_env
+    ?? 'RUI_DEVICE_TOKEN'
+}
+
+function closeRotate(): void {
+  if (rotateBusy.value) return
+  rotateOpen.value = false
+  rotateError.value = ''
+  rotated.value = null
+}
+
+async function confirmRotate(): Promise<void> {
+  const id = detail.value?.device.id ?? selectedId.value
+  if (!id || rotateBusy.value) return
+  rotateBusy.value = true
+  rotateError.value = ''
+  try {
+    const result = await api.rotateDeviceToken(id)
+    rotated.value = result
+    void loadStatus(id)
+    void loadConnect(id)
+    notice.value = t('dm.rotate.doneNotice', { id })
+  } catch (exc) {
+    const object = apiErrorObject(exc)
+    if (object?.code === 'token_from_environment') {
+      rotateError.value = t('dm.rotate.envError')
+    } else if (object?.code === 'rate_limited') {
+      const retry = object.details?.retry_after_s
+      rotateError.value = t('dm.rotate.rateLimited', { seconds: String(retry ?? '—') })
+    } else {
+      rotateError.value = t('dm.rotate.error', { message: errorText(exc) })
+    }
+  } finally {
+    rotateBusy.value = false
+  }
+}
+
 function clearFieldErrors(): void {
   for (const key of Object.keys(fieldErrors)) delete fieldErrors[key]
 }
@@ -628,6 +814,7 @@ function openCreate(): void {
   form.host = ''
   form.adapterId = ''
   form.enabled = true
+  form.listenPort = ''
   form.wakeWords = ['']
   editorMode.value = 'create'
   const plugId = defaultPlugId()
@@ -665,6 +852,7 @@ function openEdit(): void {
   form.host = base.host
   form.adapterId = base.adapter
   form.enabled = doc ? Boolean(doc.enabled) : true
+  form.listenPort = doc?.listen_port == null ? '' : String(doc.listen_port)
   form.wakeWords = doc && Array.isArray(doc.wake_words) && doc.wake_words.length
     ? [...doc.wake_words].slice(0, 3)
     : ['']
@@ -683,6 +871,7 @@ function closeEditor(force = false): void {
   form.wakeWords = ['']
   form.plugId = ''
   form.adapterId = ''
+  form.listenPort = ''
 }
 
 function handlePlugChange(): void {
@@ -750,6 +939,31 @@ function validateForm(): boolean {
   }
   if (form.room.trim().length > 32 || /[\u0000-\u001f]/.test(form.room)) {
     setError('room', t('dm.err.room'))
+  }
+  const rawPort = form.listenPort.trim()
+  let port = 4412
+  if (rawPort) {
+    if (!/^\d+$/.test(rawPort) || Number(rawPort) < 1 || Number(rawPort) > 65535) {
+      setError('listen_port', t('dm.err.port'))
+    } else {
+      port = Number(rawPort)
+    }
+  }
+  if (!fieldErrors.listen_port && form.enabled) {
+    const selfId = form.id.trim().toLowerCase()
+    const clash = devices.value.find(
+      (device) =>
+        device.id !== selfId &&
+        device.enabled !== false &&
+        device.transport !== 'outbound' &&
+        (device.listen_port ?? 4412) === port,
+    )
+    if (clash) {
+      setError(
+        'listen_port',
+        t('dm.err.portConflictInline', { id: clash.id, port }),
+      )
+    }
   }
   const words = cleanWakeWords()
   if (!words.length || words.length > 3) {
@@ -839,7 +1053,7 @@ function issueFieldKey(loc: (string | number)[] | undefined): string {
     if (key) return `param:${key}`
   }
   for (let at = parts.length - 1; at >= 0; at -= 1) {
-    if (['host', 'room', 'wake_words', 'id', 'adapter', 'enabled'].includes(parts[at])) {
+    if (['host', 'room', 'wake_words', 'id', 'adapter', 'enabled', 'listen_port'].includes(parts[at])) {
       return parts[at]
     }
   }
@@ -864,6 +1078,16 @@ function applyFormError(exc: unknown): void {
   formError.value = ''
   const object = apiErrorObject(exc)
   if (object) {
+    if (object.code === 'port_conflict') {
+      const details = object.details ?? {}
+      const port = String(details.port ?? details.listen_port ?? '—')
+      const ids = Array.isArray(details.device_ids)
+        ? details.device_ids.map(String).join(', ')
+        : '—'
+      fieldErrors.listen_port = t('dm.err.portConflictInline', { id: ids, port })
+      formError.value = t('dm.portConflict', { port, ids })
+      return
+    }
     let applied = 0
     const details = object.details ?? {}
     if (Array.isArray(details.errors)) {
@@ -907,6 +1131,7 @@ async function saveForm(): Promise<void> {
   const room = form.room.trim()
   const words = cleanWakeWords()
   const adapter = form.adapterId || editorManifest.value?.id || ''
+  const listenPort = form.listenPort.trim() ? Number(form.listenPort.trim()) : null
   formBusy.value = true
   try {
     if (editorMode.value === 'create') {
@@ -916,7 +1141,10 @@ async function saveForm(): Promise<void> {
         plug,
         step: 'params',
         action: 'device.upsert',
-        values: { id, host, room, wake_words: words, params, ...(adapter ? { adapter } : {}) },
+        values: {
+          id, host, room, wake_words: words, listen_port: listenPort,
+          params, ...(adapter ? { adapter } : {}),
+        },
       })
       const listError = await refreshListAfterWrite()
       selectedId.value = id
@@ -935,6 +1163,7 @@ async function saveForm(): Promise<void> {
         room,
         wake_words: words,
         enabled: form.enabled,
+        listen_port: listenPort,
         params,
         ...(adapter ? { adapter } : {}),
       }
@@ -944,9 +1173,14 @@ async function saveForm(): Promise<void> {
       testError.value = ''
       const listError = await refreshListAfterWrite()
       selectedId.value = id
+      void loadStatus(id)
       await loadConnect(id)
       notice.value = t('dm.updated', { id })
-      if (listError) actionError.value = t('dm.err.loadFailed', { message: listError })
+      if (updated.plane_error) {
+        actionError.value = t('dm.planeError', { error: updated.plane_error })
+      } else if (listError) {
+        actionError.value = t('dm.err.loadFailed', { message: listError })
+      }
     }
     formBusy.value = false
     closeEditor(true)
@@ -1034,6 +1268,13 @@ onMounted(() => {
     <AppIcon name="alert" :size="16" class="banner-icon" />
     <span>{{ actionError }}</span>
   </div>
+  <div v-if="multiWarning" class="banner banner-warn dm-banner" role="status">
+    <AppIcon name="alert" :size="16" class="banner-icon" />
+    <div>
+      <strong>{{ t('dm.multi.title') }}</strong>
+      <p>{{ multiWarningBody }}</p>
+    </div>
+  </div>
 
   <!-- list ---------------------------------------------------------------- -->
   <section class="block">
@@ -1092,6 +1333,11 @@ onMounted(() => {
             <span v-if="plugForDevice(device)?.trust">{{ trustLabel(plugForDevice(device)?.trust) }}</span>
           </div>
           <div class="dm-chips">
+            <span v-if="device.active" class="dm-chip accent">{{ t('dm.activeChip') }}</span>
+            <span class="dm-chip">{{ t('dm.portChip', { port: device.listen_port ?? 4412 }) }}</span>
+            <span class="dm-chip" :class="{ muted: !device.token_configured }">
+              {{ device.token_configured ? t('dm.token.configured') : t('dm.token.missing') }}
+            </span>
             <span v-if="!capabilitiesFor(device).length" class="dm-chip muted">{{ t('dm.cap.none') }}</span>
             <span v-for="capability in capabilitiesFor(device)" :key="capability" class="dm-chip">
               {{ capLabel(capability) }}
@@ -1103,6 +1349,19 @@ onMounted(() => {
           </p>
         </div>
         <div class="dm-card-actions">
+          <label class="switch dm-card-switch" @click.stop>
+            <input
+              type="checkbox"
+              :checked="device.enabled !== false"
+              :disabled="toggleBusyId === device.id"
+              :aria-label="device.enabled !== false ? t('dm.toggle.disable') : t('dm.toggle.enable')"
+              @change="setEnabled(device.id, toggleChecked($event))"
+            />
+            <span class="track" />
+            <span class="switch-text">
+              {{ toggleBusyId === device.id ? t('dm.toggle.saving') : (device.enabled !== false ? t('common.enabled') : t('common.disabled')) }}
+            </span>
+          </label>
           <button type="button" class="btn btn-sm" @click.stop="editDevice(device.id)">
             {{ t('dm.edit') }}
           </button>
@@ -1131,6 +1390,66 @@ onMounted(() => {
       <div v-if="detail.plane_error" class="banner banner-warn dm-inline-banner" role="alert">
         <AppIcon name="alert" :size="16" class="banner-icon" />
         <span>{{ t('dm.planeError', { error: detail.plane_error }) }}</span>
+      </div>
+
+      <div class="dm-subsection dm-status">
+        <div class="dm-subhead-row">
+          <h3 class="dm-subhead">{{ t('dm.status.title') }}</h3>
+          <div class="actions">
+            <span
+              v-if="statusInfo"
+              :class="statusInfo.ready ? 'badge badge-ok' : 'badge badge-warn'"
+            >
+              {{ statusInfo.ready ? t('dm.status.ready') : t('dm.status.notReady') }}
+            </span>
+            <label class="switch">
+              <input
+                type="checkbox"
+                :checked="detailEnabled"
+                :disabled="toggleBusyId === detail.device.id"
+                :aria-label="detailEnabled ? t('dm.toggle.disable') : t('dm.toggle.enable')"
+                @change="setEnabled(detail.device.id, toggleChecked($event))"
+              />
+              <span class="track" />
+              <span class="switch-text">
+                {{ toggleBusyId === detail.device.id ? t('dm.toggle.saving') : (detailEnabled ? t('common.enabled') : t('common.disabled')) }}
+              </span>
+            </label>
+          </div>
+        </div>
+        <p v-if="statusBusy" class="field-hint" role="status">{{ t('dm.status.loading') }}</p>
+        <p v-else-if="statusError" class="field-hint fail" role="status">
+          {{ t('dm.status.loadError', { message: statusError }) }}
+        </p>
+        <template v-else-if="statusInfo">
+          <div class="dm-facts dm-status-facts">
+            <div class="dm-fact">
+              <span class="dm-label">{{ t('dm.status.token') }}</span>
+              <span :class="statusInfo.token_configured ? 'badge badge-ok' : 'badge badge-warn'">
+                {{ statusInfo.token_configured ? t('dm.connect.configured') : t('dm.connect.notConfigured') }}
+              </span>
+            </div>
+            <div class="dm-fact">
+              <span class="dm-label">{{ t('dm.status.listenPort') }}</span>
+              <span class="mono">{{ statusInfo.listen_port }}</span>
+            </div>
+            <div class="dm-fact">
+              <span class="dm-label">{{ t('dm.status.plane') }}</span>
+              <span>
+                {{ statusInfo.plane.audio_plane ? (statusInfo.plane.speaker_connected ? t('dm.status.planeConnected') : t('dm.status.planeWaiting')) : t('dm.status.planeStopped') }}
+              </span>
+            </div>
+            <div class="dm-fact">
+              <span class="dm-label">{{ t('dm.status.lastSeen') }}</span>
+              <span>{{ formatLastSeen(statusInfo.plane.last_seen) }}</span>
+            </div>
+          </div>
+          <div v-if="statusInfo.errors.length" class="dm-chips">
+            <span v-for="code in statusInfo.errors" :key="code" class="dm-chip warn">
+              {{ statusErrorLabel(code) }}
+            </span>
+          </div>
+        </template>
       </div>
 
       <div class="dm-facts">
@@ -1166,6 +1485,10 @@ onMounted(() => {
           <span class="dm-label">{{ t('dm.transport') }}</span>
           <span>{{ transportLabel(detail.live?.transport || selectedDevice?.transport) }}</span>
         </div>
+        <div class="dm-fact">
+          <span class="dm-label">{{ t('dm.field.listenPort') }}</span>
+          <span class="mono">{{ detail.listen_port ?? detail.device.listen_port ?? 4412 }}</span>
+        </div>
       </div>
 
       <div class="dm-subsection">
@@ -1197,6 +1520,9 @@ onMounted(() => {
         </button>
         <button type="button" class="btn" :disabled="connectBusy" @click="loadConnect(detail.device.id)">
           {{ connectBusy ? t('dm.connect.loading') : t('dm.connect.reload') }}
+        </button>
+        <button type="button" class="btn" @click="openRotate">
+          {{ t('dm.rotate.open') }}
         </button>
         <button type="button" class="btn btn-danger" @click="askDeleteSelected">
           <AppIcon name="trash" :size="13" />
@@ -1427,6 +1753,24 @@ onMounted(() => {
             </div>
           </div>
 
+          <div class="field-row" :class="{ invalid: fieldErrors.listen_port }">
+            <div class="field-meta">
+              <label class="field-label" for="dm-form-port">{{ t('dm.field.listenPort') }}</label>
+              <p class="field-hint">{{ t('dm.field.listenPortHint') }}</p>
+            </div>
+            <div class="field-control">
+              <input
+                id="dm-form-port"
+                v-model="form.listenPort"
+                :class="{ invalid: fieldErrors.listen_port }"
+                inputmode="numeric"
+                autocomplete="off"
+                :placeholder="t('dm.field.listenPortPlaceholder')"
+              />
+              <p v-if="fieldErrors.listen_port" class="field-error">{{ fieldErrors.listen_port }}</p>
+            </div>
+          </div>
+
           <div class="field-row" :class="{ invalid: fieldErrors.wake_words }">
             <div class="field-meta">
               <label class="field-label" for="dm-form-wake-0">{{ t('dm.field.wakeWords') }}</label>
@@ -1562,6 +1906,78 @@ onMounted(() => {
             </button>
           </div>
         </footer>
+      </section>
+    </div>
+  </Teleport>
+
+  <!-- token rotation (show once) ------------------------------------------ -->
+  <Teleport to="body">
+    <div v-if="rotateOpen" class="dm-drawer-backdrop dm-confirm-backdrop" @click.self="closeRotate">
+      <section class="dm-confirm" role="dialog" aria-modal="true" aria-labelledby="dm-rotate-title">
+        <div class="dm-drawer-head">
+          <div>
+            <div class="kicker">{{ t('dm.rotate.kicker') }}</div>
+            <h2 id="dm-rotate-title">{{ t('dm.rotate.title') }}</h2>
+          </div>
+          <button type="button" class="btn-icon" :aria-label="t('common.close')" @click="closeRotate">
+            <AppIcon name="close" :size="18" />
+          </button>
+        </div>
+
+        <template v-if="!rotated">
+          <p>{{ t('dm.rotate.confirm', { id: detail?.device.id ?? selectedId, env: rotateEnv }) }}</p>
+          <div class="dm-warning">
+            <strong>{{ t('dm.rotate.warningTitle') }}</strong>
+            <p>{{ t('dm.rotate.warning') }}</p>
+          </div>
+          <p v-if="rotateError" class="note fail" role="alert">{{ rotateError }}</p>
+          <div class="actions dm-confirm-actions">
+            <button type="button" class="btn" :disabled="rotateBusy" @click="closeRotate">
+              {{ t('common.cancel') }}
+            </button>
+            <button type="button" class="btn btn-danger" :disabled="rotateBusy" @click="confirmRotate">
+              {{ rotateBusy ? t('dm.rotate.running') : t('dm.rotate.run') }}
+            </button>
+          </div>
+        </template>
+
+        <template v-else>
+          <p>{{ t('dm.rotate.done') }}</p>
+          <div class="dm-warning">
+            <strong>{{ t('dm.rotate.onceTitle') }}</strong>
+            <p>{{ t('dm.rotate.onceBody') }}</p>
+          </div>
+          <div class="dm-copy-field">
+            <label class="dm-label" for="dm-rotate-ws">{{ t('dm.rotate.wsUrl') }}</label>
+            <div class="dm-copy-row">
+              <input id="dm-rotate-ws" :value="rotated.ws_url" readonly class="mono" spellcheck="false" />
+              <button type="button" class="btn btn-sm" @click="copyText(rotated.ws_url, 'rotate:ws')">
+                {{ copied === 'rotate:ws' ? t('common.copied') : t('common.copy') }}
+              </button>
+            </div>
+          </div>
+          <div class="dm-copy-field">
+            <label class="dm-label" for="dm-rotate-token">{{ t('dm.rotate.token') }}</label>
+            <div class="dm-copy-row">
+              <input
+                id="dm-rotate-token"
+                :value="rotated.token"
+                readonly
+                class="mono"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button type="button" class="btn btn-sm" @click="copyText(rotated.token, 'rotate:token')">
+                {{ copied === 'rotate:token' ? t('common.copied') : t('common.copy') }}
+              </button>
+            </div>
+          </div>
+          <div class="actions dm-confirm-actions">
+            <button type="button" class="btn btn-primary" @click="closeRotate">
+              {{ t('dm.rotate.close') }}
+            </button>
+          </div>
+        </template>
       </section>
     </div>
   </Teleport>
@@ -2023,6 +2439,26 @@ onMounted(() => {
 .dm-confirm-actions {
   justify-content: flex-end;
   margin-top: var(--s4);
+}
+
+.dm-status-facts {
+  padding-top: var(--s2);
+  border-top: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.dm-card-switch {
+  margin-right: auto;
+}
+
+.dm-chip.accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dm-chip.warn {
+  border-color: var(--warn, #a16207);
+  color: var(--warn, #a16207);
 }
 
 @media (max-width: 720px) {

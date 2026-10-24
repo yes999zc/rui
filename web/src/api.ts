@@ -100,7 +100,14 @@ export interface DoctorReport {
   checks: Check[]
 }
 
-export type DeviceStatus = 'ready' | 'disconnected' | 'unknown' | 'unavailable'
+export type DeviceStatus = 'ready' | 'disconnected' | 'unknown' | 'unavailable' | 'disabled'
+
+/** One explicit limitation/contract warning, e.g. one active inbound plane in 0.3. */
+export interface DeviceWarning {
+  code: string
+  message: string
+  details?: Record<string, unknown>
+}
 
 export interface Device {
   id: string
@@ -116,6 +123,14 @@ export interface Device {
   last_seen?: number | null
   latency_ms?: number | null
   error?: string
+  /** P3.4 management summary: disabled devices stay listed so they can be enabled. */
+  enabled?: boolean
+  token_configured?: boolean
+  /** Effective inbound port (an unset `listen_port` means the adapter default). */
+  listen_port?: number
+  /** True for the one device the single 0.3 audio plane is actually driving. */
+  active?: boolean
+  warnings?: DeviceWarning[]
   /** Resolved plug id (`params.plug_id`, or the adapter's manifest). */
   plug_id?: string | null
   /** Non-secret, plug-declared values; secret params are filtered server-side. */
@@ -611,8 +626,47 @@ export interface DeviceDetail {
   plug_id?: string | null
   /** Public params (secrets removed); mirrors `device.params`. */
   params?: Record<string, unknown>
+  /** P3.4: management summary mirrored from the status endpoint. */
+  enabled?: boolean
+  token_configured?: boolean
+  token_env?: string
+  listen_port?: number
+  warnings?: DeviceWarning[]
   /** Last audio-plane restart outcome; empty when it came back. */
   plane_error?: string
+  /** Set by `POST /enabled`: false means the requested state was already in place. */
+  changed?: boolean
+}
+
+/** GET /devices/{id}/status: config + live evidence + stable failure codes. */
+export interface DeviceStatusInfo {
+  id: string
+  enabled: boolean
+  /** Enabled, authenticated, and the plane's live link says connected. */
+  ready: boolean
+  token_configured: boolean
+  token_env: string
+  listen_port: number
+  plane: {
+    speaker_connected: boolean
+    last_seen: number | null
+    audio_plane: boolean
+  }
+  capabilities: string[]
+  setup_state: {
+    configured: boolean
+    wake_words: string[]
+    last_test_ok: boolean
+    last_test_at: string
+  }
+  errors: string[]
+  warnings?: DeviceWarning[]
+}
+
+/** POST /devices/{id}/token/rotate: the one time the new secret is returned. */
+export interface DeviceTokenRotation {
+  token: string
+  ws_url: string
 }
 
 /** One row of `POST /api/v1/devices/{id}/test` (evidence only, no config write). */
@@ -978,6 +1032,19 @@ export const api = {
   /** Connection parameters for the speaker client; the token is sensitive. */
   deviceConnect: (id: string) =>
     request<DeviceConnectInfo>(`/api/v1/devices/${encodeURIComponent(id)}/connect`),
+  /** P3.4: evidence-only status, with stable error codes and no secret value. */
+  deviceStatus: (id: string) =>
+    request<DeviceStatusInfo>(`/api/v1/devices/${encodeURIComponent(id)}/status`),
+  /** P3.4: enable/disable; disabling the last enabled device stops the plane. */
+  setDeviceEnabled: (id: string, enabled: boolean) =>
+    request<DeviceDetail>(`/api/v1/devices/${encodeURIComponent(id)}/enabled`, {
+      method: 'POST', body: JSON.stringify({ enabled }),
+    }),
+  /** P3.4: rotate the device token; resolves once with the new value. */
+  rotateDeviceToken: (id: string) =>
+    request<DeviceTokenRotation>(`/api/v1/devices/${encodeURIComponent(id)}/token/rotate`, {
+      method: 'POST',
+    }),
   updateDevice: (id: string, patch: Record<string, unknown>) =>
     request<DeviceDetail>(`/api/v1/devices/${encodeURIComponent(id)}`, {
       method: 'PUT', body: JSON.stringify(patch),
