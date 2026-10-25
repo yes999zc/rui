@@ -277,3 +277,57 @@ def test_multi_device_disabled_never_builds_a_fleet(tmp_path, monkeypatch) -> No
     with TestClient(app):
         assert getattr(app.state, "audio_fleet", None) is None
         assert getattr(app.state, "wake_coordinator", None) is None
+
+
+def test_health_has_one_row_per_plane_and_keeps_the_old_aggregate(tmp_path, monkeypatch) -> None:
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+        assert isinstance(body["devices"], int)  # old count field untouched
+        assert body["audio_devices"]
+        rows = {row["id"]: row for row in body["audio_devices"]}
+        assert set(rows) == {"living", "study"}
+        assert rows["living"]["room"] == "客厅"
+        assert rows["living"]["running"] is True
+        assert rows["living"]["speaker_connected"] is True
+        assert rows["study"]["room"] == "书房"
+        assert "wake_candidates" in rows["living"]
+        assert body["multi_device"] == {
+            "enabled": True, "max_planes": 4, "default_output": "living",
+            "refused": [], "error": "",
+        }
+
+
+def test_multi_device_warnings_replace_the_single_plane_notice(tmp_path, monkeypatch) -> None:
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        cfg_now = app.state.cfg
+        codes = {warning["code"] for warning in app_module._device_warnings(app, cfg_now)}
+        assert "multiple_enabled_inbound" not in codes
+        assert codes == set()
+        # A crashed room is named, not silently painted green with the others.
+        fleet = FakeFleet.instances[-1]
+        fleet.supervisor("study").running = False
+        warnings = app_module._device_warnings(app, cfg_now)
+        assert [warning["code"] for warning in warnings] == ["plane_not_running"]
+        assert warnings[0]["details"]["device"] == "study"
+        assert warnings[0]["details"]["room"] == "书房"
+        # ... and the device row says so too, without touching the healthy room.
+        study = client.get("/api/v1/devices/study/status").json()
+        assert "audio_plane_stopped" in study["errors"]
+        living = client.get("/api/v1/devices/living/status").json()
+        assert "audio_plane_stopped" not in living["errors"]
+
+
+def test_max_planes_is_an_explicit_warning(tmp_path, monkeypatch) -> None:
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch,
+               CONFIG.replace("max_planes: 4", "max_planes: 1"))
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+        assert body["multi_device"]["refused"] == ["study"]
+        warnings = app_module._device_warnings(app, app.state.cfg)
+        over = [warning for warning in warnings if warning["code"] == "over_max_planes"]
+        assert over and over[0]["details"]["refused_devices"] == ["study"]

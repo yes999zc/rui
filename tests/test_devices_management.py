@@ -105,7 +105,10 @@ def test_status_shape_is_evidence_only(console, monkeypatch) -> None:
     assert body["token_configured"] is True
     assert body["token_env"] == TOKEN_ENV
     assert body["listen_port"] == 4412
-    assert set(body["plane"]) == {"speaker_connected", "last_seen", "audio_plane"}
+    assert set(body["plane"]) == {
+        "speaker_connected", "last_seen", "audio_plane",
+        "restarts", "error", "wake_candidates", "wake_admitted",
+    }
     assert body["plane"]["speaker_connected"] is True
     assert body["plane"]["audio_plane"] is True
     assert {"reference", "playback"} <= set(body["capabilities"])

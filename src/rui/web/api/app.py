@@ -1375,33 +1375,163 @@ def _plane_handles(app: FastAPI) -> list[object]:
     return handles
 
 
-def _device_warnings(config: Config, active_id: str) -> list[dict]:
-    """Explicit "more than one inbound speaker, only one can run" warning (P3.4).
+def _device_plane(app: FastAPI, device_id: str) -> dict:
+    """One room's plane snapshot, in the aggregate shape its callers expect.
 
-    0.3 has no multi-device arbitration: one audio plane drives one adapter. Rather
-    than silently pretending every enabled device is live, the list/status endpoints
-    say which one is active and which ones are only configured.
+    Single-plane mode has exactly one room, so the aggregate snapshot is that room. In
+    fleet mode each row must describe its own plane: inheriting a neighbour's green
+    metrics is exactly the failure mode /health exists to prevent.
     """
-    catalog = PlugCatalog(config.system.data_dir)
-    inbound = [device for device in config.devices
-               if device.enabled and is_inbound(device, catalog)]
-    if len(inbound) <= 1:
-        return []
-    ignored = [device.id for device in inbound if device.id != active_id]
-    return [{
-        "code": "multiple_enabled_inbound",
-        "message": (
-            "0.3 supports one active inbound audio plane; only "
-            f"{active_id or 'none'} is driven. Disable the other device or wait for "
-            "multi-device arbitration."
-        ),
-        "details": {
-            "active_device": active_id,
-            "enabled_inbound": [device.id for device in inbound],
-            "ignored_devices": ignored,
-            "max_active_inbound": 1,
-        },
-    }]
+    fleet = _audio_fleet(app)
+    if fleet is None:
+        return _plane_snapshot(app)
+    try:
+        status = fleet.supervisor(device_id).status()
+    except KeyError:
+        status = {}
+    metrics = status.get("metrics") or {}
+    connected = bool(metrics.get("speaker_connected"))
+    seen = getattr(app.state, "device_last_seen", None)
+    if connected:
+        now = time.time()
+        if isinstance(seen, dict):
+            seen[device_id] = now
+        last_seen: float | None = now
+    else:
+        last_seen = seen.get(device_id) if isinstance(seen, dict) else None
+    return {
+        "running": bool(status.get("running")),
+        "speaker_connected": connected,
+        "speaker_rejected": int(metrics.get("speaker_rejected") or 0),
+        "speaker_device": str(status.get("device_id") or device_id),
+        "last_seen": last_seen,
+        "error": str(status.get("error") or ""),
+        "restarts": int(status.get("restarts") or 0),
+        "wake_count": int(status.get("wake_count") or 0),
+        "wake_candidates": int(metrics.get("wake_candidates") or 0),
+        "wake_admitted": int(metrics.get("wake_admitted") or 0),
+        "wake_admit_timeouts": int(metrics.get("wake_admit_timeouts") or 0),
+        "wake_rejected": dict(metrics.get("wake_rejected") or {}),
+        "utterances": int(status.get("utterances") or 0),
+    }
+
+
+def _health_device_row(status: dict, device: DeviceConfig | None) -> dict:
+    """One /health row: what that room's plane reports, nothing inferred."""
+    metrics = status.get("metrics") or {}
+    return {
+        "id": device.id if device is not None else str(status.get("device_id") or ""),
+        "room": device.room if device is not None else "",
+        "enabled": bool(device.enabled) if device is not None else True,
+        "running": bool(status.get("running")),
+        "speaker_connected": bool(metrics.get("speaker_connected")),
+        "speaker_rejected": int(metrics.get("speaker_rejected") or 0),
+        "restarts": int(status.get("restarts") or 0),
+        "error": str(status.get("error") or ""),
+        "pid": status.get("pid"),
+        "wake_count": int(status.get("wake_count") or 0),
+        "wake_candidates": int(metrics.get("wake_candidates") or 0),
+        "wake_admitted": int(metrics.get("wake_admitted") or 0),
+        "wake_admit_timeouts": int(metrics.get("wake_admit_timeouts") or 0),
+        "wake_rejected": dict(metrics.get("wake_rejected") or {}),
+        "utterances": int(status.get("utterances") or 0),
+    }
+
+
+def _audio_devices_health(app: FastAPI, config: Config) -> list[dict]:
+    """Per-plane rows for /health (fleet or single plane; empty before start_audio)."""
+    fleet = _audio_fleet(app)
+    by_id = {device.id: device for device in config.devices}
+    rows: list[dict] = []
+    if fleet is not None:
+        for device_id in fleet.device_ids():
+            try:
+                status = fleet.supervisor(device_id).status()
+            except KeyError:
+                continue
+            rows.append(_health_device_row(status, by_id.get(device_id)))
+        return rows
+    supervisor = getattr(app.state, "audio", None)
+    if supervisor is None:
+        return rows
+    with contextlib.suppress(Exception):
+        status = supervisor.status()
+        device_id = str(status.get("device_id") or _primary_device_id(app, config))
+        rows.append(_health_device_row(status, by_id.get(device_id)))
+    return rows
+
+
+def _device_warnings(app: FastAPI, config: Config) -> list[dict]:
+    """Per-room warnings a person can act on before blaming the speaker.
+
+    Single-plane mode keeps the 0.3 notice ("more than one enabled inbound speaker,
+    only one can be driven"). Multi-device mode drops that notice - every room is meant
+    to be live - and instead names what is actually wrong: devices refused over
+    max_planes, a fleet that failed to start, and each enabled room whose plane is down.
+    """
+    multi = config.multi_device
+    if not multi.enabled:
+        active_id = _active_device_id(app, config)
+        inbound = _enabled_inbound(config)
+        if len(inbound) <= 1:
+            return []
+        ignored = [device.id for device in inbound if device.id != active_id]
+        return [{
+            "code": "multiple_enabled_inbound",
+            "message": (
+                "0.3 supports one active inbound audio plane; only "
+                f"{active_id or 'none'} is driven. Disable the other device or wait for "
+                "multi-device arbitration."
+            ),
+            "details": {
+                "active_device": active_id,
+                "enabled_inbound": [device.id for device in inbound],
+                "ignored_devices": ignored,
+                "max_active_inbound": 1,
+            },
+        }]
+    warnings: list[dict] = []
+    error = str(getattr(app.state, "fleet_error", "") or "")
+    if error:
+        warnings.append({
+            "code": "fleet_start_failed",
+            "message": f"the audio plane fleet did not start: {error}",
+            "details": {"error": error},
+        })
+    refused = list(getattr(app.state, "fleet_refused", []) or [])
+    if refused:
+        warnings.append({
+            "code": "over_max_planes",
+            "message": (
+                f"multi_device.max_planes={multi.max_planes}; these devices have no "
+                f"audio plane: {', '.join(refused)}"
+            ),
+            "details": {"max_planes": multi.max_planes, "refused_devices": refused},
+        })
+    fleet = _audio_fleet(app)
+    if fleet is None:
+        return warnings
+    for device in _enabled_inbound(config):
+        try:
+            status = fleet.supervisor(device.id).status()
+        except KeyError:
+            continue
+        if status.get("running"):
+            continue
+        warnings.append({
+            "code": "plane_not_running",
+            "message": (
+                f"device {device.id!r} ({device.room}) has no running audio plane: "
+                f"{status.get('error') or 'the child is not connected'}"
+            ),
+            "details": {
+                "device": device.id,
+                "room": device.room,
+                "error": str(status.get("error") or ""),
+                "restarts": int(status.get("restarts") or 0),
+            },
+        })
+    return warnings
 
 
 async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
@@ -1415,7 +1545,7 @@ async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
     catalog = PlugCatalog(config.system.data_dir)
     resolved = catalog.resolve(
         plug_id=_device_plug_id(device, None), adapter=device.adapter)
-    plane = _plane_snapshot(app)
+    plane = _device_plane(app, device.id)
     token_env = _token_env(device, resolved)
     token_ok = _token_configured(device, resolved)
     listen_port = effective_listen_port(device, resolved)
@@ -1471,6 +1601,10 @@ async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
             "speaker_connected": bool(plane["speaker_connected"]),
             "last_seen": plane["last_seen"],
             "audio_plane": bool(plane["running"]),
+            "restarts": int(plane.get("restarts") or 0),
+            "error": str(plane.get("error") or ""),
+            "wake_candidates": int(plane.get("wake_candidates") or 0),
+            "wake_admitted": int(plane.get("wake_admitted") or 0),
         },
         "capabilities": sorted(capabilities),
         "setup_state": {
@@ -2409,6 +2543,7 @@ def create_app(
             app.state.fleet_refused = []
             app.state.fleet_start_errors = {}
             app.state.output_owner_lost = 0
+            app.state.device_last_seen = {}
             app.state.rebuild_fleet = _restart_fleet
             app.state.stop_audio = _stop_audio
             if cfg.multi_device.enabled:
@@ -2667,6 +2802,17 @@ def create_app(
             "speaker_connected": plane["speaker_connected"],
             "speaker_device": plane["speaker_device"],
             "speaker_last_seen": plane["last_seen"],
+            # Phase 2: one row per plane. A dead room is visible here without being
+            # allowed to make the aggregate (and the container) unhealthy; every old
+            # top-level field above keeps its meaning.
+            "audio_devices": _audio_devices_health(app, cfg_now),
+            "multi_device": {
+                "enabled": bool(cfg_now.multi_device.enabled),
+                "max_planes": cfg_now.multi_device.max_planes,
+                "default_output": cfg_now.multi_device.default_output or "",
+                "refused": list(getattr(app.state, "fleet_refused", []) or []),
+                "error": str(getattr(app.state, "fleet_error", "") or ""),
+            },
             "vendor": {
                 "quiet_s": cfg.session.vendor_quiet_s,
                 "muted_for": round(getattr(app.state, "vendor", None).remaining(), 1)
@@ -4462,9 +4608,10 @@ def create_app(
         cfg_now = getattr(app.state, "cfg", cfg)
         catalog = PlugCatalog(cfg_now.system.data_dir)
         adapters = app.state.adapters
-        plane = _plane_snapshot(app)
+        warnings = _device_warnings(app, cfg_now)
+        fleet = _audio_fleet(app)
+        fleet_ids = set(fleet.device_ids()) if fleet is not None else set()
         active_id = _active_device_id(app, cfg_now)
-        warnings = _device_warnings(cfg_now, active_id)
         for dev in cfg_now.devices:
             resolved = catalog.resolve(
                 plug_id=_device_plug_id(dev, None), adapter=dev.adapter)
@@ -4477,7 +4624,7 @@ def create_app(
                     adapter, device_id=dev.id, adapter_name=dev.adapter
                 )
                 info = probe.info
-                link = _device_link(info, adapter, plane)
+                link = _device_link(info, adapter, _device_plane(app, dev.id))
                 capabilities.update(str(capability) for capability in info.capabilities)
                 if probe.error:
                     # P1-4: a broken adapter renders as a degraded row with a stable
@@ -4535,7 +4682,9 @@ def create_app(
                 "capabilities": sorted(capabilities),
                 "missing_for_barge_in": ([] if adapter is None
                                          else [c.value for c in info.missing_for_barge_in()]),
-                "active": bool(dev.enabled and dev.id == active_id),
+                "active": bool(dev.enabled and (dev.id == active_id
+                                                if fleet is None
+                                                else dev.id in fleet_ids)),
                 "warnings": warnings,
             })
             out.append(row)
@@ -4967,7 +5116,7 @@ def create_app(
                 adapter, device_id=device.id, adapter_name=device.adapter
             )
             info = probe.info
-            plane = _plane_snapshot(app)
+            plane = _device_plane(app, device.id)
             capabilities = {str(capability) for capability in info.capabilities}
             if resolved is not None:
                 capabilities.update(str(capability) for capability in resolved.device.capabilities)
@@ -4979,7 +5128,7 @@ def create_app(
                 live["error"] = probe.error
         payload = device.model_dump(mode="json")
         payload["params"] = params
-        warnings = _device_warnings(cfg_now, _active_device_id(app, cfg_now))
+        warnings = _device_warnings(app, cfg_now)
         return {"device": payload, "live": live,
                 "plug_id": _device_plug_id(device, resolved),
                 "params": params,
@@ -5007,7 +5156,7 @@ def create_app(
         """
         cfg_now = getattr(app.state, "cfg", cfg)
         device = _device_or_404(device_id, cfg_now)
-        warnings = _device_warnings(cfg_now, _active_device_id(app, cfg_now))
+        warnings = _device_warnings(app, cfg_now)
         return await _device_status(app, device, cfg_now, warnings)
 
     def _device_ws_url(device: DeviceConfig, request: Request,
@@ -5414,7 +5563,7 @@ def create_app(
         resolved = catalog.resolve(
             plug_id=_device_plug_id(device, None), adapter=device.adapter)
         probe = await _probe_host(device.host)
-        plane = _plane_snapshot(app)
+        plane = _device_plane(app, device.id)
         plane_ok = bool(plane["speaker_connected"]) and plane["speaker_device"] in ("", device.id)
         token_env = _token_env(device, resolved)
         token_ok = bool(token_env and secrets.get(token_env)) or bool(
