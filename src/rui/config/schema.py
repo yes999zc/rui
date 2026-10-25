@@ -188,6 +188,12 @@ class DeviceVoiceOverride(BaseModel):
     model_config = ConfigDict(extra="forbid")
     followup_delay_ms: int | None = Field(default=None, ge=0, le=10000)
     followup_replay: bool | None = None
+    # Phase 2: after this device's output owner stops speaking, drop its microphone
+    # for this long (no VAD/ASR) while playback-time barge stays available. 0 = the
+    # old behaviour; a device-AEC plug (ref_channels=0) wants ~2500 because its
+    # residual echo outlives the follow-up window (dot2 #7, docs/multi-device-design.md
+    # §12.6). Effective only once the plane runs with this device's effective audio.
+    post_playback_mute_ms: int | None = Field(default=None, ge=0, le=10000)
 
 
 class DeviceCaptureOverride(BaseModel):
@@ -339,6 +345,10 @@ class VoiceConfig(BaseModel):
     # Replay the audio caught between playback end and the gate opening into the
     # transcriber. Turn off for a device-AEC plug whose residual outlasts the delay.
     followup_replay: bool = True
+    # Phase 2 (docs/multi-device-design.md §12.6): after our own output drains, drop
+    # the microphone for this long (no VAD/ASR) so a device-AEC plug's residual echo
+    # cannot become a turn. 0 keeps the 0.4.x behaviour; a per-device override wins.
+    post_playback_mute_ms: int = Field(default=0, ge=0, le=10000)
 
     @property
     def frame_samples(self) -> int:

@@ -114,6 +114,13 @@ class Metrics(BaseModel):
     # wizard uses this to tell "no client yet" from "the client's token is wrong".
     speaker_rejected: int = 0
     wake_count: int = 0
+    # Phase 2 arbitration counters (multi_device.enabled=true only; all zero when the
+    # plane runs the single-plane local path and never emits a candidate).
+    wake_candidates: int = 0
+    wake_admitted: int = 0
+    wake_admit_timeouts: int = 0
+    wake_admit_latency_ms: float | None = None
+    wake_rejected: dict[str, int] = Field(default_factory=dict)
     # Socket & Plug v1 (docs/socket-plug-v1.md §5). `wake_count` stays the RUI KWS
     # count; a device-detected wake is a different event and is counted separately.
     # `device_wakes` is every valid event accepted for policy; the rest are the
@@ -279,6 +286,8 @@ class WakeIdle(BaseModel):
 
     type: Literal["wake_idle"] = "wake_idle"
     waited_ms: float = 0.0
+    # Phase 2: which admitted candidate went idle (empty in single-plane mode).
+    wake_id: str = ""
 
 
 class VendorSignalMsg(BaseModel):
@@ -442,11 +451,65 @@ class ResumeMusic(BaseModel):
     type: Literal["resume_music"] = "resume_music"
 
 
+class WakeCandidate(BaseModel):
+    """plane -> control: one wake candidate, before any local gate or turn (Phase 2).
+
+    Sent only when the plane runs in arbitration mode (`--arbitrate`, set when
+    `multi_device.enabled=true`). The plane does **not** arm its gate, play a cue or
+    start a turn on this event; the control plane's WakeArbiter decides. In
+    single-plane mode the old `Wake`/local path is unchanged, so a mixed fleet is not
+    a thing to support - both sides ride the same image.
+
+    The wire deliberately carries only what the plane knows: `wake_id`, the event,
+    and whether this device is currently speaking. `device_id`, `room`, priority and
+    last-active are enriched by the control plane from config (Socket & Plug v1 rule).
+    """
+
+    type: Literal["wake_candidate"] = "wake_candidate"
+    wake_id: str
+    ts_ms: float
+    source: Literal["rui", "device"]
+    keyword: str = ""
+    score: float | None = None
+    threshold: float | None = None
+    level: float | None = None
+    barge: bool = False
+    playing: bool = False
+    # Diagnostics only (never authority), mirroring `Wake`.
+    erle_db: float | None = None
+    ref_active: bool = False
+
+
+class WakeAdmit(BaseModel):
+    """control -> plane: this candidate wins; arm the gate (`gate_timeout_ms` max)."""
+
+    type: Literal["wake_admit"] = "wake_admit"
+    wake_id: str
+    turn_id: str
+    gate_timeout_ms: int = 5000
+
+
+class WakeReject(BaseModel):
+    """control -> plane: this candidate lost; drop it without arming or speaking."""
+
+    type: Literal["wake_reject"] = "wake_reject"
+    wake_id: str
+    reason: Literal[
+        "turn_open",
+        "lost_same_word",
+        "cross_echo",
+        "lost_playing",
+        "duplicate",
+        "over_capacity",
+        "admit_timeout",
+    ] = "lost_same_word"
+
+
 ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | LedState
     | SpeakStart | SpeakFinished | ReplyFinished | VendorSignalMsg | WakeIdle | Error | Shutdown | ShellCommand
     | ShellResult | DeviceVolume | DeviceVolumeResult | PlayFinished | PauseMusic | ResumeMusic
-    | DeviceWakeMsg,
+    | DeviceWakeMsg | WakeCandidate | WakeAdmit | WakeReject,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

@@ -149,6 +149,34 @@ def test_v3_overrides_parse_and_merge_over_the_global_block(tmp_path: Path) -> N
     assert eff.voice.vad_end_silence_ms == 1000
 
 
+def test_post_playback_mute_parses_per_device_and_inherits(tmp_path: Path) -> None:
+    config = V3_CONFIG.replace(
+        "      voice: {followup_delay_ms: 2500, followup_replay: false}",
+        "      voice: {followup_delay_ms: 2500, followup_replay: false,"
+        " post_playback_mute_ms: 2500}",
+    )
+    cfg = load_config(_write(tmp_path, config))
+    dot2 = next(d for d in cfg.devices if d.id == "dot2")
+    assert dot2.audio is not None and dot2.audio.voice is not None
+    assert dot2.audio.voice.post_playback_mute_ms == 2500
+
+    eff = effective_audio(cfg.audio, dot2.audio)
+    assert eff.voice.post_playback_mute_ms == 2500
+    # An untouched device inherits the global default (0 = the 0.4.x behaviour).
+    lx06 = next(d for d in cfg.devices if d.id == "lx06")
+    assert effective_audio(cfg.audio, lx06.audio).voice.post_playback_mute_ms == 0
+
+
+def test_post_playback_mute_out_of_range_is_rejected(tmp_path: Path) -> None:
+    config = V3_CONFIG.replace(
+        "      voice: {followup_delay_ms: 2500, followup_replay: false}",
+        "      voice: {followup_delay_ms: 2500, followup_replay: false,"
+        " post_playback_mute_ms: 60000}",
+    )
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, config))
+
+
 def test_lx06_keeps_the_controller_aec_path(tmp_path: Path) -> None:
     cfg = load_config(_write(tmp_path, V3_CONFIG))
     lx06 = next(d for d in cfg.devices if d.id == "lx06")

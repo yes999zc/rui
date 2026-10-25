@@ -35,6 +35,7 @@ import numpy as np
 
 from .. import secrets
 from ..config import Config, load_config
+from ..config.schema import effective_audio
 from ..device import build_adapters
 from ..device.contract import (
     AudioFrame,
@@ -77,7 +78,10 @@ from .protocol import (
     StopAudio,
     VendorSignalMsg,
     Wake,
+    WakeAdmit,
+    WakeCandidate,
     WakeIdle,
+    WakeReject,
     decode_pcm,
     encode_json,
     encode_pcm,
@@ -372,6 +376,28 @@ class AudioPlane:
         self.cfg = cfg
         self.device_id = device_id
         self.socket_path = socket_path
+        # Config v3 (Phase 1) resolved once: this device's overrides on top of the
+        # global audio block. A v2 config has no override and resolves to the globals.
+        device_cfg = next((d for d in cfg.devices if d.id == device_id), None)
+        self.device_cfg = device_cfg
+        self.effective = effective_audio(cfg.audio, device_cfg.audio if device_cfg else None)
+        # Phase 2: with multi_device.enabled the plane only reports candidates and waits
+        # for the control plane's admit/reject; it never arms its own gate or barges on
+        # its own. With it off (the default) the old local path is byte-identical.
+        self.arbitrate = bool(cfg.multi_device.enabled)
+        self._pending_wakes: dict[str, asyncio.Future[tuple[bool, str]]] = {}
+        self._active_wake_id = ""
+        self._wake_seq = 0
+        self.wake_candidates = 0
+        self.wake_admitted = 0
+        self.wake_admit_timeouts = 0
+        self.wake_admit_latency_ms: float | None = None
+        self.wake_rejections: dict[str, int] = {}
+        self._admit_timeout_s = (
+            cfg.multi_device.arbitration.candidate_merge_window_ms + 500
+        ) / 1000.0
+        # Post-playback mute (device-AEC plugs): frames are dropped from here on.
+        self._mic_mute_until = 0.0
         self.adapter: DeviceAdapter | None = None
         self.ring = PcmRing(capacity_ms=cfg.audio.playback.queue_ms, frame_ms=cfg.audio.voice.frame_ms)
         self.arrivals = ArrivalStats()
@@ -599,7 +625,14 @@ class AudioPlane:
         return adapter
 
     def _build_aec(self, mic_channels: int, ref_channels: int) -> None:
-        if not self.cfg.audio.aec.enabled:
+        aec = self.effective.aec
+        if aec.who == "device":
+            # The plug already cancelled (device-side AEC, mono uplink). Running a second
+            # canceller here would cascade; `who=device` is the explicit hand-off.
+            self.aec_error = "aec.who=device: the plug cancels, RUI AEC is off"
+            log.info("aec off: %s", self.aec_error)
+            return
+        if not aec.enabled:
             return
         if ref_channels < 1:
             self.aec_error = "device has no reference channel: AEC and barge-in unavailable"
@@ -608,9 +641,9 @@ class AudioPlane:
         try:
             self.aec = AecChain(
                 channels=mic_channels,
-                rate=self.cfg.audio.voice.rate,
-                taps=self.cfg.audio.aec.filter_len,
-                cancel=self.cfg.audio.aec.cancel,
+                rate=self.effective.voice.rate,
+                taps=aec.filter_len,
+                cancel=aec.cancel,
             )
         except AecUnavailable as exc:
             self.aec_error = str(exc)
@@ -666,6 +699,92 @@ class AudioPlane:
         except VadUnavailable as exc:
             self.vad_error = str(exc)
             log.warning("vad off: %s", exc)
+
+    # ------------------------------------------------------ Phase 2 arbitration
+    @property
+    def _post_playback_mute_s(self) -> float:
+        return self.effective.voice.post_playback_mute_ms / 1000.0
+
+    def _mic_is_muted(self) -> bool:
+        """True while a post-playback mute window is open (no VAD/KWS at all)."""
+        return self._mic_mute_until > 0.0 and time.monotonic() < self._mic_mute_until
+
+    def _followup_delay_from(self, pacer_due: float) -> float:
+        """Drain wait + post-playback mute + the configured follow-up window.
+
+        Starting the mute at the moment the device buffer drains is what keeps barge
+        working: during playback the microphone is still live, only the echo tail after
+        it is dropped. Without a mute (the default) this is exactly the old delay.
+        """
+        mute_s = self._post_playback_mute_s
+        if mute_s:
+            self._mic_mute_until = max(time.monotonic(), pacer_due) + mute_s
+        return (
+            max(0.0, pacer_due - time.monotonic())
+            + mute_s
+            + self.effective.voice.followup_delay_ms / 1000.0
+        )
+
+    async def _arbitrate_candidate(
+        self, *, source: str, keyword: str, barge: bool, playing: bool,
+        writer: asyncio.StreamWriter, connected: asyncio.Event,
+        score: float | None = None, threshold: float | None = None,
+        level: float | None = None, erle_db: float | None = None,
+        ref_active: bool = False,
+    ) -> bool:
+        """Report one candidate and wait for the control plane's verdict.
+
+        Returns True only on `wake_admit`. Everything else (reject, timeout, no control
+        plane) returns False and the caller must not arm a gate or speak: a timeout is
+        an explicit `admit_timeout`, never a local fallback, because two planes falling
+        back to "I'll take it" is exactly the double turn the arbiter exists to stop.
+        """
+        if not self.arbitrate:
+            return True
+        if not connected.is_set():
+            log.warning("wake candidate dropped: no control plane connected")
+            return False
+        wake_id = f"{self.device_id}-{time.monotonic_ns()}"
+        future: asyncio.Future[tuple[bool, str]] = asyncio.get_running_loop().create_future()
+        self._pending_wakes[wake_id] = future
+        self.wake_candidates += 1
+        started = time.monotonic()
+        try:
+            writer.write(encode_json(WakeCandidate(
+                wake_id=wake_id,
+                ts_ms=now_ms(),
+                source=source,  # type: ignore[arg-type]
+                keyword=keyword,
+                score=score,
+                threshold=threshold,
+                level=level,
+                barge=barge,
+                playing=playing,
+                erle_db=erle_db,
+                ref_active=ref_active,
+            )))
+            await writer.drain()
+            admitted, reason = await asyncio.wait_for(future, timeout=self._admit_timeout_s)
+            self.wake_admit_latency_ms = round((time.monotonic() - started) * 1000.0, 1)
+            if admitted:
+                self.wake_admitted += 1
+                self._active_wake_id = wake_id
+                log.info("wake candidate %s admitted after %.0f ms",
+                         wake_id, self.wake_admit_latency_ms)
+            else:
+                self.wake_rejections[reason] = self.wake_rejections.get(reason, 0) + 1
+                log.info("wake candidate %s rejected: %s", wake_id, reason)
+            return admitted
+        except TimeoutError:
+            self.wake_admit_timeouts += 1
+            self.wake_rejections["admit_timeout"] = (
+                self.wake_rejections.get("admit_timeout", 0) + 1
+            )
+            log.info("wake candidate %s: no verdict in %.0f ms; dropped",
+                     wake_id, self._admit_timeout_s * 1000.0)
+            return False
+        finally:
+            self._pending_wakes.pop(wake_id, None)
 
     # ------------------------------------------------------------- pipeline
     def _frame_to_voice(self, frame: AudioFrame, decimator: Decimator) -> bytes:
@@ -771,6 +890,11 @@ class AudioPlane:
                 self.arrivals.add(frame.ts_ms - last_ts)
             last_ts = frame.ts_ms
             pcm = self._frame_to_voice(frame, decimator)
+            if self._mic_is_muted():
+                # Post-playback mute: a device-AEC plug's residual outlives its AEC and
+                # VAD/ASR would turn it into a request. Playback itself is over here, so
+                # barge (which needs the live mic) is unaffected.
+                continue
             if self.probe is not None and pcm:
                 for _ in self.probe.accept(pcm, ts_ms=frame.ts_ms, rms_db=self.voice_rms_db):
                     # Counted so the console can show "the probe heard it, production did
@@ -1425,6 +1549,16 @@ class AudioPlane:
             return
 
         playing = self._device_wake_playing()
+        if self.arbitrate:
+            admitted = await self._arbitrate_candidate(
+                source="device", keyword="",
+                barge=bool(playing and event.barge), playing=playing,
+                writer=writer, connected=connected,
+                score=float(event.score), threshold=float(event.threshold),
+                level=float(event.level) if event.level is not None else None,
+            )
+            if not admitted:
+                return
         barged_s = self._speak_queued_s if playing else 0.0
         if playing:
             if not event.barge:
@@ -1563,6 +1697,15 @@ class AudioPlane:
             # our own audio; the wake word works again once the answer drains.
             log.info("wake during playback ignored: voice.barge_in is off")
             return
+        if self.arbitrate:
+            admitted = await self._arbitrate_candidate(
+                source="rui", keyword=hit.keyword, barge=barged,
+                playing=self._device_wake_playing() or self._speak_queued_s > 0.0,
+                writer=writer, connected=connected,
+                ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
+            )
+            if not admitted:
+                return
         barged_s = self._speak_queued_s
         if barged:
             await self._stop_for_barge(barged_s)
@@ -1765,7 +1908,8 @@ class AudioPlane:
             # The wake heard nothing: tell the control plane to close the session
             # silently, otherwise the light/session stay in listening.
             try:
-                writer.write(encode_json(WakeIdle(waited_ms=float(gate.cfg.max_wait_ms))))
+                writer.write(encode_json(WakeIdle(waited_ms=float(gate.cfg.max_wait_ms),
+                                               wake_id=self._active_wake_id)))
                 await writer.drain()
             except (ConnectionResetError, BrokenPipeError):
                 connected.clear()
@@ -2161,9 +2305,8 @@ class AudioPlane:
                         # pacer to drain, then the old build's 1 s echo tail.
                         # With a song waiting the block below arms it with the music
                         # window instead (shorter max_wait, and the song stays down).
-                        delay = (max(0.0, pacer.due - time.monotonic())
-                                 + self.cfg.audio.voice.followup_delay_ms / 1000.0)
-                        if self.cfg.audio.voice.followup_replay:
+                        delay = self._followup_delay_from(pacer.due)
+                        if self.effective.voice.followup_replay:
                             self._start_followup_capture(
                                 max(0.0, pacer.due - time.monotonic()), delay)
                         asyncio.create_task(
@@ -2184,8 +2327,7 @@ class AudioPlane:
                         # The turn ended with a song waiting: hold it for the follow-up
                         # window instead of resuming between turns. A turn may shorten
                         # or cancel its own window (volume confirmations: 0).
-                        delay = (max(0.0, pacer.due - time.monotonic())
-                                 + self.cfg.audio.voice.followup_delay_ms / 1000.0)
+                        delay = self._followup_delay_from(pacer.due)
                         hold_ms = (int(self.cfg.music.resume_hold_ms)
                                    if reply_hold is None
                                    else max(0, int(reply_hold * 1000)))
@@ -2367,7 +2509,7 @@ class AudioPlane:
         self._followup_samples += len(pcm) // 2
 
     async def _replay_followup_tail(self) -> None:
-        if not self.cfg.audio.voice.followup_replay:
+        if not self.effective.voice.followup_replay:
             self._followup_tail.clear()
             self._followup_samples = 0
             self._followup_capture = False
@@ -2579,6 +2721,11 @@ class AudioPlane:
             aec_channel=self.aec.selected if self.aec is not None else 0,
             ref_active=bool(self.aec.ref_active) if self.aec is not None else False,
             wake_count=self.wake_count,
+            wake_candidates=self.wake_candidates,
+            wake_admitted=self.wake_admitted,
+            wake_admit_timeouts=self.wake_admit_timeouts,
+            wake_admit_latency_ms=self.wake_admit_latency_ms,
+            wake_rejected=dict(self.wake_rejections),
             device_wakes=self.device_wakes,
             device_wake_turns=self.device_wake_turns,
             device_wake_barges=self.device_wake_barges,
@@ -2863,6 +3010,14 @@ class AudioPlane:
                     self._speak_finished = True
                     log.info("speak finished, %s chunks still queued (%.1f s of audio)",
                              self._speak_queue.qsize(), self._speak_queued_s)
+                elif isinstance(msg, WakeAdmit):
+                    pending = self._pending_wakes.get(msg.wake_id)
+                    if pending is not None and not pending.done():
+                        pending.set_result((True, "admitted"))
+                elif isinstance(msg, WakeReject):
+                    pending = self._pending_wakes.get(msg.wake_id)
+                    if pending is not None and not pending.done():
+                        pending.set_result((False, msg.reason))
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         except Exception as exc:  # noqa: BLE001 - reported to the client, then the process exits
