@@ -80,6 +80,12 @@
 - Anthropic 原生、非 OpenAI 形状的 TTS/ASR 需要适配器，不要在 UI 上假装“预设即支持”。
 - 预设要带显示名、stage、base_url、默认 model、受控 key env、文档、必填字段和 probe；没有 probe 的预设只是模板。
 
+> 实施状态（2026-10-25，RUI 0.3.4）：§2.2 的预设/新建/内联 key/就绪已落地。预设注册表
+> `providers/presets.py`，`GET /api/v1/providers/presets`、`POST /api/v1/providers`、
+> `POST /api/v1/providers/probe`、`GET /api/v1/providers/status` 已加入；Providers 页有
+> 「新建 provider」向导、就绪/缺配置徽章与「设为主用/移出链路」。自定义环境名仅允许
+> `RUI_*`，预设凭据名由服务端固定；契约与预设清单见 `docs/provider-presets.md`。
+
 ### 2.3 密钥页到底是什么？向导 01 该叫什么？
 
 **裁决：部分同意。它不是“只填自定义 token 的地方”，但它也确实不该是一个一级导航目的地。**

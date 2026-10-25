@@ -19,8 +19,17 @@ import { onBeforeRouteLeave, RouterLink } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import ChainEditor from '../components/providers/ChainEditor.vue'
 import ProviderCard from '../components/providers/ProviderCard.vue'
+import ProviderCreateDialog from '../components/providers/ProviderCreateDialog.vue'
 import ProviderKeyStrip from '../components/providers/ProviderKeyStrip.vue'
-import { api, ApiError, type CatalogDoc } from '../api'
+import {
+  api,
+  ApiError,
+  type CatalogDoc,
+  type CreateProviderResult,
+  type ProviderPresetsDoc,
+  type ProviderStatusDoc,
+  type ProviderStatusRow,
+} from '../api'
 import { localizeIssue, providerName, t } from '../i18n'
 import {
   allowedForStage,
@@ -48,8 +57,12 @@ type StageState = 'idle' | 'saving' | 'saved' | 'error'
 
 const doc = ref<CatalogDoc | null>(null)
 const voicesDoc = ref<VoicesDoc>({})
+const presetsDoc = ref<ProviderPresetsDoc | null>(null)
+const statusDoc = ref<ProviderStatusDoc | null>(null)
 const loading = ref(true)
 const loadError = ref('')
+const createOpen = ref(false)
+const notice = ref('')
 
 const fieldDraft = ref<Record<string, unknown>>({})
 const fieldBaseline = ref<Record<string, unknown>>({})
@@ -97,6 +110,24 @@ const editableCount = computed(
         !field.path.endsWith('.kind'),
     ).length,
 )
+
+const statusByKey = computed(() => {
+  const map = new Map<string, ProviderStatusRow>()
+  for (const stage of STAGES) {
+    for (const row of statusDoc.value?.stages?.[stage]?.providers ?? []) {
+      map.set(`${stage}:${row.name}`, row)
+    }
+  }
+  return map
+})
+
+function statusFor(stage: Stage, name: string): ProviderStatusRow | undefined {
+  return statusByKey.value.get(`${stage}:${name}`)
+}
+
+function stageStatus(stage: Stage) {
+  return statusDoc.value?.stages?.[stage]
+}
 
 const allowed = computed<Record<Stage, string[]>>(() => ({
   llm: allowedForStage(model.value, 'llm'),
@@ -217,6 +248,20 @@ function resetStage(stage: Stage): void {
   globalError.value = ''
 }
 
+function setPrimary(stage: Stage, name: string): void {
+  const chain = chainDraft.value[stage]
+  if (!chain.length || chain[0] === name) return
+  updateChain(stage, [name, ...chain.filter((item) => item !== name)])
+  notice.value = t('providers.action.reorderHint')
+}
+
+function removeProvider(stage: Stage, name: string): void {
+  const chain = chainDraft.value[stage]
+  if (chain.length <= 1) return
+  updateChain(stage, chain.filter((item) => item !== name))
+  notice.value = t('providers.action.reorderHint')
+}
+
 function addUnused(def: ProviderDef): void {
   if (!def.stage) return
   chainDraft.value = { ...chainDraft.value, [def.stage]: [...chainDraft.value[def.stage], def.name] }
@@ -297,6 +342,7 @@ async function saveStage(stage: Stage): Promise<void> {
       message: result.restart_required ? t('providers.savedRestart') : t('providers.saved'),
       fields: restartFields,
     }
+    await refreshStatus()
     await nextTick()
     document.getElementById(`stage-${stage}`)?.scrollIntoView({
       behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
@@ -319,6 +365,14 @@ async function saveStage(stage: Stage): Promise<void> {
   }
 }
 
+async function refreshStatus(): Promise<void> {
+  try {
+    statusDoc.value = await api.providerStatus()
+  } catch {
+    // Badges are additive: an older server (or a transient error) must not hide the editor.
+  }
+}
+
 async function copyCommand(stage: Stage): Promise<void> {
   try {
     await navigator.clipboard.writeText(restartCommand.value)
@@ -334,12 +388,16 @@ async function load(): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
-    const [catalog, voices] = await Promise.all([
+    const [catalog, voices, presets, status] = await Promise.all([
       api.catalog(),
       api.json<VoicesDoc>('/api/v1/providers/voices').catch(() => ({ tts: {}, asr: {} })),
+      api.providerPresets().catch(() => null),
+      api.providerStatus().catch(() => null),
     ])
     doc.value = catalog
     voicesDoc.value = voices
+    presetsDoc.value = presets
+    statusDoc.value = status
     fieldBaseline.value = clone(catalog.values)
     fieldDraft.value = clone(catalog.values)
     const chains: Record<Stage, string[]> = {
@@ -361,6 +419,19 @@ async function load(): Promise<void> {
   } finally {
     loading.value = false
   }
+}
+
+async function onCreated(result: CreateProviderResult): Promise<void> {
+  createOpen.value = false
+  const name = result.provider?.name ?? ''
+  notice.value = t('providers.create.created', { name })
+  await load()
+  if (!result.provider?.stage) return
+  await nextTick()
+  document.getElementById(`stage-${result.provider.stage}`)?.scrollIntoView({
+    behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
 }
 
 onMounted(load)
@@ -394,7 +465,21 @@ onBeforeRouteLeave(() => (anyDirty.value ? window.confirm(t('providers.unsavedLe
 
       <div class="providers-bar">
         <span class="meta">{{ t('providers.catalogMeta', { providers: defs.length, fields: editableCount }) }}</span>
-        <ProviderKeyStrip :secrets="providerKeyList" />
+        <div class="providers-bar-actions">
+          <ProviderKeyStrip :secrets="providerKeyList" />
+          <button type="button" class="btn btn-sm btn-primary" @click="createOpen = true">
+            <AppIcon name="plus" :size="13" />
+            {{ t('providers.create.open') }}
+          </button>
+        </div>
+      </div>
+
+      <div v-if="notice" class="banner banner-ok" role="status">
+        <AppIcon name="check" :size="16" class="banner-icon" />
+        <span>{{ notice }}</span>
+        <button type="button" class="btn btn-sm" style="margin-left: auto" @click="notice = ''">
+          <AppIcon name="close" :size="12" />
+        </button>
       </div>
 
       <div v-if="globalError" class="banner banner-fail" role="alert">
@@ -410,6 +495,9 @@ onBeforeRouteLeave(() => (anyDirty.value ? window.confirm(t('providers.unsavedLe
             <p class="stage-purpose">{{ stagePurpose(stage) }}</p>
           </div>
           <div class="stage-actions">
+            <span v-if="stageStatus(stage)" class="badge" :class="stageStatus(stage)?.satisfied ? 'badge-accent' : 'badge-warn'">
+              {{ t('providers.status.ready') }} {{ stageStatus(stage)?.ready.length ?? 0 }}/{{ chainDraft[stage].length }}
+            </span>
             <span class="badge badge-restart">{{ t('providers.effect.restart') }}</span>
             <span v-if="stageDirtyCount(stage)" class="badge badge-warn">
               {{ t('providers.modified', { n: stageDirtyCount(stage) }) }}
@@ -481,8 +569,12 @@ onBeforeRouteLeave(() => (anyDirty.value ? window.confirm(t('providers.unsavedLe
               :secrets="secrets"
               :voices="voicesFor(def.name)"
               :audition-ready="auditionReady(def.name)"
+              :status="statusFor(stage, def.name)"
+              :can-remove="chainDraft[stage].length > 1"
               :disabled="isSaving(stage)"
               @update-field="(path, value) => updateField(stage, path, value)"
+              @set-primary="setPrimary(stage, def.name)"
+              @remove="removeProvider(stage, def.name)"
             />
             <p v-if="!stageCards[stage].length" class="empty">{{ t('providers.chain.empty') }}</p>
           </div>
@@ -526,6 +618,13 @@ onBeforeRouteLeave(() => (anyDirty.value ? window.confirm(t('providers.unsavedLe
         <span>·</span>
         <span>{{ restartCommand }}</span>
       </p>
+
+      <ProviderCreateDialog
+        :open="createOpen"
+        :presets="presetsDoc"
+        @close="createOpen = false"
+        @created="onCreated"
+      />
     </template>
   </div>
 </template>
@@ -552,6 +651,14 @@ onBeforeRouteLeave(() => (anyDirty.value ? window.confirm(t('providers.unsavedLe
   margin-top: var(--s4);
   padding-bottom: var(--s3);
   border-bottom: 1px solid var(--line);
+}
+
+.providers-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .providers-bar .p-keys {

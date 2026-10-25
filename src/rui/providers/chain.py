@@ -76,6 +76,7 @@ _REASON_TEXT = {
     "missing_key": "missing credential",
     "local_model": "local model files are not present",
     "base_url": "base_url is empty",
+    "model": "model is empty",
     "unknown_provider": "not in providers.catalog",
 }
 

@@ -274,7 +274,7 @@ docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生�
 
 | 区域 | 关键项 | 说明 |
 |---|---|---|
-| AI 供应商 | `providers.catalog` + `providers.{asr,tts,llm}.chain` | 向导每个 use 选一个 provider 并写成 `chain=[selected]`；有序 fallback、音色/语速/情感仍可在控制台改并试听 |
+| AI 供应商 | `providers.catalog` + `providers.{asr,tts,llm}.chain` | 控制台可从预设/自定义兼容端点新建 provider、内联填只写密钥、看就绪徽章；预设清单与 API 见 [docs/provider-presets.md](docs/provider-presets.md)。向导每个 use 选一个 provider 并保留旧 fallback；音色/语速/情感仍可试听 |
 | 音箱 | `devices[]` | adapter、回连端口、房间、唤醒词、音量、LED；v1 仅 LX06 |
 | 音频 | `audio.capture / voice / playback / aec` | 采样率、帧长、VAD、AEC、播放缓冲；改完重启音频面 |
 | 会话 | `session.*` | 空闲超时、结束词、上下文开关、filler 策略 |
@@ -601,7 +601,7 @@ Hard rules: only the audio plane touches mic/speaker; playback has a single owne
 
 ### Configuration
 
-Provider order and fields live in `config.yaml`: `providers.catalog` plus one ordered chain per stage (`providers.asr/tts/llm.chain`). The setup wizard selects one provider per use and stores it as that stage's chain (`[selected]`), so an unconfigured fallback never blocks first-run completion. Speakers are `devices[]`; the audio plane is `audio.*`; session, music, tools and console/security settings are grouped in the console's four-tier catalog. Everything is editable in the console (422 validation maps back onto fields), or via the CLI/config file. See [docs/config-catalog-contract.md](docs/config-catalog-contract.md) and [docs/deploy.md](docs/deploy.md).
+Provider order and fields live in `config.yaml`: `providers.catalog` plus one ordered chain per stage (`providers.asr/tts/llm.chain`). The console can create a provider from a preset or a custom OpenAI-compatible endpoint (write-only inline key, readiness badge) without hand-editing YAML; see [docs/provider-presets.md](docs/provider-presets.md). The setup wizard selects one provider per use and keeps existing fallbacks, so an unconfigured fallback never blocks first-run completion. Speakers are `devices[]`; the audio plane is `audio.*`; session, music, tools and console/security settings are grouped in the console's four-tier catalog. Everything is editable in the console (422 validation maps back onto fields), or via the CLI/config file. See [docs/config-catalog-contract.md](docs/config-catalog-contract.md) and [docs/deploy.md](docs/deploy.md).
 
 ### Status and known gaps
 

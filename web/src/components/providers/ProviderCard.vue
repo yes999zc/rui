@@ -5,6 +5,7 @@
  */
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
+import type { ProviderStatusRow } from '../../api'
 import { providerDescription, providerName, t } from '../../i18n'
 import {
   coerceValue,
@@ -12,6 +13,8 @@ import {
   EXCLUDED,
   fieldKey,
   kindLabel,
+  providerReadyLabel,
+  providerStatusDetail,
   roleLabel,
   secretsFor,
   voiceLabel,
@@ -33,10 +36,16 @@ const props = defineProps<{
   secrets: Record<string, SecretMeta>
   voices: VoiceOption[]
   auditionReady: boolean
+  status?: ProviderStatusRow
+  canRemove?: boolean
   disabled?: boolean
 }>()
 
-const emit = defineEmits<{ 'update-field': [path: string, value: unknown] }>()
+const emit = defineEmits<{
+  'update-field': [path: string, value: unknown]
+  'set-primary': []
+  remove: []
+}>()
 
 const name = computed(() => props.def.name)
 const excluded = computed(() => EXCLUDED[props.stage].includes(name.value))
@@ -98,8 +107,12 @@ const prosody = computed(() => {
           <span class="badge">{{ kindLabel(def.kind) }}</span>
           <span class="badge" :class="roleIndex === 0 ? 'badge-accent' : 'badge-muted'">{{ roleLabel(roleIndex) }}</span>
           <span v-if="excluded" class="badge badge-warn">{{ t('providers.unused.removed') }}</span>
+          <span v-if="status" class="badge" :class="status.ready ? 'badge-accent' : 'badge-warn'">
+            {{ providerReadyLabel(status) }}
+          </span>
         </div>
         <p v-if="providerDescription(def.name)" class="p-desc">{{ providerDescription(def.name) }}</p>
+        <p v-if="status && !status.ready" class="p-status-detail">{{ providerStatusDetail(status) }}</p>
       </div>
       <div class="p-key" :class="configuredKeys === secretNames.length || !secretNames.length ? 'ok' : 'warn'">
         <span class="dot" :class="configuredKeys === secretNames.length || !secretNames.length ? 'ok' : 'warn'" />
@@ -147,6 +160,26 @@ const prosody = computed(() => {
           />
         </template>
       </ProviderField>
+    </div>
+
+    <div class="p-actions">
+      <button
+        type="button"
+        class="btn btn-sm"
+        :disabled="disabled || excluded || roleIndex === 0"
+        @click="emit('set-primary')"
+      >
+        {{ roleIndex === 0 ? t('providers.action.primary') : t('providers.action.setPrimary') }}
+      </button>
+      <button
+        v-if="canRemove !== false"
+        type="button"
+        class="btn btn-sm"
+        :disabled="disabled || excluded"
+        @click="emit('remove')"
+      >
+        {{ t('providers.action.remove') }}
+      </button>
     </div>
 
     <details v-if="def.advanced.length" class="p-advanced">
@@ -251,6 +284,22 @@ const prosody = computed(() => {
   text-decoration: underline;
   text-underline-offset: 2px;
   white-space: nowrap;
+}
+
+.p-status-detail {
+  margin-top: 3px;
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.p-actions {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: var(--s4);
+  padding-top: var(--s3);
+  border-top: 1px dashed var(--line-strong);
 }
 
 .p-summary {

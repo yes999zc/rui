@@ -6,7 +6,13 @@
  * every save goes through `PUT /api/v1/config/values`. This file only turns the
  * flat field list into the three provider stages and their chains.
  */
-import type { CatalogDoc, CatalogField, CatalogOption, LocalizedText } from '../../api'
+import type {
+  CatalogDoc,
+  CatalogField,
+  CatalogOption,
+  LocalizedText,
+  ProviderStatusRow,
+} from '../../api'
 import { pickLocalized, t, type MsgKey } from '../../i18n'
 
 export type Stage = 'llm' | 'asr' | 'tts'
@@ -134,6 +140,34 @@ const KIND_KEYS: Record<string, MsgKey> = {
 export function kindLabel(kind: string): string {
   const key = KIND_KEYS[kind]
   return key ? t(key) : t('providers.kind.unknown')
+}
+
+const REASON_KEYS: Record<string, MsgKey> = {
+  missing_key: 'providers.status.reason.missingKey',
+  base_url: 'providers.status.reason.baseUrl',
+  model: 'providers.status.reason.model',
+  local_model: 'providers.status.reason.localModel',
+  unknown_provider: 'providers.status.reason.unknown',
+}
+
+/** Why a configured provider is not ready, in the UI language. */
+export function readinessReasonLabel(reason: string): string {
+  const key = REASON_KEYS[reason]
+  return key ? t(key) : reason
+}
+
+/** Status text for a provider card; `undefined` when status was not loaded. */
+export function providerReadyLabel(status?: ProviderStatusRow): string {
+  if (!status) return ''
+  return status.ready ? t('providers.status.ready') : t('providers.status.missing')
+}
+
+export function providerStatusDetail(status?: ProviderStatusRow): string {
+  if (!status || status.ready) return ''
+  if (status.missing.length) {
+    return t('providers.status.missingKeys', { names: status.missing.join(', ') })
+  }
+  return readinessReasonLabel(status.reason)
 }
 
 const STAGE_BY_KIND: Record<string, Stage> = {

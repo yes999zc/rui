@@ -57,9 +57,12 @@ from ...config.recovery import restore as restore_config
 from ...config.schema import (
     CONFIG_VERSION,
     LED_STATES,
+    STAGES,
     Config,
     DeviceConfig,
     McpServerConfig,
+    ProviderConfig,
+    StageConfig,
 )
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.loader import load_adapter_plugins
@@ -71,7 +74,7 @@ from ...music import MusicService, NavidromeSource, PlayHistory
 from ...music.names import AliasStore, NameResolver
 from ...music.tools import build_music_tools
 from ...plugins import ParamSpec, ParamType, PlugCatalog, ResolvedPlug
-from ...providers import keycheck
+from ...providers import keycheck, presets
 from ...providers.chain import build_stage
 from ...providers.volc_voices import voices_for
 from ...security.netguard import OutboundPolicy
@@ -3189,6 +3192,384 @@ def create_app(
                          [str(key) for key in keys] if keys is not None else None)
         log.info("phrasebook: reset %s", "all" if keys is None else len(keys))
         return phrasebook.document(Path(cfg.system.data_dir))
+
+    # ---------------------------------------------------------------- provider presets
+    # Creating a provider used to be impossible from the console: the catalog fields
+    # only exist for blocks already in config.yaml, so the first step required hand
+    # editing YAML. These endpoints create the *product object* (catalog entry + chain
+    # entry) atomically, with preset-controlled environment names and write-only keys.
+    def _provider_error(status: int, code: str, message: str,
+                        details: dict | None = None) -> HTTPException:
+        return HTTPException(
+            status_code=status,
+            detail={"code": code, "message": message, "details": details or {}},
+        )
+
+    def _provider_text(value: object) -> str:
+        return str(value or "").strip()
+
+    def _provider_name_checked(name: str, current: Config) -> str:
+        if not presets.valid_provider_name(name):
+            raise _provider_error(
+                422, "invalid_provider_name",
+                "provider name must be lowercase letters, digits, '-' or '_' (max 32)",
+                {"name": name},
+            )
+        if name in current.providers.catalog:
+            raise _provider_error(
+                422, "duplicate_provider",
+                f"a provider named {name!r} already exists",
+                {"name": name},
+            )
+        return name
+
+    def _provider_keys_checked(payload: object, allowed: set[str]) -> dict[str, str]:
+        """Write-only credential values keyed by a declared environment name."""
+        if payload is None:
+            return {}
+        if not isinstance(payload, dict):
+            raise _provider_error(422, "invalid_keys",
+                                  "keys must be an object of ENV name -> value")
+        values: dict[str, str] = {}
+        for raw_name, raw_value in payload.items():
+            name = _provider_text(raw_name)
+            if name not in allowed:
+                raise _provider_error(
+                    422, "invalid_key",
+                    f"{name!r} is not a credential of this provider",
+                    {"key": name, "allowed": sorted(allowed)},
+                )
+            if not isinstance(raw_value, str):
+                raise _provider_error(
+                    422, "invalid_key", f"secret {name} must be a string",
+                    {"key": name},
+                )
+            if raw_value:
+                values[name] = raw_value
+        return values
+
+    def _provider_draft(payload: dict, current: Config) -> dict:
+        """Validate a create/probe body without writing config or secrets.
+
+        Returns the catalog block, the provider name/stage, and the write-only key
+        values. Environment names are never taken from the client for presets, and a
+        custom provider may only use ``RUI_*`` names.
+        """
+        preset_id = _provider_text(payload.get("preset_id"))
+        custom = payload.get("custom")
+        has_custom = isinstance(custom, dict)
+        if bool(preset_id) == has_custom:
+            raise _provider_error(
+                422, "invalid_request",
+                "provide exactly one of preset_id or custom",
+                {"preset_id": preset_id, "custom": has_custom},
+            )
+
+        preset = None
+        if preset_id:
+            preset = presets.get_preset(preset_id)
+            if preset is None:
+                raise _provider_error(
+                    422, "unknown_preset",
+                    f"unknown provider preset {preset_id!r}",
+                    {"preset_id": preset_id,
+                     "available": [item.id for item in presets.PRESETS]},
+                )
+            stage = preset.stage
+            requested_stage = _provider_text(payload.get("stage"))
+            if requested_stage and requested_stage != stage:
+                raise _provider_error(
+                    422, "stage_mismatch",
+                    f"preset {preset.id!r} is for {stage}, not {requested_stage!r}",
+                    {"preset_id": preset.id, "stage": stage,
+                     "requested": requested_stage},
+                )
+            name = _provider_name_checked(
+                _provider_text(payload.get("name")) or preset.default_name, current)
+            base_url = _provider_text(payload.get("base_url")) or preset.base_url
+            model = _provider_text(payload.get("model")) or preset.default_model
+            if preset.kind == "openai_compat" and not base_url.startswith(
+                    ("http://", "https://")):
+                raise _provider_error(
+                    422, "invalid_base_url",
+                    "base_url must start with http:// or https://",
+                    {"base_url": base_url},
+                )
+            block = {
+                "kind": preset.kind,
+                "base_url": base_url,
+                "model": model,
+                "api_key_env": preset.api_key_env,
+                "app_id_env": preset.app_id_env,
+                "api_secret_env": preset.api_secret_env,
+                "voice": preset.default_voice,
+                "timeout_s": preset.timeout_s,
+            }
+            allowed_env = set(preset.required_env)
+        else:
+            assert isinstance(custom, dict)  # has_custom above
+            stage = _provider_text(custom.get("stage")).lower()
+            if stage not in STAGES:
+                raise _provider_error(
+                    422, "invalid_stage",
+                    f"stage must be one of {', '.join(STAGES)}",
+                    {"stage": stage, "stages": list(STAGES)},
+                )
+            kind = (_provider_text(custom.get("kind")) or "openai_compat").lower()
+            if not presets.kind_allowed(stage, kind):
+                raise _provider_error(
+                    422, "invalid_kind",
+                    f"kind {kind!r} cannot serve {stage}",
+                    {"stage": stage, "kind": kind,
+                     "allowed": list(presets.STAGE_KINDS.get(stage, ()))},
+                )
+            name = _provider_name_checked(_provider_text(custom.get("name")), current)
+            base_url = _provider_text(custom.get("base_url"))
+            model = _provider_text(custom.get("model"))
+            if not base_url and kind in ("openai_compat", "volc_asr", "volc_tts"):
+                # Built-in vendor endpoints have defaults; an OpenAI-compatible one
+                # does not, so an empty value would create a permanently unready entry.
+                if kind == "openai_compat":
+                    raise _provider_error(
+                        422, "invalid_base_url",
+                        "base_url is required for a custom OpenAI-compatible provider",
+                        {"kind": kind},
+                    )
+            if base_url and not base_url.startswith(("http://", "https://")):
+                raise _provider_error(
+                    422, "invalid_base_url",
+                    "base_url must start with http:// or https://",
+                    {"base_url": base_url},
+                )
+            if kind == "sherpa" and not model:
+                raise _provider_error(
+                    422, "invalid_model",
+                    "a local sherpa provider needs a model directory path",
+                    {"kind": kind},
+                )
+            env_fields = ("api_key_env", "app_id_env", "api_secret_env")
+            env_values: dict[str, str] = {}
+            for field_name in env_fields:
+                value = _provider_text(custom.get(field_name))
+                if value and not presets.valid_env_name(
+                        value, prefix=presets.CUSTOM_ENV_PREFIX):
+                    raise _provider_error(
+                        422, "invalid_env",
+                        f"{field_name} must be an uppercase {presets.CUSTOM_ENV_PREFIX}* "
+                        "environment name",
+                        {"field": field_name, "value": value,
+                         "prefix": presets.CUSTOM_ENV_PREFIX},
+                    )
+                env_values[field_name] = value
+            if kind == "xfyun" and not all(env_values.values()):
+                raise _provider_error(
+                    422, "missing_env",
+                    "an xfyun provider needs api_key_env, app_id_env and api_secret_env",
+                    {"kind": kind, "fields": list(env_fields)},
+                )
+            if kind in ("volc_asr", "volc_tts") and not env_values["api_key_env"]:
+                raise _provider_error(
+                    422, "missing_env",
+                    f"a {kind} provider needs api_key_env",
+                    {"kind": kind, "field": "api_key_env"},
+                )
+            block = {
+                "kind": kind,
+                "base_url": base_url,
+                "model": model,
+                "api_key_env": env_values["api_key_env"],
+                "app_id_env": env_values["app_id_env"],
+                "api_secret_env": env_values["api_secret_env"],
+                "voice": _provider_text(custom.get("voice")),
+                "timeout_s": 30.0 if stage == "llm" else 15.0,
+            }
+            allowed_env = {value for value in env_values.values() if value}
+
+        keys = _provider_keys_checked(payload.get("keys"), allowed_env)
+        return {
+            "name": name,
+            "stage": stage,
+            "kind": block["kind"],
+            "block": block,
+            "keys": keys,
+            "preset": preset,
+        }
+
+    def _provider_status(current: Config) -> dict:
+        """Ready/missing/reason/probe for every configured chain entry.
+
+        Readiness is the same predicate the runtime uses, so a green badge cannot
+        disagree with the chain that actually serves a turn. This is a read: no network
+        probe is started here; the UI's test button calls the probe endpoint.
+        """
+        by_stage: dict[str, dict] = {}
+        flat: list[dict] = []
+        for stage in STAGES:
+            chain = list(getattr(current.providers, stage).chain)
+            rows: list[dict] = []
+            for index, name in enumerate(chain):
+                provider = current.providers.catalog.get(name)
+                if provider is None:
+                    continue
+                ready, missing, reason = keycheck.provider_readiness(
+                    current.providers, stage, name)
+                label_zh, label_en = keycheck.display_names(name, provider)
+                preset = presets.preset_for(stage, provider.kind, provider.base_url)
+                if preset is not None:
+                    label_zh, label_en = preset.name_zh, preset.name_en
+                check = presets.probe_for(stage, provider.kind)
+                docs_url = (preset.docs_url if preset is not None
+                            else keycheck.provider_docs_url(stage, provider))
+                row = {
+                    "name": name,
+                    "stage": stage,
+                    "kind": provider.kind,
+                    "display_name": label_zh,
+                    "display_name_en": label_en,
+                    "base_url": provider.base_url,
+                    "model": provider.model,
+                    "api_key_env": provider.api_key_env,
+                    "app_id_env": provider.app_id_env,
+                    "api_secret_env": provider.api_secret_env,
+                    "keyless": not any((provider.api_key_env, provider.app_id_env,
+                                        provider.api_secret_env)),
+                    "docs_url": docs_url,
+                    "configured": not missing,
+                    "ready": ready,
+                    "missing": missing,
+                    "reason": reason,
+                    "primary": index == 0,
+                    "chain_index": index,
+                    "in_chain": True,
+                    "probe": {"supported": check != "none", "check": check},
+                }
+                rows.append(row)
+                flat.append(row)
+            satisfied, missing_all = keycheck.stage_satisfied(current, stage)
+            by_stage[stage] = {
+                "chain": chain,
+                "primary": chain[0] if chain else "",
+                "ready": [row["name"] for row in rows if row["ready"]],
+                "not_ready": [row["name"] for row in rows if not row["ready"]],
+                "satisfied": satisfied,
+                "missing": missing_all,
+                "providers": rows,
+            }
+        catalog = []
+        for name, provider in current.providers.catalog.items():
+            stages = [stage for stage in STAGES
+                      if name in getattr(current.providers, stage).chain]
+            catalog.append({
+                "name": name,
+                "kind": provider.kind,
+                "stages": stages,
+                "in_chain": bool(stages),
+                "api_key_env": provider.api_key_env,
+                "base_url": provider.base_url,
+                "model": provider.model,
+            })
+        return {"providers": flat, "stages": by_stage, "catalog": catalog}
+
+    @app.get("/api/v1/providers/presets", dependencies=[Depends(auth)])
+    async def provider_presets(stage: str | None = None) -> dict:
+        """Available presets (display names, docs, required fields, probe support).
+
+        Values never appear here: a credential is only an environment name. The
+        response also declares what custom mode accepts (RUI_* names only).
+        """
+        try:
+            return presets.document(stage)
+        except ValueError as exc:
+            raise _provider_error(422, "invalid_stage", str(exc),
+                                  {"stage": stage, "stages": list(STAGES)}) from exc
+
+    @app.get("/api/v1/providers/status", dependencies=[Depends(auth)])
+    async def provider_status() -> dict:
+        cfg_now = getattr(app.state, "cfg", cfg)
+        return _provider_status(cfg_now)
+
+    @app.post("/api/v1/providers", dependencies=[Depends(auth)])
+    async def provider_create(payload: Annotated[dict, Body()]) -> dict:
+        """Create a provider: catalog entry + chain position, with write-only keys.
+
+        The endpoint re-reads config from disk first (no stale page can drop another
+        provider), validates the whole `Config`, writes through the atomic `save_config`
+        path, and only then stores the keys. It returns the created provider summary
+        (ready/missing/reason/probe), never a key value.
+        """
+        current = _read_config_or_409()
+        draft = _provider_draft(payload, current)
+        name = draft["name"]
+        stage = draft["stage"]
+        set_primary = payload.get("set_primary", False)
+        if not isinstance(set_primary, bool):
+            raise _provider_error(422, "invalid_request",
+                                  "set_primary must be true or false",
+                                  {"set_primary": set_primary})
+        merged = current.model_dump(mode="json")
+        merged["providers"]["catalog"][name] = draft["block"]
+        previous_chain = list(getattr(current.providers, stage).chain)
+        rest = [item for item in previous_chain if item != name]
+        merged["providers"][stage]["chain"] = (
+            [name, *rest] if set_primary else [*rest, name])
+        try:
+            updated = Config.model_validate(merged)
+        except ValidationError as exc:
+            raise _provider_error(
+                422, "invalid_config", "the resulting config is invalid",
+                {"errors": [
+                    {"loc": list(error.get("loc", ())),
+                     "msg": str(error.get("msg", ""))}
+                    for error in exc.errors(include_url=False)
+                ]},
+            ) from exc
+        await _write_config(updated)
+        # Keys are written after the config validates. Nothing above echoes them.
+        for env_name, value in draft["keys"].items():
+            try:
+                secrets.put(env_name, value)
+            except ValueError as exc:
+                raise _provider_error(
+                    422, "secret_rejected", str(exc), {"key": env_name}) from exc
+        log.info("providers: created %s (%s/%s, keys=%d, primary=%s)",
+                 name, stage, draft["kind"], len(draft["keys"]), set_primary)
+        live = getattr(app.state, "cfg", updated)
+        status = _provider_status(live)
+        created = next((row for row in status["stages"][stage]["providers"]
+                        if row["name"] == name), None)
+        return {
+            "provider": created,
+            "stage": status["stages"][stage],
+            "status": status,
+            "restart_required": True,
+            "ok": True,
+        }
+
+    @app.post("/api/v1/providers/probe", dependencies=[Depends(auth)])
+    async def provider_probe(payload: Annotated[dict, Body()]) -> dict:
+        """Test a not-yet-created provider with the same probe as the keys step.
+
+        The draft is assembled in memory only; config and secrets are untouched. Unsaved
+        keys are ephemeral, exactly like `keys.test`, and are never echoed.
+        """
+        current = _read_config_or_409()
+        draft = _provider_draft(payload, current)
+        temp = current.model_copy(deep=True)
+        temp.providers.catalog[draft["name"]] = ProviderConfig.model_validate(
+            draft["block"])
+        stage = draft["stage"]
+        chain = [draft["name"], *[
+            item for item in getattr(temp.providers, stage).chain
+            if item != draft["name"]]]
+        setattr(temp.providers, stage, StageConfig(chain=chain))
+        try:
+            result = await keycheck.test_provider(
+                temp, stage, draft["name"], keys=draft["keys"] or None)
+        except keycheck.KeyCheckError as exc:
+            raise _provider_error(422, exc.code, str(exc), exc.details) from exc
+        log.info("providers: probe %s (%s) ok=%s", draft["name"], stage,
+                 result.get("ok"))
+        return {**result, "draft": True, "name": draft["name"]}
 
     def _wav_bytes(pcm: bytes, rate: int) -> bytes:
         import struct

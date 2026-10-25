@@ -948,6 +948,160 @@ export interface SaveValuesResult {
   warnings?: string[]
 }
 
+/* — provider presets + creation (Phase 3) ——————————————————————————————— */
+
+/** One write-only credential slot; `name` is the env var, never its value. */
+export interface ProviderPresetCredential {
+  role: string
+  name: string
+  label?: LocalizedText | string
+  hint?: LocalizedText | string
+  required?: boolean
+}
+
+export interface ProviderProbeSupport {
+  supported: boolean
+  check: string
+}
+
+/** A backend-owned preset. `api_key_env` etc. are controlled by the server. */
+export interface ProviderPreset {
+  id: string
+  stage: string
+  kind: string
+  display_name: LocalizedText | string
+  display_name_zh: string
+  display_name_en: string
+  description: LocalizedText | string
+  description_zh: string
+  description_en: string
+  base_url: string
+  model: string
+  api_key_env: string
+  app_id_env: string
+  api_secret_env: string
+  credentials: ProviderPresetCredential[]
+  required_fields: string[]
+  required_env: string[]
+  model_required: boolean
+  keyless: boolean
+  docs_url: string
+  probe: ProviderProbeSupport
+  default_name: string
+  default_voice: string
+  timeout_s: number
+  custom: false
+}
+
+/** Custom mode only accepts RUI_* environment names. */
+export interface ProviderCustomDoc {
+  enabled: boolean
+  env_prefix: string
+  env_hint?: LocalizedText | string
+  stages: Record<string, {
+    kinds: string[]
+    default_kind: string
+    requires_base_url: boolean
+    model_required: boolean
+  }>
+}
+
+export interface ProviderPresetsDoc {
+  presets: ProviderPreset[]
+  stages: { stage: string; kinds: string[]; presets: string[] }[]
+  custom: ProviderCustomDoc
+  count: number
+}
+
+export interface ProviderStatusRow {
+  name: string
+  stage: string
+  kind: string
+  display_name: string
+  display_name_en: string
+  base_url: string
+  model: string
+  api_key_env: string
+  app_id_env: string
+  api_secret_env: string
+  keyless: boolean
+  docs_url: string
+  configured: boolean
+  ready: boolean
+  missing: string[]
+  reason: string
+  primary: boolean
+  chain_index: number
+  in_chain: boolean
+  probe: ProviderProbeSupport
+}
+
+export interface ProviderStageStatus {
+  chain: string[]
+  primary: string
+  ready: string[]
+  not_ready: string[]
+  satisfied: boolean
+  missing: string[]
+  providers: ProviderStatusRow[]
+}
+
+export interface ProviderStatusDoc {
+  providers: ProviderStatusRow[]
+  stages: Record<string, ProviderStageStatus>
+  catalog: {
+    name: string
+    kind: string
+    stages: string[]
+    in_chain: boolean
+    api_key_env: string
+    base_url: string
+    model: string
+  }[]
+}
+
+export interface ProviderCustomDraft {
+  name: string
+  stage: string
+  kind: string
+  base_url: string
+  model?: string
+  api_key_env?: string
+  app_id_env?: string
+  api_secret_env?: string
+  voice?: string
+}
+
+/** `POST /api/v1/providers` body; exactly one of preset_id/custom. */
+export interface CreateProviderPayload {
+  preset_id?: string
+  name?: string
+  stage?: string
+  base_url?: string
+  model?: string
+  custom?: ProviderCustomDraft
+  keys?: Record<string, string>
+  set_primary?: boolean
+}
+
+export interface CreateProviderResult {
+  ok: boolean
+  provider: ProviderStatusRow
+  stage: ProviderStageStatus
+  status: ProviderStatusDoc
+  restart_required: boolean
+}
+
+export interface ProviderProbeResult {
+  ok: boolean
+  stage: string
+  provider: string
+  message: string
+  details?: Record<string, unknown>
+  draft?: boolean
+  name?: string
+}
+
 /* — music credentials (write-only; the panel never receives the values) ————— */
 
 export interface MusicCredentialsPatch {
@@ -1219,6 +1373,23 @@ export const api = {
   restartAudio: () =>
     request<{ restarted: boolean; error: string }>('/api/v1/system/audio/restart', {
       method: 'POST', body: JSON.stringify({}),
+    }),
+
+  /* — provider presets + creation (Phase 3) ————————————————————————— */
+
+  /** Backend-owned preset registry + what custom mode accepts. No secret values. */
+  providerPresets: () => request<ProviderPresetsDoc>('/api/v1/providers/presets'),
+  /** Ready/missing/reason/probe for every configured provider and chain. */
+  providerStatus: () => request<ProviderStatusDoc>('/api/v1/providers/status'),
+  /** Create a provider (catalog block + chain entry) with write-only keys. */
+  createProvider: (payload: CreateProviderPayload) =>
+    request<CreateProviderResult>('/api/v1/providers', {
+      method: 'POST', body: JSON.stringify(payload),
+    }),
+  /** Test an unsaved draft with the same probe as the keys step; writes nothing. */
+  probeProvider: (payload: CreateProviderPayload) =>
+    request<ProviderProbeResult>('/api/v1/providers/probe', {
+      method: 'POST', body: JSON.stringify(payload),
     }),
 
   /* — voice audition + Volcano quota (console-voice) ————————————— */

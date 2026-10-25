@@ -32,6 +32,7 @@ __all__ = [
     "KeyCheckError",
     "credential_names",
     "provider_catalog",
+    "provider_docs_url",
     "provider_entries",
     "provider_readiness",
     "provider_ready",
@@ -248,6 +249,11 @@ def _field_docs(stage: str, provider: ProviderConfig, role: str) -> str:
     return _docs_url(stage, provider)
 
 
+def provider_docs_url(stage: str, provider: ProviderConfig) -> str:
+    """Public docs link for a configured provider (never a credential value)."""
+    return _docs_url(stage, provider)
+
+
 def _provider_hint(stage: str, provider: ProviderConfig) -> dict[str, str]:
     kind = _norm(provider.kind)
     if kind in ("volc_asr", "volc_tts"):
@@ -448,11 +454,11 @@ def provider_readiness(
 
     A provider is usable when every credential it declares resolves *and* it can
     actually run: a local model's files exist, a built-in vendor endpoint needs no
-    ``base_url``, and an OpenAI-compatible entry needs its endpoint configured.
+    ``base_url``, and an OpenAI-compatible entry needs its endpoint and model configured.
 
     ``reason`` is a stable machine word rather than prose, so the console can badge a
     provider without parsing a message: ``""`` (ready), ``missing_key``, ``local_model``,
-    ``base_url`` or ``unknown_provider``.
+    ``base_url``, ``model`` or ``unknown_provider``.
     """
     providers = _providers_of(cfg)
     provider = providers.catalog.get(name)
@@ -468,8 +474,13 @@ def provider_readiness(
         return ready, [], "" if ready else "local_model"
     if kind in ("volc_asr", "volc_tts", "xfyun"):
         return True, [], ""
-    ready = bool(str(provider.base_url or "").strip())
-    return ready, [], "" if ready else "base_url"
+    if not str(provider.base_url or "").strip():
+        return False, [], "base_url"
+    if kind == "openai_compat" and not str(provider.model or "").strip():
+        # Creating a provider from a preset should leave no half-working entry: an
+        # OpenAI-compatible endpoint without a model fails the first real call.
+        return False, [], "model"
+    return True, [], ""
 
 
 def provider_ready(
