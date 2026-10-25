@@ -435,9 +435,8 @@ def test_each_config_panel_owns_exactly_its_tier_groups(tmp_path) -> None:
                 and (tab is None or block.get("tab") == tab)
                 for group in block.get("groups", [])}
 
-    # Phase 2: the speaker parameters moved to the 音频与唤醒 tab; the legacy panel
-    # stays declared (and reachable) for one release with the same groups.
-    assert set(panels["speaker"]["component_args"]["groups"]) == by_tier[2]
+    # Phase 2: the speaker parameters moved to the 音频与唤醒 tab; Phase 4 removed
+    # the duplicate `speaker` panel, so that tab is the single tier-2 home.
     assert config_groups(panels["devices"], "audio") == by_tier[2]
     # Providers moved to a dedicated page (providers-v2) but its tier-3 groups stay
     # catalogued, so every provider field keeps its single home.
@@ -450,17 +449,15 @@ def test_each_config_panel_owns_exactly_its_tier_groups(tmp_path) -> None:
     assert config_groups(panels["integrations"]) | {"music", "tools.ha", "tools.mcp"} == by_tier[4]
     assert config_groups(panels["music"]) == {"music"}
     # Tier 1 is split by meaning: conversational fields vs process foundations.
+    # Phase 4 removed the `assistant-session`/`foundation` duplicates; the reply
+    # tab and the system component are now the only tier-1 homes.
     assert config_groups(panels["voice-assistant"], "reply") == {"assistant", "session"}
-    assert set(panels["assistant-session"]["component_args"]["groups"]) == {
-        "assistant", "session"}
-    assert set(panels["foundation"]["component_args"]["groups"]) == {
+    assert set(panels["system"]["component_args"]["groups"]) == {
         "system", "web", "security"}
-    assert (set(panels["assistant-session"]["component_args"]["groups"])
-            | set(panels["foundation"]["component_args"]["groups"])) == by_tier[1]
-    # The foundation warning is about the process, not about DSP numbers.
-    warning = json.dumps(panels["foundation"]["component_args"]["warning"], ensure_ascii=False)
-    assert "data_dir" in warning or "数据目录" in warning
-    assert "audio.capture" not in json.dumps(panels["foundation"]["component_args"])
+    assert (config_groups(panels["voice-assistant"], "reply")
+            | set(panels["system"]["component_args"]["groups"])) == by_tier[1]
+    # Speaker hardware stays out of the process-foundations page.
+    assert "audio.capture" not in json.dumps(panels["system"]["component_args"])
 
 
 # --------------------------------------------------------- 6. music credentials

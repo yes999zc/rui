@@ -411,9 +411,14 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
     """The PanelSpec table (docs/console.md, docs/config-catalog-contract.md §2).
 
     Expressions are deliberately tiny: `$.path` lookups, `map` for enum wording,
-    `enabled_when: "$.x=v"` equality. The configuration pages are not blocks - they all
-    use the `config-center` escape hatch with `component_args.groups`, so the same
-    catalog drives five panels and a new field needs no frontend change.
+    `enabled_when: "$.x=v"` equality. Catalog groups are rendered by the generic
+    `config` block (and by the `config-center` escape hatch where a whole page is
+    one form), so the same catalog drives the screens and a new field needs no
+    frontend change.
+
+    Every kept panel carries `nav` ({section, order, hidden, icon}); Phase 4 makes it
+    the single source of console navigation (docs/console-ia-audit.md §3/§5). `group`
+    and `order` stay declared for compatibility with older control planes.
     """
     # "Enabled" must mean "the service can actually be assembled": a hand-typed
     # source with no adapter used to leave the music panel green while the runtime
@@ -434,6 +439,7 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         {
             "id": "overview", "title": "概览", "title_en": "Overview",
             "icon": "◎", "group": "status", "order": 10,
+            "nav": {"section": "run", "order": 10, "hidden": False, "icon": "gauge"},
             "enabled": True, "enabled_reason": "",
             "source": "/health", "extra_sources": {"audio": "/api/v1/audio"},
             "refresh_s": 5,
@@ -465,11 +471,12 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         },
         {
             # Phase 2 merge (docs/console-ia-audit.md §3/§5): live status and volume,
-            # device lifecycle and speaker/audio parameters are one task. The three
-            # legacy ids (`devices`, `devices-admin`, `speaker`) stay declared and
-            # their routes redirect here for one release.
+            # device lifecycle and speaker/audio parameters are one task. The legacy
+            # `speaker`/`devices-admin` panels were removed in Phase 4.
             "id": "devices", "title": "设备与音频", "title_en": "Devices & audio",
             "icon": "⌸", "group": "config", "order": 20,
+            "nav": {"section": "configure", "order": 20, "hidden": False,
+                    "icon": "speaker"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/devices", "refresh_s": 10,
             "tabs": [
@@ -505,6 +512,7 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         {
             "id": "turns", "title": "对话", "title_en": "Conversation",
             "icon": "☰", "group": "status", "order": 25,
+            "nav": {"section": "run", "order": 20, "hidden": False, "icon": "chat"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/turns?limit=20", "refresh_s": 5,
             "blocks": [
@@ -520,19 +528,13 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         },
         # ---------------------------------------------------------- config center
         {
-            "id": "assistant-session", "title": "助手与会话", "title_en": "Assistant & session",
-            "icon": "☺", "group": "config", "order": 40,
-            "enabled": True, "enabled_reason": "",
-            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
-            "component": "config-center",
-            "component_args": {"groups": ["assistant", "session"], "tier": 1},
-        },
-        {
             # Phase 2 merge: assistant reply/session behaviour and the phrasebook are
-            # one task. `/panel/assistant-session` and `/panel/phrases` are aliases
-            # for one release (docs/console-ia-audit.md §5 Phase 2).
+            # one task. The legacy `assistant-session`/`phrases` panels were removed
+            # in Phase 4 (docs/console-ia-audit.md §5).
             "id": "voice-assistant", "title": "语音助手", "title_en": "Voice assistant",
             "icon": "☺", "group": "config", "order": 40,
+            "nav": {"section": "configure", "order": 10, "hidden": False,
+                    "icon": "chat"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/config/catalog", "refresh_s": 0,
             "tabs": [
@@ -547,37 +549,11 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
-            "id": "speaker", "title": "音箱参数", "title_en": "Speaker",
-            "icon": "⌸", "group": "config", "order": 41,
-            "enabled": True, "enabled_reason": "",
-            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
-            "component": "config-center",
-            "component_args": {
-                # Everything that follows the speaker hardware: the device list, the
-                # DSP/segmentation/playback numbers and the wake acknowledgement. These
-                # are tier 2 in the catalog, so the panel and the directory agree.
-                "groups": ["devices", "audio.capture", "audio.voice",
-                           "audio.playback", "audio.aec", "ack"],
-                "tier": 2,
-                "links": [{"label": {"zh": "设备管理", "en": "Device manager"},
-                           "href": "/panel/devices-admin"}],
-                "note": {
-                    "zh": "这些参数跟随音箱硬件：换另一款音箱要重新量。改完重启音频面。",
-                    "en": "These follow the speaker hardware; re-measure for another "
-                          "model. Restart the audio plane after saving.",
-                },
-            },
-        },
-        {
-            "id": "devices-admin", "title": "设备管理", "title_en": "Device manager",
-            "icon": "⚙", "group": "config", "order": 42, "enabled": True,
-            "enabled_reason": "",
-            "source": "/api/v1/devices", "refresh_s": 0, "blocks": [],
-            "component": "device-manager", "component_args": {},
-        },
-        {
-            "id": "providers", "title": "外部资源", "title_en": "Providers",
+            "id": "providers", "title": "模型与语音服务",
+            "title_en": "Models & voice services",
             "icon": "⇄", "group": "config", "order": 43,
+            "nav": {"section": "configure", "order": 40, "hidden": False,
+                    "icon": "plug"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
             # Dedicated page: three stage chains, provider cards, voice audition.
@@ -586,26 +562,14 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "component_args": {},
         },
         {
-            "id": "tools", "title": "工具", "title_en": "Tools",
-            "icon": "⚒", "group": "config", "order": 44,
-            "enabled": True, "enabled_reason": "",
-            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
-            "component": "config-center",
-            "component_args": {
-                # Legacy page (redirects to /panel/integrations). Music moved to the
-                # music page in Phase 2, so this list no longer contains `music`.
-                "groups": ["tools.weather", "tools.news", "tools.search", "tools.ha",
-                           "tools.mcp", "tools.exposure"],
-                "tier": 4,
-            },
-        },
-        {
             # Phase 2 merge: built-in tools, MCP/HA, the read-only registry and the
             # exposure policy are one destination. `tools.ha`/`tools.mcp` are owned
             # by McpManager (the only hot-write path) instead of being re-rendered
             # by ConfigCenter, so the old duplicate writer is gone.
             "id": "integrations", "title": "工具与集成", "title_en": "Tools & integrations",
             "icon": "⚒", "group": "config", "order": 44,
+            "nav": {"section": "configure", "order": 50, "hidden": False,
+                    "icon": "wrench"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/config/catalog", "refresh_s": 0,
             "tabs": [
@@ -626,50 +590,13 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
-            "id": "phrases", "title": "话术", "title_en": "Phrasing",
-            "icon": "Aa", "group": "config", "order": 45,
-            "enabled": True, "enabled_reason": "",
-            "source": "/api/v1/phrases", "refresh_s": 0,
-            "blocks": [],
-            # The escape hatch (docs/console.md §2.5): editing 49 templates with slot
-            # chips, dirty tracking and per-key reset is a sequence, not a block set.
-            "component": "phrasebook-editor", "component_args": {},
-        },
-        {
-            "id": "mcp", "title": "MCP / HA", "title_en": "MCP / HA",
-            "icon": "⌗", "group": "config", "order": 46,
-            "enabled": True, "enabled_reason": "",
-            "source": "/api/v1/mcp", "refresh_s": 5, "blocks": [],
-            "component": "mcp-manager", "component_args": {},
-        },
-        {
-            "id": "foundation", "title": "底子·高级", "title_en": "Foundation (advanced)",
-            "icon": "⚙", "group": "config", "order": 47,
-            "enabled": True, "enabled_reason": "",
-            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
-            "component": "config-center",
-            "component_args": {
-                # Tier 1 foundation only: the data directory, the log level, the clock
-                # zone, the console's own bind address and the outbound SSRF policy.
-                # Audio/speaker parameters moved to the speaker panel so a warning here
-                # is about the process, not DSP.
-                "groups": ["system", "web", "security"],
-                "tier": 1,
-                "warning": {
-                    "zh": "底子参数平时不要动：数据目录决定日志/记忆/密钥放哪，控制台端口"
-                          "改错会打不开页面。改完要重启服务（docker compose restart）。",
-                    "en": "Do not touch these unless you must: the data directory decides "
-                          "where logs/memory/secrets live, and a wrong console port hides "
-                          "the UI. Restart the service afterwards (`docker compose restart`).",
-                },
-            },
-        },
-        {
             # Phase 3: the tier-1 process/console/SSRF fields keep their data and move
-            # to the name the rail already used ("系统"). `foundation` stays declared
-            # and reachable for one release; the router aliases it here.
+            # to the name the rail already used ("系统"). `foundation` was removed in
+            # Phase 4; the data stays in the same catalog groups.
             "id": "system", "title": "系统", "title_en": "System",
             "icon": "⚙", "group": "config", "order": 47,
+            "nav": {"section": "configure", "order": 60, "hidden": False,
+                    "icon": "gear"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
             # The connection card (bind address, auth badge, copy URL) is hand-written;
@@ -687,6 +614,9 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "id": "credentials", "title": "凭据（只写）",
             "title_en": "Credentials (write-only)",
             "icon": "key", "group": "config", "order": 48,
+            # Hidden from the rail, not from the IA: consumer pages link here.
+            "nav": {"section": "configure", "order": 70, "hidden": True,
+                    "icon": "key"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/secrets", "refresh_s": 0, "blocks": [],
             "component": "secrets-view", "component_args": {"embedded": True},
@@ -694,12 +624,13 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         {
             "id": "logs", "title": "日志", "title_en": "Logs",
             "icon": "≡", "group": "system", "order": 60,
+            "nav": {"section": "run", "order": 40, "hidden": False, "icon": "list"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/logs?lines=300", "refresh_s": 2,
             "blocks": [
-                # `log_level` stays in the `system` catalog group (so the field keeps a
-                # home and foundation still declares it), but its only rendering is the
-                # log page header: that is where verbosity is an actionable choice.
+                # `log_level` stays in the `system` catalog group (the field keeps
+                # a home there), but its only rendering is the log page header: that
+                # is where verbosity is an actionable choice.
                 {"type": "config", "groups": ["system"],
                  "paths": ["system.log_level"]},
                 # The plane's level line lands every 2 s and would drown the 300-line
@@ -711,6 +642,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         {
             "id": "memory", "title": "记忆", "title_en": "Memory",
             "icon": "◇", "group": "living", "order": 35,
+            "nav": {"section": "run", "order": 30, "hidden": False,
+                    "icon": "bookmark"},
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/memory", "refresh_s": 0,
             "blocks": [
@@ -721,6 +654,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         {
             "id": "music", "title": "音乐", "title_en": "Music",
             "icon": "♪", "group": "living", "order": 30,
+            "nav": {"section": "configure", "order": 30, "hidden": False,
+                    "icon": "note"},
             "enabled": music_panel_enabled,
             "enabled_reason": music_reason,
             "source": "/api/v1/music", "refresh_s": 4,

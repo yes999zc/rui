@@ -84,7 +84,12 @@ def test_reset_restores_defaults(client) -> None:
 def test_the_panel_uses_the_escape_hatch(client) -> None:
     api, _data = client
     panels = api.get("/api/v1/panels").json()["panels"]
-    panel = next(item for item in panels if item["id"] == "phrases")
-    assert panel["component"] == "phrasebook-editor"
-    assert panel["blocks"] == []
+    # Phase 4: the phrasebook is the "phrases" tab of the merged voice-assistant
+    # page, not a panel of its own (docs/console-ia-audit.md §3/§5).
+    panel = next(item for item in panels if item["id"] == "voice-assistant")
+    phrases_blocks = [block for block in panel["blocks"]
+                      if block.get("tab") == "phrases"]
+    assert [block["component"] for block in phrases_blocks] == ["phrasebook-editor"]
+    assert all(block["type"] == "component" for block in phrases_blocks)
     assert api.get(panel["source"]).status_code == 200
+    assert api.get("/api/v1/phrases").status_code == 200

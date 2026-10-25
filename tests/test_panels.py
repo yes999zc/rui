@@ -1,20 +1,29 @@
-"""The console registry contract (docs/console.md).
+"""The console registry contract (docs/console.md, docs/console-ia-audit.md §3).
 
 The backend declares the panels, the front end renders them. A page review keeps
-breaking the same three things, so they are pinned here:
+breaking the same things, so they are pinned here:
 
 1. every console route opens by URL (a reload while sitting on /panel/music used
    to answer a JSON 404 - the SPA had no history fallback);
 2. every declared source and action points at a real endpoint, so a renamed API
    cannot leave a dead button behind;
-3. the config-center panels own every field the deleted hand-written pages
-   used to edit (assistant.* / session.*), otherwise deleting those pages
-   silently removes a setting from the console.
+3. the merged pages own every field the deleted hand-written pages used to edit
+   (assistant.* / session.* / speakers), otherwise a page deletion silently
+   removes a setting from the console;
+4. the PanelSpec `nav` object is the one navigation manifest (section/order/
+   hidden/icon), so the rail has a single source of truth.
+
+Phase 4 removed the pre-merge panel declarations (assistant-session, speaker,
+devices-admin, tools, mcp, foundation, phrases): their content lives on the
+combined destinations and their ids must not come back.
 
 The API paths must stay JSON: a mistyped /api/v1/* must not fall into the SPA
 shell, or a client gets HTML instead of a 404.
 """
 from __future__ import annotations
+
+import re
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -28,27 +37,39 @@ BLOCK_TYPES = {
     "component",    # hand-written view embedded in a tab (DeviceManager/McpManager/...)
 }
 
+# Phase 4 (docs/console-ia-audit.md §5): current destinations only. The legacy
+# route aliases were removed with their panel declarations.
 CONSOLE_ROUTES = [
-    "/", "/panel/overview", "/panel/devices", "/panel/turns", "/panel/logs",
-    "/panel/memory", "/panel/settings", "/panel/music", "/panel/assistant-session",
-    "/panel/speaker", "/panel/devices-admin", "/panel/providers", "/panel/tools",
-    "/panel/phrases", "/panel/mcp", "/panel/foundation",
-    # Phase 2 combined destinations.
-    "/panel/voice-assistant", "/panel/integrations",
-    # Phase 3: system replaces foundation in the rail; credentials is hidden but a
-    # real destination, and `/secrets` remains the standalone bookmark route.
-    "/panel/system", "/panel/credentials",
-    "/assistant", "/settings", "/voice", "/models", "/tools", "/secrets",
-    "/diagnostics", "/logs", "/setup", "/channels",
+    "/", "/panel/overview", "/panel/turns", "/panel/memory", "/panel/logs",
+    "/panel/voice-assistant", "/panel/devices", "/panel/music", "/panel/providers",
+    "/panel/integrations", "/panel/system", "/panel/credentials",
+    "/channels", "/diagnostics", "/secrets", "/setup",
 ]
 
-# The IA change hides some destinations but must not delete their routes/panel ids
-# for one release (audit §3 "保留与兼容", §5 Phase 1).
-LEGACY_PANEL_IDS = {
-    "overview", "devices", "turns", "logs", "memory", "music",
-    "assistant-session", "speaker", "devices-admin", "providers", "tools",
-    "phrases", "mcp", "foundation",
+# Compatibility-only panels deleted in Phase 4. Their task is represented by a
+# merged destination, so re-adding an id would put a duplicate back in the IA.
+RETIRED_PANEL_IDS = {
+    "assistant-session", "speaker", "devices-admin", "tools", "mcp",
+    "foundation", "phrases",
 }
+
+# The designed placement (docs/console-ia-audit.md §3). `nav` is authoritative;
+# `group`/`order` remain declared for older control planes.
+EXPECTED_NAV = {
+    "overview": ("run", 10),
+    "turns": ("run", 20),
+    "memory": ("run", 30),
+    "logs": ("run", 40),
+    "voice-assistant": ("configure", 10),
+    "devices": ("configure", 20),
+    "music": ("configure", 30),
+    "providers": ("configure", 40),
+    "integrations": ("configure", 50),
+    "system": ("configure", 60),
+    "credentials": ("configure", 70),
+}
+
+NAV_SECTIONS = {"run", "configure"}
 
 SETTINGS_FIELDS = {
     "name", "persona", "system_prompt",
@@ -56,6 +77,8 @@ SETTINGS_FIELDS = {
     "timeout_s", "farewell", "farewell_text", "keep_context", "history_rounds",
     "vendor_quiet_s",
 }
+
+APP_ICON_VUE = Path(__file__).resolve().parents[1] / "web/src/components/AppIcon.vue"
 
 
 def client(cfg: Config | None = None) -> TestClient:
@@ -65,6 +88,12 @@ def client(cfg: Config | None = None) -> TestClient:
 def panels(c: TestClient) -> dict[str, dict]:
     body = c.get("/api/v1/panels").json()
     return {panel["id"]: panel for panel in body["panels"]}
+
+
+def app_icon_names() -> set[str]:
+    """The shell's icon vocabulary (AppIcon.vue), so nav.icon cannot silently miss."""
+    source = APP_ICON_VUE.read_text(encoding="utf-8")
+    return set(re.findall(r"^  ([A-Za-z][A-Za-z0-9]*): \[", source, re.MULTILINE))
 
 
 def test_every_console_route_opens_by_url() -> None:
@@ -121,6 +150,49 @@ def test_panels_have_ids_groups_and_known_block_types() -> None:
                 assert block.get("component"), panel["id"]
 
 
+def test_nav_is_the_single_navigation_manifest() -> None:
+    """Phase 4: section/order/hidden/icon live in the PanelSpec nav object.
+
+    Every kept panel is either placed in a section or explicitly hidden, and the
+    icon is a real AppIcon name - the rail and the page kicker both read this.
+    """
+    found = panels(client())
+    icons = app_icon_names()
+    assert "gauge" in icons, f"could not parse {APP_ICON_VUE}"
+
+    assert set(found) == set(EXPECTED_NAV)
+    for panel_id, (section, order) in EXPECTED_NAV.items():
+        panel = found[panel_id]
+        nav = panel["nav"]
+        assert nav["section"] in NAV_SECTIONS, panel_id
+        assert nav["section"] == section, panel_id
+        assert nav["order"] == order, panel_id
+        assert isinstance(nav["hidden"], bool), panel_id
+        assert nav["icon"] in icons, (panel_id, nav["icon"])
+        # Compatibility fields stay declared but no longer decide placement.
+        assert panel["group"], panel_id
+        assert isinstance(panel["order"], int), panel_id
+
+    hidden = {panel_id for panel_id, panel in found.items() if panel["nav"]["hidden"]}
+    assert hidden == {"credentials"}
+    # Every visible panel has exactly one place in its section.
+    placements = [(p["nav"]["section"], p["nav"]["order"])
+                  for p in found.values() if not p["nav"]["hidden"]]
+    assert len(placements) == len(set(placements))
+
+
+def test_retired_panels_are_not_declared() -> None:
+    """Phase 4 removed the compatibility-only declarations after 0.4.0/0.4.1.
+
+    Their content is on the merged destinations (voice-assistant, devices,
+    integrations, system); a stale declaration would be a second, dead home.
+    """
+    found = panels(client())
+    assert RETIRED_PANEL_IDS.isdisjoint(found)
+    for route in CONSOLE_ROUTES:
+        assert route.rsplit("/", 1)[-1] not in RETIRED_PANEL_IDS, route
+
+
 def test_every_declared_source_answers() -> None:
     c = client()
     for panel in panels(c).values():
@@ -156,71 +228,6 @@ def test_every_action_points_at_a_real_endpoint() -> None:
                 assert (method, href) in routes, (panel["id"], method, href)
 
 
-CONFIG_CENTER_PANELS = {
-    "assistant-session": {"assistant", "session"},
-    # tier 2: everything that follows the speaker hardware (devices + DSP + ack).
-    "speaker": {"devices", "audio.capture", "audio.voice", "audio.playback",
-                "audio.aec", "ack"},
-    # Legacy tools page: music left for the music page in Phase 2; the combined
-    # integrations page splits these groups across tabs instead.
-    "tools": {"tools.weather", "tools.news", "tools.search", "tools.ha",
-              "tools.mcp", "tools.exposure"},
-    # tier 1 process foundations only; assistant/session is its own panel.
-    "foundation": {"system", "web", "security"},
-}
-
-
-def test_the_config_center_panels_render_from_the_catalog() -> None:
-    """The old hand-written `settings` panel is gone; five catalog-driven panels replace it.
-
-    AssistantView used to edit these fields, so the directory has to keep every one of
-    them - a page deletion that silently deletes a setting is the failure this pins.
-    """
-    c = client()
-    found = panels(c)
-    assert "settings" not in found
-    catalog = c.get("/api/v1/config/catalog").json()
-    declared_groups = {group["id"] for group in catalog["groups"]}
-    paths = {field["path"] for field in catalog["fields"]}
-    covered: set[str] = set()
-    provider_groups = {"providers.catalog", "providers.asr", "providers.tts",
-                       "providers.llm"}
-    assert provider_groups <= declared_groups
-    # Providers has its own page since 2026-10-23 (three stage chains, cards, audition);
-    # its fields still live in the same catalog, so no setting loses a home.
-    providers = found["providers"]
-    assert providers["component"] == "providers-v2"
-    assert providers["blocks"] == []
-    assert providers["source"] == "/api/v1/config/catalog"
-    for panel_id, groups in CONFIG_CENTER_PANELS.items():
-        panel = found[panel_id]
-        assert panel["component"] == "config-center", panel_id
-        assert panel["blocks"] == [], panel_id
-        assert panel["source"] == "/api/v1/config/catalog", panel_id
-        assert set(panel["component_args"]["groups"]) == groups, panel_id
-        assert groups <= declared_groups, (panel_id, groups - declared_groups)
-        covered |= groups
-    settings_paths = {
-        f"assistant.{key}" for key in SETTINGS_FIELDS if key not in
-        {"timeout_s", "farewell", "farewell_text", "keep_context", "history_rounds",
-         "vendor_quiet_s"}
-    } | {
-        f"session.{key}" for key in SETTINGS_FIELDS if key in
-        {"timeout_s", "farewell", "farewell_text", "keep_context", "history_rounds",
-         "vendor_quiet_s"}
-    }
-    assert settings_paths <= paths
-    assert {"assistant", "session"} <= covered
-
-
-# Phase 2 (docs/console-ia-audit.md §3/§5): merged destinations and their tabs.
-COMBINED_TABS = {
-    "voice-assistant": ["reply", "phrases"],
-    "devices": ["status", "manage", "audio"],
-    "integrations": ["builtin", "mcp", "registry", "exposure"],
-}
-
-
 def _tab_blocks(panel: dict, tab_id: str) -> list[dict]:
     return [block for block in panel["blocks"] if block.get("tab") == tab_id]
 
@@ -242,6 +249,72 @@ def _section_titles(blocks: list[dict]) -> list[str]:
         if text and (not out or out[-1] != text):
             out.append(text)
     return out
+
+
+def test_the_merged_pages_render_from_the_catalog() -> None:
+    """Deleting the pre-merge panels must not delete a catalog home.
+
+    AssistantView/ConfigCenter used to edit these fields, so the directory has to
+    keep every one of them - a page deletion that silently removes a setting is
+    the failure this pins. Phase 4 removed the duplicate pages, not the fields.
+    """
+    c = client()
+    found = panels(c)
+    assert "settings" not in found
+    catalog = c.get("/api/v1/config/catalog").json()
+    declared_groups = {group["id"] for group in catalog["groups"]}
+    paths = {field["path"] for field in catalog["fields"]}
+
+    provider_groups = {"providers.catalog", "providers.asr", "providers.tts",
+                       "providers.llm"}
+    assert provider_groups <= declared_groups
+    # Providers has its own page (three stage chains, cards, audition); its fields
+    # still live in the same catalog, so no setting loses a home.
+    providers = found["providers"]
+    assert providers["component"] == "providers-v2"
+    assert providers["blocks"] == []
+    assert providers["source"] == "/api/v1/config/catalog"
+
+    # Assistant/session behaviour lives on the voice-assistant reply tab.
+    assert _config_groups(_tab_blocks(found["voice-assistant"], "reply")) == {
+        "assistant", "session"}
+    # Speaker hardware parameters live on the devices audio tab.
+    assert _config_groups(_tab_blocks(found["devices"], "audio")) == {
+        "devices", "audio.capture", "audio.voice", "audio.playback", "audio.aec",
+        "ack"}
+    # Process/console/SSRF fields live in the system component; log_level keeps its
+    # catalog home but is rendered only by the logs page.
+    system = found["system"]
+    assert set(system["component_args"]["groups"]) == {"system", "web", "security"}
+    assert system["component_args"]["excludePaths"] == ["system.log_level"]
+    log_config = [block for block in found["logs"]["blocks"] if block["type"] == "config"]
+    assert [block["paths"] for block in log_config] == [["system.log_level"]]
+
+    settings_paths = {
+        f"assistant.{key}" for key in SETTINGS_FIELDS if key not in
+        {"timeout_s", "farewell", "farewell_text", "keep_context", "history_rounds",
+         "vendor_quiet_s"}
+    } | {
+        f"session.{key}" for key in SETTINGS_FIELDS if key in
+        {"timeout_s", "farewell", "farewell_text", "keep_context", "history_rounds",
+         "vendor_quiet_s"}
+    }
+    assert settings_paths <= paths
+
+    # A rendered group that is not in the catalog is a dead editor.
+    for panel in found.values():
+        for block in panel["blocks"]:
+            assert set(block.get("groups", [])) <= declared_groups, panel["id"]
+        assert (set(panel.get("component_args", {}).get("groups", []))
+                <= declared_groups), panel["id"]
+
+
+# Phase 2 (docs/console-ia-audit.md §3/§5): merged destinations and their tabs.
+COMBINED_TABS = {
+    "voice-assistant": ["reply", "phrases"],
+    "devices": ["status", "manage", "audio"],
+    "integrations": ["builtin", "mcp", "registry", "exposure"],
+}
 
 
 def test_combined_pages_compose_existing_components() -> None:
@@ -317,28 +390,14 @@ def test_every_panel_has_an_english_title() -> None:
     """The console is bilingual; the backend supplies both titles (task-6 renders them)."""
     for panel in panels(client()).values():
         assert panel.get("title_en"), panel["id"]
+        assert panel.get("title"), panel["id"]
 
 
-def test_legacy_panel_ids_stay_declared_for_one_release() -> None:
-    """Hiding a rail entry is a frontend decision; the panel id/route is the contract.
+def test_system_owns_the_process_data_and_logs_own_log_level() -> None:
+    """Phase 3 IA: `/panel/system` is the rail name; the data never left the catalog.
 
-    The two-group rail merges assistant-session+phrases, devices+speaker+devices-admin
-    and tools+mcp. Old bookmarks and external links must keep resolving for a release.
-    """
-    found = panels(client())
-    c = client()
-    assert LEGACY_PANEL_IDS <= set(found)
-    for panel_id in LEGACY_PANEL_IDS:
-        response = c.get(f"/panel/{panel_id}")
-        assert response.status_code == 200, panel_id
-        assert response.headers["content-type"].startswith("text/html"), panel_id
-
-
-def test_system_owns_foundation_data_and_logs_owns_log_level() -> None:
-    """Phase 3 IA: `/panel/system` is the rail name; the data did not move out of the catalog.
-
-    `foundation` stays declared for one release and `/panel/foundation` still answers.
-    `system.log_level` keeps its catalog home but is rendered only by the logs page.
+    Phase 4 removed the `foundation` duplicate panel: its groups are exactly the
+    system component's groups, so every field keeps a single home.
     """
     c = client()
     found = panels(c)
@@ -355,10 +414,6 @@ def test_system_owns_foundation_data_and_logs_owns_log_level() -> None:
             "web.host", "web.port", "web.allow_anonymous"} <= paths
     outbound = {path for path in paths if path.startswith("security.outbound.")}
     assert len(outbound) >= 4, outbound
-    # foundation keeps all 13 fields (its own config-center has no exclusion).
-    assert found["foundation"]["component"] == "config-center"
-    assert set(found["foundation"]["component_args"]["groups"]) == {
-        "system", "web", "security"}
 
     logs = found["logs"]
     log_config = [block for block in logs["blocks"] if block["type"] == "config"]
@@ -367,10 +422,9 @@ def test_system_owns_foundation_data_and_logs_owns_log_level() -> None:
     assert log_config[0]["paths"] == ["system.log_level"]
     assert any(block["type"] == "log" for block in logs["blocks"])
 
-    for route in ("/panel/system", "/panel/foundation"):
-        response = c.get(route)
-        assert response.status_code == 200, route
-        assert response.headers["content-type"].startswith("text/html"), route
+    response = c.get("/panel/system")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
 
 
 def test_credentials_is_a_hidden_typed_ledger_with_the_old_route_alive() -> None:
@@ -382,6 +436,7 @@ def test_credentials_is_a_hidden_typed_ledger_with_the_old_route_alive() -> None
     assert credentials["title_en"] == "Credentials (write-only)"
     assert credentials["source"] == "/api/v1/secrets"
     assert credentials["blocks"] == []
+    assert credentials["nav"]["hidden"] is True
     for route in ("/panel/credentials", "/secrets"):
         response = c.get(route)
         assert response.status_code == 200, route
@@ -401,8 +456,9 @@ def test_the_console_declares_the_tools_the_review_found_missing() -> None:
     # The plane's 2 s level line is noise in a 300-line tail.
     log_block = next(b for b in found["logs"]["blocks"] if b["type"] == "log")
     assert "voice peak" in log_block["hide"]
-    # P5: device administration and the HA/MCP page are hand-written components.
-    assert found["devices-admin"]["component"] == "device-manager"
-    assert found["mcp"]["component"] == "mcp-manager"
-    for panel_id in ("devices-admin", "mcp", "phrases"):
-        assert found[panel_id]["blocks"] == [], panel_id
+    # P5: device administration, the HA/MCP editor and the phrasebook are
+    # hand-written components inside the merged destinations, not panels of their own.
+    assert _component_ids(_tab_blocks(devices, "manage")) == {"device-manager"}
+    assert _component_ids(_tab_blocks(found["integrations"], "mcp")) == {"mcp-manager"}
+    assert _component_ids(_tab_blocks(found["voice-assistant"], "phrases")) == {
+        "phrasebook-editor"}
