@@ -130,6 +130,9 @@ docker compose exec -T rui rui config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
+- 10-25 上午：控制台 IA 重构 Phase 1–3 → 0.4.0：两分组/合并页、provider 预设+新建、音乐 Subsonic 家族预设、
+  凭据类型化+隐藏、MCP headers+HA 卡片、系统页；部署时发现 builtin rui_compat 仍 <0.4.0 导致启动失败，已修并重发 0.4.0。
+
 - 10-25 凌晨：两个独立审计（控制台 IA、Socket/Plug 契约+实现）完成；0.3.3 修 P0（导航两分组、向导 01 改名、
   xfyun 就绪过滤、音乐死路、provider fallback 保留）与 socket P0/P1（trust 门控、能力交集、音量契约、DeviceWake、
   音频守护、ws 上限、ts 对齐），issue #3/#7 更正已回。生产 0.3.3 非 root 运行。
