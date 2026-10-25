@@ -125,7 +125,7 @@
 
 生产仍 0.4.2；多平面未经真机验证前 `multi_device.enabled=false`。
 
-**v0.5.0 已发布（2026-10-25 17:4x）**：tag `v0.5.0`；GHCR `0.5.0`=`0.5`=`latest`=`sha-406785e`，digest `sha256:01a3afe18faa116f318223b8ce6596825fb61e2cd04789bc7c44d37de6184b15`（amd64+arm64）；CI secret-scan/security/ci/docker-publish 全绿；GitHub Release 已发，#7 已公布「相对 0.4.2 契约变化=无」。部署与真机验收待 9哥。
+**v0.5.0 已发布（2026-10-25 17:4x）**：tag `v0.5.0`；GHCR `0.5.0`=`0.5`=`sha-406785e`，digest `sha256:01a3afe18faa116f318223b8ce6596825fb61e2cd04789bc7c44d37de6184b15`（amd64+arm64）；发布时 `latest` 指向同一 manifest，之后随 `main` 移动。CI secret-scan/security/ci/docker-publish 全绿；GitHub Release 已发，#7 已公布「相对 0.4.2 契约变化=无」。部署与真机验收待 9哥。
 
 **运行形态待定（P2.1 里定）**：音箱端 client/固件跑在音箱上（不在 NAS）；
 RUI 侧 adapter 有两种形态——in-process（可信内置插头，简单）与 sidecar 容器（第三方插头隔离，NAS 上会多一个镜像）。

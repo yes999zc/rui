@@ -19,7 +19,7 @@
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 
 - **当前发布/生产**：v0.4.2 在线（`ghcr.io/yes999zc/rui:0.4.2`，digest `sha256:3791ccfd…`，amd64+arm64；回滚 `0.4.1`/`0.4.0`）；本会话**没有动生产**。
-- **发布状态（2026-10-25 17:4x）**：`main` 已推（HEAD `406785e`）+ tag **`v0.5.0`**；CI 全绿（secret-scan/security/ci/docker-publish，tag 与 main 各一轮）。GHCR `0.5.0`=`0.5`=`latest`=`sha-406785e` 同一 manifest digest **`sha256:01a3afe18faa…`**（amd64+arm64）；`docs/releases/v0.5.0.md` 已补 digest；GitHub Release 已发；#7 已公布 tag/digest/平台/「契约变化=无」。
+- **发布状态（2026-10-25 17:4x）**：`main` 已推（HEAD `406785e`）+ tag **`v0.5.0`**；CI 全绿（secret-scan/security/ci/docker-publish，tag 与 main 各一轮）。GHCR `0.5.0`=`0.5`=`sha-406785e` 同一 manifest digest **`sha256:01a3afe18faa…`**（amd64+arm64；发布时 `latest` 也是同一 manifest，之后随 `main` 移动）；`docs/releases/v0.5.0.md` 已补 digest；GitHub Release 已发；#7 已公布 tag/digest/平台/「契约变化=无」。
 - **本会话新完成**（`git log origin/main..main`）：
   - HA 控制台逻辑：测试用表单里的一次性 token（不落盘）、保存并重连覆盖新 token、测试后表单不被清空（`6003700`/`7ae83cf`）；
   - §9 决策冻结 + `docs/multi-device-design.md` §11 答复 dot2 #11（`aa0bdb4`），Phase 2 契约草案 v0.1 写入 §12（`f3f0135`）；
