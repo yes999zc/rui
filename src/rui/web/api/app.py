@@ -2369,10 +2369,22 @@ def create_app(
                     # has to be (re)stated here as well as in on_wake.
                     coordinator.set_turn_open(True)
                     coordinator.touch(device_id)
+                def _no_turn(reason: str, *args: object) -> None:
+                    """An utterance that produces no answer must release the turn.
+
+                    turn_open is the house-wide one-turn latch: leaving it set after an
+                    empty/noise/echo transcript rejected every later wake until the
+                    process restarted (measured 14:52:02: noise -> turn_open forever).
+                    """
+                    log.info(reason, *args)
+                    if coordinator is not None:
+                        coordinator.set_turn_open(False)
+                        coordinator.touch(device_id)
+
                 if vendor.muted():
                     # The speaker's own assistant is answering; answering too would
                     # double-reply to one sentence.
-                    log.info("vendor dialog, dropping our turn (%.1fs left)",
+                    _no_turn("vendor dialog, dropping our turn (%.1fs left)",
                              vendor.remaining())
                     return
                 trace = TurnTrace(device_id=link.ready.device_id if link.ready else "")
@@ -2388,22 +2400,22 @@ def create_app(
                     # Text-level backstop for the vendor wake: its StartCapture signal
                     # may be missing on some client builds, and its final transcript
                     # arrives after our own ASR has already decided to answer.
-                    log.info("vendor wake word in our transcript; yielding: %r", clean)
+                    _no_turn("vendor wake word in our transcript; yielding: %r", clean)
                     vendor.vendor_spoke("wake", clean)
                     return
                 if not clean.strip():
                     # Only the wake word arrived: the wake residue case, not a request.
-                    log.info("utterance was wake residue only; no turn")
+                    _no_turn("utterance was wake residue only; no turn")
                     return
                 if app.state.spoken.is_echo(clean):
                     # Our own answer came back through the arrays: measured 2026-10-22,
                     # the speaker answered itself once per weather question.
-                    log.info("own voice heard back, no turn: %r", clean)
+                    _no_turn("own voice heard back, no turn: %r", clean)
                     return
                 if rules.is_noise(clean):
                     # 「嗯。」 after the wake word: measured on the real speaker, and it
                     # used to become a whole turn ("嗯，你说。").
-                    log.info("noise, no turn: %r", clean)
+                    _no_turn("noise, no turn: %r", clean)
                     return
                 # Transport words before the dismiss list: 「暂停」 and 「停一下」
                 # are both, and with a song playing they mean the player, not
