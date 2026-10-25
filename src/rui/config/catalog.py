@@ -1433,6 +1433,20 @@ def _device_fields(cfg: Config) -> list[dict]:
                       "= inherit the global value. Restart the plane."),
                    effect="restart", minimum=0, maximum=10000, nullable=True,
                    unit=_t("ms", "ms")),
+
+            _field(f"{prefix}.audio.voice.ack_echo_ignore_ms", "devices", "number",
+                   {"zh": f"{name} · 唤醒应答静音窗口", "en": f"{name} · ack echo window"},
+                   _t("设备自己播完「在呢」后，麦克风忽略多少毫秒以躲开自己的回声尾"
+                      "（0 = 不忽略；设备侧 AEC 的机型建议 2500；上限 5000）。留空 = 继承全局 "
+                      "ack.echo_ignore_ms。窗口太小会把自己的应答当成请求（0.5.3 的假回合），"
+                      "太大会吞掉紧接着说的第一个字。改完重启音频面。",
+                      "How long this speaker's microphone ignores its own spoken cue after "
+                      "it plays (0 = no window; a device-side AEC model wants about 2500; max "
+                      "5000). Empty = inherit the global ack.echo_ignore_ms. Too small and it "
+                      "hears its own cue as a request (the 0.5.3 false turn); too large and it "
+                      "eats the first word after the cue. Restart the audio plane."),
+                   effect="restart", minimum=0, maximum=5000, nullable=True,
+                   unit=_t("ms", "ms")),
             _field(f"{prefix}.audio.voice.followup_delay_ms", "devices", "number",
                    {"zh": f"{name} · 续听窗口", "en": f"{name} · follow-up window"},
                    _t("回答结束后仍可无唤醒词续听的毫秒数（留空 = 继承全局）。回声拖尾长的设备"

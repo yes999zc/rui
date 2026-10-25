@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import contextlib
+import json
 import types
+from pathlib import Path
 
 from rui.config import Config
 from rui.config.schema import (
     AecConfig,
     AudioConfig,
+    DeviceAudioOverride,
+    DeviceConfig,
+    DevicePlaybackOverride,
     ProviderConfig,
     ProvidersConfig,
     StageConfig,
@@ -226,3 +232,189 @@ def test_the_doctor_report_carries_the_models_row(tmp_path, monkeypatch) -> None
     assert check.status == "warn"
     # A warn row degrades the verdict; it must never turn a runnable box "unsupported".
     assert report.verdict == "degraded"
+
+
+# --------------------------------------- 0.5.3 observability rows
+#
+# The three rows asked for by the first multi-device install: wire rate vs the rate that
+# actually plays, the channel gateway's last error (a Telegram 409 from a second poller),
+# and console-token.txt vs web.auth_token. None of them may print a token value.
+
+def _device_config(tmp_path, *, rate: int | None = None, room: str = "卧室") -> Config:
+    cfg = Config(devices=[DeviceConfig(id="bedroom", adapter="dot2", host="192.0.2.10",
+                                       room=room)])
+    cfg.system.data_dir = str(tmp_path)
+    if rate is not None:
+        cfg.devices[0].audio = DeviceAudioOverride(
+            playback=DevicePlaybackOverride(rate=rate))
+    return cfg
+
+
+def test_audio_rates_reports_a_wire_rate_mismatch_with_both_numbers(tmp_path,
+                                                                   monkeypatch) -> None:
+    cfg = _device_config(tmp_path)          # global playback.rate is 16000
+    monkeypatch.setattr(probes, "_declared_wire_rate",
+                        lambda cfg, dev: (48000, "fake.SPEAKER_RATE"))
+    check = probes._audio_rates_check(cfg)
+    assert check.name == "audio_rates"
+    assert check.status == "warn"
+    assert "48000" in check.value and "16000" in check.value
+    assert "devices[0].audio.playback.rate" in check.hint
+    # The per-device override is the fix, and it keeps both numbers in the evidence.
+    cfg = _device_config(tmp_path, rate=48000)
+    check = probes._audio_rates_check(cfg)
+    assert check.status == "ok"
+    assert "48000 Hz" in check.value
+    assert "not" not in check.value
+
+
+def test_audio_rates_is_not_applicable_without_a_plug_declaration(tmp_path,
+                                                                  monkeypatch) -> None:
+    monkeypatch.setattr(probes, "_declared_wire_rate", lambda cfg, dev: (None, ""))
+    check = probes._audio_rates_check(_device_config(tmp_path))
+    assert check.status == "ok"
+    assert "not_applicable" in check.value
+    assert "playback.rate 16000 Hz" in check.value
+
+
+def test_audio_rates_reads_the_rate_from_the_adapter_module_constant(monkeypatch) -> None:
+    module = types.SimpleNamespace(SPEAKER_RATE=48000)
+    monkeypatch.setattr(probes.importlib, "import_module", lambda name: module)
+    rate, source = probes._wire_rate_from_entrypoint("rui_dot2_bridge.adapter:build")
+    assert rate == 48000
+    assert source == "rui_dot2_bridge.adapter.SPEAKER_RATE"
+    # A boolean/out-of-range value is not a rate.
+    assert probes._wire_rate_from_module(types.SimpleNamespace(SPEAKER_RATE=True)) == (None, "")
+    assert probes._wire_rate_from_module(types.SimpleNamespace(SPEAKER_RATE=123)) == (None, "")
+
+    def broken(name: str):
+        raise ImportError("plug not installed")
+
+    monkeypatch.setattr(probes.importlib, "import_module", broken)
+    assert probes._wire_rate_from_entrypoint("missing.module:build") == (None, "")
+
+
+def test_the_doctor_report_carries_the_new_rows_and_degrades_on_a_mismatch(
+        tmp_path, monkeypatch) -> None:
+    cfg = _device_config(tmp_path)
+    monkeypatch.setattr(probes, "_declared_wire_rate",
+                        lambda cfg, dev: (48000, "fake.SPEAKER_RATE"))
+    monkeypatch.setattr(probes.socket, "create_connection",
+                        lambda *args, **kwargs: contextlib.nullcontext())
+    monkeypatch.delenv("RUI_CONSOLE_TOKEN_FILE", raising=False)
+    report = run_doctor(cfg)
+    names = {check.name for check in report.checks}
+    assert {"audio_rates", "channels", "console_token"} <= names
+    assert report.verdict == "degraded"
+
+
+def _write_channels(tmp_path, **channels) -> Path:
+    path = tmp_path / "channels.json"
+    path.write_text(json.dumps(channels), encoding="utf-8")
+    return path
+
+
+def _gateway(**overrides) -> dict:
+    status = {"running": True, "pid": 42, "last_error": ""}
+    status.update(overrides)
+    return status
+
+
+def test_channels_lists_enabled_channels_when_the_gateway_is_healthy(tmp_path) -> None:
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    _write_channels(tmp_path, telegram={"enabled": True})
+    check = probes._channels_check(cfg, _gateway())
+    assert check.name == "channels"
+    assert check.status == "ok"
+    assert "telegram enabled" in check.value
+    assert "pid 42" in check.value
+
+
+def test_channels_surfaces_the_gateway_last_error_as_degraded(tmp_path) -> None:
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    _write_channels(tmp_path, telegram={"enabled": True})
+    check = probes._channels_check(
+        cfg, _gateway(last_error="Conflict: terminated by other getUpdates request"))
+    assert check.status == "warn"
+    assert "Conflict" in check.value
+    assert "409" in check.hint
+
+
+def test_channels_reads_the_409_from_the_gateway_log(tmp_path) -> None:
+    """The child's poll loop writes the 409 to the log; the supervisor sees only "running"."""
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    _write_channels(tmp_path, telegram={"enabled": True})
+    (tmp_path / "channels-gateway.log").write_text(
+        "2026-10-25 12:00:00 WARNING rui.channels.telegram: telegram poll: "
+        "RuntimeError: Conflict: terminated by other getUpdates request\n",
+        encoding="utf-8")
+    check = probes._channels_check(cfg, _gateway())
+    assert check.status == "warn"
+    assert "Conflict" in check.value
+
+
+def test_channels_never_prints_a_telegram_bot_token(tmp_path) -> None:
+    token = "123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ0123456789"
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    _write_channels(tmp_path, telegram={"enabled": True})
+    (tmp_path / "channels-gateway.log").write_text(
+        "2026-10-25 12:00:00 WARNING rui.channels.telegram: telegram poll: "
+        f"https://api.telegram.org/bot{token}/getUpdates 409 Conflict\n",
+        encoding="utf-8")
+    check = probes._channels_check(cfg, _gateway())
+    assert check.status == "warn"
+    assert token not in check.value
+    assert token not in check.hint
+    assert "<telegram-token>" in check.value
+
+
+def test_channels_without_an_enabled_channel_is_not_applicable(tmp_path) -> None:
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    check = probes._channels_check(cfg, _gateway())
+    assert check.status == "ok"
+    assert "not_applicable" in check.value
+
+
+def test_console_token_match_is_reported_without_the_value(tmp_path, monkeypatch) -> None:
+    cfg = Config(web=WebConfig(auth_token="console-token-do-not-print"))
+    cfg.system.data_dir = str(tmp_path)
+    saved = tmp_path / "console-token.txt"
+    saved.write_text("console-token-do-not-print\n", encoding="utf-8")
+    monkeypatch.setenv("RUI_CONSOLE_TOKEN_FILE", str(saved))
+    check = probes._console_token_check(cfg)
+    assert check.name == "console_token"
+    assert check.status == "ok"
+    assert "matches web.auth_token" in check.value
+    for text in (check.value, check.hint):
+        assert "console-token-do-not-print" not in text
+
+
+def test_console_token_mismatch_is_degraded_and_names_the_fix(tmp_path, monkeypatch) -> None:
+    cfg = Config(web=WebConfig(auth_token="console-token-do-not-print"))
+    cfg.system.data_dir = str(tmp_path)
+    saved = tmp_path / "console-token.txt"
+    saved.write_text("stale-console-token\n", encoding="utf-8")
+    monkeypatch.setenv("RUI_CONSOLE_TOKEN_FILE", str(saved))
+    check = probes._console_token_check(cfg)
+    assert check.status == "warn"
+    assert "does NOT match" in check.value
+    assert "rui token > console-token.txt" in check.hint
+    for text in (check.value, check.hint):
+        assert "console-token-do-not-print" not in text
+        assert "stale-console-token" not in text
+
+
+def test_console_token_missing_is_not_applicable(tmp_path, monkeypatch) -> None:
+    cfg = Config(web=WebConfig(auth_token="console-token-do-not-print"))
+    cfg.system.data_dir = str(tmp_path)
+    monkeypatch.delenv("RUI_CONSOLE_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("RUI_CONFIG", raising=False)
+    monkeypatch.chdir(tmp_path)
+    check = probes._console_token_check(cfg)
+    assert check.status == "ok"
+    assert "not_applicable" in check.value

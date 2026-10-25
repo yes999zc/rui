@@ -2921,7 +2921,14 @@ def create_app(
 
     @app.get("/api/v1/doctor", dependencies=[Depends(auth)])
     async def doctor() -> dict:
-        report = run_doctor(cfg)
+        # 0.5.3: the channels row needs the gateway's in-memory status, which only this
+        # process has (the CLI falls back to the gateway log). Everything else stays in
+        # run_doctor so both entry points report the same rows.
+        supervisor = getattr(app.state, "channel_supervisor", None)
+        report = run_doctor(
+            getattr(app.state, "cfg", cfg),
+            channel_status=supervisor.status() if supervisor is not None else None,
+        )
         # dot2 #12 C4: the doctor, /health and the container healthcheck must agree.
         # Evaluate the same body the probe reads, so a disagreement becomes a visible row
         # instead of two tools telling the operator different things.

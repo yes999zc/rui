@@ -667,3 +667,40 @@ def test_enabling_multi_device_without_a_room_is_rejected(tmp_path) -> None:
             "multi_device.enabled": True}})
         assert response.status_code == 422
         assert "room" in response.text
+
+
+# ----------------------------------------------- per-device ack echo (0.5.3)
+
+def test_per_device_ack_echo_window_is_exposed_and_nullable(tmp_path) -> None:
+    """The Dot 2 needs its own cue-echo window; unset must mean "inherit global"."""
+    cfg = Config(devices=[DeviceConfig(id="bedroom", adapter="mock", host="192.0.2.10",
+                                       room="卧室")])
+    fields = {field["path"]: field for field in field_specs(cfg)}
+    path = "devices.0.audio.voice.ack_echo_ignore_ms"
+    spec = fields[path]
+    assert spec["kind"] == "number"
+    assert (spec["min"], spec["max"]) == (0, 5000)
+    assert spec["unit"] == {"zh": "ms", "en": "ms"}
+    assert spec["nullable"] is True
+    assert spec["effect"] == "restart"
+    assert spec["group"] == "devices"
+    assert spec["label"]["zh"] and spec["label"]["en"]
+    assert len(spec["hint"]["zh"]) > len(spec["label"]["zh"])
+    assert len(spec["hint"]["en"]) > len(spec["label"]["en"])
+    # No override yet: the console must show "inherit", not a missing key.
+    assert document(cfg)["values"][path] is None
+
+    cfg, config_path = _device_config(tmp_path)
+    with _app(cfg, config_path) as http:
+        response = http.put("/api/v1/config/values", json={"values": {path: 2500}})
+        assert response.status_code == 200, response.text
+        assert response.json()["restart_required"] is True
+        saved = load_config(config_path)
+        assert saved.devices[0].audio is not None
+        assert saved.devices[0].audio.voice is not None
+        assert saved.devices[0].audio.voice.ack_echo_ignore_ms == 2500
+        # Empty means inherit again, not 0 (0 is a real "do not ignore" value).
+        response = http.put("/api/v1/config/values", json={"values": {path: None}})
+        assert response.status_code == 200, response.text
+        cleared = load_config(config_path)
+        assert cleared.devices[0].audio.voice.ack_echo_ignore_ms is None

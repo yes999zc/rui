@@ -66,7 +66,7 @@ def test_one_connected_room_satisfies_the_aggregate_probe() -> None:
 def test_doctor_row_matches_the_container_healthcheck(monkeypatch) -> None:
     monkeypatch.setattr(
         app_module, "run_doctor",
-        lambda cfg: Report(verdict="ok", checks=[Check("disk_free_gb", "ok", "10")]))
+        lambda cfg, **kwargs: Report(verdict="ok", checks=[Check("disk_free_gb", "ok", "10")]))
     with TestClient(create_app(Config())) as client:
         body = client.get("/api/v1/doctor").json()
     checks = {check["name"]: check for check in body["checks"]}
@@ -77,7 +77,7 @@ def test_doctor_row_matches_the_container_healthcheck(monkeypatch) -> None:
 def test_doctor_row_names_the_reason_when_the_probe_would_fail(monkeypatch) -> None:
     monkeypatch.setattr(
         app_module, "run_doctor",
-        lambda cfg: Report(verdict="ok", checks=[]))
+        lambda cfg, **kwargs: Report(verdict="ok", checks=[]))
     cfg = Config(devices=[DeviceConfig(id="living", adapter="mock",
                                        host="127.0.0.1", room="客厅")])
     with TestClient(create_app(cfg)) as client:

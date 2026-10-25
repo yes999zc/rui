@@ -8,20 +8,24 @@ fact. A number that silently encodes a guess is worse than no number.
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import platform
+import re
 import shutil
 import socket
 import time
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import psutil
 
 from .. import secrets
 from ..audio.ack import ack_wav_path
-from ..config.schema import AecConfig, Config
+from ..config.schema import AecConfig, Config, effective_audio
+from ..env import get as env_get
 
 SUPPORTED_ARCH = {"x86_64", "AMD64", "arm64", "aarch64"}
 
@@ -320,7 +324,256 @@ def _models_check(cfg: Config) -> Check:
     )
 
 
-def run_doctor(cfg: Config | None = None) -> Report:
+# ---------------------------------------------------------------- 0.5.3 observability
+#
+# Three rows for the first multi-device production install (0.5.3). Each one names the
+# evidence and the command that fixes it, and none of them ever prints a secret: the
+# console token is compared, never echoed, and gateway errors are redacted of a
+# Telegram bot token before they leave this module.
+
+#: Adapter module constants that declare the rate a plug's wire actually carries. The
+#: Dot 2 adapter exposes SPEAKER_RATE = 48000; a core adapter that resamples on its
+#: own declares nothing and is reported as not_applicable instead of assumed.
+_WIRE_RATE_ATTRS = ("SPEAKER_RATE", "PLAYBACK_RATE", "WIRE_RATE", "OUTPUT_RATE")
+
+# Telegram's own URL shape is /bot<id>:<secret>, so the leading "bot" is a word
+# character: anchor on "not a digit" instead of a word boundary.
+_TELEGRAM_TOKEN_RE = re.compile(r"(?<!\d)\d{6,}:[A-Za-z0-9_-]{30,}\b")
+_LOG_TAIL_BYTES = 64 * 1024
+
+
+def _redact(text: object, limit: int = 240) -> str:
+    """One line, bounded, and never a bot token: the log/exception may carry the URL."""
+    line = " ".join(str(text).split())
+    line = _TELEGRAM_TOKEN_RE.sub("<telegram-token>", line)
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def _wire_rate_from_module(module: object) -> tuple[int | None, str]:
+    """(Hz, constant name) from an adapter module, or (None, "") when it declares none."""
+    for attr in _WIRE_RATE_ATTRS:
+        value = getattr(module, attr, None)
+        if isinstance(value, int) and not isinstance(value, bool) and 8000 <= value <= 96000:
+            return value, attr
+    return None, ""
+
+
+def _wire_rate_from_entrypoint(entrypoint: str) -> tuple[int | None, str]:
+    """Read the wire rate a plug's in-process adapter declares as a module constant.
+
+    The manifest's runtime.entrypoint is a string the loader never imports; the trusted
+    adapter behind it is imported by the audio plane anyway. Doctor imports the module
+    read-only to read a constant - it never calls the entrypoint - and a module that
+    cannot be imported simply declares nothing (not_applicable), because a broken plug
+    is already reported by the device/plane rows.
+    """
+    module_name = str(entrypoint or "").split(":", 1)[0].strip()
+    if not module_name:
+        return None, ""
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:  # noqa: BLE001 - doctor must not fail because a plug cannot import
+        return None, ""
+    rate, attr = _wire_rate_from_module(module)
+    return rate, (f"{module_name}.{attr}" if attr else "")
+
+
+def _declared_wire_rate(cfg: Config, device: object) -> tuple[int | None, str]:
+    """(Hz, where the plug declared it) for one configured device."""
+    try:
+        from ..plugins.resolve import resolve_device_plug
+
+        resolved = resolve_device_plug(device, cfg.system.data_dir)
+    except Exception:  # noqa: BLE001 - a missing/broken plug manifest is not a doctor crash
+        return None, ""
+    if resolved is None:
+        return None, ""
+    runtime = getattr(resolved.device, "runtime", None)
+    return _wire_rate_from_entrypoint(str(getattr(runtime, "entrypoint", "") or ""))
+
+
+def _audio_rates_check(cfg: Config) -> Check:
+    """Every enabled device's declared wire rate against its effective playback rate.
+
+    The Dot 2 wire is 48 kHz mono; the global playback.rate is usually the LX06's
+    16 kHz, so a device without its own audio.playback.rate override produced a silent
+    speaker (the 0.5.3 D2 bug). This row is the post-fix guard: both numbers are
+    printed, and a mismatch degrades the verdict.
+    """
+    enabled = [(index, device) for index, device in enumerate(cfg.devices)
+               if device.enabled]
+    if not enabled:
+        return Check("audio_rates", "ok", "not_applicable (no enabled device)",
+                     "add a speaker in the console's Devices page")
+    parts: list[str] = []
+    mismatched: list[tuple[int, int]] = []
+    declared = 0
+    for index, device in enabled:
+        effective = effective_audio(cfg.audio, device.audio).playback.rate
+        wire, source = _declared_wire_rate(cfg, device)
+        label = device.id + (f" ({device.room})" if device.room else "")
+        if wire is None:
+            parts.append(f"{label}: no declared wire rate, playback.rate {effective} Hz")
+            continue
+        declared += 1
+        where = f" [{source}]" if source else ""
+        if wire == effective:
+            parts.append(f"{label}: wire {wire} Hz = playback.rate {effective} Hz{where}")
+        else:
+            parts.append(f"{label}: wire {wire} Hz != playback.rate {effective} Hz{where}")
+            mismatched.append((index, wire))
+    if mismatched:
+        fixes = "; ".join(
+            f"devices[{index}].audio.playback.rate: {wire}"
+            for index, wire in mismatched
+        )
+        return Check("audio_rates", "warn", "mismatch: " + "; ".join(parts),
+                     f"set {fixes}, then restart the audio plane (docs/deploy.md 3.1)")
+    if not declared:
+        return Check("audio_rates", "ok", "not_applicable (no plug declares a wire rate); "
+                                            + "; ".join(parts),
+                     "the adapter raises at speak time if the rate it receives is wrong")
+    return Check("audio_rates", "ok", "; ".join(parts), "")
+
+
+def _channels_config(cfg: Config) -> tuple[Path, dict]:
+    """The channels.json the API reads, plus its parsed object when readable."""
+    path = Path(cfg.system.data_dir) / "channels.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return path, {}
+    return path, data if isinstance(data, dict) else {}
+
+
+def _last_gateway_error(path: Path) -> str:
+    """The newest poll/start failure in the gateway log, or "".
+
+    The supervisor's in-memory last_error only covers start failures; a Telegram 409
+    Conflict happens inside the child's poll loop and is only written to this log, so
+    doctor reads it as the persistent evidence. The tail is bounded so a long running
+    gateway does not make the row slow.
+    """
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - _LOG_TAIL_BYTES))
+            text = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+    markers = ("telegram poll:", "start failed", "conflict", "409")
+    for line in reversed(text.splitlines()):
+        lowered = line.lower()
+        if any(marker in lowered for marker in markers):
+            # Drop the logging prefix so the row stays one short line; keep the message.
+            message = line.split(":", 4)[-1].strip() if ":" in line else line.strip()
+            return _redact(message or line)
+    return ""
+
+
+def _channels_check(cfg: Config, gateway_status: dict | None = None) -> Check:
+    """Enabled channels plus the gateway's last error (Telegram 409 conflict included).
+
+    gateway_status is the live ChannelSupervisor.status() passed by the console
+    process; the CLI has no supervisor, so it falls back to the persistent gateway log.
+    """
+    path, saved = _channels_config(cfg)
+    enabled = [name for name in ("telegram", "weixin")
+               if bool((saved.get(name) or {}).get("enabled"))]
+    if not enabled:
+        return Check("channels", "ok", "not_applicable (no channel enabled)",
+                     f"enable Telegram/WeChat on the console's Channels page; state: {path}")
+    summary = ", ".join(enabled)
+    evidence = ""
+    state = ""
+    if isinstance(gateway_status, dict):
+        if gateway_status.get("last_error"):
+            evidence = _redact(gateway_status["last_error"])
+        elif gateway_status.get("running"):
+            state = f"gateway running pid {gateway_status.get('pid')}"
+        else:
+            state = "gateway not running"
+    log_error = _last_gateway_error(Path(cfg.system.data_dir) / "channels-gateway.log")
+    if log_error and (not evidence or evidence == "gateway not running"):
+        # The supervisor says "running" while the child's poll loop is failing (409);
+        # the log is the evidence the in-memory status cannot carry.
+        evidence = log_error
+    if evidence:
+        return Check("channels", "warn", f"{summary} enabled; {evidence}",
+                     "one poller per bot token: a Telegram 409 Conflict means a second "
+                     "getUpdates client uses the same token; stop it and restart the "
+                     "gateway from the Channels page (docs/deploy.md 7.3)")
+    if state == "gateway not running":
+        return Check("channels", "warn", f"{summary} enabled; gateway not running",
+                     "start it with POST /api/v1/channels/gateway/start or the Channels "
+                     "page's Start button; rui-channels is one process per bot")
+    detail = f"{summary} enabled; {state}" if state else (
+        f"{summary} enabled; gateway status not visible from this process "
+        "(run rui doctor through the console/API for the live status)")
+    return Check("channels", "ok", detail, "")
+
+
+def _console_token_candidates(cfg: Config) -> list[Path]:
+    """Where a saved console token may live for this install.
+
+    install.sh writes it next to the compose file (host ~/rui/console-token.txt), so
+    the container usually cannot see it; the env override and the data dir are here for
+    deployments that mount or copy it, and the config's grandparent covers a bare-metal
+    ~/rui/config/config.yaml layout.
+    """
+    candidates: list[Path] = []
+    override = env_get("RUI_CONSOLE_TOKEN_FILE")
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.append(Path(cfg.system.data_dir).expanduser() / "console-token.txt")
+    config_env = env_get("RUI_CONFIG")
+    if config_env:
+        candidates.append(
+            Path(config_env).expanduser().resolve().parent.parent / "console-token.txt")
+    candidates.append(Path.cwd() / "console-token.txt")
+    unique: list[Path] = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def _console_token_check(cfg: Config) -> Check:
+    """Does the saved console token still match web.auth_token? Never print either."""
+    candidates = _console_token_candidates(cfg)
+    path = next((item for item in candidates if item.is_file()), None)
+    if path is None:
+        return Check("console_token", "ok", "not_applicable (no console-token.txt found)",
+                     "save one with: docker compose exec -T rui rui token > "
+                     "console-token.txt && chmod 600 console-token.txt")
+    try:
+        saved = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return Check("console_token", "warn",
+                     f"cannot read {path.name}: {type(exc).__name__}",
+                     "fix permissions or refresh it with: docker compose exec -T rui "
+                     "rui token > console-token.txt")
+    current = str(cfg.web.auth_token or "").strip()
+    fix = ("refresh it with: docker compose exec -T rui rui token > console-token.txt "
+           "&& chmod 600 console-token.txt")
+    if not current:
+        return Check("console_token", "warn",
+                     f"{path.name} exists but web.auth_token is empty",
+                     "the console is unauthenticated; set web.auth_token "
+                     "(rui token --rotate) and run " + fix)
+    if not saved:
+        return Check("console_token", "warn",
+                     f"{path.name} is empty; web.auth_token is set", fix)
+    if saved == current:
+        return Check("console_token", "ok",
+                     f"{path.name} matches web.auth_token", "")
+    return Check("console_token", "warn",
+                 f"{path.name} does NOT match web.auth_token", fix)
+
+
+def run_doctor(cfg: Config | None = None, *,
+               channel_status: dict[str, Any] | None = None) -> Report:
     cfg = cfg or Config()
     checks: list[Check] = []
     audio = cfg.audio
@@ -358,6 +611,11 @@ def run_doctor(cfg: Config | None = None) -> Report:
     if not cfg.web.auth_token and cfg.web.host not in {"127.0.0.1", "localhost", "::1"}:
         checks.append(Check("web_auth", "warn", f"{cfg.web.host}:{cfg.web.port} without a token",
                             "anyone on the LAN can read the console; set web.auth_token"))
+    # 0.5.3: the saved token and the live one drifted apart before (rotate vs file), and
+    # a second Telegram poller only shows up as a 409 in the gateway log - both are now
+    # rows of their own. Evidence only: no token value is ever printed.
+    checks.append(_console_token_check(cfg))
+    checks.append(_channels_check(cfg, channel_status))
 
     key_check = _llm_key_check(cfg)
     if key_check is not None:
@@ -378,6 +636,9 @@ def run_doctor(cfg: Config | None = None) -> Report:
         f"queue {audio.playback.queue_ms} ms, fade {audio.playback.fade_out_ms} ms",
         f"barge-in target: silence within {audio.playback.target_silence_ms} ms",
     ))
+    # 0.5.3 D2: a device whose wire rate differs from its effective playback rate used
+    # to play silently; compare the plug's declared rate with the one that will play.
+    checks.append(_audio_rates_check(cfg))
 
     aec_rtf = measure_aec_rtf(aec=audio.aec, rate=audio.voice.rate, frame_ms=audio.voice.frame_ms,
                               channels=cap.mic_channels)

@@ -569,6 +569,69 @@ docker run --rm --user 1000:1000 -v ~/rui/data:/data \
 - **备份/恢复**：`cd ~/rui && scripts/backup.sh --out ~/rui-backups`；恢复步骤见
   [runbook.md §9](runbook.md#9-备份与恢复)。
 
+### 3.7 多设备（一个房子多台音箱）
+
+同一份 `config.yaml` 可以驱动多台音箱，一台一个音频面。每台设备要有唯一的 `room`
+（会话、告别、灯效按发起房间走），`multi_device.max_planes` 不小于启用的设备数。
+
+```yaml
+multi_device:
+  enabled: true
+  max_planes: 4           # 至少 = devices 里 enabled 的数量（默认 4）
+  default_output: living  # 没有 turn_device 时的默认输出房间；留空 = 最近活跃房间
+
+audio:
+  # 全局默认跟着第一台设备；每台设备用 devices[].audio 覆盖自己不同的部分。
+  playback: {rate: 16000, channels: 1}    # LX06 的 wire
+  aec: {enabled: true, who: controller}   # LX06 有参考通道，RUI 做 AEC
+
+devices:
+  - id: living            # 客厅 LX06：全部继承全局
+    adapter: xiaoai
+    host: 192.168.5.61
+    room: 客厅
+  - id: bedroom           # 卧室 Dot 2：设备侧 AEC + 48 kHz wire
+    adapter: dot2
+    host: echo-dot-2
+    room: 卧室
+    audio:
+      playback:
+        rate: 48000       # 插件 wire 是 48 kHz mono；不覆盖会按全局 16 kHz 播（0.5.3 前的静音）
+      aec:
+        enabled: false    # 设备自己做 AEC，RUI 再跑一级会吃掉人声
+        who: device
+      voice:
+        post_playback_mute_ms: 2500   # 播放排空后丢麦克风，挡住设备 AEC 的回声尾
+        ack_echo_ignore_ms: 2500      # 「在呢」自己的回声窗口；留空 = 全局 ack.echo_ignore_ms
+```
+
+每台设备可以覆盖的音频项（留空 = 继承全局，改完重启音频面）：
+
+| 字段 | 作用 | Dot 2 参考值 |
+|---|---|---|
+| `audio.playback.rate` / `channels` | 这条线实际承载的采样率/声道 | `48000` / `1` |
+| `audio.aec.enabled` / `who` | 谁做回声消除；设备侧 AEC 时 RUI 关掉 | `false` / `device` |
+| `audio.voice.post_playback_mute_ms` | 播放排空后丢麦克风多久 | `2500` |
+| `audio.voice.ack_echo_ignore_ms` | 说完「在呢」后忽略麦克风多久（0–5000） | `2500` |
+| `audio.voice.followup_delay_ms` | 回答结束后还能无唤醒词续听的窗口 | 设备侧 AEC 可调大 |
+| `audio.capture.rate` / `channels` / `ref_channels` | 采集布局；LX06 是 48k/8ch/6mic+2ref，Dot 2 是 16k/1ch/0ref | 见插件 manifest |
+| `audio.playback.prebuffer_ms` | 批量/转发型 adapter 的首包预缓冲 | `450` |
+
+**先量再填**：`ack_echo_ignore_ms` 和 `post_playback_mute_ms` 都是按真机回声尾长量的，
+不是通用默认值。填太小会把自己的应答当成请求（0.5.3 的「在呢」假回合），填太大会吞掉
+应答后紧接着说的第一个字。
+
+doctor 里的三行（`docker compose exec -T rui rui doctor`，或控制台「诊断」）：
+
+- `audio_rates`：每台设备的插件 wire rate vs 生效的 `playback.rate`。不一致会报
+  `mismatch` 并给出要写的 `devices[N].audio.playback.rate`；插件没声明 wire rate 时为
+  `not_applicable`。
+- `channels`：`data/channels.json` 里启用的通道 + 网关的 `last_error`；Telegram 409 会报成
+  `warn`（见 §7.3）。
+- `console_token`：`console-token.txt` 与 `web.auth_token` 是否一致；只报一致/不一致和修复
+  命令，**不打印 token 值**。容器里通常看不到宿主机的 `console-token.txt`（它不是挂载卷），
+  可设 `RUI_CONSOLE_TOKEN_FILE=/path/to/console-token.txt` 指向一份可读副本。
+
 ## 4. 音乐：Navidrome
 
 音乐默认 **关闭**（`music.enabled: false`）：NAS 不可达时工具只会反复说「曲库里没找到」，
@@ -735,6 +798,27 @@ cd ~/rui && docker compose up -d --force-recreate
 然后在控制台「通道」页填 bot token 并启用 Telegram。验收看 `GET /api/v1/channels`：
 `telegram.token_configured=true` 且 `gateway.status.running=true`；`telegram.enabled=false` 时网关
 不启动是正常的（新用户默认关闭，想用再开）。
+### 7.3 一个 bot 只能有一个 poller（Telegram 409）
+
+Telegram 的 `getUpdates` 对同一个 bot token 只允许一个消费者。控制台已经自动起了一个
+`rui-channels` 网关，再从另一台机器/另一个容器/手工 `rui-channels` 起第二个，就会得到：
+
+```text
+telegram poll: RuntimeError: ... Conflict: terminated by other getUpdates request
+```
+
+表现是通道页看起来 `gateway.status.running=true`，但收不到消息——因为 409 发生在子进程的
+轮询循环里，不在 supervisor 的 `last_error` 里。0.5.3 起 `rui doctor` 的 `channels` 行会读
+`data/channels-gateway.log`，把这条报成 `warn`。处理：
+
+1. 只保留一个网关：停掉另一台机器/另一个容器上的 rui 或 `rui-channels` 进程；
+2. 在控制台「通道」页点 Stop → Start（或 `POST /api/v1/channels/gateway/restart`）；
+3. 确认 `GET /api/v1/channels` 的 `gateway.status.running=true` 且没有 `last_error`，
+   再发一条消息验证收到回复。
+
+一个 bot token 只配一个网关。要跑两个 bot，就建两个 bot token（各自一个网关/容器），
+不要把同一个 token 塞给两处；微信同理，一个账号只在一个网关里登录。
+
 ## 8. 卷与备份
 
 | 宿主机 | 容器内 | 内容 | 丢了会怎样 |
