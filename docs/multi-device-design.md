@@ -4,7 +4,7 @@
 > 外部契约输入见 §11（dot2 桥 issue #11 的 Q1–Q7 已逐条答复）。Phase 1（config v3，仍单 active）已开工。
 > 基于 0.4.1 的代码与 Socket/Plug v1 契约；本文件不含代码改动。
 > 目标读者：9 哥（产品决策）、Lead（排期）、后续实现者。
-> 阅读顺序：§0 是三个问题的直接答案；§1 是当前代码事实；§4/§5/§6 是设计本体；§8 是分阶段计划；§9 是**已冻结的决策记录**；§11 是外部契约输入与答复。
+> 阅读顺序：§0 是三个问题的直接答案；§1 是当前代码事实；§4/§5/§6 是设计本体；§8 是分阶段计划；§9 是**已冻结的决策记录**；§11 是外部契约输入与答复；**§12 是 Phase 2 契约草案（v0.1，实现与 dot2 对齐用）**。
 
 ## 0. 三个问题的直接答案
 
@@ -382,7 +382,7 @@ multi_device:
 
 ### Phase 2（0.5.0-beta）：多平面 + 中央仲裁（目标：LX06 + Dot2）
 
-- Supervisor N 平面、每设备 socket/端口；WakeArbiter + WakeCandidate 协议；OutputOwner 第一版（回答去起源房间，提醒/音乐去 default_output）。
+- Supervisor N 平面、每设备 socket/端口；WakeArbiter + WakeCandidate 协议；OutputOwner 第一版（回答去起源房间，提醒/音乐去 default_output）。**具体 IPC/字段见 §12 草案 v0.1（2026-10-25，9 哥 已确认方向）。**
 - 全局重复抑制；每设备健康/指标；控制台 devices 数组；去掉 max_active=1 警告。
 - 判据：§7.2 中“共存/各自唤醒/同时听到/播放中打断/故障隔离”通过；两台 fake adapter 的自动化测试全绿。
 - Dot2 真机：在 0.4.2 冷启动窗口做一次受控切换验证（8870 单监听，需 9 哥同意）；此时若两台各占 4412/8870，可首次同时在线。
@@ -472,3 +472,114 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 - **多实例部署（临时）**：允许用户用两个独立 rui 实例分别驱动两台设备，但这不是“多设备支持”，不进入验收矩阵；Phase 2 单实例多 plane 交付后应迁回单实例。
 - 设备侧 OWW 未就位前（D6），Dot2 的 `wake.source` 保持 KWS，双方都按 0.4.x 现状实现，不预留特例。
 
+## 12. Phase 2 契约草案 v0.1（2026-10-25，供实现与 dot2 对齐）
+
+> 状态：**草案**。9 哥 已确认方向；Phase 2 开工时冻结为 v1（字段若有调整会在 #11 说明）。
+> 范围：单实例多 plane 的内部 IPC + 配置字段。**对 adapter/manifest 零改动**。
+
+### 12.1 不变量（沿用 §2，且是这次实现要守的）
+
+1. 只有音频面碰麦克风/扬声器；控制面只发消息、不写音频。
+2. 一个家庭同一时刻一个 turn、一个输出 owner（K2）。
+3. 设备事件是建议：plane 上报候选，控制面拥有 admit/reject 最终裁决。
+4. `multi_device.enabled=false` 时行为与 0.4.x 逐字节一致（单 plane、`multiple_enabled_inbound` 警告保留）。
+
+### 12.2 IPC 新增消息（control ↔ plane，沿用 5 字节帧头 + JSON）
+
+现有消息（`Wake` / `DeviceWakeMsg` / `WakeIdle` / `SpeakStart` / `StopAudio` / `PlayFile` / `Metrics`）
+的语义不变。Phase 2 新增三类：
+
+~~~json
+// plane -> control：一次候选唤醒（不 arm gate、不开 turn）
+{"type": "wake_candidate", "wake_id": "<uuid4>", "ts_ms": 0.0,
+ "source": "rui" | "device", "keyword": "", "score": null, "threshold": null,
+ "level": null, "barge": false, "playing": false}
+
+// control -> plane：赢家。收到后才 arm gate、等 VAD 出句
+{"type": "wake_admit", "wake_id": "<uuid4>", "turn_id": "<uuid4>", "gate_timeout_ms": 5000}
+
+// control -> plane：输家/被抑制。plane 丢弃本地候选，不产生 turn
+{"type": "wake_reject", "wake_id": "<uuid4>", "reason": "turn_open"}
+~~~
+
+`reason` 取值：`turn_open` / `lost_same_word` / `cross_echo` / `lost_playing` / `duplicate` /
+`over_capacity` / `admit_timeout`。每个 reason 对应一个计数（§12.5）。
+
+字段归属（延续 v1 "RUI enriches"）：
+
+- plane 只报它知道的事实：`wake_id`、`ts_ms`、`source`、`keyword`、`score/threshold/level`、
+  `barge`（设备提示或本地 barge 门结果）、`playing`（本设备此刻是否在出声）；
+- 控制面按 socket→device 映射补 `device_id/room/priority/last_active`，**adapter 不参与**；
+- `Wake`（旧的"回合时钟从这里开始"）在 Phase 2 仅保留给**已 admit 之后**的本地事件/观测，
+  不再作为开 turn 的依据（若实现上合并，需在冻结时明确）。
+
+### 12.3 仲裁时序（唯一权威在控制面）
+
+1. **空闲**：plane 收到唤醒 → 发 `wake_candidate`，**不 arm gate**。控制面在
+   `candidate_merge_window_ms`（默认 400）内收集候选，按 K3 顺序选一个，发 `wake_admit`，
+   其余发 `wake_reject(reason=lost_same_word)`。
+2. **播放中**：只有当前输出 owner 设备可以 barge。该设备本地 barge 门全过 → 候选带
+   `barge=true, playing=true`，控制面走**快路径**（不等合并窗口）直接 admit；其他设备的候选
+   带 `playing=false`，一律 `wake_reject(lost_playing)`，不同 utterance 内丢弃。
+3. **同房间交叉回声**：某设备播放时，**同 room** 的另一设备候选默认
+   `wake_reject(cross_echo)`；除非它 `barge=true` 且自身门控通过（§4.5）。
+4. **已有 turn**：新候选 → `wake_reject(turn_open)`（只处理 barge/停止/重复抑制）。
+5. **重复**：同一唤醒词在 `duplicate_window_ms`（默认 2000）内 → `wake_reject(duplicate)`。
+6. **超时**：plane 在 `admit_timeout_ms`（默认 = 合并窗口 + 500）内没收到
+   admit/reject → 本地丢弃候选、计 `wake_admit_timeout`，**绝不本地开 turn**。
+7. **赢家无语音**：`WakeIdle` 新增可选 `wake_id` 字段；控制面结束会话，不自动晋升第二名（D1）。
+
+### 12.4 输出所有权（OutputOwner，控制面）
+
+- 语音回答 → 起源设备（唤醒/打断的那台）；提示音/提醒/无来源通知 → `default_output`
+  （未配置则最近活跃房间，D7 校验要求 enabled 设备都有 room）。
+- 音乐 → 第一版单房间全局 owner；B 房间的回合不自动暂停 A 的音乐（D2）。
+- 停止/打断 → 只作用于当前 owner 设备；非 owner 房间的"停止"只结束该房间会话（D3）。
+- 平面内 `_owner` 保留为最后一道本地安全闸，但不再是跨房间裁决者。
+- owner 设备平面崩溃：控制面释放 claim；有 `default_output` 则回退到它，否则静默结束并记
+  `output_owner_lost`。平面由 supervisor 独立重启，不影响其他房间。
+
+### 12.5 计数与 trace（采纳 dot2 #11 E 表）
+
+`TurnTrace.meta` 与 metrics（按设备 + 全局）：
+
+| 字段 | 含义 |
+|---|---|
+| `arbitration_candidates` | 本次候选设备数 |
+| `arbitration_winner` / `arbitration_reason` | 赢家与理由（`playing` / `same_room` / `score` / `last_active` / `tie` / `barge`） |
+| `arbitration_dropped{device: reason}` | 被丢弃候选及原因 |
+| `arbitration_ties` | 平票次数 |
+| `arbitration_cross_echo_suppressed` | 同房间抑制次数 |
+| `wake_source`（每候选） | `device_wake` / `kws` |
+| `wake_admit_latency_ms` | 首候选到 admit 的时延 |
+| `wake_admit_timeout` | 控制面未按时裁决 |
+| `output_owner` / `output_owner_lost` | 当前 owner 与丢失次数 |
+
+### 12.6 配置（在 Phase 1 基础上新增，全部有默认值）
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `multi_device.enabled` | false | Phase 2 起允许 true；true 时启动 N 个平面 |
+| `devices[].room` | "" | `multi_device.enabled=true` 时**必填**（D7，缺省 422） |
+| `devices[].audio.voice.post_playback_mute_ms` | 0 | **新增**：输出 owner 停止播报后 N ms 内丢弃麦克风（不进 VAD/ASR）；播放中的 barge 不受影响。`≥ followup_delay_ms` 时跳过 follow-up gate。设备侧 AEC 的插头建议 2500（dot2 #7） |
+| `multi_device.arbitration.*` | §5.3 | 已在 Phase 1 落地：`source_priority`、`candidate_merge_window_ms`、`duplicate_window_ms`、`room_priority`、`prefer_playing_room`、`last_active_window_s`、`on_no_speech` |
+
+兼容承诺：不改 `devices[]` 现有字段语义；不改 `/api/v1/*` 现有路径；`/health` 顶层字段保留、
+新增 `devices[]` 数组；旧 config（v2/v3 且 `enabled=false`）行为不变。
+
+### 12.7 对插头/适配器作者（含 dot2）的影响 = 无接口改动
+
+- `drain_wakes()` 与 `DeviceWake` **六字段不变**；adapter 不上报 `device_id/room/playing/last_active`。
+- 多 plane 由 rui 内部完成：每设备一个音频面子进程、绑定各自 `listen_port`，adapter 无感知。
+- 唯一需要 adapter 侧配合的：若设备 AEC 在设备侧（`ref_channels=0`），可在 config 的
+  `devices[].audio.voice.post_playback_mute_ms` 配 ~2500，届时可撤掉 adapter 里的播放后静音门控；
+  该字段生效前**继续保留 adapter 门控**。
+- `rui_compat` 不需要因 Phase 2 调整；`>=0.3.0 <0.5.0` 继续有效（0.5 正式版再更新文档）。
+
+### 12.8 测试与验收（Phase 2 判据，§7.2 的子集）
+
+- 表驱动 Arbiter：空闲多候选/播放中 barge/非 barge/turn 已开/重复/优先级/平票/跨来源不可比；
+- IPC：赢家收 admit 才 arm、输家不产生 Utterance、超时不悬挂、平面崩溃不悬挂；
+- 配置：`enabled=true` 缺 room 422、`post_playback_mute_ms` 继承/覆盖、v2 行为零差异；
+- 真机：LX06 + 2 台 Dot2 同在线、各自唤醒、同时听到只一个 turn、播放中打断只归播放设备、
+  杀一个平面其余可用；记录 RSS/CPU 与唤醒→首字延迟。

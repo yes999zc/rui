@@ -103,7 +103,7 @@
 |---|---|---|
 | P5.1 ✅ | Phase 1：config v3（`devices[].audio` 覆盖、`multi_device` 块、`effective_audio()` 继承、引用/房间校验、v2 文件保持 v2） | `tests/test_config_v3.py` 21 用例；全量 1173/18；LX06 行为零差异 |
 | P5.2 | Phase 1b：控制台“未启用多设备”状态 + `multi_device.*` / `devices[].audio.*` 目录字段 | 面板/目录契约测试；不改单 active 语义 |
-| P5.3 | Phase 2：每设备一音频面 + WakeArbiter/WakeCandidate + OutputOwner 第一版 + 全局重复抑制 + 每设备健康/指标 | §7.2 共存/各自唤醒/同时听到/播放中打断/故障隔离通过；LX06+Dot2 真机 |
+| P5.3 | Phase 2：每设备一音频面 + WakeArbiter/WakeCandidate + OutputOwner 第一版 + 全局重复抑制 + 每设备健康/指标（契约草案 v0.1 见 `multi-device-design.md` §12） | §7.2 共存/各自唤醒/同时听到/播放中打断/故障隔离通过；LX06+Dot2 真机 |
 | P5.4 | Phase 3：房间策略与输出体验（room_priority/last_active、房间视图、全局 stop 语义） | 多房间一周误唤醒/抢占统计 |
 
 0.5.0 发布前需 9 哥 点头；生产仍 0.4.2，多平面未经真机验证前 `multi_device.enabled=false`。
