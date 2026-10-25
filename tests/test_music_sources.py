@@ -132,7 +132,8 @@ def _api(tmp_path: Path) -> tuple[TestClient, Config, Path]:
 # --------------------------------------------------------------------- registry
 
 def test_registry_offers_the_subsonic_family() -> None:
-    assert preset_ids() == ("navidrome", "airsonic", "gonic", "ampache", "custom")
+    assert preset_ids() == ("navidrome", "airsonic", "gonic", "ampache",
+                            "jellyfin", "emby", "custom")
     for preset_id in ("navidrome", "airsonic", "gonic", "ampache"):
         preset = get_preset(preset_id)
         assert preset is not None
@@ -149,7 +150,8 @@ def test_registry_offers_the_subsonic_family() -> None:
     custom = get_preset("custom")
     assert custom is not None and custom.custom is True
     assert custom.default_port is None
-    assert get_preset("jellyfin") is None
+    # "plex" stays the placeholder for a family with no adapter in this release.
+    assert get_preset("plex") is None
 
 
 def test_config_source_is_a_registry_driven_select(tmp_path: Path) -> None:
@@ -248,17 +250,17 @@ def test_credentials_are_write_only_and_token_is_an_alternative(
 
 def test_unknown_source_is_rejected_at_save(tmp_path: Path) -> None:
     client, cfg, _path = _api(tmp_path)
-    response = client.put("/api/v1/music/credentials", json={"source": "jellyfin"})
+    response = client.put("/api/v1/music/credentials", json={"source": "plex"})
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert detail[0]["loc"] == ["source"]
-    assert "navidrome" in detail[0]["msg"] and "jellyfin" in detail[0]["msg"]
+    assert "navidrome" in detail[0]["msg"] and "plex" in detail[0]["msg"]
     assert not (Path(cfg.system.data_dir) / "lan_media.json").exists()
 
     # The config-center path rejects it too (existing behaviour, kept here as the
     # single save contract).
     response = client.put("/api/v1/config/values", json={
-        "values": {"music.source": "jellyfin"}})
+        "values": {"music.source": "plex"}})
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["music.source"]
 
@@ -267,13 +269,13 @@ def test_panel_does_not_fake_enabled_for_an_unknown_source(tmp_path: Path) -> No
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")
     cfg.music.enabled = True
-    cfg.music.source = "jellyfin"  # hand-edited YAML analogue
+    cfg.music.source = "plex"  # hand-edited YAML analogue
     cfg.music.secrets_path = str(tmp_path / "data" / "lan_media.json")
     client = TestClient(create_app(cfg))
     panels = {panel["id"]: panel for panel in
               client.get("/api/v1/panels").json()["panels"]}
     assert panels["music"]["enabled"] is False
-    assert "jellyfin" in panels["music"]["enabled_reason"]
+    assert "plex" in panels["music"]["enabled_reason"]
     assert "不受支持" in panels["music"]["enabled_reason"]
     status = client.get("/api/v1/music").json()
     assert status["enabled"] is False
@@ -282,7 +284,7 @@ def test_panel_does_not_fake_enabled_for_an_unknown_source(tmp_path: Path) -> No
     sources = client.get("/api/v1/music/sources").json()
     assert sources["source_known"] is False
     assert sources["current_preset"] is None
-    assert sources["current"] == "jellyfin"
+    assert sources["current"] == "plex"
     assert {preset["id"] for preset in sources["sources"]} == set(preset_ids())
 
 
@@ -313,7 +315,7 @@ def test_test_endpoint_redacts_failures_and_rejects_unknown_sources(
     missing = client.post("/api/v1/music/test", json={}).json()
     assert missing["ok"] is False and "凭据" in missing["error"]
 
-    response = client.post("/api/v1/music/test", json={"source": "jellyfin"})
+    response = client.post("/api/v1/music/test", json={"source": "plex"})
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["source"]
 

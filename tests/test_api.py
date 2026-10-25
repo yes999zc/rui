@@ -282,12 +282,12 @@ def test_an_unknown_music_source_is_not_reported_as_enabled() -> None:
     """`enabled` means "the runtime can assemble it", not just the config flag."""
     cfg = Config()
     cfg.music.enabled = True
-    cfg.music.source = "jellyfin"  # no adapter in this release
+    cfg.music.source = "plex"  # no adapter in this release
     cfg.music.secrets_path = "/tmp/rui-test-music.json"
     c = client(cfg)
     music = _music_panel(c)
     assert music["enabled"] is False
-    assert "jellyfin" in music["enabled_reason"]
+    assert "plex" in music["enabled_reason"]
     assert "不受支持" in music["enabled_reason"]
     # The music API agrees: no service was built, so there is nothing "enabled".
     assert c.get("/api/v1/music").json()["enabled"] is False

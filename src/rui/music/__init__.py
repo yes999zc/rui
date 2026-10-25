@@ -13,6 +13,7 @@ from .service import MusicService
 from .source import MusicSource, SourceError
 from .sources import (
     PRESETS,
+    JellyfinSource,
     MusicSourcePreset,
     NavidromeSource,
     SubsonicSource,
@@ -23,6 +24,7 @@ from .sources import (
 )
 
 __all__ = [
+    "JellyfinSource",
     "MusicService",
     "MusicSource",
     "MusicSourcePreset",

@@ -9,8 +9,9 @@ credential fields the console may show. The source itself is still selected by i
 Everything in this module is pure data (stdlib only) so `config/catalog.py` can import
 it lazily while building the select options and `web/api/app.py` can use the same list
 to validate a save. A preset is offered only when the family has a runtime adapter:
-the Subsonic family is implemented (`SubsonicSource`), and the custom entry is the
-same protocol pointed at a self-hosted URL.
+the Subsonic family (`SubsonicSource`) and the Jellyfin/Emby family
+(`JellyfinSource`) are implemented, and the custom entry is the Subsonic protocol
+pointed at a self-hosted URL.
 
 No secret value is stored here. A credential field is a *slot*: key, label, whether it
 is required, and how the console should render it. Values live in the write-only
@@ -33,10 +34,13 @@ __all__ = [
     "presets",
 ]
 
-# Protocol families with a runtime builder. `subsonic` covers Navidrome/Airsonic/
-# Gonic/Ampache: they all expose the same /rest/*.view API and token auth.
+# Protocol families with a runtime builder.
+#   subsonic: Navidrome/Airsonic/Gonic/Ampache share /rest/*.view and token auth.
+#   jellyfin: Jellyfin and Emby share the MediaBrowser HTTP API; they differ only in
+#             how the API key travels (header vs ?api_key=), which a preset declares.
 SUBSONIC = "subsonic"
-SUPPORTED_FAMILIES = frozenset({SUBSONIC})
+JELLYFIN = "jellyfin"
+SUPPORTED_FAMILIES = frozenset({SUBSONIC, JELLYFIN})
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,9 @@ class MusicSourcePreset:
     description_en: str
     credential_fields: tuple[CredentialField, ...] = field(default_factory=tuple)
     custom: bool = False
+    # Non-secret protocol detail: how this preset's API key must travel. The Jellyfin
+    # family has two live-verified styles; a new family leaves it at the default.
+    auth_style: str = "header"
 
     @property
     def supported(self) -> bool:
@@ -156,6 +163,40 @@ def _subsonic_fields(port: int | None, host: str = "nas") -> tuple[CredentialFie
     )
 
 
+def _jellyfin_fields(port: int | None, host: str = "jellyfin.local",
+                     product: str = "Jellyfin") -> tuple[CredentialField, ...]:
+    """The two slots a Jellyfin/Emby server needs: root URL and an API key.
+
+    No username/password: the adapter authenticates with an API key the operator
+    creates in the server's own dashboard, and discovers the user id itself (friends
+    and favourites are per-user). The key is write-only like every other secret slot.
+    """
+    url_placeholder = f"http://{host}:{port}" if port else f"http://{host}"
+    return (
+        CredentialField(
+            key="url",
+            label_zh="服务器地址",
+            label_en="Server URL",
+            kind="url",
+            placeholder_zh=url_placeholder,
+            placeholder_en=url_placeholder,
+            hint_zh="含协议和端口，指向服务根路径（不要加 /web 或 /api）。",
+            hint_en="Scheme and port, pointing at the server root (no /web or /api).",
+        ),
+        CredentialField(
+            key="api_key",
+            label_zh="API Key",
+            label_en="API key",
+            kind="password",
+            placeholder_zh="在服务端后台创建（只写不读）",
+            placeholder_en="Create it in the server dashboard (write-only)",
+            hint_zh=f"在 {product} 控制台 → API 密钥里新建；只写不读，保存后不回显。",
+            hint_en=f"Create one under {product} dashboard → API Keys; write-only, "
+                    "never returned after saving.",
+        ),
+    )
+
+
 PRESETS: tuple[MusicSourcePreset, ...] = (
     MusicSourcePreset(
         id="navidrome",
@@ -204,6 +245,34 @@ PRESETS: tuple[MusicSourcePreset, ...] = (
         description_zh="老牌 Web 音乐库；启用 Subsonic API 后走同一套接口。",
         description_en="Long-standing web music library; its Subsonic API uses the same endpoints.",
         credential_fields=_subsonic_fields(80, host="ampache.local"),
+    ),
+    MusicSourcePreset(
+        id="jellyfin",
+        name_zh="Jellyfin",
+        name_en="Jellyfin",
+        protocol_family=JELLYFIN,
+        docs_url="https://api.jellyfin.org/",
+        default_port=8096,
+        default_path="/",
+        description_zh="开源媒体服务器；Jellyfin/Emby（MediaBrowser）API，用 API Key 访问。",
+        description_en="Open-source media server; Jellyfin/Emby (MediaBrowser) API with an "
+                       "API key.",
+        credential_fields=_jellyfin_fields(8096),
+        auth_style="header",
+    ),
+    MusicSourcePreset(
+        id="emby",
+        name_zh="Emby",
+        name_en="Emby",
+        protocol_family=JELLYFIN,
+        docs_url="https://dev.emby.media/",
+        default_port=8096,
+        default_path="/",
+        description_zh="Emby 4.x；与 Jellyfin 同一套 MediaBrowser API，API Key 走查询参数。",
+        description_en="Emby 4.x; same MediaBrowser API as Jellyfin, API key in the query "
+                       "string.",
+        credential_fields=_jellyfin_fields(8096, host="emby.local", product="Emby"),
+        auth_style="query",
     ),
     MusicSourcePreset(
         id="custom",
