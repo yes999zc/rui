@@ -172,7 +172,7 @@ def _persisted_layers(path: Path) -> tuple[set[str] | None, bool]:
     default value". Since 0.6 a device plug's manifest `audio_defaults` is the bottom
     layer of the audio and cue-window merges; writing the neutral core defaults into
     every saved file would turn them into explicit choices and shadow the plug on the
-    next boot (an LX06 would come back as 1-channel audio after any console save).
+    next boot (a multi-channel speaker would come back as 1-channel audio after any console save).
     """
     try:
         raw = _yaml.load(path.read_text(encoding="utf-8"))

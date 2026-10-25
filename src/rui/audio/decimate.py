@@ -1,6 +1,6 @@
 """Streaming decimation from an adapter's capture rate to the voice rate.
 
-The LX06 hands over 48 kHz; AEC, KWS and VAD run at 16 kHz. Naive `[::3]` aliases
+A reference array speaker hands over 48 kHz; AEC, KWS and VAD run at 16 kHz. Naive `[::3]` aliases
 everything between 8 and 24 kHz back into the speech band, which is exactly where a
 speaker's own music lives - so the filter is not optional, it is the difference between
 "KWS works with music playing" and "KWS only works in silence".

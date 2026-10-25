@@ -1,6 +1,6 @@
 """Image-shipped Socket & Plug manifests, loaded from a plug directory.
 
-0.6 M2 (docs/roadmap-0.6.md): the LX06 manifest is no longer in code. The image
+0.6 M2 (docs/roadmap-0.6.md): device manifests are no longer in code. The image
 copies the repository's plugs/ tree to /opt/rui-plugins, and this module is the
 catalog over that directory; a source checkout falls back to its own plugs/
 directory, so "uv run rui" and the test suite see the same manifests the image

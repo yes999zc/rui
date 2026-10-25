@@ -1576,7 +1576,7 @@ async def _check_playback(
         report.add("playback.sink", SKIP, "no playback capability declared")
         return
     rate = getattr(info, "sample_rate", 16000) if info is not None else 16000
-    # DeviceInfo describes the capture layout (LX06: 8 channels). Playback is a
+    # DeviceInfo describes the capture layout (an array: 8 channels). Playback is a
     # separate sink and the common layout is stereo; use mono only for mono devices.
     capture_channels = getattr(info, "channels", 1) if info is not None else 1
     channels = 2 if isinstance(capture_channels, int) and capture_channels >= 2 else 1

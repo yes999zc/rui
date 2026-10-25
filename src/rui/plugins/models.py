@@ -94,7 +94,7 @@ class WakeSource(StrEnum):
     """Who detects the wake word for this device model (v1 §3.3)."""
 
     DEVICE = "device"   # the device runs our wake word and reports DeviceWake
-    RUI = "rui"         # RUI's own KWS (the LX06 path, unchanged)
+    RUI = "rui"         # RUI's own KWS (the core path, unchanged)
 
 
 class WakeSpec(BaseModel):

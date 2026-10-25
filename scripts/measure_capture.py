@@ -25,17 +25,21 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _xiaoai_plug import load_xiaoai_plug  # noqa: E402
 
 from rui.config import Config, load_config  # noqa: E402
-from rui.env import get as env_get  # noqa: E402
 from rui.device import build_adapters  # noqa: E402
-from rui.device.xiaoai import protocol  # noqa: E402
-from rui.device.xiaoai.adapter import XiaoaiAdapter  # noqa: E402
+from rui.env import get as env_get  # noqa: E402
+
+_plug = load_xiaoai_plug()
+XiaoaiAdapter = _plug.adapter
+protocol = _plug.protocol
 
 
 async def fake_speaker(port: int, token_env: str, rate: int, channels: int, seconds: float) -> None:
     """A stand-in for the real client: same protocol, known signal."""
-    import os
 
     from websockets.asyncio.client import connect
 

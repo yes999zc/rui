@@ -7,7 +7,7 @@ says so instead of pretending.
 
 Two transport directions exist and both fit this contract:
   outbound - we connect to the device (USB audio, an exposed HTTP/ALSA bridge);
-  inbound  - the device's client dials us (LX06: ws://<server>:<port>/?token=...).
+  inbound  - the device's client dials us (ws://<server>:<port>/?token=...).
 An inbound adapter's `open()` starts accepting and `frames()` yields from the
 connected client; `probe()` reports what the device declared at handshake and what
 we verified over SSH, never an optimistic guess.
@@ -49,7 +49,7 @@ class Transport(StrEnum):
 #: either side does not claim is not effective. The other three capability values
 #: (``led``/``keys``/``volume``) are backed by ``DeviceServices`` calls instead, so
 #: the manifest is authoritative for them and a probe that omits them must not
-#: downgrade a working LX06.
+#: downgrade a working speaker.
 PROBE_BOUND_CAPABILITIES: frozenset[Capability] = frozenset(
     {
         Capability.MIC_ARRAY,
@@ -71,7 +71,7 @@ def effective_capabilities(
     adapter reported. For :data:`PROBE_BOUND_CAPABILITIES` the result is the
     intersection (both sides must back the claim). For ``led``/``keys``/``volume``
     the manifest wins, because :class:`DeviceServices` is the actual runtime
-    evidence and a v0 LX06 probe deliberately does not list them.
+    evidence and a v0 probe deliberately does not list them.
 
     ``manifest=None`` means "no manifest resolved" (the documented dev/mock case):
     the probe is then authoritative for every capability, exactly as before v1.
@@ -293,8 +293,8 @@ def wake_validation_error(
 class AudioFrame:
     """One interleaved capture block, already scaled to 16-bit.
 
-    The reference channels travel inside the same frame as the microphones (LX06:
-    ch0..ch5 mics, ch6..ch7 reference), so a frame describes one layout for all of
+    The reference channels travel inside the same frame as the microphones (an array
+    speaker: ch0..ch5 mics, ch6..ch7 reference), so a frame describes one layout for all of
     its channels instead of pretending reference audio arrives separately.
     """
 
@@ -330,7 +330,7 @@ class DeviceServices(Protocol):
     """What a device can do beyond moving audio: a shell, the mixer, a light.
 
     Optional on purpose. A speaker that has none of this implements `NullServices` and
-    reports no VOLUME/LED capability; nothing above has to ask "is this a 小爱".
+    reports no VOLUME/LED capability; nothing above has to ask which model this is.
     """
 
     async def shell(self, script: str, timeout: float = 3.0) -> str: ...
@@ -345,7 +345,7 @@ class DeviceServices(Protocol):
         The config/UI percentage (0-100) is mapped before it reaches this method with
         :func:`percent_to_device_volume`. Implementations must reject values outside
         0-255 rather than clamping silently. ``0`` is in range but may be reserved for
-        "leave it to the vendor" (the LX06's services rejects a 0 write); core never
+        "leave it to the vendor" (a vendor mixer may reject a 0 write); core never
         sends 0 because config ``volume = 0`` means "do not manage".
         """
         ...
@@ -377,7 +377,7 @@ class DeviceAdapter(Protocol):
     #: Shell/mixer/light. Optional: adapters without one leave it unset (or assign
     #: :class:`NullServices`) and must not advertise VOLUME/LED. It is an attribute,
     #: not a property, because an adapter may assign a vendor-specific object in
-    #: ``__init__`` (the LX06 does).
+    #: ``__init__`` (an adapter may).
     services: DeviceServices
 
     async def probe(self) -> DeviceInfo: ...
@@ -389,7 +389,7 @@ class DeviceAdapter(Protocol):
     def frames(self) -> AsyncIterator[AudioFrame]: ...
 
     async def play(self, pcm: bytes, *, sample_rate: int, channels: int) -> None:
-        """Queue PCM for playback. Channels matter: LX06 plays 2 ch at 48 kHz."""
+        """Queue PCM for playback. Channels matter: a device may play 2 ch at 48 kHz."""
         ...
 
     async def stop_playback(self, fade_ms: int = 120) -> None:
@@ -433,7 +433,7 @@ class DeviceAdapter(Protocol):
 
         Synchronous, non-blocking, no I/O, one caller, and no event returned twice.
         Default is empty: an adapter without a device-side wake model is indistinguishable
-        from an LX06, and RUI's own KWS path stays exactly as it was. Vendor wakes belong
+        from a KWS-only speaker, and RUI's own KWS path stays exactly as it was. Vendor wakes belong
         to ``drain_signals()``; the two channels must not be merged.
         """
         return []

@@ -25,13 +25,17 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _xiaoai_plug import load_xiaoai_plug  # noqa: E402
 
 from rui.audio.aec import AecChain, speex_available  # noqa: E402
 from rui.audio.process import read_wav_mono  # noqa: E402
 from rui.audio.resample import resample  # noqa: E402
 from rui.config import load_config  # noqa: E402
 from rui.device import build_adapters  # noqa: E402
-from rui.device.xiaoai.adapter import XiaoaiAdapter  # noqa: E402
+
+XiaoaiAdapter = load_xiaoai_plug().adapter
 
 CHUNK_MS = 100
 

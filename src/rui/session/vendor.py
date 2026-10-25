@@ -1,8 +1,8 @@
 """Yielding to the speaker's own assistant.
 
-The LX06 still runs 小爱. Saying "小爱同学" wakes *it*, and it answers - which is fine
-until our own wake word fires on the same audio and we answer too: two assistants, one
-sentence, from the old project's log at 20:47 on 2026-10-21.
+A speaker may still run its vendor assistant. Its wake word wakes *it*, and it answers -
+which is fine until our own wake word fires on the same audio and we answer too: two
+assistants, one sentence, from the old project's log at 20:47 on 2026-10-21.
 
 The rule that fixed it there, kept here: a vendor wake means we yield.
   - we do not open a session, we do not play the cue;

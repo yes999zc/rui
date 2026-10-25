@@ -1,7 +1,7 @@
 """Wake acknowledgement tones, synthesised from parameters - no sample files.
 
 The cue exists to confirm the wake without costing a millisecond of the request. A spoken
-acknowledgement keeps the LX06 microphone muted for ~1.2 s; a tone costs only its own
+acknowledgement keeps the reference speaker's microphone muted for ~1.2 s; a tone costs only its own
 length, so the default here is 160 ms. (The old deployment shipped 500 ms; `chime_ms` is a
 knob and `chime_ms: 0` renders a preset at its natural length.)
 

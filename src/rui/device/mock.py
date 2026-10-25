@@ -1,6 +1,6 @@
 """Mock adapter: the second implementation that keeps the abstraction honest.
 
-Mirrors the LX06's real wire format - 48 kHz, 8 interleaved channels, 6 mics and 2
+Mirrors a real array speaker's wire format - 48 kHz, 8 interleaved channels, 6 mics and 2
 duplicated reference channels - so code written against the mock cannot quietly assume
 a mono 16 kHz device. Tests and CI run the whole pipeline against this, no hardware.
 """

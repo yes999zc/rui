@@ -37,7 +37,7 @@ from ..env import get as env_get
 SUPPORTED_ARCH = {"x86_64", "AMD64", "arm64", "aarch64"}
 
 # One speaker costs this much of one core for KWS + streaming ASR + VAD. Placeholder
-# until M1 measures it on the LX06; the doctor prints it so nobody mistakes it for data.
+# until it is measured on real hardware; the doctor prints it so nobody mistakes it for data.
 ASSUMED_PER_DEVICE_CPU = 0.35
 CPU_HEADROOM = 0.8  # leave a fifth of the box for the control plane, OS and bursts
 
@@ -409,7 +409,7 @@ def _merged_audio(cfg: Config, device: object):
 
     Doctor rows must describe what the plane will run with. The global block alone is
     wrong as soon as a plug declares `audio_defaults` (the neutral core defaults are
-    not the LX06's 8 ch / 48 kHz) or a device sets its own playback rate (the 0.5.3 D2
+    not an array speaker's 8 ch / 48 kHz) or a device sets its own playback rate (the 0.5.3 D2
     bug: the row said 16 kHz while the speaker heard 48 kHz).
     """
     return effective_audio(
@@ -439,7 +439,7 @@ def _declared_wire_rate(cfg: Config, device: object) -> tuple[int | None, str]:
 def _audio_rates_check(cfg: Config) -> Check:
     """Every enabled device's declared wire rate against its merged playback rate.
 
-    The Dot 2 wire is 48 kHz mono; the LX06 plays 16 kHz mono, so a device without its
+    A downstream plug's wire is 48 kHz mono; the image plug plays 16 kHz mono, so a device without its
     own rate produced a silent speaker (the 0.5.3 D2 bug). Since 0.6 M1 the effective
     rate is the three-layer merge (manifest audio_defaults < global config < device
     override), so a plug's declared playback default counts too - not just a

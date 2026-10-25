@@ -2,7 +2,7 @@
 
 Everything here is driven by the frames an adapter hands over. The plane never reads
 `audio.capture` to decide a layout - a frame says its own `channels`, `sample_rate` and
-`reference_channels`, so an LX06 (48 kHz / 8 ch / 6 mic + 2 ref) and a future ESP32
+`reference_channels`, so an array speaker (48 kHz / 8 ch / 6 mic + 2 ref) and a future ESP32
 (16 kHz / 1 ch / no reference) run through the same code path with different adapters.
 Config values are expectations the doctor checks, not assumptions the plane bakes in.
 
@@ -720,7 +720,7 @@ class AudioPlane:
         """Spoken-cue echo window: device default < global ack < device override.
 
         A device-AEC plug keeps the cue's residual echo on its microphone far longer
-        than an LX06 needs; reading the global value here is what let its own cue open a
+        than the reference speaker needs; reading the global value here is what let its own cue open a
         turn (0.5.3 self-hearing fix). 0.6 lets the plug declare its own measured tail.
         """
         return effective_ack_echo_ignore_ms(
@@ -1808,7 +1808,7 @@ class AudioPlane:
         self._vendor_quiet_until = 0.0
         # Takeover: our wake outranks a running vendor dialog. The old build stayed
         # deaf while the vendor player ran (mic gated, assistant_v3.py:3115), so its
-        # wake never had to stop 小爱; ours hears 你好小瑞 mid-answer, and taking the
+        # wake never had to stop the vendor assistant; ours hears 你好小瑞 mid-answer, and taking the
         # line means the vendor's voice stops - otherwise both assistants talk at
         # once and the vendor's own answer leaks into our ASR as the next request
         # (measured 19:54:06 on 2026-10-22). Fire-and-forget: the wake path must not

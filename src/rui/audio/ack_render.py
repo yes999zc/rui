@@ -1,6 +1,6 @@
 """Render the spoken wake acknowledgement once, ahead of time.
 
-The cue exists to hide latency, so it cannot itself cost latency. On the LX06 a wake
+The cue exists to hide latency, so it cannot itself cost latency. On the reference speaker a wake
 answer synthesised on demand took ~1.5 s and arrived after the user had already started
 talking - and the old build found the queued audio then hit its echo gate at the wrong
 moment and swallowed the first request. Its fix (`assistant_v3.py:1111`, `ack_warmer`) was

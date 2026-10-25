@@ -249,7 +249,7 @@ def _warn_v0_once(plugin_file: Path, device_file: Path) -> None:
 
     A v0 manifest keeps working through 0.5.x, but the spec requires a warning at
     least one minor before removal (now earliest 0.6.0; 0.5.0 kept v0 because the
-    builtin LX06 reference plug is still v0). Logging once avoids a warning flood
+    builtin reference plug was still v0). Logging once avoids a warning flood
     from per-request catalog reads.
     """
     key = str(device_file)

@@ -31,12 +31,16 @@ import uvicorn
 from websockets.asyncio.client import connect
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _xiaoai_plug import load_xiaoai_plug  # noqa: E402
 
 from rui.config import load_config, save_config  # noqa: E402
 from rui.env import get as env_get  # noqa: E402
-from rui.device.xiaoai import protocol  # noqa: E402
 from rui.log_setup import setup_logging  # noqa: E402
 from rui.web.api.app import create_app  # noqa: E402
+
+protocol = load_xiaoai_plug().protocol
 
 
 def load_env_file(path: Path) -> None:

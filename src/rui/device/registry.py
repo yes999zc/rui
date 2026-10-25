@@ -158,8 +158,8 @@ def _import_entrypoint(source_dir, entrypoint: str) -> Builder:
     if not separator or not module_name or not attribute:
         raise ValueError(f"invalid runtime.entrypoint {entrypoint!r}")
     path = str(getattr(source_dir, "resolve", lambda: source_dir)())
-    # Two layouts ship in the wild: <plug>/<package>/adapter.py (the LX06 image
-    # plug) and <plug>/adapter.py where <plug> is itself the top-level package (the
+    # Two layouts ship in the wild: <plug>/<package>/adapter.py (an image plug
+    # package) and <plug>/adapter.py where <plug> is itself the top-level package (the
     # Dot 2 downstream recipe, PYTHONPATH=/opt/rui-plugins). Make both importable.
     for candidate in (path, str(Path(path).parent)):
         if candidate not in sys.path:

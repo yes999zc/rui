@@ -90,8 +90,8 @@ def fallback_info(
 ) -> DeviceInfo:
     """The best degraded description of an adapter whose probe just failed.
 
-    Prefer the object's own cached ``info`` (the LX06 builds one in ``__init__`` and its
-    probe simply returns it); otherwise return an honest empty layout with the configured
+    Prefer the object's own cached ``info`` (an adapter that builds one in ``__init__``
+    and whose probe simply returns it); otherwise return an honest empty layout with the configured
     identity so the console can still render the row it must let the user remove.
     """
     cached = getattr(adapter, "info", None)

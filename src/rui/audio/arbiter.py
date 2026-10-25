@@ -237,7 +237,7 @@ class WakeArbiter:
     Usage, from the control plane's event loop::
 
         arbiter = WakeArbiter(cfg.multi_device, devices)
-        arbiter.set_state(turn_open=True, owner_device="lx06", playing={"lx06"})
+        arbiter.set_state(turn_open=True, owner_device="living", playing={"living"})
         decision = arbiter.candidate(candidate, now_ms)   # fast path / rejects
         decision = arbiter.resolve(now_ms)                # after the merge window
 

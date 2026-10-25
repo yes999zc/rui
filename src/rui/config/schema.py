@@ -199,7 +199,7 @@ class DeviceVoiceOverride(BaseModel):
     # How long to hold the gate after this device's own spoken cue, replacing the global
     # `ack.echo_ignore_ms`. Under `voice` because it describes this device's microphone
     # (a device-AEC plug keeps its cue's residual echo far longer than the 1200 ms the
-    # LX06 needs), but the value it overrides is the conversational `ack` setting.
+    # reference speaker needs), but the value it overrides is the conversational `ack` setting.
     # None = inherit. Resolved by `effective_ack_echo_ignore_ms()`, not by
     # `effective_audio()` (the `ack` block is deliberately outside `audio`).
     ack_echo_ignore_ms: int | None = Field(default=None, ge=0, le=5000)
@@ -289,7 +289,7 @@ class CaptureConfig(BaseModel):
     int16 mono microphone delivers (16 kHz, 1 channel, no reference, no shift). A
     speaker that differs declares its own layout in its plug manifest's
     "audio_defaults" block, which is the bottom layer of the audio merge
-    (device default < global config < devices[].audio). The LX06, for instance,
+    (device default < global config < devices[].audio). A multi-mic speaker, for instance,
     declares S32_LE / 8 interleaved channels / 48 kHz (ch0..ch5 mic array, ch6/ch7
     playback reference; mic full scale 2**23, reference 2**28).
     """
@@ -299,7 +299,7 @@ class CaptureConfig(BaseModel):
     mic_channels: int = Field(default=1, ge=1, le=16)
     ref_channels: int = Field(default=0, ge=0, le=16)
     bits: Literal[16, 32] = 16
-    # A 16-bit neutral wire needs no scaling; a 32-bit device (the LX06) declares the
+    # A 16-bit neutral wire needs no scaling; a 32-bit device (a measured array) declares the
     # headroom it measured. Level-matching clips loud speech, so a fresh install that
     # never edits this file must not start there.
     mic_shift: int = Field(default=0, ge=0, le=31)
@@ -354,7 +354,7 @@ class VoiceConfig(BaseModel):
     # request spoken straight after the wake word never reach the transcriber.
     wake_preroll_ms: int = Field(default=500, ge=0, le=1500)
     # Follow-up gate: how long after the pacer drains before the microphone reopens
-    # for the next sentence. 1000 ms is the LX06's measured echo tail; a device-AEC
+    # for the next sentence. 1000 ms is the reference speaker's measured echo tail; a device-AEC
     # plug (no reference, RUI AEC off) keeps residual echo on the mic for seconds.
     followup_delay_ms: int = Field(default=1000, ge=0, le=10000)
     # Replay the audio caught between playback end and the gate opening into the
@@ -373,7 +373,7 @@ class VoiceConfig(BaseModel):
 class PlaybackConfig(BaseModel):
     """Speech and music leave at the rate the pipeline runs at: 16 kHz, mono.
 
-    The capture/ASR/TTS side is 16 kHz, the LX06 client plays mono frames (the
+    The capture/ASR/TTS side is 16 kHz, the reference client plays mono frames (the
     adapter rejects anything else), and asking for 48 kHz/2 ch here only produced
     a config that looked right and raised on the first reply. The device's own
     ALSA layer resamples; the wire format is what this number describes.
@@ -384,14 +384,14 @@ class PlaybackConfig(BaseModel):
     queue_ms: int = Field(default=200, ge=20, le=1000)
     fade_out_ms: int = Field(default=120, ge=0, le=500)
     # Blocks (100 ms each) the plane may run ahead of the device's own "consumed"
-    # reports. Measured on LX06: the report fires when a block enters aplay's stdin
+    # reports. Measured on a real speaker: the report fires when a block enters aplay's stdin
     # pipe, not when ALSA plays it, so a small window keeps that pipe full and every
     # write waits ~100 ms for a drain (228 blocked writes / 30 s at 2, 130 at 2 with
     # the clock too, 0 at 8). The window is a leak bound; the clock paces. 0 leaves
     # only the clock.
     credit_window: int = Field(default=8, ge=0, le=50)
     # P2.9: how much reply audio the plane waits for before it hands the first block
-    # to the device. Zero (default) keeps the LX06 path exactly as it was: its control
+    # to the device. Zero (default) keeps the reference path exactly as it was: its control
     # plane and TTS deliver a sentence in a burst, so waiting only adds
     # first_response latency. A transport that delivers the reply in batches ~400 ms
     # apart (issue #1, Echo Dot 2 adapter) underruns a 250-320 ms prebuffer; set this
@@ -410,7 +410,7 @@ class AecConfig(BaseModel):
     # mysoftvol 170); "per_channel" = six cancellers, better diagnostics, worse ERLE and
     # 6x the CPU. Measured on this speaker 2026-10-22.
     cancel: Literal["mix", "per_channel"] = "mix"
-    # v3: who runs the canceller. "controller" is the LX06 topology we measured
+    # v3: who runs the canceller. "controller" is the reference topology we measured
     # (RUI cancels on the array mix); "device" means the plug already cancelled and
     # RUI must not run a second one. "none" is ASR-only (no barge), "both" is an
     # experiment. `effective_audio()` below resolves a per-device override.
@@ -424,7 +424,7 @@ class AckConfig(BaseModel):
     plane serves a cue, a spoken word or silence depending on what the room prefers.
 
     `max_ms` is the whole point of having a `tts` mode at all. A spoken acknowledgement
-    mutes the LX06 microphone for about 1.2 s plus its own length, so the cap is enforced
+    mutes the reference speaker's microphone for about 1.2 s plus its own length, so the cap is enforced
     when the cue is rendered (anything longer is refused and the cue falls back to a
     tone), not documented and hoped for.
     """
@@ -549,7 +549,7 @@ def _explicit(block: BaseModel, key: str, core: BaseModel) -> bool:
     (`model_fields_set`) or when its value differs from the core default `core` (a
     value mutated after load, which older write paths do). The distinction is what
     lets a device manifest's `audio_defaults` apply to a config that never chose a
-    layout while an explicit value - including the LX06's 16 kHz capture override -
+    layout while an explicit value - including the production template's 16 kHz capture override -
     wins.
     """
     return key in block.model_fields_set or getattr(block, key) != getattr(core, key)
@@ -607,7 +607,7 @@ def effective_ack_echo_ignore_ms(
     `ack.echo_ignore_ms` (when the config states it) <
     `devices[].audio.voice.ack_echo_ignore_ms`. The override lives under `voice`
     because it describes this device's microphone (a device-AEC plug keeps the cue's
-    residual echo far longer than the 1200 ms an LX06 needs), but the value it replaces
+    residual echo far longer than the 1200 ms the reference speaker needs), but the value it replaces
     is the conversational `ack` setting, which is deliberately outside the `audio`
     block. Keeping the two resolved in one place is what stops the next caller from
     reading the global value and re-introducing the self-hearing bug.
@@ -1146,7 +1146,7 @@ class Config(BaseModel):
             try:
                 # Resolve the device's manifest defaults too: an override that only
                 # states the changed fields must be checked against the layout the plug
-                # actually declares (an LX06 inherits 6 mic + 2 ref), not against the
+                # actually declares (a multi-mic plug inherits 6 mic + 2 ref), not against the
                 # neutral core defaults.
                 effective_device_audio(self, dev)
             except ValidationError as exc:

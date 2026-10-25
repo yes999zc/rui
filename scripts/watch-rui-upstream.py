@@ -29,8 +29,8 @@ def _token() -> str:
         return token
     try:
         line = next(
-            l for l in pathlib.Path.home().joinpath(".git-credentials").read_text().splitlines()
-            if "github.com" in l
+            candidate for candidate in pathlib.Path.home().joinpath(".git-credentials").read_text().splitlines()
+            if "github.com" in candidate
         )
         return line.split("//", 1)[1].split("@", 1)[0].split(":", 1)[1]
     except Exception:

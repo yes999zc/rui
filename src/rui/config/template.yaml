@@ -40,7 +40,8 @@ security:
     blocked_cidrs: []
 devices: []
 audio:
-  # Measured on LX06 1.94.13. Do not copy these numbers to another speaker; measure it.
+  # Measured on the reference speaker (firmware 1.94.13). Do not copy these numbers
+  # to another speaker; measure it.
   capture:
     rate: 16000
     channels: 8
@@ -65,7 +66,7 @@ audio:
     kws_num_threads: 1
     vad_model_path: /data/models/silero_vad.onnx
     wake_preroll_ms: 500
-  # The LX06 client plays mono frames; 16 kHz is the rate the whole pipeline runs at.
+  # The reference client plays mono frames; 16 kHz is the rate the whole pipeline runs at.
   # Asking for 48 kHz here is rejected by the adapter (channels must be 1).
   playback:
     rate: 16000

@@ -105,9 +105,9 @@ _GROUPS: dict[str, tuple[dict, int, int, str, dict]] = {
         "single-plane behaviour. arbitration.mode / prefer_playing_room / on_no_speech "
         "are frozen to score/true/end and have no input. Restart the service.")),
     "audio.capture": (_t("采集", "Capture"), 2, 100, "restart", _t(
-        "从音箱收到的原始格式。这些是照 LX06 实测写的（48000 Hz / 8 通道 / 32 bit，"
+        "从音箱收到的原始格式。这些数值是按参考机型实测的（48000 Hz / 8 通道 / 32 bit，"
         "麦移位 12、参考移位 16），换音箱必须重新量；改错会变调、削顶或没声音。",
-        "The raw format the speaker sends. Measured on LX06 (48000 Hz / 8 ch / 32 bit, "
+        "The raw format the speaker sends. Measured on the reference model (48000 Hz / 8 ch / 32 bit, "
         "mic shift 12, ref shift 16); re-measure for another speaker. A wrong value "
         "pitch-shifts, clips, or silences the input.")),
     "audio.voice": (_t("唤醒与分段", "Wake & segmentation"), 2, 110, "restart", _t(
@@ -115,9 +115,9 @@ _GROUPS: dict[str, tuple[dict, int, int, str, dict]] = {
         "Wake model, VAD end-of-speech, preroll and wake tail. Tuned by measurement; a "
         "wrong value eats the first syllable, cuts early, or never wakes.")),
     "audio.playback": (_t("播放", "Playback"), 2, 120, "restart", _t(
-        "推给音箱的音频格式和控速。LX06 客户端只收 16 kHz 单声道；credit_window 是在途上限"
+        "推给音箱的音频格式和控速。参考机型的客户端只收 16 kHz 单声道；credit_window 是在途上限"
         "（8 = 实测 0 次阻塞）。改错会没声音或卡顿。",
-        "Format pushed to the speaker and write pacing. The LX06 client takes 16 kHz mono "
+        "Format pushed to the speaker and write pacing. The reference client takes 16 kHz mono "
         "only; credit_window is the in-flight bound (8 = zero blocked writes measured).")),
     "audio.aec": (_t("回声消除", "Echo cancellation"), 2, 130, "restart", _t(
         "回声消除。mix = 一个滤波器消 6 麦加权混音（默认，实测 23.5 dB）；关掉会听见自己、"
@@ -565,9 +565,9 @@ def _session_fields() -> list[dict]:
                unit=_t("轮", "rounds"), minimum=0, maximum=12),
         _field("session.vendor_quiet_s", "session", "number",
                _t("让位静默窗口", "Vendor quiet window"),
-               _t("说「小爱同学」后我们安静多久：避免两个助手同时答。调大更保守，"
+               _t("设备自带助手被唤醒后我们安静多久：避免两个助手同时答。调大更保守，"
                   "但可能吞掉紧接着的「你好小瑞」。保存后下一轮生效。",
-                  "How long we stay quiet after the vendor assistant answers. Larger is "
+                  "How long we stay quiet after the vendor assistant is woken. Larger is "
                   "safer but can swallow a quick wake. Next turn."),
                unit=_t("秒", "s"), minimum=0, maximum=60),
     ]
@@ -577,24 +577,24 @@ def _audio_fields() -> list[dict]:
     fields: list[dict] = []
     capture = [
         ("rate", "采集采样率", "Capture rate", "number", 8000, 96000,
-         "音箱实际输出的采样率。LX06 是 48000；填错会变调或直接没声音。",
-         "The rate the speaker actually sends. LX06 is 48000; a wrong value pitch- "
-         "shifts or silences it.", _t("Hz", "Hz")),
+         "音箱实际输出的采样率。参考机型为 48000 Hz（生产模板会让客户端降到 16000 Hz 以省带宽）；填错会变调或直接没声音。",
+         "The rate the speaker actually sends. The reference model is 48000 Hz (the production "
+         "template asks its client for 16000 Hz to save bandwidth); a wrong value pitch-shifts or silences it.", _t("Hz", "Hz")),
         ("channels", "总通道数", "Total channels", "number", 1, 16,
-         "采集总通道数 = 麦通道 + 参考通道。LX06 是 8。填错 DSP 会读错帧。",
-         "Total capture channels = mic + reference. LX06 is 8; a wrong value misreads "
+         "采集总通道数 = 麦克风通道 + 参考通道。参考机型为 8 通道。填错会让 DSP 读错帧。",
+         "Total capture channels = mic + reference. The reference model has 8 channels; a wrong value misreads "
          "every frame.", None),
         ("mic_channels", "麦克风通道", "Mic channels", "number", 1, 16,
-         "前几路是麦。LX06 是 6 路；换 4 麦音箱时改这里。",
-         "The first N channels are mics. LX06 has 6; change it for a 4-mic speaker.",
+         "前几路是麦克风。参考机型有 6 路；换 4 麦音箱时改这里。",
+         "The first N channels are mics. The reference model has 6; change it for a 4-mic speaker.",
          None),
         ("ref_channels", "参考通道", "Reference channels", "number", 0, 16,
-         "最后几路是播放参考（AEC 用）。LX06 是 2；删掉参考会失去回声消除。",
-         "The last N channels are the playback reference for AEC. LX06 has 2; removing "
+         "最后几路是播放参考（供 AEC 使用）。参考机型有 2 路；删掉参考会失去回声消除。",
+         "The last N channels are the playback reference for AEC. The reference model has 2; removing "
          "it loses echo cancellation.", None),
         ("bits", "位深", "Bit depth", "select", None, None,
-         "设备 ALSA 的位深。LX06 是 32；填错电平/削顶都会异常。",
-         "The device's ALSA bit depth. LX06 is 32; a wrong value breaks levels/clipping.",
+         "设备 ALSA 的位深。参考机型为 32 bit；填错会导致电平异常或削顶。",
+         "The device's ALSA bit depth. The reference model is 32 bit; a wrong value breaks levels or clipping.",
          _t("bit", "bit")),
         ("mic_shift", "麦克风移位", "Mic shift", "number", 0, 31,
          "定点右移位数，决定麦克风电平。12 = 留 4 bit 余量（实测值）；调小会削顶，"
@@ -602,8 +602,8 @@ def _audio_fields() -> list[dict]:
          "Right-shift that sets the mic level. 12 leaves 4 bits of headroom (measured); "
          "smaller clips, larger gets quiet and loses wakes.", None),
         ("ref_shift", "参考移位", "Reference shift", "number", 0, 31,
-         "参考通道的右移位数。参考满量程是麦的 32 倍，LX06 用 16；改错 AEC 效果骤降。",
-         "Right-shift for the reference. Its full scale is 32x the mic, so LX06 uses 16; "
+         "参考通道的右移位数。参考满量程是麦克风的 32 倍，参考机型用 16；改错会让 AEC 效果骤降。",
+         "Right-shift for the reference. Its full scale is 32x the mic, so the reference model uses 16; "
          "a wrong value cripples AEC.", None),
     ]
     for key, zh, en, kind, lo, hi, hzh, hen, unit in capture:
@@ -643,11 +643,11 @@ def _audio_fields() -> list[dict]:
          "Audio kept from before the KWS hit and replayed into the gate; 500 ms measured. "
          "Without it the words after the wake word are lost.", _t("ms", "ms"), True),
         ("followup_delay_ms", "跟进窗口延迟", "Follow-up delay", "number", 0, 10000,
-         "回答结束后等多久重新开麦听下一句（毫秒）。1000 是 LX06 的实测回声尾；设备"
+         "回答结束后等多久重新开麦听下一句（毫秒）。1000 ms 是参考机型实测的回声尾；设备"
          "自己做 AEC 的插头（rui 不跑 AEC）残余更久，调到 2500 可减少把自己的回答"
          "听成一句。改完重启音频面。",
-         "How long after playback drains before the mic reopens (ms). 1000 is the "
-         "LX06's measured echo tail; a device-AEC plug (RUI AEC off) may need 2500. "
+         "How long after playback drains before the mic reopens (ms). 1000 ms is the "
+         "reference speaker's measured echo tail; a device-AEC plug (RUI AEC off) may need 2500. "
          "Restart the audio plane.", _t("ms", "ms"), True),
         ("followup_replay", "回放跟进尾巴", "Replay follow-up tail", "bool", None, None,
          "是否把「播放结束到重新开麦」之间的麦克风音频回灌给识别器。设备侧 AEC 的"
@@ -695,12 +695,12 @@ def _audio_fields() -> list[dict]:
                              options=None))
     playback = [
         ("rate", "播放采样率", "Playback rate", "number", 8000, 96000,
-         "推给音箱的采样率。LX06 客户端只接受 16000；填 48000 会被 adapter 拒绝、没声音。",
-         "Rate pushed to the speaker. The LX06 client takes 16000 only; 48000 is rejected "
+         "推给音箱的采样率。参考机型的客户端只接受 16000 Hz；填 48000 会被 adapter 拒绝、没有声音。",
+         "Rate pushed to the speaker. The reference client takes 16000 Hz only; 48000 is rejected "
          "by the adapter (no sound).", _t("Hz", "Hz")),
         ("channels", "播放通道", "Playback channels", "number", 1, 8,
-         "推给音箱的通道数。LX06 只收单声道；填 2 会被拒绝。",
-         "Channels pushed to the speaker. The LX06 takes mono only; 2 is rejected.", None),
+         "推给音箱的通道数。参考机型只接受单声道；填 2 会被拒绝。",
+         "Channels pushed to the speaker. The reference model takes mono only; 2 is rejected.", None),
         ("queue_ms", "队列缓冲", "Queue buffer", "number", 20, 1000,
          "服务端播放队列的缓冲毫秒数。调大可吸收网络抖动，但打断时多吐一点尾巴。",
          "Server-side playback queue in ms. Larger absorbs jitter but keeps a little more "
@@ -1491,8 +1491,8 @@ def _device_fields(cfg: Config) -> list[dict]:
                    effect="restart", minimum=1, maximum=16, nullable=True, advanced=True),
             _field(f"{prefix}.audio.capture.mic_channels", "devices", "number",
                    {"zh": f"{name} · 麦克风通道", "en": f"{name} · mic channels"},
-                   _t("前几个通道是麦克风（留空 = 继承全局；LX06 是 6）。改完重启音频面。",
-                      "Leading channels that are microphones (empty = inherit; LX06 is 6). "
+                   _t("前几个通道是麦克风（留空 = 继承全局；参考机型有 6 路）。改完重启音频面。",
+                      "Leading channels that are microphones (empty = inherit; the reference model has 6). "
                       "Restart the plane."),
                    effect="restart", minimum=1, maximum=16, nullable=True, advanced=True),
             _field(f"{prefix}.audio.capture.ref_channels", "devices", "number",
@@ -1505,23 +1505,23 @@ def _device_fields(cfg: Config) -> list[dict]:
                    effect="restart", minimum=0, maximum=16, nullable=True, advanced=True),
             _field(f"{prefix}.audio.capture.bits", "devices", "select",
                    {"zh": f"{name} · 采样位深", "en": f"{name} · capture bits"},
-                   _t("采集样本的位深（16 或 32；留空 = 继承全局；LX06 是 32）。改完重启音频面。",
-                      "Capture sample width (16 or 32; empty = inherit; LX06 is 32). Restart "
+                   _t("采集样本的位深（16 或 32；留空 = 继承全局；参考机型为 32 bit）。改完重启音频面。",
+                      "Capture sample width (16 or 32; empty = inherit; the reference model is 32 bit). Restart "
                       "the plane."),
                    effect="restart", options=[16, 32], nullable=True, advanced=True),
             _field(f"{prefix}.audio.capture.mic_shift", "devices", "number",
                    {"zh": f"{name} · 麦移位", "en": f"{name} · mic shift"},
-                   _t("把麦克风样本左移多少位到 32 bit（留空 = 继承全局；LX06 是 12）。"
+                   _t("把麦克风样本左移多少位到 32 bit（留空 = 继承全局；参考机型为 12）。"
                       "填错会削顶或声音很小。改完重启音频面。",
-                      "Left shift applied to mic samples into 32-bit (empty = inherit; LX06 "
-                      "is 12). A wrong value clips or goes quiet. Restart the plane."),
+                      "Left shift applied to mic samples into 32-bit (empty = inherit; the reference "
+                      "model is 12). A wrong value clips or goes quiet. Restart the plane."),
                    effect="restart", minimum=0, maximum=31, nullable=True, advanced=True),
             _field(f"{prefix}.audio.capture.ref_shift", "devices", "number",
                    {"zh": f"{name} · 参考移位", "en": f"{name} · reference shift"},
-                   _t("把参考样本左移多少位到 32 bit（留空 = 继承全局；LX06 是 16）。"
+                   _t("把参考样本左移多少位到 32 bit（留空 = 继承全局；参考机型为 16）。"
                       "填错会让 AEC 的参考比例不对。改完重启音频面。",
                       "Left shift applied to reference samples into 32-bit (empty = inherit; "
-                      "LX06 is 16). A wrong value mis-scales the AEC reference. Restart."),
+                      "the reference model is 16). A wrong value mis-scales the AEC reference. Restart."),
                    effect="restart", minimum=0, maximum=31, nullable=True, advanced=True),
         ])
         for state in LED_STATES:

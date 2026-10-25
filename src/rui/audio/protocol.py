@@ -293,8 +293,8 @@ class WakeIdle(BaseModel):
 class VendorSignalMsg(BaseModel):
     """plane -> control: the device's own assistant woke, or finished its dialog.
 
-    Not audio and not ours: the control plane decides whether to stay quiet. 小爱同学
-    waking the vendor's assistant used to make both assistants answer the same sentence.
+    Not audio and not ours: the control plane decides whether to stay quiet. The
+    vendor's wake phrase waking its assistant used to make both answer the same sentence.
     """
 
     type: Literal["vendor_signal"] = "vendor_signal"
