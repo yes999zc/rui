@@ -24,6 +24,7 @@ from pydantic import ValidationError
 
 from rui.__main__ import (
     ASR_URL_ENV,
+    DOWNLOAD_ATTEMPTS,
     KWS_REPO,
     KWS_URL_ENV,
     KWS_URLS,
@@ -34,6 +35,7 @@ from rui.__main__ import (
     _download_first,
     _download_to,
     _fetch_kws_model,
+    _retry_delay,
     _url_list,
     cmd_fetch_models,
     main,
@@ -407,6 +409,109 @@ def test_read_timeout_on_the_first_mirror_falls_through_to_the_next(
     assert calls == [first, second]
     assert target.read_bytes() == b"data"
     assert not list(tmp_path.glob("*.part"))
+
+
+# ----------------------------------------- transient mirror answers (dot2 #14)
+
+def _http_status_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://mirror.invalid/model.int8.onnx")
+    return httpx.HTTPStatusError(
+        f"HTTP {status}", request=request,
+        response=httpx.Response(status, request=request))
+
+
+class _OkResponse:
+    headers = {"content-length": "4"}
+
+    def raise_for_status(self) -> None:
+        pass
+
+    def iter_bytes(self, chunk_size: int):
+        yield b"data"
+
+
+class _OkStream:
+    def __enter__(self) -> _OkResponse:
+        return _OkResponse()
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
+def _client_with_outcomes(
+    *outcomes: object,
+) -> tuple[type, list[str]]:
+    """A fake client factory whose stream() raises the next outcome, then succeeds."""
+    calls: list[str] = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+        def stream(self, method: str, url: str, **kwargs: object):
+            calls.append(url)
+            index = len(calls) - 1
+            if index < len(outcomes):
+                outcome = outcomes[index]
+                if isinstance(outcome, BaseException):
+                    raise outcome
+            return _OkStream()
+
+    return Client, calls
+
+
+def test_download_retries_429_with_bounded_backoff(monkeypatch, tmp_path) -> None:
+    """A loaded hf-mirror is transient: retry the same URL, do not call it a dead mirror."""
+    client_cls, calls = _client_with_outcomes(
+        _http_status_error(429), _http_status_error(429))
+    sleeps: list[float] = []
+    monkeypatch.setattr("rui.__main__._download_client", lambda timeout: client_cls())
+    monkeypatch.setattr("rui.__main__._retry_sleep", sleeps.append)
+    target = tmp_path / "model.int8.onnx"
+
+    assert _download_to("https://mirror.invalid/model.int8.onnx", target) == 4
+    assert len(calls) == 3
+    assert sleeps == [_retry_delay(0), _retry_delay(1)]
+    assert target.read_bytes() == b"data"
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_download_retries_5xx_then_fails_after_the_attempt_budget(
+    monkeypatch, tmp_path
+) -> None:
+    client_cls, calls = _client_with_outcomes(
+        *(_http_status_error(503) for _ in range(DOWNLOAD_ATTEMPTS)))
+    sleeps: list[float] = []
+    monkeypatch.setattr("rui.__main__._download_client", lambda timeout: client_cls())
+    monkeypatch.setattr("rui.__main__._retry_sleep", sleeps.append)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _download_to("https://mirror.invalid/model.int8.onnx",
+                     tmp_path / "model.int8.onnx")
+    assert len(calls) == DOWNLOAD_ATTEMPTS
+    assert sleeps == [_retry_delay(i) for i in range(DOWNLOAD_ATTEMPTS - 1)]
+
+
+def test_download_does_not_retry_a_permanent_404(monkeypatch, tmp_path) -> None:
+    """A missing file will not appear on a retry; fail fast so the next mirror runs."""
+    client_cls, calls = _client_with_outcomes(_http_status_error(404))
+    sleeps: list[float] = []
+    monkeypatch.setattr("rui.__main__._download_client", lambda timeout: client_cls())
+    monkeypatch.setattr("rui.__main__._retry_sleep", sleeps.append)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _download_to("https://mirror.invalid/model.int8.onnx",
+                     tmp_path / "model.int8.onnx")
+    assert calls == ["https://mirror.invalid/model.int8.onnx"]
+    assert sleeps == []
+
+
+def test_retry_backoff_is_bounded() -> None:
+    assert [_retry_delay(i) for i in range(2)] == [1.0, 2.0]
+    assert _retry_delay(10) == _retry_delay(3) == 8.0
 
 
 def test_playback_defaults_are_playable_by_the_device_adapter() -> None:

@@ -203,6 +203,13 @@ def _new_web_token() -> str:
 # the gap *between* 1 MiB blocks, and a slow-but-live large download must still finish.
 DOWNLOAD_CONNECT_TIMEOUT_S = 10.0
 DOWNLOAD_READ_TIMEOUT_S = 60.0
+# dot2 #14: hf-mirror sometimes answers 429/5xx under load. One attempt per URL meant a
+# transient answer looked like a dead mirror; the install then printed a warning and
+# exited 0 with no ASR. Retry the *same* URL with bounded exponential backoff before
+# falling through to the next mirror (3 retries: 1 s, 2 s, 4 s).
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_RETRY_BASE_S = 1.0
+DOWNLOAD_RETRY_MAX_S = 8.0
 
 
 # The NAS has no global IPv6 route. hf-mirror/GitHub resolve to AAAA records too, and
@@ -218,8 +225,37 @@ def _download_client(timeout: httpx.Timeout) -> httpx.Client:
     )
 
 
+def _retry_delay(attempt: int) -> float:
+    """Bounded exponential backoff: 1 s, 2 s, 4 s, then the 8 s cap."""
+    return min(DOWNLOAD_RETRY_BASE_S * (2 ** attempt), DOWNLOAD_RETRY_MAX_S)
+
+
+def _retryable_http_status(exc: BaseException) -> int | None:
+    """The status worth retrying (429 or 5xx), or None for a permanent failure.
+
+    A 404/401 means the mirror does not have this file, so retrying only delays the
+    next mirror; a 429 or a server error is the load/latency case dot2 #14 hit.
+    """
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code == 429 or 500 <= code <= 599:
+            return code
+    return None
+
+
+def _retry_sleep(seconds: float) -> None:
+    """Separate call so tests can assert the backoff without waiting for it."""
+    time.sleep(seconds)
+
+
 def _download_to(url: str, target: Path, *, force: bool = False) -> int:
-    """Stream one file to disk atomically; returns its size in bytes."""
+    """Stream one file to disk atomically; returns its size in bytes.
+
+    A transient 429/5xx retries the same URL with bounded backoff before the caller
+    moves on to the next mirror.
+    """
     import httpx
 
     if target.exists() and not force:
@@ -229,16 +265,29 @@ def _download_to(url: str, target: Path, *, force: bool = False) -> int:
     part = target.with_suffix(target.suffix + ".part")
     print(f"fetching {url}")
     timeout = httpx.Timeout(DOWNLOAD_READ_TIMEOUT_S, connect=DOWNLOAD_CONNECT_TIMEOUT_S)
-    with _download_client(timeout) as client, client.stream("GET", url) as resp:
-        resp.raise_for_status()
-        total = int(resp.headers.get("content-length") or 0)
-        done = 0
-        with part.open("wb") as fh:
-            for block in resp.iter_bytes(1 << 20):
-                fh.write(block)
-                done += len(block)
-                if total and done % (25 << 20) < (1 << 20):
-                    print(f"  {done / 1e6:6.1f} / {total / 1e6:.1f} MB", flush=True)
+    total = 0
+    done = 0
+    for attempt in range(DOWNLOAD_ATTEMPTS):
+        try:
+            with _download_client(timeout) as client, client.stream("GET", url) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("content-length") or 0)
+                done = 0
+                with part.open("wb") as fh:
+                    for block in resp.iter_bytes(1 << 20):
+                        fh.write(block)
+                        done += len(block)
+                        if total and done % (25 << 20) < (1 << 20):
+                            print(f"  {done / 1e6:6.1f} / {total / 1e6:.1f} MB", flush=True)
+            break
+        except Exception as exc:  # noqa: BLE001 - classified just below
+            code = _retryable_http_status(exc)
+            if code is None or attempt == DOWNLOAD_ATTEMPTS - 1:
+                raise
+            delay = _retry_delay(attempt)
+            print(f"  HTTP {code} from {url}; retrying in {delay:.0f}s "
+                  f"(attempt {attempt + 2}/{DOWNLOAD_ATTEMPTS})", flush=True)
+            _retry_sleep(delay)
     if total and done != total:
         part.unlink(missing_ok=True)
         raise RuntimeError(f"incomplete download: {done} of {total} bytes")
