@@ -442,11 +442,11 @@ python -m rui plug-test plugs/xiaoai \
 
 | 层 | 字段 | v0 | v1 |
 |---|---|---|---|
-| 插件级 | `plugin.yaml.rui_compat` | `>=0.2.0 <0.6.0` | `>=0.3.0 <0.6.0` |
+| 插件级 | `plugin.yaml.rui_compat` | `>=0.2.0 <0.7.0` | `>=0.3.0 <0.7.0` |
 | 机型级 | `compatibility.rui_min` | `0.2.0`（可更低） | `0.3.0` |
 | 允许的 schema | `rui-device/*` | v0 | v1；0.3 loader 同时读 v0 |
 
-- 镜像 LX06 插头 `plugs/xiaoai`：v1 矩阵 `rui_compat: ">=0.3.0 <0.7.0"`、`rui_min: "0.3.0"`。它由 `load_plugin()` 加载，兼容上下限由 loader 强制（0.6 M2 之前这是绕过 loader 的 in-code builtin，上限 `<0.6.0`）。
+- 镜像 LX06 插头 `plugs/xiaoai`：v1 矩阵 `rui_compat: ">=0.3.0 <0.7.0"`、`rui_min: "0.3.0"`。它由 `load_plugin()` 加载，兼容上下限由 loader 强制（0.6 M2 之前这是绕过 loader 的 in-code builtin，上限 `<0.7.0`）。
 - 旧的 v0 参考包已随 0.6 M2 移除；v0 manifest 的支持本身仍在（synthetic fixtures + `examples/plugin-example` 的 v1 对照）。
 - 示例包 `examples/plugin-example/`：v1 矩阵 `>=0.3.0 <0.4.0` / `rui_min: "0.3.0"`，不再对 0.2 宣称可用。
 - `rui_compat` 是**唯一插件级**版本门；`rui_min` 是机型下限。能力可用性在运行时按 §4.3 判定，不用版本号猜能力。

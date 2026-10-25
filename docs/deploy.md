@@ -755,8 +755,8 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 - **先备份**：`config/`、`data/` 与 `.env`（含 `RUI_IMAGE`、`RUI_DEVICE_TOKEN` 和下游自己的
   `DOT2_*` 等变量）。重跑 `install.sh` **不会**改现有 `RUI_IMAGE`；升级是显式改 `.env` 那一行。
 - **`rui_compat` 必须对齐**：loader 用 range 匹配 **rui 包版本**（`rui.__version__`），语义没变。
-  0.5.0 会让 `>=0.3.0 <0.5.0` 直接失效；内置 LX06 / `examples/plugin-example` 已抬到 `<0.6.0`，
-  下游插头（含 dot2）应在 0.5.0 发布前把 `plugin.yaml` 上界改成 `<0.6.0`，并在新版本上先跑
+  0.5.0 会让 `>=0.3.0 <0.5.0` 直接失效；内置 LX06 / `examples/plugin-example` 已抬到 `<0.7.0`，
+  下游插头（含 dot2）应在 0.5.0 发布前把 `plugin.yaml` 上界改成 `<0.7.0`，并在新版本上先跑
   `rui plug-test`。
 - **healthcheck 失败要区分根因**：`/health` 的 `device_errors>0` → 「设备不可驱动（adapter 缺失
   或 manifest 不兼容），restart 不会修复」；`multi_device.error` → 平面启动失败并带真因；
@@ -775,8 +775,8 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 
 | rui 版本 | 可接受的插头 `rui_compat` | 说明 |
 |---|---|---|
-| 0.3.x / 0.4.x | 覆盖该版本的 range（当时为 `<0.5.0`） | 0.4.2 仍是单平面；内置插头已同步 `<0.6.0`，两个版本都能加载 |
-| 0.5.x | 上界必须 > 0.5.0（建议 `>=0.3.0 <0.6.0`） | 多平面/仲裁随 0.5.0 落地，但全部在 rui 内部；adapter/manifest 契约、`drain_wakes()` 时序、`DeviceWake` 六字段、enrich 责任均不变 |
+| 0.3.x / 0.4.x | 覆盖该版本的 range（当时为 `<0.5.0`） | 0.4.2 仍是单平面；内置插头已同步 `<0.7.0`，两个版本都能加载 |
+| 0.5.x | 上界必须 > 0.5.0（建议 `>=0.3.0 <0.7.0`） | 多平面/仲裁随 0.5.0 落地，但全部在 rui 内部；adapter/manifest 契约、`drain_wakes()` 时序、`DeviceWake` 六字段、enrich 责任均不变 |
 | 0.6+ | 上界再按当次 release note 抬 | 每次 Major/Minor 发布会在 CHANGELOG 写清需要的上界 |
 ### 7.2 渠道（Telegram）出网与代理
 

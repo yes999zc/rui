@@ -600,7 +600,7 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 - 唯一需要 adapter 侧配合的：若设备 AEC 在设备侧（`ref_channels=0`），可在 config 的
   `devices[].audio.voice.post_playback_mute_ms` 配 ~2500，届时可撤掉 adapter 里的播放后静音门控；
   该字段生效前**继续保留 adapter 门控**。
-- `rui_compat` 的**匹配语义不变**（range 匹配包版本），但 0.5.0 会让 `<0.5.0` 失效：下游插头需在 0.5.0 发布前把上界抬到 `<0.6.0`（内置 LX06 与 example 同步抬）。
+- `rui_compat` 的**匹配语义不变**（range 匹配包版本），但 0.5.0 会让 `<0.5.0` 失效：下游插头需在 0.5.0 发布前把上界抬到 `<0.7.0`（内置 LX06 与 example 同步抬）。
 
 ### 12.8 测试与验收（Phase 2 判据，§7.2 的子集）
 

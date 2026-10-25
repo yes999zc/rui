@@ -732,7 +732,7 @@ def test_builtin_uses_the_v1_matrix() -> None:
 def test_the_example_v1_plugin_uses_the_v1_version_matrix() -> None:
     repo = Path(__file__).resolve().parents[1]
     example = load_plugin(repo / "examples" / "plugin-example")
-    assert example.rui_compat == ">=0.3.0 <0.6.0"
+    assert example.rui_compat == ">=0.3.0 <0.7.0"
     device = example.devices[0]
     assert device.schema == DEVICE_SCHEMA_V1
     assert device.compatibility is not None

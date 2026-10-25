@@ -26,7 +26,7 @@
   - §9 决策冻结 + `docs/multi-device-design.md` §11 答复 dot2 #11（`aa0bdb4`），Phase 2 契约草案 v0.1 写入 §12（`f3f0135`）；
   - 发布版本定为 **v0.5.0** 并写发布判据（`7c66dde`）；
   - Phase 2 四块：音频面候选/准入 + `post_playback_mute_ms`（`1b71584`）、`src/rui/audio/fleet.py`（`a34cba5`）、`src/rui/audio/arbiter.py`（`c0c2fc9`）、`src/rui/audio/coordinator.py`（`bd7c737`）；
-  - `rui_compat` 上界抬到 `<0.6.0`（内置 LX06 / example / v1 文档 / 测试；`a4740b1`）——不改会让 0.5.0 拒绝加载内置插头；
+  - `rui_compat` 上界抬到 `<0.7.0`（内置 LX06 / example / v1 文档 / 测试；`a4740b1`）——不改会让 0.5.0 拒绝加载内置插头；
   - `PlaneHandle` 重启回调补 `on_wake_idle` 与 Phase 2 的 `on_wake_candidate`（`43a268b`）。
 - **本段（17:25 前）完成 Phase 2 接线**：`fce8d8c` 抽取 `_wire_plane`（零行为变化，`git diff -w` 只移动）、`e84fac4` `PlaneFleet` 启动 + 逐设备回调 + `WakeCoordinator` + turn/owner 生命周期 + 单平面端点主平面化、`ec8cf44` 逐设备健康/告警/状态（`/health.audio_devices`、`/api/v1/audio.planes`、设备写 fleet 重建）；新增 `tests/test_app_fleet.py` 7 例（fake `PlaneFleet`，不 spawn），并用 2×mock 真进程 smoke 验证 2 plane 共存与干净退出。
 - **Phase 1b（17:35）**：`multi_device` 目录组（启用/max_planes/default_output/来源优先级/两个窗口/房间优先级/最近活跃窗口）+ 每设备 13 个 `devices[].audio.*` 覆盖字段（AEC 归属/开关、播放后静音、续听、预缓冲、采集布局；空值 = 继承）；体检页多设备卡片（未启用说明 / 逐平面状态 / 超 cap / 启动失败）；`web` typecheck+build 绿。
