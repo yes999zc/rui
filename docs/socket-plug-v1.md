@@ -89,6 +89,11 @@ transport: inbound            # inbound = 设备拨回；outbound = RUI 连设�
 protocol: {kind: ws, version: "1"}   # 具体字段由 adapter 解释
 capabilities: [mic_array, playback, volume, device_wake, barge_via_device]
 wake: {source: device, barge_via_device: true}
+# 0.6：本机型的硬件音频默认（可选，合并的最底层；见 §3.2.1）
+audio_defaults:
+  capture: {rate: 48000, channels: 1, mic_channels: 1, ref_channels: 0}
+  playback: {rate: 48000, channels: 1}
+  ack_echo_ignore_ms: 2500
 device_side:
   artifact: firmware          # firmware | client | app | none
   name: "Example device image"
@@ -125,6 +130,31 @@ acceptance: {verified: false, last_verified: "", evidence: "待真机验收；�
 | `params` | list / 是 | 表单 schema；类型 `string/int/bool/list/secret/choice`。`list.max` 必须覆盖 `default` 的长度；`secret` 无默认、只写不读；向导只接受 manifest 已声明的 key/类型/options（declared-only） |
 | `compatibility` | mapping / 否 | `rui_min`/`tested_with` 为 semver；`notes` 人读 |
 | `acceptance` | mapping / 否 | `verified` + `last_verified`（`YYYY-MM-DD`）+ `evidence`；`verified: true` 必须带 `last_verified`；向导不把它当完成证据 |
+| `audio_defaults` | mapping / 否 | **仅 v1（0.6）**；本机型的硬件音频默认：`{capture?, playback?, ack_echo_ignore_ms?}`；未知键报错；v0 声明它一律报错。省略 = 中性核心默认（16000/1ch/0ref、playback 16000、ack earcon），所以旧 plug 不写也照常加载 |
+
+### 3.2.1 `audio_defaults` 与三层合并（0.6）
+
+```text
+设备默认（manifest audio_defaults，本文档）   ← 最底层
+  < 全局 config（config.yaml 的 audio / ack，显式写下的值才覆盖）
+    < devices[].audio（单台设备的覆盖，最高层）
+```
+
+- 每一层都可缺省，缺一层不报错；三层合成后再做一次 schema 校验（`mic_channels +
+  ref_channels == channels`），失败指向具体设备而不是在音频面里崩帧长。
+- 核心默认是**中性**的：capture 16000 Hz / 1 ch / 0 ref、playback 16000 Hz / 1 ch、ack `earcon`。
+  LX06 的 8 ch / 6 mic / 2 ref / 48 kHz 由它自己的 manifest 声明
+  （`src/rui/plugins/builtin.py`），核心不再硬编码任何机型数字。
+- 「全局 config」按**文件里是否写了该字段**判定：没写的字段继续落到设备默认；显式写下的值
+  （例如生产模板把 capture.rate 写成 16000 以省 wifi 带宽）永远赢。`save_config` 因此
+  不会把核心默认值（audio 各字段与 `ack.echo_ignore_ms`）写回文件，避免一次控制台保存
+  就把设备默认「冻结」成显式覆盖。
+- `ack_echo_ignore_ms` 属于唤醒应答（`ack.echo_ignore_ms`）而不是 DSP 参数，所以放在
+  `audio_defaults` 顶层，由 `effective_ack_echo_ignore_ms()` 单独合成；它不进
+  `effective_audio()` 的 `audio` 块，避免看起来生效实际被忽略的假旋钮。
+- 内置 LX06 manifest 自 0.6 起是 `rui-device/v1`（唤醒仍走 RUI KWS：省略 `wake` 即
+  `source: rui`）；`plugins/rui-plugin-xiaoai/` 的 v0 参考包继续作为「没有
+  audio_defaults 的旧 plug」兼容样本。
 
 ### 3.3 `wake` 块与校验
 
@@ -394,9 +424,10 @@ python -m rui plug-test plugins/rui-plugin-xiaoai \
 | Adapter | `drain_signals()` | 新增 `drain_wakes()` 与 `DeviceWake` |
 | 策略 | RUI KWS 唯一入口 | device_wake 可入口，RUI 拥有最终 turn/barge 决策 |
 | 内部 IPC | `VendorSignalMsg` | 新增 `DeviceWakeMsg`；vendor 语义不变 |
+| 音频默认 | 无（核心写死 LX06） | 新增可选 `audio_defaults`（0.6）：`capture`/`playback`/`ack_echo_ignore_ms` |
 | 验收 | 手工 + 既有 pytest | 增加 manifest validator、wake injection、playback gap 工具 |
 
-**兼容规则**：0.3 loader 接受 v0，按 `wake.source=rui`、`barge_via_device=false` 处理；v0 不得声明 `wake`/`device_wake`/`barge_via_device`/`model`（否则报错，不静默升级）。LX06 内置 manifest 继续用 v0，`src/rui/device/xiaoai/` 不实现 `drain_wakes()`，KWS 路径不变。v0 + 新字段、v1 + 未知字段、`rui_compat` 不匹配都报文件/字段。`devices[].params` 仍是值字典，`params.plug_id` 继续作为 adapter→plug 兜底（`src/rui/plugins/resolve.py`）。
+**兼容规则**：loader 接受 v0，按 `wake.source=rui`、`barge_via_device=false` 处理；v0 不得声明 `wake`/`device_wake`/`barge_via_device`/`model`/`audio_defaults`（否则报错，不静默升级）。0.6 起 LX06 内置 manifest 升为 `rui-device/v1` 以声明 `audio_defaults`（唤醒仍走 RUI KWS，省略 `wake` 即 `source: rui`）；`plugins/rui-plugin-xiaoai/` 的 v0 参考包保留为「无 audio_defaults 的旧 plug」兼容样本，`src/rui/device/xiaoai/` 不实现 `drain_wakes()`，KWS 路径不变。v0 + 新字段、v1 + 未知字段、`rui_compat` 不匹配都报文件/字段。`devices[].params` 仍是值字典，`params.plug_id` 继续作为 adapter→plug 兜底（`src/rui/plugins/resolve.py`）。
 
 **sidecar（0.3.x 明确未实现）**：manifest 仍可写 `runtime.mode: sidecar` 并通过 schema 校验，但 0.3.x **没有 sidecar runner/RPC**。向导返回 `sidecar_not_supported`；`build_adapters()` 对解析到 sidecar 的设备返回明确错误 `runtime.mode 'sidecar' is not implemented in 0.3.x; run the plug in-process with trust: trusted (or wait for the 0.4 sidecar runner)`，不会静默降级成 in-process，也不会把它当成“未知 adapter”。第三方插头在 0.3.x 因此不可运行，这是有意的最小安全面（§Q8）。sidecar 内部 RPC 由插头定义，v1 不标准化。
 
@@ -408,8 +439,8 @@ python -m rui plug-test plugins/rui-plugin-xiaoai \
 | 机型级 | `compatibility.rui_min` | `0.2.0`（可更低） | `0.3.0` |
 | 允许的 schema | `rui-device/*` | v0 | v1；0.3 loader 同时读 v0 |
 
-- builtin `xiaoai-lx06`：`rui_compat: ">=0.2.0 <0.6.0"`，`rui_min: "0.2.0"`；因为 builtin 绕过 `load_plugin()` 的兼容检查，`plugins/builtin.py` 在 import 时用 `parse_range(...).matches(rui.__version__)` 自检（不匹配直接 RuntimeError，视为 release bug）。
-- 参考包 `plugins/rui-plugin-xiaoai/`：同一个 v0 矩阵。
+- builtin `xiaoai-lx06`：0.6 起为 v1 矩阵 `rui_compat: ">=0.3.0 <0.6.0"`、`rui_min: "0.3.0"`（声明 `audio_defaults` 需要 v1；0.6 之前它是 `>=0.2.0 <0.6.0` / `0.2.0`）。因为 builtin 绕过 `load_plugin()` 的兼容检查，`plugins/builtin.py` 在 import 时用 `parse_range(...).matches(rui.__version__)` 自检（不匹配直接 RuntimeError，视为 release bug）。
+- 参考包 `plugins/rui-plugin-xiaoai/`：仍用 v0 矩阵（`>=0.2.0 <0.6.0` / `0.2.0`），作为没有 `audio_defaults` 的旧 plug 样本。
 - 示例包 `examples/plugin-example/`：v1 矩阵 `>=0.3.0 <0.4.0` / `rui_min: "0.3.0"`，不再对 0.2 宣称可用。
 - `rui_compat` 是**唯一插件级**版本门；`rui_min` 是机型下限。能力可用性在运行时按 §4.3 判定，不用版本号猜能力。
 

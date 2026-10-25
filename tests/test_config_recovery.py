@@ -49,7 +49,9 @@ def test_restore_last_good_replaces_the_broken_file(tmp_path: Path) -> None:
     loaded, info = load_with_recovery(path)
     assert info is not None
     restore(path, loaded, "last-good")
-    assert "audio" in path.read_text()
+    # The restored snapshot is a real config document (0.6 saves no longer materialize
+    # the neutral `audio` block, so assert a block that is always written).
+    assert "system" in path.read_text()
     assert read_marker(loaded) is None
 
 
@@ -72,7 +74,7 @@ def test_recovery_api_and_banner_data(tmp_path: Path) -> None:
                          json={"mode": "last-good"})
         assert restore.status_code == 200
         assert restore.json()["restart_required"] is True
-    assert "audio" in path.read_text()
+    assert "system" in path.read_text()
 
 
 def test_successful_startup_snapshots_last_good(tmp_path: Path) -> None:

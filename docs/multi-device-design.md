@@ -266,6 +266,29 @@ multi_device:
     on_no_speech: end           # end | retry_next（默认 end）
 ~~~
 
+### 5.2.1 三层音频合并（0.6，M1）
+
+0.6 起每台设备的生效音频由三层合成（低 → 高）：
+
+~~~text
+设备默认（插头 manifest 的 audio_defaults） < 全局 config（audio / ack） < devices[].audio
+~~~
+
+- 核心默认改为中性：capture 16000 Hz / 1 ch / 0 ref、playback 16000 Hz / 1 ch、ack earcon；
+  LX06 的 8 ch / 6 mic / 2 ref / 48 kHz 由 `src/rui/plugins/builtin.py` 的 manifest 声明，
+  不再硬编码在 `CaptureConfig` 里。
+- 缺任一层都不报错：没有 `audio_defaults` 的旧 plug 继续拿中性默认；没有
+  `devices[].audio` 的设备继续继承全局块。
+- 「全局 config」只认**配置文件里显式写下的字段**（`model_fields_set`）：生产模板把
+  `capture.rate` 写成 16000 是有意的带宽选择，必须继续覆盖 manifest 的 48000。
+  `save_config()` 因此只回写文件原本写过的 audio 字段与 `ack.echo_ignore_ms`
+  （以及相对核心默认改过的值），避免一次控制台保存把中性默认固化成显式覆盖、把设备的
+  manifest 默认挤掉。
+- `ack_echo_ignore_ms` 属于 `ack` 语义，单独由 `effective_ack_echo_ignore_ms()` 合成
+  （设备默认 < 全局 `ack.echo_ignore_ms` < `devices[].audio.voice.ack_echo_ignore_ms`）。
+- `rui doctor` 的 `capture_layout` 按设备打印合成后的布局，`audio_rates` 用合成后的
+  `playback.rate` 与插头声明的 wire rate 对比——两者都不再读全局块。
+
 ### 5.3 字段与校验
 
 | 字段 | 类型 | 默认 | 规则 |

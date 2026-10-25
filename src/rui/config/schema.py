@@ -279,23 +279,27 @@ class DeviceConfig(BaseModel):
 
 
 class CaptureConfig(BaseModel):
-    """What arrives from the device, measured rather than assumed.
+    """What arrives from the device; neutral by default (0.6, docs/roadmap-0.6.md M1).
 
-    LX06 (1.94.13): S32_LE, 8 interleaved channels, 48000 Hz; ch0..ch5 are the mic
-    array, ch6 and ch7 carry the same playback reference. Mic full scale is 2**23,
-    reference full scale is 2**28 - hence two different shifts, not one.
+    The core has no device in it: the default layout is the neutral one a generic
+    int16 mono microphone delivers (16 kHz, 1 channel, no reference, no shift). A
+    speaker that differs declares its own layout in its plug manifest's
+    "audio_defaults" block, which is the bottom layer of the audio merge
+    (device default < global config < devices[].audio). The LX06, for instance,
+    declares S32_LE / 8 interleaved channels / 48 kHz (ch0..ch5 mic array, ch6/ch7
+    playback reference; mic full scale 2**23, reference 2**28).
     """
 
-    rate: int = Field(default=48000, ge=8000, le=96000)
-    channels: int = Field(default=8, ge=1, le=16)
-    mic_channels: int = Field(default=6, ge=1, le=16)
-    ref_channels: int = Field(default=2, ge=0, le=16)
-    bits: Literal[16, 32] = 32
-    # Production values from the two-day-old deployment: 4 bits of headroom on the
-    # mics and 6 dB on the reference. Level-matching (8/13) clips loud speech - a
-    # fresh install that never edits this file must not start there.
-    mic_shift: int = Field(default=12, ge=0, le=31)
-    ref_shift: int = Field(default=16, ge=0, le=31)
+    rate: int = Field(default=16000, ge=8000, le=96000)
+    channels: int = Field(default=1, ge=1, le=16)
+    mic_channels: int = Field(default=1, ge=1, le=16)
+    ref_channels: int = Field(default=0, ge=0, le=16)
+    bits: Literal[16, 32] = 16
+    # A 16-bit neutral wire needs no scaling; a 32-bit device (the LX06) declares the
+    # headroom it measured. Level-matching clips loud speech, so a fresh install that
+    # never edits this file must not start there.
+    mic_shift: int = Field(default=0, ge=0, le=31)
+    ref_shift: int = Field(default=0, ge=0, le=31)
 
     @model_validator(mode="after")
     def _layout_adds_up(self) -> CaptureConfig:
@@ -464,12 +468,101 @@ class EffectiveAudio(BaseModel):
     aec: AecConfig
 
 
-def effective_audio(audio: AudioConfig, override: DeviceAudioOverride | None) -> EffectiveAudio:
-    """Merge `devices[].audio` over the global block; absent fields inherit.
+class CaptureDefaults(BaseModel):
+    """A plug manifest's declared capture layout (rui-device/v1 `audio_defaults`).
 
-    The merged dict is validated again on purpose: an override that changes
-    `capture.channels` without the matching `mic_channels`/`ref_channels` must fail
-    here with a schema error, not later in the audio plane as a frame-length crash.
+    Every field is optional: a plug states only what its hardware changes, and the
+    neutral core layout fills the rest. The ranges match `CaptureConfig` so a merged
+    block can never be out of range. A plug that states one of
+    channels/mic_channels/ref_channels must state the layout consistently, otherwise
+    the merged block would fail its own `mic + ref == channels` rule later.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    rate: int | None = Field(default=None, ge=8000, le=96000)
+    channels: int | None = Field(default=None, ge=1, le=16)
+    mic_channels: int | None = Field(default=None, ge=1, le=16)
+    ref_channels: int | None = Field(default=None, ge=0, le=16)
+    bits: Literal[16, 32] | None = None
+    mic_shift: int | None = Field(default=None, ge=0, le=31)
+    ref_shift: int | None = Field(default=None, ge=0, le=31)
+
+    @model_validator(mode="after")
+    def _layout_adds_up(self) -> CaptureDefaults:
+        if (
+            self.channels is None
+            and self.mic_channels is None
+            and self.ref_channels is None
+        ):
+            return self
+        neutral = CaptureConfig()
+        channels = neutral.channels if self.channels is None else self.channels
+        mic = neutral.mic_channels if self.mic_channels is None else self.mic_channels
+        ref = neutral.ref_channels if self.ref_channels is None else self.ref_channels
+        if mic + ref != channels:
+            raise ValueError(
+                f"audio_defaults.capture: mic_channels({mic}) + ref_channels({ref}) "
+                f"must equal channels({channels}); declare the whole layout "
+                "(channels, mic_channels, ref_channels) for a non-neutral device"
+            )
+        return self
+
+
+class PlaybackDefaults(BaseModel):
+    """A plug manifest's declared playback wire format (rui-device/v1)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rate: int | None = Field(default=None, ge=8000, le=96000)
+    channels: int | None = Field(default=None, ge=1, le=8)
+
+
+class AudioDefaults(BaseModel):
+    """The optional `audio_defaults` block of a rui-device/v1 manifest.
+
+    This is the *bottom* layer of the three-layer audio merge:
+    device default < global config < devices[].audio override. A plug that declares
+    nothing (every pre-0.6 plug) leaves the neutral core defaults in place, so the
+    field is unknown-safe and loading an old plug never errors.
+
+    `ack_echo_ignore_ms` lives here rather than under `capture` because it is the
+    conversational cue window (`ack.echo_ignore_ms`), not a DSP property; it is
+    resolved by `effective_ack_echo_ignore_ms()`, not by `effective_audio()`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    capture: CaptureDefaults | None = None
+    playback: PlaybackDefaults | None = None
+    ack_echo_ignore_ms: int | None = Field(default=None, ge=0, le=5000)
+
+
+def _explicit(block: BaseModel, key: str, core: BaseModel) -> bool:
+    """Whether the config state for `key` is a real choice, not a core default.
+
+    A field counts as configured when the operator/config file set it
+    (`model_fields_set`) or when its value differs from the core default `core` (a
+    value mutated after load, which older write paths do). The distinction is what
+    lets a device manifest's `audio_defaults` apply to a config that never chose a
+    layout while an explicit value - including the LX06's 16 kHz capture override -
+    wins.
+    """
+    return key in block.model_fields_set or getattr(block, key) != getattr(core, key)
+
+
+def effective_audio(
+    audio: AudioConfig,
+    override: DeviceAudioOverride | None,
+    defaults: AudioDefaults | None = None,
+) -> EffectiveAudio:
+    """Merge the three audio layers for one device: manifest < global < override.
+
+    `defaults` is the device plug's `audio_defaults` (None for an old plug or an
+    unresolved manifest: the neutral core defaults then apply unchanged). The merged
+    dict is validated again on purpose: an override that changes `capture.channels`
+    without the matching `mic_channels`/`ref_channels` must fail here with a schema
+    error, not later in the audio plane as a frame-length crash.
     """
     resolved: dict[str, Any] = {}
     blocks = {
@@ -480,6 +573,12 @@ def effective_audio(audio: AudioConfig, override: DeviceAudioOverride | None) ->
     }
     for name, block in blocks.items():
         merged = block.model_dump()
+        default_block = getattr(defaults, name, None) if defaults is not None else None
+        if default_block is not None:
+            core = type(block)()
+            for key, value in default_block.model_dump(exclude_none=True).items():
+                if not _explicit(block, key, core):
+                    merged[key] = value
         part = getattr(override, name) if override is not None else None
         if part is not None:
             values = part.model_dump(exclude_none=True)
@@ -493,20 +592,69 @@ def effective_audio(audio: AudioConfig, override: DeviceAudioOverride | None) ->
     return EffectiveAudio(**resolved)
 
 
-def effective_ack_echo_ignore_ms(ack: AckConfig, device: DeviceConfig | None) -> int:
-    """The spoken-cue echo window for one device: its override, else the global value.
+def effective_ack_echo_ignore_ms(
+    ack: AckConfig,
+    device: DeviceConfig | None,
+    defaults: AudioDefaults | None = None,
+) -> int:
+    """The spoken-cue echo window for one device, three layers resolved.
 
-    `devices[].audio.voice.ack_echo_ignore_ms` lives under `voice` because it describes
-    this device's microphone (a device-AEC plug keeps the cue's residual echo far longer
-    than the 1200 ms an LX06 needs), but the value it replaces is the conversational
-    `ack.echo_ignore_ms`, which is deliberately outside the `audio` block. Keeping the
-    two resolved in one place is what stops the next caller from reading the global value
-    and re-introducing the self-hearing bug.
+    Layer order: the plug's `audio_defaults.ack_echo_ignore_ms` < the global
+    `ack.echo_ignore_ms` (when the config states it) <
+    `devices[].audio.voice.ack_echo_ignore_ms`. The override lives under `voice`
+    because it describes this device's microphone (a device-AEC plug keeps the cue's
+    residual echo far longer than the 1200 ms an LX06 needs), but the value it replaces
+    is the conversational `ack` setting, which is deliberately outside the `audio`
+    block. Keeping the two resolved in one place is what stops the next caller from
+    reading the global value and re-introducing the self-hearing bug.
     """
+    base = ack.echo_ignore_ms
+    if (
+        defaults is not None
+        and defaults.ack_echo_ignore_ms is not None
+        and not _explicit(ack, "echo_ignore_ms", type(ack)())
+    ):
+        base = defaults.ack_echo_ignore_ms
     override = None
     if device is not None and device.audio is not None and device.audio.voice is not None:
         override = device.audio.voice.ack_echo_ignore_ms
-    return ack.echo_ignore_ms if override is None else override
+    return base if override is None else override
+
+
+def device_audio_defaults(
+    device: DeviceConfig | None, data_dir: str | None
+) -> AudioDefaults | None:
+    """The `audio_defaults` of the plug manifest that owns `device`, or None.
+
+    Imported lazily: `rui.plugins.models` imports this module, so a module-level
+    import here would close a cycle, and config validation must not require the plug
+    catalog unless a device actually asks for its defaults. An unresolved or broken
+    plug is not an error at this layer - the neutral core defaults are the documented
+    shim for a plug that declares nothing.
+    """
+    if device is None:
+        return None
+    try:
+        from ..plugins.resolve import resolve_device_plug
+
+        resolved = resolve_device_plug(device, data_dir)
+    except Exception:  # noqa: BLE001 - a broken plug must not make the config unloadable
+        return None
+    return None if resolved is None else resolved.device.audio_defaults
+
+
+def effective_device_audio(cfg: Config, device: DeviceConfig | None) -> EffectiveAudio:
+    """`effective_audio()` for a configured device, resolving its manifest defaults."""
+    defaults = device_audio_defaults(device, cfg.system.data_dir)
+    return effective_audio(
+        cfg.audio, device.audio if device is not None else None, defaults
+    )
+
+
+def effective_device_ack_echo_ignore_ms(cfg: Config, device: DeviceConfig | None) -> int:
+    """`effective_ack_echo_ignore_ms()` with the device manifest's declared tail."""
+    defaults = device_audio_defaults(device, cfg.system.data_dir)
+    return effective_ack_echo_ignore_ms(cfg.ack, device, defaults)
 
 
 class ProviderConfig(BaseModel):
@@ -992,7 +1140,11 @@ class Config(BaseModel):
             if dev.audio is None:
                 continue
             try:
-                effective_audio(self.audio, dev.audio)
+                # Resolve the device's manifest defaults too: an override that only
+                # states the changed fields must be checked against the layout the plug
+                # actually declares (an LX06 inherits 6 mic + 2 ref), not against the
+                # neutral core defaults.
+                effective_device_audio(self, dev)
             except ValidationError as exc:
                 raise ValueError(
                     f"devices[{dev.id}].audio does not merge into a valid audio block: {exc}"
@@ -1014,7 +1166,7 @@ def config_warnings(cfg: Config) -> list[str]:
         if dev.audio is None or dev.audio.aec is None or dev.audio.aec.who != "device":
             continue
         try:
-            eff = effective_audio(cfg.audio, dev.audio)
+            eff = effective_device_audio(cfg, dev)
         except ValidationError:
             continue  # already rejected by Config._multi_device_references
         if eff.aec.enabled:

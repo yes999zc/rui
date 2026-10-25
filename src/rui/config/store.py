@@ -13,6 +13,8 @@ from ruamel.yaml import YAML
 from ..env import get as env_get
 from .schema import (
     CONFIG_VERSION,
+    AckConfig,
+    AudioConfig,
     Config,
     ConfigError,
     MultiDeviceConfig,
@@ -157,6 +159,64 @@ def _uses_v3(cfg: Config) -> bool:
     return any(dev.audio is not None for dev in cfg.devices)
 
 
+_AUDIO_BLOCKS = ("capture", "voice", "playback", "aec")
+
+
+def _persisted_layers(path: Path) -> tuple[set[str] | None, bool]:
+    """The merge-layer fields the existing file states itself.
+
+    Returns the dotted `audio.*` fields plus whether the file states
+    `ack.echo_ignore_ms`. `None` for the audio set means "no usable previous file".
+
+    `save_config` uses this to keep "not configured" distinct from "configured at the
+    default value". Since 0.6 a device plug's manifest `audio_defaults` is the bottom
+    layer of the audio and cue-window merges; writing the neutral core defaults into
+    every saved file would turn them into explicit choices and shadow the plug on the
+    next boot (an LX06 would come back as 1-channel audio after any console save).
+    """
+    try:
+        raw = _yaml.load(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - a broken/absent file is not a write error
+        return None, False
+    if not isinstance(raw, dict):
+        return None, False
+    audio = raw.get("audio")
+    present: set[str] = set()
+    if isinstance(audio, dict):
+        for name in _AUDIO_BLOCKS:
+            block = audio.get(name)
+            if isinstance(block, dict):
+                present.update(f"{name}.{key}" for key in block)
+    elif audio is not None:
+        return None, False
+    ack = raw.get("ack")
+    return present, isinstance(ack, dict) and "echo_ignore_ms" in ack
+
+
+def _audio_for_disk(audio: AudioConfig, previous: set[str] | None) -> dict[str, dict]:
+    """The `audio` mapping to persist: what the file already states or what changed.
+
+    A field is written when the previous file already had it (an explicit choice stays
+    explicit) or when it differs from the neutral core default (an operator/code change).
+    Fields that are merely at the core default drop out, so the device manifest keeps
+    supplying the layout the config never chose.
+    """
+    full = audio.model_dump(mode="json")
+    out: dict[str, dict] = {}
+    for name in _AUDIO_BLOCKS:
+        block = getattr(audio, name)
+        core = type(block)().model_dump(mode="json")
+        part = {
+            key: value
+            for key, value in full[name].items()
+            if (previous is not None and f"{name}.{key}" in previous)
+            or value != core.get(key)
+        }
+        if part:
+            out[name] = part
+    return out
+
+
 def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -177,6 +237,22 @@ def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
     try:
         os.chmod(tmp, 0o600)          # chmod before the first byte, umask-proof
         data = cfg.model_dump(mode="json")
+        # Audio (and the cue window) are the blocks with a layer below the config (the
+        # device manifest's audio_defaults), so their core defaults must not be
+        # materialized on every write.
+        previous_audio, previous_ack_window = _persisted_layers(p)
+        audio_data = _audio_for_disk(cfg.audio, previous_audio)
+        if audio_data:
+            data["audio"] = audio_data
+        else:
+            data.pop("audio", None)
+        ack_data = data.get("ack")
+        if (
+            isinstance(ack_data, dict)
+            and not previous_ack_window
+            and cfg.ack.echo_ignore_ms == AckConfig().echo_ignore_ms
+        ):
+            ack_data.pop("echo_ignore_ms", None)
         # An older file only becomes v3 once a v3-only field is written, so a config
         # that still parses as v2 stays readable by a 0.4.x image after a rollback.
         if data.get("version", 0) < CONFIG_VERSION and _uses_v3(cfg):

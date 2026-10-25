@@ -28,7 +28,12 @@ def make_adapter(port: int, *, rate: int = 48000, allow_no_token: bool = False) 
         id="living", adapter="xiaoai", host="192.0.2.10", listen_port=port,
         token_env=TOKEN_ENV, allow_no_token=allow_no_token,
     )
-    capture = CaptureConfig(rate=rate)
+    # The LX06 layout the manifest declares (0.6 M1: core defaults are neutral, so the
+    # adapter's own tests must state the hardware shape they exercise).
+    capture = CaptureConfig(
+        rate=rate, channels=8, mic_channels=6, ref_channels=2,
+        bits=32, mic_shift=12, ref_shift=16,
+    )
     return XiaoaiAdapter(dev, capture, VoiceConfig())
 
 

@@ -24,7 +24,13 @@ import psutil
 
 from .. import secrets
 from ..audio.ack import ack_wav_path
-from ..config.schema import AecConfig, Config, effective_audio
+from ..config.schema import (
+    AecConfig,
+    CaptureConfig,
+    Config,
+    device_audio_defaults,
+    effective_audio,
+)
 from ..env import get as env_get
 
 SUPPORTED_ARCH = {"x86_64", "AMD64", "arm64", "aarch64"}
@@ -378,6 +384,21 @@ def _wire_rate_from_entrypoint(entrypoint: str) -> tuple[int | None, str]:
     return rate, (f"{module_name}.{attr}" if attr else "")
 
 
+def _merged_audio(cfg: Config, device: object):
+    """This device's three-layer audio: manifest defaults < global config < override.
+
+    Doctor rows must describe what the plane will run with. The global block alone is
+    wrong as soon as a plug declares `audio_defaults` (the neutral core defaults are
+    not the LX06's 8 ch / 48 kHz) or a device sets its own playback rate (the 0.5.3 D2
+    bug: the row said 16 kHz while the speaker heard 48 kHz).
+    """
+    return effective_audio(
+        cfg.audio,
+        getattr(device, "audio", None),
+        device_audio_defaults(device, cfg.system.data_dir),
+    )
+
+
 def _declared_wire_rate(cfg: Config, device: object) -> tuple[int | None, str]:
     """(Hz, where the plug declared it) for one configured device."""
     try:
@@ -393,12 +414,14 @@ def _declared_wire_rate(cfg: Config, device: object) -> tuple[int | None, str]:
 
 
 def _audio_rates_check(cfg: Config) -> Check:
-    """Every enabled device's declared wire rate against its effective playback rate.
+    """Every enabled device's declared wire rate against its merged playback rate.
 
-    The Dot 2 wire is 48 kHz mono; the global playback.rate is usually the LX06's
-    16 kHz, so a device without its own audio.playback.rate override produced a silent
-    speaker (the 0.5.3 D2 bug). This row is the post-fix guard: both numbers are
-    printed, and a mismatch degrades the verdict.
+    The Dot 2 wire is 48 kHz mono; the LX06 plays 16 kHz mono, so a device without its
+    own rate produced a silent speaker (the 0.5.3 D2 bug). Since 0.6 M1 the effective
+    rate is the three-layer merge (manifest audio_defaults < global config < device
+    override), so a plug's declared playback default counts too - not just a
+    devices[].audio override. Both numbers are printed and a mismatch degrades the
+    verdict; the hint still names the override as the per-device fix.
     """
     enabled = [(index, device) for index, device in enumerate(cfg.devices)
                if device.enabled]
@@ -409,7 +432,7 @@ def _audio_rates_check(cfg: Config) -> Check:
     mismatched: list[tuple[int, int]] = []
     declared = 0
     for index, device in enabled:
-        effective = effective_audio(cfg.audio, device.audio).playback.rate
+        effective = _merged_audio(cfg, device).playback.rate
         wire, source = _declared_wire_rate(cfg, device)
         label = device.id + (f" ({device.room})" if device.room else "")
         if wire is None:
@@ -434,6 +457,24 @@ def _audio_rates_check(cfg: Config) -> Check:
                                             + "; ".join(parts),
                      "the adapter raises at speak time if the rate it receives is wrong")
     return Check("audio_rates", "ok", "; ".join(parts), "")
+
+
+def _capture_layouts(cfg: Config) -> list[tuple[str, CaptureConfig]]:
+    """(device id, merged capture block) for every enabled device (0.6).
+
+    One row cannot describe a heterogeneous fleet, so the doctor lists each device's
+    merged layout instead of a single global block: after M1 the core default is
+    neutral (16 kHz / 1 ch / 0 ref) and a plug manifest supplies the device's own.
+    """
+    rows: list[tuple[str, CaptureConfig]] = []
+    for device in cfg.devices:
+        if not device.enabled:
+            continue
+        try:
+            rows.append((device.id, _merged_audio(cfg, device).capture))
+        except Exception:  # noqa: BLE001 - a broken override must not crash doctor
+            continue
+    return rows
 
 
 def _channels_config(cfg: Config) -> tuple[Path, dict]:
@@ -621,14 +662,29 @@ def run_doctor(cfg: Config | None = None, *,
     if key_check is not None:
         checks.append(key_check)
 
-    cap = audio.capture
-    checks.append(Check(
-        "capture_layout",
-        "ok",
-        f"{cap.rate} Hz requested / {cap.channels} ch / S{cap.bits}_LE on the device "
-        f"(mic {cap.mic_channels} + ref {cap.ref_channels}, >>{cap.mic_shift}/>>{cap.ref_shift})",
-        "hardware runs 48000 Hz; verify with: cat /proc/asound/card*/pcm*/sub0/hw_params",
-    ))
+    layouts = _capture_layouts(cfg)
+    if layouts:
+        cap_mics = max(block.mic_channels for _, block in layouts)
+        capture_value = "; ".join(
+            f"{label}: {block.rate} Hz / {block.channels} ch / S{block.bits}_LE "
+            f"(mic {block.mic_channels} + ref {block.ref_channels}, "
+            f">>{block.mic_shift}/>>{block.ref_shift})"
+            for label, block in layouts
+        )
+        capture_hint = (
+            "merged per device (manifest audio_defaults < config < devices[].audio); "
+            "verify with: cat /proc/asound/card*/pcm*/sub0/hw_params"
+        )
+    else:
+        cap = audio.capture
+        cap_mics = cap.mic_channels
+        capture_value = (
+            f"core default: {cap.rate} Hz / {cap.channels} ch / S{cap.bits}_LE "
+            f"(mic {cap.mic_channels} + ref {cap.ref_channels}, "
+            f">>{cap.mic_shift}/>>{cap.ref_shift}); add a device to see its layout"
+        )
+        capture_hint = "no enabled device; this is the neutral core layout"
+    checks.append(Check("capture_layout", "ok", capture_value, capture_hint))
     checks.append(Check(
         "playback_layout",
         "ok",
@@ -641,7 +697,7 @@ def run_doctor(cfg: Config | None = None, *,
     checks.append(_audio_rates_check(cfg))
 
     aec_rtf = measure_aec_rtf(aec=audio.aec, rate=audio.voice.rate, frame_ms=audio.voice.frame_ms,
-                              channels=cap.mic_channels)
+                              channels=cap_mics)
     cpu_share = aec_rtf * 100
     if aec_rtf <= 0.5:
         status = "ok"

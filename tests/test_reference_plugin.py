@@ -69,7 +69,14 @@ def test_reference_manifest_matches_the_builtin_capabilities() -> None:
     plugin = load_plugin(PLUGIN)
     reference = plugin.devices[0]
 
-    assert reference.schema == builtin_device.schema
+    # 0.6 M1: the in-image builtin moved to rui-device/v1 (audio_defaults). The
+    # reference package deliberately stays v0: it is the compatibility sample for an
+    # old plug that declares no audio defaults and must keep loading with the neutral
+    # core layout. Everything else must still match, so the two copies cannot drift.
+    assert reference.schema == "rui-device/v0"
+    assert builtin_device.schema == "rui-device/v1"
+    assert builtin_device.audio_defaults is not None
+    assert reference.audio_defaults is None
     assert set(reference.capabilities) == set(builtin_device.capabilities)
     assert reference.transport is builtin_device.transport
     assert reference.device_class is builtin_device.device_class
@@ -77,10 +84,10 @@ def test_reference_manifest_matches_the_builtin_capabilities() -> None:
     assert [param.key for param in reference.params] == [
         param.key for param in builtin_device.params
     ]
-    # v0 version matrix (v1 §7): one range for the whole 0.2/0.3 line. The in-code
-    # builtin declares the same range and validates it against rui.__version__.
+    # Two matrices (v1 §7): the v0 reference package keeps the 0.2 floor; the v1
+    # builtin moved its floor to 0.3.0 with the schema and validates it in _build().
     assert plugin.rui_compat == ">=0.2.0 <0.6.0"
-    assert builtin.rui_compat == ">=0.2.0 <0.6.0"
+    assert builtin.rui_compat == ">=0.3.0 <0.6.0"
     compat = parse_range(plugin.rui_compat)
     assert compat.matches("0.2.2")
     assert compat.matches("0.3.2")
@@ -105,6 +112,22 @@ def test_builtin_manifest_stays_the_catalog_default(tmp_path: Path) -> None:
     assert resolved is not None
     assert resolved.source == "builtin"
     assert resolved.device.id == "xiaoai"
+
+
+def test_the_catalog_exposes_the_lx06_audio_defaults(tmp_path: Path) -> None:
+    """0.6 M1: a configured device resolves to its manifest's audio_defaults."""
+    resolved = PlugCatalog(tmp_path).resolve(adapter="xiaoai")
+    assert resolved is not None
+    assert resolved.source == "builtin"
+    defaults = resolved.device.audio_defaults
+    assert defaults is not None and defaults.capture is not None
+    assert (defaults.capture.rate, defaults.capture.channels) == (48000, 8)
+    assert (defaults.capture.mic_channels, defaults.capture.ref_channels) == (6, 2)
+    assert defaults.ack_echo_ignore_ms == 1200
+    # The v0 reference package stays the "old plug" sample: resolving it gives no
+    # audio defaults, i.e. the neutral core shim.
+    reference = load_plugin(PLUGIN).devices[0]
+    assert reference.audio_defaults is None
 
 
 def test_reference_adapter_builder_returns_the_core_adapter(monkeypatch) -> None:

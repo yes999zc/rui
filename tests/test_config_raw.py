@@ -71,7 +71,9 @@ def test_the_raw_view_returns_the_effective_config_as_yaml(tmp_path) -> None:
     document = _load(body["yaml"])
     assert document["version"] == CONFIG_VERSION
     assert document["web"]["port"] == 8080
-    assert document["audio"]["capture"]["channels"] == 8
+    # Neutral core default (0.6 M1); a device's hardware layout comes from its plug
+    # manifest and is not part of the config document.
+    assert document["audio"]["capture"]["channels"] == 1
     assert document["assistant"]["name"] == "小瑞"
     # Chinese copy round-trips instead of becoming YAML escapes.
     assert "我在。" in body["yaml"]

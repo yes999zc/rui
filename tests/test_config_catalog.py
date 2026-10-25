@@ -621,6 +621,23 @@ def test_the_directory_exposes_multi_device_and_per_device_audio() -> None:
     assert "multi_device.arbitration.on_no_speech" not in fields
 
 
+def test_the_directory_reports_the_neutral_core_audio_defaults() -> None:
+    """0.6 M1: the global block is neutral; the hardware numbers come from the plug.
+
+    The console must render the neutral core values for the global audio block and keep
+    the per-device fields empty (= inherit) instead of showing the old LX06 numbers.
+    """
+    cfg = Config(devices=[DeviceConfig(id="living", adapter="mock", host="127.0.0.1",
+                                       room="客厅")])
+    values = document(cfg)["values"]
+    assert values["audio.capture.rate"] == 16000
+    assert values["audio.capture.channels"] == 1
+    assert values["audio.capture.ref_channels"] == 0
+    assert values["audio.playback.rate"] == 16000
+    assert values["ack.mode"] == "earcon"
+    assert values["devices.0.audio.capture.rate"] is None   # empty = inherit
+
+
 def test_multi_device_values_round_trip_and_empty_means_inherit(tmp_path) -> None:
     cfg, path = _device_config(tmp_path)
     with _app(cfg, path) as http:

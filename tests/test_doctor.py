@@ -158,9 +158,20 @@ def test_unauthenticated_lan_console_is_warned_about() -> None:
     assert any(c.name == "web_auth" and c.status == "warn" for c in report.checks)
 
 
-def test_capture_layout_is_reported() -> None:
-    report = run_doctor(Config())
-    check = next(c for c in report.checks if c.name == "capture_layout")
+def test_capture_layout_reports_the_neutral_core_default_without_a_device() -> None:
+    # 0.6 M1: no device -> the core default is neutral (16000/1ch/0ref), not the LX06.
+    check = next(c for c in run_doctor(Config()).checks if c.name == "capture_layout")
+    assert "core default" in check.value
+    assert "16000 Hz" in check.value and "1 ch" in check.value
+    assert "mic 1 + ref 0" in check.value
+
+
+def test_capture_layout_reports_the_merged_manifest_layout() -> None:
+    """The row describes what the plane will run: the device manifest's own layout."""
+    cfg = Config(devices=[DeviceConfig(id="lx06", adapter="xiaoai", host="192.0.2.10",
+                                       room="客厅")])
+    check = next(c for c in run_doctor(cfg).checks if c.name == "capture_layout")
+    assert "lx06:" in check.value
     assert "48000 Hz" in check.value
     assert "8 ch" in check.value
     assert "mic 6 + ref 2" in check.value
@@ -248,6 +259,67 @@ def _device_config(tmp_path, *, rate: int | None = None, room: str = "卧室") -
         cfg.devices[0].audio = DeviceAudioOverride(
             playback=DevicePlaybackOverride(rate=rate))
     return cfg
+
+
+def _write_manifest_only_dot2_plug(tmp_path: Path) -> None:
+    """A manifest-only plug whose audio_defaults declare the Dot 2 wire (M4 shape)."""
+    from ruamel.yaml import YAML
+
+    root = tmp_path / "plugs" / "rui-plugin-dot2"
+    (root / "devices").mkdir(parents=True)
+    yaml = YAML()
+    yaml.default_flow_style = False
+    plugin = {
+        "schema": "rui-plugin/v0",
+        "id": "dot2",
+        "name": "Echo Dot 2",
+        "version": "1.2.0",
+        "rui_compat": ">=0.5.0 <0.7.0",
+        "license": "MIT",
+        "maintainer": "rui maintainers",
+        "homepage": "https://example.invalid/dot2",
+        "trust": "third-party",
+        "devices": ["devices/dot2.yaml"],
+    }
+    device = {
+        "schema": "rui-device/v1",
+        "id": "dot2",
+        "name": "Echo Dot 2",
+        "vendor": "Amazon",
+        "class": "A",
+        "transport": "inbound",
+        "protocol": {"kind": "ws", "version": "1"},
+        "capabilities": ["playback"],
+        "audio_defaults": {"playback": {"rate": 48000, "channels": 1}},
+        "params": [],
+        "compatibility": {"rui_min": "0.5.0", "tested_with": ["0.5.3"]},
+    }
+    with (root / "plugin.yaml").open("w", encoding="utf-8") as handle:
+        yaml.dump(plugin, handle)
+    with (root / "devices" / "dot2.yaml").open("w", encoding="utf-8") as handle:
+        yaml.dump(device, handle)
+
+
+def test_audio_rates_uses_the_merged_manifest_playback_rate(tmp_path, monkeypatch) -> None:
+    """0.6 M1: the row compares the wire rate with the *merged* playback rate.
+
+    Before M1 it read the global block and a Dot 2 manifest could only fix the
+    mismatch through a devices[].audio override. The plug's audio_defaults is now the
+    bottom layer, so the shipped manifest is enough - and a config that states its own
+    playback rate still overrides it (that path is pinned in test_config_v3.py).
+    """
+    cfg = _device_config(tmp_path)          # global playback.rate is 16000
+    monkeypatch.setattr(probes, "_declared_wire_rate",
+                        lambda cfg, dev: (48000, "fake.SPEAKER_RATE"))
+    # No plug yet: the neutral/global playback rate is what the plane would use.
+    check = probes._audio_rates_check(cfg)
+    assert check.status == "warn"
+    assert "wire 48000 Hz != playback.rate 16000 Hz" in check.value
+
+    _write_manifest_only_dot2_plug(tmp_path)
+    check = probes._audio_rates_check(cfg)
+    assert check.status == "ok"
+    assert "wire 48000 Hz = playback.rate 48000 Hz" in check.value
 
 
 def test_audio_rates_reports_a_wire_rate_mismatch_with_both_numbers(tmp_path,

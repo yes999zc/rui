@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..config.schema import AudioDefaults
 from ..device.contract import Capability, Transport
 from .semver import VersionError, parse_range, parse_version
 
@@ -392,8 +393,10 @@ with warnings.catch_warnings():
         """One speaker model (``devices/<model>.yaml``).
 
         Accepts ``rui-device/v0`` (unchanged) and ``rui-device/v1``. v0 manifests must
-        not declare the v1-only ``wake`` block or the two new capabilities: a silent
-        upgrade would change device behaviour, so it is an error (§7).
+        not declare the v1-only ``wake`` block, the two new capabilities or
+        ``audio_defaults``: a silent upgrade would change device behaviour, so it is
+        an error (§7). 0.6 adds ``audio_defaults``, the hardware defaults the core used
+        to hard-code (docs/roadmap-0.6.md M1).
         """
 
         model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -412,6 +415,11 @@ with warnings.catch_warnings():
         # v1 only: who detects our wake word and whether the device barge hint is
         # enabled. Omitting it is the v0 default (`source: rui`, barge off).
         wake: WakeSpec | None = None
+        # v1 only (0.6): this model's hardware audio defaults. They are the bottom layer
+        # of the audio merge (device default < global config < devices[].audio), so a
+        # plug that declares nothing keeps the neutral core defaults - the compatibility
+        # shim for every pre-0.6 plug.
+        audio_defaults: AudioDefaults | None = None
         device_side: DeviceSide | None = None
         runtime: RuntimeSpec | None = None
         params: list[ParamSpec]
@@ -460,6 +468,11 @@ with warnings.catch_warnings():
                         "wake: the wake block is rui-device/v1 only; a v0 manifest cannot "
                         "declare wake, even {source: rui}. Publish rui-device/v1, or omit "
                         "wake and use RUI KWS"
+                    )
+                if self.audio_defaults is not None:
+                    raise ValueError(
+                        "audio_defaults: the block is rui-device/v1 only; a v0 manifest "
+                        "cannot declare its hardware audio layout (publish rui-device/v1)"
                     )
                 for cap in (Capability.DEVICE_WAKE, Capability.BARGE_VIA_DEVICE):
                     if cap in caps:

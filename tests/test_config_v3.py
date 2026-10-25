@@ -19,15 +19,20 @@ import pytest
 from rui.config import Config, load_config, save_config
 from rui.config.schema import (
     CONFIG_VERSION,
+    AckConfig,
     AecConfig,
+    AudioDefaults,
     CaptureConfig,
     ConfigError,
     DeviceAudioOverride,
     DeviceVoiceOverride,
     MultiDeviceConfig,
     config_warnings,
+    device_audio_defaults,
     effective_ack_echo_ignore_ms,
     effective_audio,
+    effective_device_ack_echo_ignore_ms,
+    effective_device_audio,
 )
 
 V2_CONFIG = """\
@@ -336,3 +341,268 @@ def test_warnings_flag_too_many_planes(tmp_path: Path) -> None:
 
 def test_clean_v2_config_has_no_warnings(tmp_path: Path) -> None:
     assert config_warnings(load_config(_write(tmp_path, V2_CONFIG))) == []
+
+
+# --------------------------------------- 0.6 M1: the three-layer audio merge
+#
+# docs/roadmap-0.6.md M1: device manifest default < global config < devices[].audio.
+# The core defaults became neutral, so an LX06 config now gets its hardware layout
+# from the built-in manifest. These tests pin the new layering AND the promised
+# non-regression: an LX06-shaped config resolves field-for-field as it did before M1.
+
+LX06_CONFIG = """\
+version: 3
+devices:
+  - id: lx06
+    adapter: xiaoai
+    host: 192.0.2.10
+    room: 客厅
+"""
+
+# The production/template shape: the config states the LX06 numbers itself. The 16 kHz
+# capture rate is a deliberate bandwidth choice (the client JSON-encodes raw bytes),
+# so it must keep beating the manifest's 48 kHz hardware rate.
+LX06_TEMPLATE_CONFIG = """\
+version: 3
+audio:
+  capture:
+    rate: 16000
+    channels: 8
+    mic_channels: 6
+    ref_channels: 2
+    bits: 32
+    mic_shift: 12
+    ref_shift: 16
+  playback:
+    rate: 16000
+    channels: 1
+    queue_ms: 200
+    fade_out_ms: 120
+    credit_window: 8
+    target_silence_ms: 300
+  aec:
+    enabled: true
+    filter_len: 4096
+    cancel: mix
+devices:
+  - id: lx06
+    adapter: xiaoai
+    host: 192.0.2.10
+    room: 客厅
+"""
+
+# Captured from the pre-M1 code path (schema defaults were the LX06 layout): the golden
+# values an existing LX06 config must keep resolving after M1. Written out field by
+# field on purpose - a typo in a default must fail this test, not be compared against
+# itself.
+_VOICE_GOLDEN = {
+    "barge_in": True,
+    "followup_delay_ms": 1000,
+    "followup_replay": True,
+    "frame_ms": 20,
+    "kws_chunk": 8,
+    "kws_enabled": False,
+    "kws_keywords_file": "",
+    "kws_model_dir": "",
+    "kws_num_threads": 1,
+    "kws_probe_file": "",
+    "post_playback_mute_ms": 0,
+    "rate": 16000,
+    "vad_end_silence_ms": 1000,
+    "vad_min_speech_ms": 200,
+    "vad_model_path": "",
+    "vad_preroll_ms": 350,
+    "wake_preroll_ms": 500,
+    "wake_skip_ms": 300,
+}
+_AEC_GOLDEN = {"cancel": "mix", "enabled": True, "filter_len": 4096, "who": "controller"}
+_PLAYBACK_GOLDEN = {
+    "channels": 1,
+    "credit_window": 8,
+    "fade_out_ms": 120,
+    "prebuffer_ms": 0,
+    "queue_ms": 200,
+    "rate": 16000,
+    "target_silence_ms": 300,
+}
+# The old core CaptureConfig() values, now declared by the LX06 manifest.
+_CAPTURE_GOLDEN = {
+    "bits": 32,
+    "channels": 8,
+    "mic_channels": 6,
+    "mic_shift": 12,
+    "rate": 48000,
+    "ref_channels": 2,
+    "ref_shift": 16,
+}
+_PRE_M1_SCHEMA_DEFAULT = {
+    "aec": _AEC_GOLDEN,
+    "capture": _CAPTURE_GOLDEN,
+    "playback": _PLAYBACK_GOLDEN,
+    "voice": _VOICE_GOLDEN,
+}
+_PRE_M1_TEMPLATE = {
+    "aec": _AEC_GOLDEN,
+    "capture": {**_CAPTURE_GOLDEN, "rate": 16000},
+    "playback": _PLAYBACK_GOLDEN,
+    "voice": _VOICE_GOLDEN,
+}
+
+
+def test_lx06_manifest_declares_the_old_core_defaults() -> None:
+    from rui.plugins import builtin_plugin
+
+    plugin = builtin_plugin("xiaoai-lx06")
+    assert plugin is not None
+    defaults = plugin.devices[0].audio_defaults
+    assert defaults is not None and defaults.capture is not None
+    assert defaults.capture.model_dump(exclude_none=True) == _CAPTURE_GOLDEN
+    assert defaults.ack_echo_ignore_ms == 1200
+    assert defaults.playback is None, "playback stays the neutral pipeline choice"
+
+
+def test_lx06_shaped_config_without_an_audio_block_resolves_as_before_m1(
+        tmp_path: Path) -> None:
+    """Golden: the old default-shaped config resolves every field as it did before M1."""
+    cfg = load_config(_write(tmp_path, LX06_CONFIG))
+    device = cfg.devices[0]
+    defaults = device_audio_defaults(device, cfg.system.data_dir)
+    assert defaults is not None, "the built-in LX06 manifest declares audio_defaults"
+    eff = effective_audio(cfg.audio, device.audio, defaults)
+    assert eff.model_dump() == _PRE_M1_SCHEMA_DEFAULT
+    assert effective_ack_echo_ignore_ms(cfg.ack, device, defaults) == 1200
+    # The wrapper (what the plane/doctor/xiaoai builder call) resolves the same layers.
+    assert effective_device_audio(cfg, device).model_dump() == _PRE_M1_SCHEMA_DEFAULT
+
+
+def test_lx06_template_shaped_config_resolves_as_before_m1(tmp_path: Path) -> None:
+    """Golden: an existing production config (explicit LX06 numbers) does not drift."""
+    cfg = load_config(_write(tmp_path, LX06_TEMPLATE_CONFIG))
+    device = cfg.devices[0]
+    eff = effective_device_audio(cfg, device)
+    assert eff.model_dump() == _PRE_M1_TEMPLATE
+    # Written values win over the manifest, field by field.
+    assert eff.capture.rate == 16000
+    assert eff.capture.channels == 8
+    assert effective_ack_echo_ignore_ms(
+        cfg.ack, device, device_audio_defaults(device, cfg.system.data_dir)) == 1200
+
+
+def test_an_explicit_global_capture_field_beats_the_manifest_default(tmp_path: Path) -> None:
+    config = LX06_CONFIG.replace(
+        "version: 3\n",
+        "version: 3\naudio:\n  capture:\n    rate: 24000\n",
+    )
+    cfg = load_config(_write(tmp_path, config))
+    eff = effective_device_audio(cfg, cfg.devices[0])
+    assert eff.capture.rate == 24000      # the config states it
+    assert eff.capture.channels == 8      # untouched fields still come from the plug
+    assert eff.capture.mic_channels == 6
+    assert eff.capture.ref_channels == 2
+
+
+def test_a_device_override_beats_both_lower_layers(tmp_path: Path) -> None:
+    config = LX06_CONFIG + (
+        "    audio:\n"
+        "      capture: {rate: 16000, channels: 2, mic_channels: 1, ref_channels: 1}\n"
+        "      playback: {rate: 48000}\n"
+    )
+    cfg = load_config(_write(tmp_path, config))
+    eff = effective_device_audio(cfg, cfg.devices[0])
+    assert (eff.capture.rate, eff.capture.channels) == (16000, 2)
+    assert (eff.capture.mic_channels, eff.capture.ref_channels) == (1, 1)
+    assert eff.playback.rate == 48000
+
+
+def test_a_plug_without_audio_defaults_keeps_the_neutral_core(tmp_path: Path) -> None:
+    # V2_CONFIG's device uses the mock adapter, i.e. no plug manifest: the documented
+    # shim for a pre-0.6 plug is the neutral core layout, not an error.
+    cfg = load_config(_write(tmp_path, V2_CONFIG))
+    device = cfg.devices[0]
+    assert device_audio_defaults(device, cfg.system.data_dir) is None
+    eff = effective_device_audio(cfg, device)
+    assert eff.capture == CaptureConfig()
+    assert (eff.capture.rate, eff.capture.channels, eff.capture.ref_channels) == (
+        16000, 1, 0)
+
+
+def test_the_ack_window_resolves_its_three_layers(tmp_path: Path) -> None:
+    cfg = load_config(_write(tmp_path, V2_CONFIG))
+    device = cfg.devices[0]
+    defaults = AudioDefaults(ack_echo_ignore_ms=2500)
+    # The config states no ack.echo_ignore_ms, so the manifest's measured tail beats
+    # the neutral core 1200.
+    assert effective_ack_echo_ignore_ms(cfg.ack, device, defaults) == 2500
+    # A config that states the global value wins over the manifest ...
+    cfg.ack = AckConfig(echo_ignore_ms=900)
+    assert effective_ack_echo_ignore_ms(cfg.ack, device, defaults) == 900
+    # ... and a device override wins over both (the 0.5.3 self-hearing knob).
+    device.audio = DeviceAudioOverride(
+        voice=DeviceVoiceOverride(ack_echo_ignore_ms=3000))
+    assert effective_ack_echo_ignore_ms(cfg.ack, device, defaults) == 3000
+
+
+def test_saving_does_not_materialize_the_neutral_audio_defaults(tmp_path: Path) -> None:
+    """A console save must not freeze the core defaults over the plug's layout.
+
+    The console write path revalidates a full model dump before saving, so
+    `model_fields_set` is empty information there; `save_config` keeps the previous
+    file's "not configured" state instead.
+    """
+    path = _write(tmp_path, LX06_CONFIG)
+    cfg = load_config(path)
+    assert effective_device_audio(cfg, cfg.devices[0]).capture.rate == 48000
+
+    save_config(path, Config.model_validate(cfg.model_dump(mode="json")))
+
+    from ruamel.yaml import YAML
+
+    document = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+    assert "audio" not in document, "the neutral core defaults must not be persisted"
+    # The global cue window is the middle layer of the same merge: its core default
+    # must not be frozen either, or a plug's measured tail could never apply.
+    assert "echo_ignore_ms" not in document["ack"]
+    reloaded = load_config(path)
+    assert effective_device_audio(reloaded, reloaded.devices[0]).capture.rate == 48000
+    assert effective_device_ack_echo_ignore_ms(reloaded, reloaded.devices[0]) == 1200
+
+
+def test_saving_keeps_a_stated_ack_window(tmp_path: Path) -> None:
+    path = _write(tmp_path, LX06_CONFIG)
+    cfg = load_config(path)
+    cfg.ack = AckConfig(echo_ignore_ms=900)   # the operator changed the global window
+    save_config(path, Config.model_validate(cfg.model_dump(mode="json")))
+
+    from ruamel.yaml import YAML
+
+    document = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+    assert document["ack"]["echo_ignore_ms"] == 900
+    reloaded = load_config(path)
+    assert effective_device_ack_echo_ignore_ms(reloaded, reloaded.devices[0]) == 900
+
+
+def test_an_explicit_cue_window_at_the_default_is_preserved(tmp_path: Path) -> None:
+    # A file that already states the window keeps it, even at the core default: it is
+    # an explicit conversational choice (the production template writes 1200).
+    path = _write(tmp_path, LX06_TEMPLATE_CONFIG.replace(
+        "devices:\n", "ack:\n  echo_ignore_ms: 1200\ndevices:\n"))
+    cfg = load_config(path)
+    save_config(path, Config.model_validate(cfg.model_dump(mode="json")))
+
+    from ruamel.yaml import YAML
+
+    document = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+    assert document["ack"]["echo_ignore_ms"] == 1200
+
+
+def test_saving_keeps_an_explicit_capture_layout(tmp_path: Path) -> None:
+    path = _write(tmp_path, LX06_TEMPLATE_CONFIG)
+    cfg = load_config(path)
+    save_config(path, Config.model_validate(cfg.model_dump(mode="json")))
+
+    text = path.read_text(encoding="utf-8")
+    assert "rate: 16000" in text
+    reloaded = load_config(path)
+    eff = effective_device_audio(reloaded, reloaded.devices[0])
+    assert eff.capture.rate == 16000
+    assert eff.capture.channels == 8

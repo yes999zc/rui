@@ -20,7 +20,7 @@ from pathlib import Path
 import rui
 
 from .models import (
-    DEVICE_SCHEMA,
+    DEVICE_SCHEMA_V1,
     PLUGIN_SCHEMA,
     DeviceManifest,
     Plugin,
@@ -36,7 +36,11 @@ LX06_ADAPTER = "xiaoai"
 _SOURCE_DIR = Path(__file__).resolve().parent
 
 _XIAOAI_LX06 = {
-    "schema": DEVICE_SCHEMA,
+    # 0.6: the built-in LX06 manifest is rui-device/v1 so it can declare the hardware
+    # defaults the core no longer hard-codes (docs/roadmap-0.6.md M1). It still wakes
+    # through RUI KWS: no `wake` block means `source: rui` by the v1 default, and the
+    # manifest never declares device_wake / barge_via_device.
+    "schema": DEVICE_SCHEMA_V1,
     "id": LX06_ADAPTER,
     "name": "Xiaomi AI Speaker Pro (LX06)",
     "vendor": "Xiaomi",
@@ -44,6 +48,24 @@ _XIAOAI_LX06 = {
     "transport": "inbound",
     "protocol": {"kind": "ws", "version": "1"},
     "capabilities": ["mic_array", "reference", "playback", "led", "keys", "volume"],
+    # What the core used to bake into CaptureConfig (0.5 and earlier): S32_LE, 8
+    # interleaved channels at 48 kHz, ch0..ch5 mics, ch6/ch7 playback reference, and
+    # the measured shifts. This is the bottom layer of the audio merge: a config that
+    # states its own values (the production template asks the client for 16 kHz to save
+    # wifi bandwidth) keeps them.
+    "audio_defaults": {
+        "capture": {
+            "rate": 48000,
+            "channels": 8,
+            "mic_channels": 6,
+            "ref_channels": 2,
+            "bits": 32,
+            "mic_shift": 12,
+            "ref_shift": 16,
+        },
+        # The LX06's measured own-cue echo tail (AckConfig documents 1200 ms).
+        "ack_echo_ignore_ms": 1200,
+    },
     "device_side": {
         "artifact": "client",
         "name": "open-xiaoai client",
@@ -95,13 +117,14 @@ _XIAOAI_LX06 = {
         },
     ],
     "compatibility": {
-        "rui_min": "0.2.0",
-        "tested_with": ["0.2.0", "0.3.2"],
+        "rui_min": "0.3.0",
+        "tested_with": ["0.3.2", "0.5.3"],
         # Socket & Plug v1: the LX06 is a closed device (open-xiaoai client only), so
-        # there is no device-side RUI wake model. The built-in manifest stays v0, which
-        # means `wake.source: rui` by the v0 default; it must never declare device_wake.
+        # there is no device-side RUI wake model. Omitting `wake` means
+        # `wake.source: rui`; the manifest must never declare device_wake.
         "notes": "A-class coexistence with the stock firmware; open-xiaoai client required. "
-                 "Wake is RUI KWS (v0 default), not device_wake.",
+                 "Wake is RUI KWS (v1 default when wake is omitted), not device_wake. "
+                 "audio_defaults declares the 8 ch / 6 mic / 2 ref / 48 kHz layout.",
     },
     "acceptance": {
         "verified": True,
@@ -115,10 +138,11 @@ _XIAOAI_LX06_PLUGIN = {
     "id": LX06_PLUG_ID,
     "name": "Xiaomi AI Speaker Pro (LX06)",
     "version": "0.2.0",
-    # v0 matrix (docs/socket-plug-v1.md §7): a v0 manifest stays loadable on the
-    # whole 0.2/0.3 line. The builtins bypass ``load_plugin``'s compat check, so this
-    # is also asserted in ``_build`` below and in tests/test_plugins.py.
-    "rui_compat": ">=0.2.0 <0.6.0",
+    # v1 matrix (docs/socket-plug-v1.md §7): a rui-device/v1 manifest is only loadable
+    # from 0.3.0 on, so the range floor moves with the schema. The builtins bypass
+    # ``load_plugin``'s compat check, so this is also asserted in ``_build`` below and
+    # in tests/test_plugins.py.
+    "rui_compat": ">=0.3.0 <0.6.0",
     "license": "MIT",
     "maintainer": "rui maintainers",
     "homepage": "https://github.com/coderzc/open-xiaoai",

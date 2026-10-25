@@ -516,15 +516,85 @@ def test_unknown_wake_fields_are_rejected(tmp_path: Path) -> None:
     assert "token" in message
 
 
-def test_lx06_stays_rui_kws_and_never_declares_device_wake() -> None:
+def test_lx06_is_a_v1_plug_that_still_wakes_through_rui_kws() -> None:
     plugin = builtin_plugin("xiaoai-lx06")
     assert plugin is not None
     device = plugin.devices[0]
-    assert device.schema == DEVICE_SCHEMA
-    assert device.wake is None, "v0 manifests must not carry the v1 wake block"
+    # 0.6 M1: the builtin is rui-device/v1 so it can declare audio_defaults. Wake is
+    # still RUI KWS because the block is omitted (the v1 default is source: rui), and
+    # the manifest must never claim device_wake/barge_via_device.
+    assert device.schema == DEVICE_SCHEMA_V1
+    assert device.wake is None, "an omitted wake block means source: rui"
     assert device.wake_source is WakeSource.RUI
     assert Capability.DEVICE_WAKE not in device.capabilities
     assert Capability.BARGE_VIA_DEVICE not in device.capabilities
+    # The hardware numbers the core used to hard-code now live here.
+    defaults = device.audio_defaults
+    assert defaults is not None and defaults.capture is not None
+    assert (defaults.capture.rate, defaults.capture.channels) == (48000, 8)
+    assert (defaults.capture.mic_channels, defaults.capture.ref_channels) == (6, 2)
+    assert (defaults.capture.bits, defaults.capture.mic_shift,
+            defaults.capture.ref_shift) == (32, 12, 16)
+    assert defaults.ack_echo_ignore_ms == 1200
+
+
+# --- 0.6 M1: the optional audio_defaults block (docs/socket-plug-v1.md §3.2.1) -----
+
+
+def test_a_v1_manifest_declares_audio_defaults(tmp_path: Path) -> None:
+    device = _v1_device_doc(
+        capabilities=["playback"],
+        audio_defaults={
+            "capture": {"rate": 48000, "channels": 8, "mic_channels": 6,
+                        "ref_channels": 2, "bits": 32, "mic_shift": 12,
+                        "ref_shift": 16},
+            "playback": {"rate": 48000, "channels": 1},
+            "ack_echo_ignore_ms": 2500,
+        },
+    )
+    loaded = load_plugin(_single(tmp_path, device=device)).devices[0]
+
+    defaults = loaded.audio_defaults
+    assert defaults is not None
+    assert defaults.capture is not None and defaults.playback is not None
+    assert (defaults.capture.mic_channels, defaults.capture.ref_channels) == (6, 2)
+    assert defaults.playback.rate == 48000
+    assert defaults.ack_echo_ignore_ms == 2500
+
+
+def test_audio_defaults_is_optional_for_a_v1_manifest(tmp_path: Path) -> None:
+    # The compatibility shim: a plug that declares nothing gets the neutral core
+    # defaults, exactly like every pre-0.6 plug.
+    loaded = load_plugin(_single(tmp_path, device=_v1_device_doc())).devices[0]
+    assert loaded.audio_defaults is None
+
+
+def test_a_v0_manifest_cannot_declare_audio_defaults(tmp_path: Path) -> None:
+    # §7: v0 + a new behaviour-changing field is an error, never a silent upgrade.
+    device = _device_doc(audio_defaults={"capture": {"rate": 48000}})
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+    message = str(error.value)
+    assert "audio_defaults" in message
+    assert "rui-device/v1" in message
+
+
+def test_unknown_audio_defaults_keys_are_rejected(tmp_path: Path) -> None:
+    device = _v1_device_doc(audio_defaults={"capture": {"rate": 48000, "eq": "x"}})
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+    assert "audio_defaults" in str(error.value)
+
+
+def test_audio_defaults_capture_layout_must_add_up(tmp_path: Path) -> None:
+    # A partial hardware layout that cannot merge with the neutral core defaults is a
+    # manifest bug; the error names the field instead of failing later in the plane.
+    device = _v1_device_doc(audio_defaults={"capture": {"channels": 8}})
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+    message = str(error.value)
+    assert "audio_defaults.capture" in message
+    assert "must equal channels(8)" in message
 
 
 def test_a_v0_manifest_cannot_declare_the_v1_model_field(tmp_path: Path) -> None:
@@ -642,16 +712,18 @@ def test_verified_acceptance_needs_a_date(tmp_path: Path) -> None:
     assert "last_verified" in str(error.value)
 
 
-def test_builtin_and_reference_ranges_match_the_v0_matrix() -> None:
+def test_builtin_uses_the_v1_matrix() -> None:
     builtin = builtin_plugin("xiaoai-lx06")
     assert builtin is not None
-    # One matrix for the v0 line: the plugin range is a superset of the device floor
-    # and both accept the running 0.3.2 build.
-    assert builtin.rui_compat == ">=0.2.0 <0.6.0"
+    # 0.6 M1: declaring audio_defaults requires rui-device/v1, whose matrix floor is
+    # 0.3.0 (docs/socket-plug-v1.md §7). The reference package in
+    # plugins/rui-plugin-xiaoai/ keeps the v0 matrix and is pinned in
+    # tests/test_reference_plugin.py.
+    assert builtin.rui_compat == ">=0.3.0 <0.6.0"
     device = builtin.devices[0]
-    assert device.schema == DEVICE_SCHEMA
+    assert device.schema == DEVICE_SCHEMA_V1
     assert device.compatibility is not None
-    assert device.compatibility.rui_min == "0.2.0"
+    assert device.compatibility.rui_min == "0.3.0"
     plugin_range = parse_range(builtin.rui_compat)
     minimum = parse_version(device.compatibility.rui_min, allow_partial=True)
     assert plugin_range.matches(str(minimum))

@@ -35,7 +35,11 @@ import numpy as np
 
 from .. import secrets
 from ..config import Config, load_config
-from ..config.schema import effective_ack_echo_ignore_ms, effective_audio
+from ..config.schema import (
+    device_audio_defaults,
+    effective_ack_echo_ignore_ms,
+    effective_audio,
+)
 from ..device import build_adapters
 from ..device.contract import (
     AudioFrame,
@@ -377,10 +381,16 @@ class AudioPlane:
         self.device_id = device_id
         self.socket_path = socket_path
         # Config v3 (Phase 1) resolved once: this device's overrides on top of the
-        # global audio block. A v2 config has no override and resolves to the globals.
+        # global audio block. 0.6 adds the plug manifest's `audio_defaults` underneath
+        # both (device default < global config < devices[].audio), resolved once here
+        # because the ack window needs the same layer and a plug catalog scan is not
+        # something to repeat per turn.
         device_cfg = next((d for d in cfg.devices if d.id == device_id), None)
         self.device_cfg = device_cfg
-        self.effective = effective_audio(cfg.audio, device_cfg.audio if device_cfg else None)
+        self.audio_defaults = device_audio_defaults(device_cfg, cfg.system.data_dir)
+        self.effective = effective_audio(
+            cfg.audio, device_cfg.audio if device_cfg else None, self.audio_defaults
+        )
         # Phase 2: with multi_device.enabled the plane only reports candidates and waits
         # for the control plane's admit/reject; it never arms its own gate or barges on
         # its own. With it off (the default) the old local path is byte-identical.
@@ -707,13 +717,15 @@ class AudioPlane:
 
     @property
     def ack_echo_ignore_ms(self) -> int:
-        """Spoken-cue echo window: this device's override, else the global ack value.
+        """Spoken-cue echo window: device default < global ack < device override.
 
         A device-AEC plug keeps the cue's residual echo on its microphone far longer
         than an LX06 needs; reading the global value here is what let its own cue open a
-        turn (0.5.3 self-hearing fix).
+        turn (0.5.3 self-hearing fix). 0.6 lets the plug declare its own measured tail.
         """
-        return effective_ack_echo_ignore_ms(self.cfg.ack, self.device_cfg)
+        return effective_ack_echo_ignore_ms(
+            self.cfg.ack, self.device_cfg, self.audio_defaults
+        )
 
     def _mic_is_muted(self) -> bool:
         """True while a post-playback mute window is open (no VAD/KWS at all)."""

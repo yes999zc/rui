@@ -20,14 +20,19 @@ REPO = Path(__file__).resolve().parents[1]
 def test_defaults_are_sane() -> None:
     cfg = Config()
     assert cfg.version == 3
-    assert cfg.audio.capture.mic_shift == 12
-    assert cfg.audio.capture.ref_shift == 16
-    assert cfg.audio.capture.rate == 48000
+    # 0.6 M1: the core defaults are neutral. The LX06's 48000/8/6/2/S32 with >>12/>>16
+    # is declared by its own manifest (src/rui/plugins/builtin.py), not by the core.
+    assert (cfg.audio.capture.rate, cfg.audio.capture.channels) == (16000, 1)
+    assert (cfg.audio.capture.mic_channels, cfg.audio.capture.ref_channels) == (1, 0)
+    assert (cfg.audio.capture.bits, cfg.audio.capture.mic_shift,
+            cfg.audio.capture.ref_shift) == (16, 0, 0)
     assert cfg.audio.voice.rate == 16000
     assert cfg.audio.playback.rate == 16000
-    # The LX06 client plays mono frames; the adapter rejects stereo, so a
-    # default of 2 channels would raise on the first reply of a fresh install.
+    # The client plays mono frames; the adapter rejects stereo, so a default of 2
+    # channels would raise on the first reply of a fresh install.
     assert cfg.audio.playback.channels == 1
+    # The neutral core ack is the tone, not a spoken word.
+    assert cfg.ack.mode == "earcon"
     assert cfg.tools.expose == "domain"
 
 
