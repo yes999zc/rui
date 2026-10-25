@@ -45,7 +45,7 @@
 | 冷装证据 | `/vol1/rui-verify/`（269 MB，可删；`install.log` 与冷装 service.log 已拷到验收工作区） |
 | 端口 | 控制台 `8080`、设备入口 `4412`（host network）；`allow_no_token: false` |
 | 开发机 | Mac：仓库 + `.venv`（Python 3.13）+ Node 22；**无 docker CLI**（只有 OrbStack 的 `orb/orbctl`），compose/冷装只能在 NAS 上跑 |
-| GHCR | `0.4.1` / `0.4` / `latest`（同一 manifest，digest `sha256:380327e5c…`，amd64+arm64）；历史 tag 保留 |
+| GHCR | `0.4.1` / `0.4` 同一 manifest（digest `sha256:380327e5c…`，amd64+arm64）；`latest` 随 `main` 自动重建、digest 会变（安装请固定 `0.4.1` 或 digest）；历史 tag 保留 |
 
 ## 3. 已定决策（改前先问 9 哥）
 
