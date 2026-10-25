@@ -647,7 +647,7 @@ def test_builtin_and_reference_ranges_match_the_v0_matrix() -> None:
     assert builtin is not None
     # One matrix for the v0 line: the plugin range is a superset of the device floor
     # and both accept the running 0.3.2 build.
-    assert builtin.rui_compat == ">=0.2.0 <0.4.0"
+    assert builtin.rui_compat == ">=0.2.0 <0.5.0"
     device = builtin.devices[0]
     assert device.schema == DEVICE_SCHEMA
     assert device.compatibility is not None
@@ -661,7 +661,7 @@ def test_builtin_and_reference_ranges_match_the_v0_matrix() -> None:
 def test_the_example_v1_plugin_uses_the_v1_version_matrix() -> None:
     repo = Path(__file__).resolve().parents[1]
     example = load_plugin(repo / "examples" / "plugin-example")
-    assert example.rui_compat == ">=0.3.0 <0.4.0"
+    assert example.rui_compat == ">=0.3.0 <0.5.0"
     device = example.devices[0]
     assert device.schema == DEVICE_SCHEMA_V1
     assert device.compatibility is not None
