@@ -14,7 +14,7 @@
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
 | 质量 | **1298 passed / 17 skipped**（0.5.2；跳过数随平台差 1，总数不变）；ruff clean；`sh -n deploy/install.sh` 干净；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | **v0.5.2 已备好**（dot2 #15 管道安装 + #7 卫星就绪/连接测试）；生产仍是 0.5.0；真机验收 9哥 保留 |
+| 当前主线 | **v0.5.2 已发布**（2026-10-25；dot2 #15 管道安装 + #7 卫星就绪/连接测试）；生产仍是 0.5.0；真机验收 9哥 保留 |
 
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 
@@ -46,7 +46,7 @@ Phase 2 接线已完成并验证，**不要再改** `src/rui/audio/{protocol,pro
 2. **打磨批 ✅**（P5.4）：healthcheck 根因 + doctor 一致性行、install.sh 升级提示 + prune、0.4.2 占位注释清理、`docs/deploy.md` §7.1 下游升级/兼容矩阵、音量换算 pointer；dot2 docs PR 当前无 open，发布前再查。
 3. **v0.5.0 发布 + 生产部署 ✅**（2026-10-25）：tag `v0.5.0`、digest `sha256:01a3afe1…`、CI 全绿、Release 已发、#7 已公布；生产已切 0.5.0（healthcheck ok、真实回合通过）。
 4. **v0.5.1 发布 ✅**（2026-10-25 18:5x，dot2 #13/#14）：tag `v0.5.1`（commit `c0d7048`）、digest `sha256:25d67cf88c62…`（0.5.1=`0.5`=`latest`=`sha-c0d7048` 同一 manifest，amd64+arm64）；CI 全绿；Release 已发；#7/#13/#14 已通知复测。**生产保持 0.5.0**（0.5.1 只改安装器/doctor/文档，无运行时变化）。**剩真机 LX06+2×Dot2 验收与回滚演练（9哥 安排）**。
-5. **v0.5.2 发布**（2026-10-25）：`a26af81` 管道安装 stdin（dot2 #15，端到端管道测试 + 静态不变量）、`fe16846` 卫星就绪/连接测试按传输方式（dot2 #7）+ 控制台新增设备默认 id / 不适用徽章；全量 **1298/17**、ruff/`sh -n`/web 全绿；tag 与 digest 待 9哥 点头后补。**生产保持 0.5.0**。
+5. **v0.5.2 发布**（2026-10-25）：`a26af81` 管道安装 stdin（dot2 #15，端到端管道测试 + 静态不变量）、`fe16846` 卫星就绪/连接测试按传输方式（dot2 #7）+ 控制台新增设备默认 id / 不适用徽章；全量 **1298/17**、ruff/`sh -n`/web 全绿；tag `v0.5.2`（`b6c5a37`）、digest `sha256:df53073540e2d147d41df15ce885f25791456f2c6dd8649e7b38332d93f37132`（0.5.2=`0.5`=`sha-b6c5a37`=`latest` 同一 manifest，amd64+arm64）、CI 全绿（secret-scan/security/ci/docker-publish）、GitHub Release 已发；#1/#3/#5/#6/#7/#11/#12/#13/#14/#15 已全部关闭（内部协调不再走 issue）。**生产保持 0.5.0**。
 6. **真机验收**（9哥 保留）：LX06 + 2×Dot2 的共存/各自唤醒/同词单 turn/barge 归属/故障隔离/回滚；记录 2/4 平面 RSS/CPU 与唤醒→首字延迟。
 
 ### 0.3 环境与命令（新会话必读）
