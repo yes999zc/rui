@@ -1667,8 +1667,321 @@ def create_app(
         app.state.ack_note = ""
         app.state.led_tasks = set()
 
+        def _wire_plane(device_id: str, client: object) -> None:
+            """Attach every turn callback for one audio plane.
+
+            ``client`` is that room's stable PlaneHandle: the supervisor re-binds
+            the callbacks after a restart, so this runs once per plane, not per launch.
+            ``device_id`` names the room the turn and its answer belong to.
+            """
+            async def on_utterance(pcm: bytes) -> None:
+                if vendor.muted():
+                    # The speaker's own assistant is answering; answering too would
+                    # double-reply to one sentence.
+                    log.info("vendor dialog, dropping our turn (%.1fs left)",
+                             vendor.remaining())
+                    return
+                trace = TurnTrace(device_id=client.ready.device_id if client.ready else "")
+                if client.last_wake is not None:
+                    trace.mark("wake", at_ms=client.last_wake.ts_ms)
+                    trace.note_wake(client.last_wake)
+                    # Consume it: a follow-up utterance has no new wake event, and
+                    # reusing this timestamp made first_response_ms 20-35 s.
+                    client.last_wake = None
+                text, asr_report = await runner.transcribe(pcm, trace)
+                clean = strip_wake(text, runner.wake_words)
+                if "小爱同学" in clean or clean.strip() in {"小爱", "小爱小爱"}:
+                    # Text-level backstop for the vendor wake: its StartCapture signal
+                    # may be missing on some client builds, and its final transcript
+                    # arrives after our own ASR has already decided to answer.
+                    log.info("vendor wake word in our transcript; yielding: %r", clean)
+                    vendor.vendor_spoke("wake", clean)
+                    return
+                if not clean.strip():
+                    # Only the wake word arrived: the wake residue case, not a request.
+                    log.info("utterance was wake residue only; no turn")
+                    return
+                if app.state.spoken.is_echo(clean):
+                    # Our own answer came back through the arrays: measured 2026-10-22,
+                    # the speaker answered itself once per weather question.
+                    log.info("own voice heard back, no turn: %r", clean)
+                    return
+                if rules.is_noise(clean):
+                    # 「嗯。」 after the wake word: measured on the real speaker, and it
+                    # used to become a whole turn ("嗯，你说。").
+                    log.info("noise, no turn: %r", clean)
+                    return
+                # Transport words before the dismiss list: 「暂停」 and 「停一下」
+                # are both, and with a song playing they mean the player, not
+                # the session (old build: VENDOR_PAUSE_WORDS checked first).
+                if await _music_transport(app, clean, runner, client, trace,
+                                          traces) is not None:
+                    return
+                if await _volume_command(app, clean, runner, client, trace,
+                                         traces) is not None:
+                    return
+                if await _context_command(app, clean, runner, client, trace,
+                                          traces) is not None:
+                    return
+                if await _stop_command(app, clean, runner, client, trace, traces):
+                    return
+                # A bare device name is a question, not a command (old build,
+                # measured 5/5 guessing the direction): ask which way.
+                if rules.verbless_device_name(clean):
+                    line = phrases.book.render("device.ask_verb")
+                    runner.idle.touch()
+                    spoken = await runner.say(line, _speaking(app, client), trace)
+                    _record_turn(app, {
+                        "transcript": clean, "reply": line, "audio_bytes": spoken,
+                        "error": "", "tools": ["clarify.verb"],
+                        "stages": {},
+                    })
+                    _light_after_audio(app, spoken, cfg.audio.voice.rate)
+                    log.info("clarify: bare device name %r -> asking the verb", clean)
+                    return
+                _light(app, "thinking")
+                # An utterance that asks to be remembered leaves a candidate
+                # for the console; it is not injected until confirmed.
+                with contextlib.suppress(Exception):
+                    memory.extract(clean)
+                try:
+                    result = await runner.run(pcm, _speaking(app, client), trace, transcript=clean)
+                except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
+                    log.warning("turn failed: %s", exc)
+                    # Turn-level degrade (V1): silence after a wake reads as
+                    # "it ignored me"; one system-layer line, best effort.
+                    with contextlib.suppress(Exception):
+                        await runner.say(phrases.book.render("turn.failed"),
+                                         _speaking(app, client), trace)
+                    # The plane's drain needs the flag or it falls back to the
+                    # no-reply grace; a failed turn is still a finished turn.
+                    with contextlib.suppress(Exception):
+                        await client.reply_finished()
+                    return
+                claimed_device = rules.claims_device_success(clean, result.reply)
+                claimed_music = rules.claims_music_success(clean, result.reply)
+                if not result.tools and (claimed_device or claimed_music):
+                    # The model said it did something without calling a tool:
+                    # retry once with an explicit instruction, then be honest.
+                    log.info("clarify: claimed success with no tool call: %r", result.reply)
+                    hint = ("上一轮你没有成功调用任何工具，不要用文字回答。"
+                            "如果是点歌就调用 music_play；做不到就如实说没做成，"
+                            "不要谎称已经放/已经执行。")
+                    try:
+                        result = await runner.run(pcm, _speaking(app, client), trace,
+                                                  transcript=clean, hint=hint)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("retry after a false claim failed: %s", exc)
+                    if not result.tools:
+                        key = "music.ask_play" if claimed_music else "device.not_done"
+                        line = phrases.book.render(key)
+                        spoken = await runner.say(line, _speaking(app, client), trace)
+                        result.reply = line
+                        result.audio_bytes = spoken
+                if asr_report is not None:
+                    result.stages.setdefault("asr", asr_report)
+                _record_turn(app, result.to_dict())
+                trace.note_playback_metrics(getattr(client, "metrics", None))
+                traces.add(trace)
+                # A music/volume turn wants the song back the moment the reply
+                # drains, not after the follow-up window (measured 09:21: ~10 s).
+                await client.reply_finished(hold_music_s=_turn_hold(result))
+                _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
+                                   _turn_light(result))
+                log.info("turn: %s", result.to_dict())
+
+            client.on_utterance = on_utterance
+            async def stop_ours() -> None:
+                try:
+                    await client.send(StopAudio())
+                except Exception as exc:  # noqa: BLE001 - never crash the app
+                    log.info("vendor yield: stop failed: %s", exc)
+
+            # The vendor's playing state as the CONTROL plane sees it. The
+            # adapter's own `vendor_playing` lives inside the audio plane's
+            # process; reading it from here always looked False, so the
+            # watchdog gave the line back mid-answer (measured 08:49:17).
+            vendor_state = {"playing": False, "seen": False}
+
+            async def vendor_park_and_watch() -> None:
+                """The vendor took the line while our song played (V4/V5).
+
+                Park the song; hand it back when the vendor's dialog ends
+                (Dialog.Finish, or playing idle). The 4 s watchdog only covers
+                a wake that never starts speaking (old build's rule) - once
+                the vendor has sounded, its dialog decides.
+                """
+                service = getattr(app.state, "music", None)
+                if service is None or not await service.park_for_vendor():
+                    return
+                await asyncio.sleep(4.0)
+                if not vendor_state["playing"] and not vendor_state["seen"]:
+                    await service.give_back_if_parked(delay_s=0.0)
+                    return
+                # Sound started but its end event may be lost: bounded fallback.
+                for _ in range(36):          # up to 3 more minutes
+                    await asyncio.sleep(5.0)
+                    if not service.vendor_parked:
+                        return
+                    if not vendor_state["playing"]:
+                        await service.give_back_if_parked(delay_s=0.0)
+                        return
+
+            def on_vendor(kind: str, text: str) -> None:
+                """The vendor's assistant woke: it owns the next utterance.
+
+                Opening a quiet window is not enough - if our turn already started
+                (continuous follow-up listening means it often has), the two answers
+                overlap. The old build barge-in'd on this signal; so do we: abort the
+                synthesis and stop the speaker, then stay quiet for 12 s.
+
+                With our music playing the stop becomes a park: the song waits out
+                the vendor's dialog and comes back (its `idle` event, or the 4 s
+                watchdog above). Key 114 starting the vendor's own player lands on
+                the same `playing` event, so V5 needs no separate path.
+                """
+                service = getattr(app.state, "music", None)
+                if kind == "playing":
+                    vendor_state["playing"] = text == "playing"
+                    vendor_state["seen"] = vendor_state["seen"] or vendor_state["playing"]
+                    if service is not None:
+                        if text == "playing" and service.state == "playing":
+                            asyncio.create_task(service.park_for_vendor(),
+                                                name="vendor-park")
+                        elif text == "idle" and service.vendor_parked:
+                            # The old build's 0.6 s tail: let the TTS ring out.
+                            asyncio.create_task(service.give_back_if_parked(0.6),
+                                                name="vendor-giveback")
+                elif kind == "vendor_listening":
+                    # The vendor's recognizer is hearing someone: get the song
+                    # out of the way now (only music, no quiet window).
+                    if service is not None and service.state == "playing":
+                        asyncio.create_task(service.park_for_vendor(),
+                                            name="vendor-park")
+                elif kind == "wake":
+                    # A new vendor dialog: the silent-wake watchdog starts fresh.
+                    vendor_state["playing"] = False
+                    vendor_state["seen"] = False
+                    if service is not None and service.vendor_parked:
+                        asyncio.create_task(service.give_back_if_parked(0.6),
+                                            name="vendor-giveback")
+                if not vendor.vendor_spoke(kind, text):
+                    return
+                runner.abort()
+                if service is not None and service.state == "playing":
+                    asyncio.create_task(vendor_park_and_watch(), name="vendor-park")
+                asyncio.create_task(stop_ours(), name="vendor-stop")
+                _light(app, "off")
+
+            client.on_vendor = on_vendor
+            def on_wake(msg: object) -> None:
+                vendor.ours_spoke()
+                _light(app, "wake")
+                # Unified idle rule (9哥, 16:1x): ANY interaction in a session ends
+                # with 「我先下啦」 after session.timeout_s of silence - a wake that
+                # heard nothing, a finished answer, a finished song. The clock is
+                # started here, kept alive while a turn/playback/gate is active, and
+                # closed by the single goodbye in idle_watch.
+                runner.idle.start()
+                # A wake is also a new conversation: the previous session's turns
+                # must not bleed in (10:41:26: a weather answer ended by asking
+                # which 周杰伦 song to play). Old build: begin_session().
+                runner.reset_history()
+
+                if getattr(msg, "barge", False):
+                    # The plane already stopped the speaker and dropped its queue;
+                    # this stops the answer that is still being synthesised from
+                    # refilling it.
+                    log.info("barge-in: %.1f s of queued speech dropped",
+                             getattr(msg, "barged_s", 0.0))
+                    runner.abort()
+
+            def on_wake_idle(msg: object) -> None:
+                # The listening gate closed with nothing said. Do NOT close the
+                # session here: the unified rule says a silent wake still gets the
+                # 「我先下啦」 goodbye after session.timeout_s (9哥, 16:1x). The idle
+                # clock was started in on_wake and keeps running; only the light is
+                # turned off because nobody is being listened to any more.
+                _light(app, "off")
+                log.info("wake without speech (%.1f s); idle goodbye in %.0f s",
+                         float(getattr(msg, "waited_ms", 0.0)) / 1000.0,
+                         max(0.0, runner.idle.remaining()))
+
+            client.on_wake = on_wake
+            client.on_wake_idle = on_wake_idle
+            music = getattr(app.state, "music", None)
+            if music is not None:
+                # The queue advances only on a file's natural end (the plane's
+                # PlayFinished); a pause or a barge must not look like a finish.
+                client.on_playback_finished = music.on_finished
+
+            # Volume: the speaker's own mixer, never a claim without a call.
+            # Measured 08:53: 「音量80%」 was answered 「音量调到80%了。」 with
+            # zero tool calls - the old build's false-claim failure mode.
+            async def volume_tool(args: dict) -> ToolResult:
+                level = str(args.get("level") or "").strip().lower()
+                try:
+                    now = await client.device_volume()
+                except Exception:  # noqa: BLE001 - a dead mixer is a sentence
+                    return ToolResult(status="unreachable")
+                if now is None:
+                    return ToolResult(status="unreachable")
+                pct = round(now * 100 / 255)
+                if level in ("", "read", "how", "now"):
+                    return ToolResult(status="ok_read").slot(pct=pct)
+                if level in ("up", "down"):
+                    pct = max(0, min(100, pct + (10 if level == "up" else -10)))
+                elif level in ("mute", "静音"):
+                    pct = 0
+                else:
+                    digits = "".join(ch for ch in level if ch.isdigit())
+                    if not digits:
+                        return ToolResult(status="unknown").slot(pct=pct)
+                    pct = max(0, min(100, int(digits)))
+                target = round(pct * 255 / 100)
+                try:
+                    got = await client.set_device_volume(target)
+                except Exception:  # noqa: BLE001
+                    return ToolResult(status="unreachable")
+                applied = round((got if got is not None else target) * 100 / 255)
+                # Learn it as the target: the reconciler would otherwise put the
+                # configured value back within 16 s (old build: adopt_device_volume).
+                dev_id = client.ready.device_id if client.ready else ""
+                dev = next((d for d in cfg.devices if d.id == dev_id),
+                           cfg.devices[0] if cfg.devices else None)
+                if dev is not None and config_path is not None:
+                    dev.volume = applied
+                    with contextlib.suppress(Exception):
+                        save_config(config_path, cfg)
+                return ToolResult(status="ok").slot(pct=applied)
+
+            volume_spec = ToolSpec(
+                name="local.volume", permission=Permission.WRITE,
+                description="调音量（「音量大一点/小一点/调到80%/静音/现在音量多少」）",
+                input_schema={"type": "object", "properties": {
+                    "level": {"type": "string",
+                              "description": "up | down | mute | 0-100 | 空=查询"}}},
+                interaction=InteractionSpec(exec={
+                    "ok": "volume.set", "ok_read": "volume.read",
+                    "unknown": "volume.unknown",
+                    "unreachable": "volume.failed"}),
+            )
+            # Lifespan can run twice (TestClient, restarts): register once.
+            if "local.volume" not in registry.names():
+                registry.register(volume_spec)
+                local_tools.append((volume_spec, volume_tool))
+            mem_specs = build_memory_tools(memory)
+            for spec, handler in mem_specs:
+                if spec.name not in registry.names():
+                    registry.register(spec)
+                    local_tools.append((spec, handler))
+            # Make every tool registered in this lifespan visible to the model.
+            runner.set_tools(local_tools)
+            app.state.volume_tool = volume_tool
+
         if start_audio:
             supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
+            ready = None
             try:
                 await supervisor.start()
                 ready = supervisor.client.ready if supervisor.client else None
@@ -1689,312 +2002,7 @@ def create_app(
             app.state.audio = supervisor
             # The handle stays valid across restarts (callbacks are re-applied on
             # every bind), so the turn path is wired once, not once per launch.
-            client = supervisor.handle
-            if client is not None:
-                async def on_utterance(pcm: bytes) -> None:
-                    if vendor.muted():
-                        # The speaker's own assistant is answering; answering too would
-                        # double-reply to one sentence.
-                        log.info("vendor dialog, dropping our turn (%.1fs left)",
-                                 vendor.remaining())
-                        return
-                    trace = TurnTrace(device_id=client.ready.device_id if client.ready else "")
-                    if client.last_wake is not None:
-                        trace.mark("wake", at_ms=client.last_wake.ts_ms)
-                        trace.note_wake(client.last_wake)
-                        # Consume it: a follow-up utterance has no new wake event, and
-                        # reusing this timestamp made first_response_ms 20-35 s.
-                        client.last_wake = None
-                    text, asr_report = await runner.transcribe(pcm, trace)
-                    clean = strip_wake(text, runner.wake_words)
-                    if "小爱同学" in clean or clean.strip() in {"小爱", "小爱小爱"}:
-                        # Text-level backstop for the vendor wake: its StartCapture signal
-                        # may be missing on some client builds, and its final transcript
-                        # arrives after our own ASR has already decided to answer.
-                        log.info("vendor wake word in our transcript; yielding: %r", clean)
-                        vendor.vendor_spoke("wake", clean)
-                        return
-                    if not clean.strip():
-                        # Only the wake word arrived: the wake residue case, not a request.
-                        log.info("utterance was wake residue only; no turn")
-                        return
-                    if app.state.spoken.is_echo(clean):
-                        # Our own answer came back through the arrays: measured 2026-10-22,
-                        # the speaker answered itself once per weather question.
-                        log.info("own voice heard back, no turn: %r", clean)
-                        return
-                    if rules.is_noise(clean):
-                        # 「嗯。」 after the wake word: measured on the real speaker, and it
-                        # used to become a whole turn ("嗯，你说。").
-                        log.info("noise, no turn: %r", clean)
-                        return
-                    # Transport words before the dismiss list: 「暂停」 and 「停一下」
-                    # are both, and with a song playing they mean the player, not
-                    # the session (old build: VENDOR_PAUSE_WORDS checked first).
-                    if await _music_transport(app, clean, runner, client, trace,
-                                              traces) is not None:
-                        return
-                    if await _volume_command(app, clean, runner, client, trace,
-                                             traces) is not None:
-                        return
-                    if await _context_command(app, clean, runner, client, trace,
-                                              traces) is not None:
-                        return
-                    if await _stop_command(app, clean, runner, client, trace, traces):
-                        return
-                    # A bare device name is a question, not a command (old build,
-                    # measured 5/5 guessing the direction): ask which way.
-                    if rules.verbless_device_name(clean):
-                        line = phrases.book.render("device.ask_verb")
-                        runner.idle.touch()
-                        spoken = await runner.say(line, _speaking(app, client), trace)
-                        _record_turn(app, {
-                            "transcript": clean, "reply": line, "audio_bytes": spoken,
-                            "error": "", "tools": ["clarify.verb"],
-                            "stages": {},
-                        })
-                        _light_after_audio(app, spoken, cfg.audio.voice.rate)
-                        log.info("clarify: bare device name %r -> asking the verb", clean)
-                        return
-                    _light(app, "thinking")
-                    # An utterance that asks to be remembered leaves a candidate
-                    # for the console; it is not injected until confirmed.
-                    with contextlib.suppress(Exception):
-                        memory.extract(clean)
-                    try:
-                        result = await runner.run(pcm, _speaking(app, client), trace, transcript=clean)
-                    except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
-                        log.warning("turn failed: %s", exc)
-                        # Turn-level degrade (V1): silence after a wake reads as
-                        # "it ignored me"; one system-layer line, best effort.
-                        with contextlib.suppress(Exception):
-                            await runner.say(phrases.book.render("turn.failed"),
-                                             _speaking(app, client), trace)
-                        # The plane's drain needs the flag or it falls back to the
-                        # no-reply grace; a failed turn is still a finished turn.
-                        with contextlib.suppress(Exception):
-                            await client.reply_finished()
-                        return
-                    claimed_device = rules.claims_device_success(clean, result.reply)
-                    claimed_music = rules.claims_music_success(clean, result.reply)
-                    if not result.tools and (claimed_device or claimed_music):
-                        # The model said it did something without calling a tool:
-                        # retry once with an explicit instruction, then be honest.
-                        log.info("clarify: claimed success with no tool call: %r", result.reply)
-                        hint = ("上一轮你没有成功调用任何工具，不要用文字回答。"
-                                "如果是点歌就调用 music_play；做不到就如实说没做成，"
-                                "不要谎称已经放/已经执行。")
-                        try:
-                            result = await runner.run(pcm, _speaking(app, client), trace,
-                                                      transcript=clean, hint=hint)
-                        except Exception as exc:  # noqa: BLE001
-                            log.warning("retry after a false claim failed: %s", exc)
-                        if not result.tools:
-                            key = "music.ask_play" if claimed_music else "device.not_done"
-                            line = phrases.book.render(key)
-                            spoken = await runner.say(line, _speaking(app, client), trace)
-                            result.reply = line
-                            result.audio_bytes = spoken
-                    if asr_report is not None:
-                        result.stages.setdefault("asr", asr_report)
-                    _record_turn(app, result.to_dict())
-                    trace.note_playback_metrics(getattr(client, "metrics", None))
-                    traces.add(trace)
-                    # A music/volume turn wants the song back the moment the reply
-                    # drains, not after the follow-up window (measured 09:21: ~10 s).
-                    await client.reply_finished(hold_music_s=_turn_hold(result))
-                    _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
-                                       _turn_light(result))
-                    log.info("turn: %s", result.to_dict())
-
-                client.on_utterance = on_utterance
-                async def stop_ours() -> None:
-                    try:
-                        await client.send(StopAudio())
-                    except Exception as exc:  # noqa: BLE001 - never crash the app
-                        log.info("vendor yield: stop failed: %s", exc)
-
-                # The vendor's playing state as the CONTROL plane sees it. The
-                # adapter's own `vendor_playing` lives inside the audio plane's
-                # process; reading it from here always looked False, so the
-                # watchdog gave the line back mid-answer (measured 08:49:17).
-                vendor_state = {"playing": False, "seen": False}
-
-                async def vendor_park_and_watch() -> None:
-                    """The vendor took the line while our song played (V4/V5).
-
-                    Park the song; hand it back when the vendor's dialog ends
-                    (Dialog.Finish, or playing idle). The 4 s watchdog only covers
-                    a wake that never starts speaking (old build's rule) - once
-                    the vendor has sounded, its dialog decides.
-                    """
-                    service = getattr(app.state, "music", None)
-                    if service is None or not await service.park_for_vendor():
-                        return
-                    await asyncio.sleep(4.0)
-                    if not vendor_state["playing"] and not vendor_state["seen"]:
-                        await service.give_back_if_parked(delay_s=0.0)
-                        return
-                    # Sound started but its end event may be lost: bounded fallback.
-                    for _ in range(36):          # up to 3 more minutes
-                        await asyncio.sleep(5.0)
-                        if not service.vendor_parked:
-                            return
-                        if not vendor_state["playing"]:
-                            await service.give_back_if_parked(delay_s=0.0)
-                            return
-
-                def on_vendor(kind: str, text: str) -> None:
-                    """The vendor's assistant woke: it owns the next utterance.
-
-                    Opening a quiet window is not enough - if our turn already started
-                    (continuous follow-up listening means it often has), the two answers
-                    overlap. The old build barge-in'd on this signal; so do we: abort the
-                    synthesis and stop the speaker, then stay quiet for 12 s.
-
-                    With our music playing the stop becomes a park: the song waits out
-                    the vendor's dialog and comes back (its `idle` event, or the 4 s
-                    watchdog above). Key 114 starting the vendor's own player lands on
-                    the same `playing` event, so V5 needs no separate path.
-                    """
-                    service = getattr(app.state, "music", None)
-                    if kind == "playing":
-                        vendor_state["playing"] = text == "playing"
-                        vendor_state["seen"] = vendor_state["seen"] or vendor_state["playing"]
-                        if service is not None:
-                            if text == "playing" and service.state == "playing":
-                                asyncio.create_task(service.park_for_vendor(),
-                                                    name="vendor-park")
-                            elif text == "idle" and service.vendor_parked:
-                                # The old build's 0.6 s tail: let the TTS ring out.
-                                asyncio.create_task(service.give_back_if_parked(0.6),
-                                                    name="vendor-giveback")
-                    elif kind == "vendor_listening":
-                        # The vendor's recognizer is hearing someone: get the song
-                        # out of the way now (only music, no quiet window).
-                        if service is not None and service.state == "playing":
-                            asyncio.create_task(service.park_for_vendor(),
-                                                name="vendor-park")
-                    elif kind == "wake":
-                        # A new vendor dialog: the silent-wake watchdog starts fresh.
-                        vendor_state["playing"] = False
-                        vendor_state["seen"] = False
-                        if service is not None and service.vendor_parked:
-                            asyncio.create_task(service.give_back_if_parked(0.6),
-                                                name="vendor-giveback")
-                    if not vendor.vendor_spoke(kind, text):
-                        return
-                    runner.abort()
-                    if service is not None and service.state == "playing":
-                        asyncio.create_task(vendor_park_and_watch(), name="vendor-park")
-                    asyncio.create_task(stop_ours(), name="vendor-stop")
-                    _light(app, "off")
-
-                client.on_vendor = on_vendor
-                def on_wake(msg: object) -> None:
-                    vendor.ours_spoke()
-                    _light(app, "wake")
-                    # Unified idle rule (9哥, 16:1x): ANY interaction in a session ends
-                    # with 「我先下啦」 after session.timeout_s of silence - a wake that
-                    # heard nothing, a finished answer, a finished song. The clock is
-                    # started here, kept alive while a turn/playback/gate is active, and
-                    # closed by the single goodbye in idle_watch.
-                    runner.idle.start()
-                    # A wake is also a new conversation: the previous session's turns
-                    # must not bleed in (10:41:26: a weather answer ended by asking
-                    # which 周杰伦 song to play). Old build: begin_session().
-                    runner.reset_history()
-
-                    if getattr(msg, "barge", False):
-                        # The plane already stopped the speaker and dropped its queue;
-                        # this stops the answer that is still being synthesised from
-                        # refilling it.
-                        log.info("barge-in: %.1f s of queued speech dropped",
-                                 getattr(msg, "barged_s", 0.0))
-                        runner.abort()
-
-                def on_wake_idle(msg: object) -> None:
-                    # The listening gate closed with nothing said. Do NOT close the
-                    # session here: the unified rule says a silent wake still gets the
-                    # 「我先下啦」 goodbye after session.timeout_s (9哥, 16:1x). The idle
-                    # clock was started in on_wake and keeps running; only the light is
-                    # turned off because nobody is being listened to any more.
-                    _light(app, "off")
-                    log.info("wake without speech (%.1f s); idle goodbye in %.0f s",
-                             float(getattr(msg, "waited_ms", 0.0)) / 1000.0,
-                             max(0.0, runner.idle.remaining()))
-
-                client.on_wake = on_wake
-                client.on_wake_idle = on_wake_idle
-                music = getattr(app.state, "music", None)
-                if music is not None:
-                    # The queue advances only on a file's natural end (the plane's
-                    # PlayFinished); a pause or a barge must not look like a finish.
-                    client.on_playback_finished = music.on_finished
-
-                # Volume: the speaker's own mixer, never a claim without a call.
-                # Measured 08:53: 「音量80%」 was answered 「音量调到80%了。」 with
-                # zero tool calls - the old build's false-claim failure mode.
-                async def volume_tool(args: dict) -> ToolResult:
-                    level = str(args.get("level") or "").strip().lower()
-                    try:
-                        now = await client.device_volume()
-                    except Exception:  # noqa: BLE001 - a dead mixer is a sentence
-                        return ToolResult(status="unreachable")
-                    if now is None:
-                        return ToolResult(status="unreachable")
-                    pct = round(now * 100 / 255)
-                    if level in ("", "read", "how", "now"):
-                        return ToolResult(status="ok_read").slot(pct=pct)
-                    if level in ("up", "down"):
-                        pct = max(0, min(100, pct + (10 if level == "up" else -10)))
-                    elif level in ("mute", "静音"):
-                        pct = 0
-                    else:
-                        digits = "".join(ch for ch in level if ch.isdigit())
-                        if not digits:
-                            return ToolResult(status="unknown").slot(pct=pct)
-                        pct = max(0, min(100, int(digits)))
-                    target = round(pct * 255 / 100)
-                    try:
-                        got = await client.set_device_volume(target)
-                    except Exception:  # noqa: BLE001
-                        return ToolResult(status="unreachable")
-                    applied = round((got if got is not None else target) * 100 / 255)
-                    # Learn it as the target: the reconciler would otherwise put the
-                    # configured value back within 16 s (old build: adopt_device_volume).
-                    dev_id = client.ready.device_id if client.ready else ""
-                    dev = next((d for d in cfg.devices if d.id == dev_id),
-                               cfg.devices[0] if cfg.devices else None)
-                    if dev is not None and config_path is not None:
-                        dev.volume = applied
-                        with contextlib.suppress(Exception):
-                            save_config(config_path, cfg)
-                    return ToolResult(status="ok").slot(pct=applied)
-
-                volume_spec = ToolSpec(
-                    name="local.volume", permission=Permission.WRITE,
-                    description="调音量（「音量大一点/小一点/调到80%/静音/现在音量多少」）",
-                    input_schema={"type": "object", "properties": {
-                        "level": {"type": "string",
-                                  "description": "up | down | mute | 0-100 | 空=查询"}}},
-                    interaction=InteractionSpec(exec={
-                        "ok": "volume.set", "ok_read": "volume.read",
-                        "unknown": "volume.unknown",
-                        "unreachable": "volume.failed"}),
-                )
-                # Lifespan can run twice (TestClient, restarts): register once.
-                if "local.volume" not in registry.names():
-                    registry.register(volume_spec)
-                    local_tools.append((volume_spec, volume_tool))
-                mem_specs = build_memory_tools(memory)
-                for spec, handler in mem_specs:
-                    if spec.name not in registry.names():
-                        registry.register(spec)
-                        local_tools.append((spec, handler))
-                # Make every tool registered in this lifespan visible to the model.
-                runner.set_tools(local_tools)
-                app.state.volume_tool = volume_tool
+            _wire_plane(ready.device_id if ready else "", supervisor.handle)
         # Session end. Polled rather than timed: one loop, 1 s resolution, and the
         # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
         async def idle_watch() -> None:
