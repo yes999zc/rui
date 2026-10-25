@@ -14,7 +14,7 @@
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
 | 质量 | **1293 passed / 18 skipped**（0.5.0 + dot2 冷装回归修复 #13/#14）；ruff clean；`sh -n deploy/install.sh` 干净；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | 0.5.0 已发布并上线 → **v0.5.1 冷装回归修复（dot2 #13/#14）已准备就绪，待 9哥 点头 tag/push**；真机验收 9哥 保留 |
+| 当前主线 | **v0.5.1 已发布**（冷装回归修复 dot2 #13/#14）；生产仍是 0.5.0（无运行时变化，不必升级）；真机验收 9哥 保留 |
 
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 
@@ -44,7 +44,8 @@ Phase 2 接线已完成并验证，**不要再改** `src/rui/audio/{protocol,pro
 
 1. **Phase 1b ✅**（P5.3）：`multi_device.*` / `devices[].audio.*` 已进目录（`multi_device` 组 + 每设备 13 个 audio 覆盖字段），体检页有多设备卡片（未启用/逐平面状态/超 cap/启动失败）；`web` 构建绿。
 2. **打磨批 ✅**（P5.4）：healthcheck 根因 + doctor 一致性行、install.sh 升级提示 + prune、0.4.2 占位注释清理、`docs/deploy.md` §7.1 下游升级/兼容矩阵、音量换算 pointer；dot2 docs PR 当前无 open，发布前再查。
-3. **v0.5.0 发布 + 生产部署 ✅**（2026-10-25）：tag `v0.5.0`、digest `sha256:01a3afe1…`、CI 全绿、Release 已发、#7 已公布；生产已切 0.5.0（healthcheck ok、真实回合通过）。**剩真机 LX06+2×Dot2 验收与回滚演练（9哥 安排）**。
+3. **v0.5.0 发布 + 生产部署 ✅**（2026-10-25）：tag `v0.5.0`、digest `sha256:01a3afe1…`、CI 全绿、Release 已发、#7 已公布；生产已切 0.5.0（healthcheck ok、真实回合通过）。
+4. **v0.5.1 发布 ✅**（2026-10-25 18:5x，dot2 #13/#14）：tag `v0.5.1`（commit `c0d7048`）、digest `sha256:25d67cf88c62…`（0.5.1=`0.5`=`latest`=`sha-c0d7048` 同一 manifest，amd64+arm64）；CI 全绿；Release 已发；#7/#13/#14 已通知复测。**生产保持 0.5.0**（0.5.1 只改安装器/doctor/文档，无运行时变化）。**剩真机 LX06+2×Dot2 验收与回滚演练（9哥 安排）**。
 4. **真机验收**（9哥 保留）：LX06 + 2×Dot2 的共存/各自唤醒/同词单 turn/barge 归属/故障隔离/回滚；记录 2/4 平面 RSS/CPU 与唤醒→首字延迟。
 
 ### 0.3 环境与命令（新会话必读）
