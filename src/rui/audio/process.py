@@ -35,7 +35,7 @@ import numpy as np
 
 from .. import secrets
 from ..config import Config, load_config
-from ..config.schema import effective_audio
+from ..config.schema import effective_ack_echo_ignore_ms, effective_audio
 from ..device import build_adapters
 from ..device.contract import (
     AudioFrame,
@@ -704,6 +704,16 @@ class AudioPlane:
     @property
     def _post_playback_mute_s(self) -> float:
         return self.effective.voice.post_playback_mute_ms / 1000.0
+
+    @property
+    def ack_echo_ignore_ms(self) -> int:
+        """Spoken-cue echo window: this device's override, else the global ack value.
+
+        A device-AEC plug keeps the cue's residual echo on its microphone far longer
+        than an LX06 needs; reading the global value here is what let its own cue open a
+        turn (0.5.3 self-hearing fix).
+        """
+        return effective_ack_echo_ignore_ms(self.cfg.ack, self.device_cfg)
 
     def _mic_is_muted(self) -> bool:
         """True while a post-playback mute window is open (no VAD/KWS at all)."""
@@ -1809,7 +1819,9 @@ class AudioPlane:
         # own 300 ms buffer. Both need more than their nominal length, so the hold carries
         # a floor - the old build used 250 ms for exactly this - and anything arriving
         # meanwhile is buffered, not dropped.
-        hold_ms = cue_ms + (float(self.cfg.ack.echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS)
+        hold_ms = cue_ms + (
+            float(self.ack_echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS
+        )
         # A device barge hint inside this window is our own cue/echo, not a person;
         # `_device_wake_barge_allowed` consults this deadline (§5 ACK mute/gate hold).
         self._wake_hold_until = max(self._wake_hold_until, time.monotonic() + hold_ms / 1000.0)

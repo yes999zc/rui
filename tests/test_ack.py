@@ -20,6 +20,7 @@ from rui.audio import ack, chime
 from rui.audio.kws import WakeHit
 from rui.audio.process import AudioPlane
 from rui.config import Config
+from rui.device.contract import AudioFrame, DeviceInfo
 
 # Optional model for the gate tests. Point RUI_TEST_MODELS at a directory that
 # holds silero_vad.onnx (and kws/, sensevoice/ for the other suites); without it these
@@ -284,6 +285,84 @@ class FakeAdapter:
         self.stops += 1
 
 
+class FrameAdapter(FakeAdapter):
+    """FakeAdapter plus a finite capture stream: the plane's frame-consumer input."""
+
+    def __init__(self, frames: list[AudioFrame]) -> None:
+        super().__init__()
+        self._frames = frames
+
+    def set_frames(self, frames: list[AudioFrame]) -> None:
+        self._frames = frames
+
+    async def frames(self):
+        for frame in self._frames:
+            yield frame
+
+
+class HoldAwareGate:
+    """Utterance-gate stand-in: a turn may only close outside the hold window.
+
+    `hold()` is measured in audio time, exactly like `UtteranceGate.hold()`: every block
+    fed meanwhile is the box's own voice, and the first block after the window closes a
+    turn. The real gate buffers the window and replays it, but the invariant this test
+    pins is what the *plane* may do (open a turn), not VAD tuning - and a plane that
+    holds for the wrong, shorter window lifts mid-echo and fails immediately.
+    """
+
+    def __init__(self) -> None:
+        self.armed = False
+        self.hold_ms = 0.0
+        self.held_ms = 0.0
+        self.turns = 0
+        self.interrupted = 0
+        self.speech_ms = 0.0
+        self.idle_events = 0
+        self.fed = 0
+        self.events: list[str] = []
+
+    def arm(self, **_kwargs) -> None:
+        self.armed = True
+        self.hold_ms = 0.0
+        self.held_ms = 0.0
+        self.events.append("arm")
+
+    def hold(self, ms: float, skip_ms: float = 0.0) -> None:  # noqa: ARG002
+        self.hold_ms = max(0.0, float(ms))
+        self.held_ms = 0.0
+        self.events.append("hold")
+
+    def feed(self, pcm: bytes, ts_ms: float = 0.0):
+        if not self.armed:
+            return None
+        self.fed += len(pcm)
+        block_ms = len(pcm) / 2 * 1000.0 / 16000.0
+        if self.hold_ms > 0.0:
+            self.held_ms += block_ms
+            self.hold_ms = max(0.0, self.hold_ms - block_ms)
+            return None
+        # UtteranceGate.disarm()s once a turn closes: one gate, one turn.
+        self.armed = False
+        self.turns += 1
+        return pcm, ts_ms
+
+
+def _voice_frames(pcm: bytes, device_id: str = "dot2") -> list[AudioFrame]:
+    """Split 16 kHz mono s16 into the 20 ms frames the capture loop receives."""
+    step = 16000 * 20 // 1000 * 2
+    return [
+        AudioFrame(
+            device_id=device_id,
+            seq=index,
+            ts_ms=(start // 2) * 1000.0 / 16000,
+            pcm=pcm[start : start + step],
+            channels=1,
+            sample_rate=16000,
+        )
+        for index, start in enumerate(range(0, len(pcm), step))
+    ]
+
+
 class FakeWriter:
     def __init__(self) -> None:
         self.written = b""
@@ -364,6 +443,123 @@ def test_spoken_cue_holds_the_gate_for_its_length_plus_the_echo_window(tmp_path:
         await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=0.0), FakeWriter(), asyncio.Event())
         assert plane.ack_mode_effective == "tts"
         assert plane.gate.holds[0] == pytest.approx(500 + 1200, abs=15)
+
+    asyncio.run(run())
+
+
+def test_a_device_sets_its_own_ack_echo_window(tmp_path: Path) -> None:
+    """A device that keeps echo longer holds the gate longer; the others stay global.
+
+    The spoken cue mutes the microphone for roughly its own length plus this window. A
+    device-AEC plug (Dot 2) cannot cancel its own cue and needs ~2500 ms; the LX06 and
+    every device without the override keep the global `ack.echo_ignore_ms`.
+    """
+    from rui.config import DeviceConfig
+    from rui.config.schema import DeviceAudioOverride, DeviceVoiceOverride
+
+    async def run() -> None:
+        cfg = Config()
+        cfg.system.data_dir = str(tmp_path)
+        cfg.ack.mode = "tts"  # type: ignore[assignment]
+        cfg.ack.echo_ignore_ms = 1200
+        cfg.audio.aec.enabled = False
+        cfg.devices = [
+            DeviceConfig(
+                id="dot2", adapter="mock", host="dot2.local", room="卧室",
+                audio=DeviceAudioOverride(
+                    voice=DeviceVoiceOverride(ack_echo_ignore_ms=2500)
+                ),
+            ),
+            DeviceConfig(id="lx06", adapter="mock", host="lx06.local", room="客厅"),
+        ]
+        tone_wav(ack.ack_wav_path(cfg), 0.5)
+
+        holds: dict[str, float] = {}
+        for device_id in ("dot2", "lx06"):
+            plane = AudioPlane(cfg, device_id, tmp_path / f"{device_id}.sock")
+            plane.gate = FakeGate()  # type: ignore[assignment]
+            plane.adapter = FakeAdapter()  # type: ignore[assignment]
+            await plane._on_wake(
+                WakeHit(keyword="你好小瑞", ts_ms=0.0), FakeWriter(), asyncio.Event()
+            )
+            holds[device_id] = plane.gate.holds[0]
+            assert plane._ack_task is not None
+            plane._ack_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await plane._ack_task
+
+        assert holds["dot2"] == pytest.approx(500 + 2500, abs=15)
+        assert holds["lx06"] == pytest.approx(500 + 1200, abs=15), (
+            "a device without the override must keep the global window"
+        )
+
+    asyncio.run(run())
+
+
+def test_the_cue_replayed_into_the_frame_consumer_cannot_become_a_turn(
+    tmp_path: Path,
+) -> None:
+    """0.5.3 self-hearing regression: the cue's own PCM is the worst fake utterance.
+
+    A device-AEC plug cannot cancel the cue it just played, so the return path carries
+    that PCM back into the frame consumer like microphone audio. With this device's
+    2500 ms window the gate is still shut after 2.9 s of it; the global 1200 ms window
+    lifted at 1.7 s, and exactly this audio opened a turn on the assistant's own voice.
+    """
+    from rui.config import DeviceConfig
+    from rui.config.schema import DeviceAudioOverride, DeviceVoiceOverride
+
+    async def run() -> None:
+        cfg = Config()
+        cfg.system.data_dir = str(tmp_path)
+        cfg.ack.mode = "tts"  # type: ignore[assignment]
+        cfg.ack.echo_ignore_ms = 1200
+        cfg.audio.aec.enabled = False
+        cfg.devices = [DeviceConfig(
+            id="dot2", adapter="mock", host="dot2.local", room="卧室",
+            audio=DeviceAudioOverride(
+                voice=DeviceVoiceOverride(ack_echo_ignore_ms=2500)
+            ),
+        )]
+        tone_wav(ack.ack_wav_path(cfg), 0.5)
+        plane = AudioPlane(cfg, "dot2", tmp_path / "plane.sock")
+        gate = HoldAwareGate()
+        plane.gate = gate  # type: ignore[assignment]
+        adapter = FrameAdapter([])
+        plane.adapter = adapter  # type: ignore[assignment]
+        writer, connected = FakeWriter(), asyncio.Event()
+        connected.set()
+
+        await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=0.0), writer, connected)
+        assert gate.hold_ms == pytest.approx(500 + 2500, abs=15), (
+            "the plane held for the global window, not this device's"
+        )
+
+        # 2.9 s of the cue's own PCM: the cue plus the residual tail a device-AEC plug
+        # cannot cancel, arriving as capture frames at the voice rate.
+        cue_audio, mode, _ = ack.render(cfg)
+        assert mode == "tts"
+        cue_pcm = np.round(np.clip(cue_audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+        echoed = (cue_pcm * 6)[: int(2.9 * 16000) * 2]
+        info = DeviceInfo(
+            id="dot2", adapter="mock", model="mock", host="dot2.local", room="卧室",
+            channels=1, sample_rate=16000,
+        )
+        adapter.set_frames(_voice_frames(echoed))
+        await plane._capture_frames(info, connected, writer)
+
+        assert gate.turns == 0 and plane.utterances == 0, (
+            "the cue's own audio became a turn inside the echo window"
+        )
+        assert gate.hold_ms == pytest.approx(100, abs=25), (
+            "the window was not the device's 2500 ms: it lifted mid-echo"
+        )
+
+        # ... and it is not a deaf window: a real utterance right after it still closes.
+        adapter.set_frames(_voice_frames(_speech(0.2)))
+        await plane._capture_frames(info, connected, writer)
+        assert gate.turns == 1
+        assert plane.utterances == 1
 
     asyncio.run(run())
 

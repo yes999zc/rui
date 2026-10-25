@@ -26,6 +26,7 @@ from rui.config.schema import (
     DeviceVoiceOverride,
     MultiDeviceConfig,
     config_warnings,
+    effective_ack_echo_ignore_ms,
     effective_audio,
 )
 
@@ -172,6 +173,62 @@ def test_post_playback_mute_out_of_range_is_rejected(tmp_path: Path) -> None:
         "      voice: {followup_delay_ms: 2500, followup_replay: false}",
         "      voice: {followup_delay_ms: 2500, followup_replay: false,"
         " post_playback_mute_ms: 60000}",
+    )
+    with pytest.raises(ConfigError):
+        load_config(_write(tmp_path, config))
+
+
+def test_ack_echo_ignore_ms_parses_per_device_and_inherits(tmp_path: Path) -> None:
+    """The spoken-cue echo window is the device's, or the global `ack` value.
+
+    It lives under `voice` (it describes the microphone/echo path) but replaces a
+    conversational `ack` setting, so `effective_audio()` deliberately does not resolve
+    it - a value it silently ignored would be the "fake knob" this schema forbids.
+    """
+    config = V3_CONFIG.replace(
+        "      voice: {followup_delay_ms: 2500, followup_replay: false}",
+        "      voice: {followup_delay_ms: 2500, followup_replay: false,"
+        " ack_echo_ignore_ms: 2500}",
+    )
+    cfg = load_config(_write(tmp_path, config))
+    dot2 = next(d for d in cfg.devices if d.id == "dot2")
+    lx06 = next(d for d in cfg.devices if d.id == "lx06")
+    assert dot2.audio is not None and dot2.audio.voice is not None
+    assert dot2.audio.voice.ack_echo_ignore_ms == 2500
+    # An explicit value wins over the global default ...
+    assert effective_ack_echo_ignore_ms(cfg.ack, dot2) == 2500
+    # ... every other device still inherits it.
+    assert cfg.ack.echo_ignore_ms == 1200
+    assert effective_ack_echo_ignore_ms(cfg.ack, lx06) == 1200
+    assert effective_ack_echo_ignore_ms(cfg.ack, None) == 1200
+    # Changing the global moves the inheriting device and leaves the override alone.
+    cfg.ack.echo_ignore_ms = 900
+    assert effective_ack_echo_ignore_ms(cfg.ack, lx06) == 900
+    assert effective_ack_echo_ignore_ms(cfg.ack, dot2) == 2500
+    # The override must not leak into the audio merge or make it invalid.
+    assert effective_audio(cfg.audio, dot2.audio).voice.followup_delay_ms == 2500
+    assert not hasattr(effective_audio(cfg.audio, dot2.audio).voice, "ack_echo_ignore_ms")
+
+
+def test_ack_echo_ignore_ms_null_means_inherit(tmp_path: Path) -> None:
+    config = V3_CONFIG.replace(
+        "      voice: {followup_delay_ms: 2500, followup_replay: false}",
+        "      voice: {followup_delay_ms: 2500, followup_replay: false,"
+        " ack_echo_ignore_ms: null}",
+    )
+    cfg = load_config(_write(tmp_path, config))
+    dot2 = next(d for d in cfg.devices if d.id == "dot2")
+    assert dot2.audio is not None and dot2.audio.voice is not None
+    assert dot2.audio.voice.ack_echo_ignore_ms is None
+    assert effective_ack_echo_ignore_ms(cfg.ack, dot2) == cfg.ack.echo_ignore_ms
+
+
+@pytest.mark.parametrize("value", [-1, 5001])
+def test_ack_echo_ignore_ms_out_of_range_is_rejected(tmp_path: Path, value: int) -> None:
+    config = V3_CONFIG.replace(
+        "      voice: {followup_delay_ms: 2500, followup_replay: false}",
+        "      voice: {followup_delay_ms: 2500, followup_replay: false,"
+        f" ack_echo_ignore_ms: {value}}}",
     )
     with pytest.raises(ConfigError):
         load_config(_write(tmp_path, config))

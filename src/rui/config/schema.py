@@ -194,6 +194,13 @@ class DeviceVoiceOverride(BaseModel):
     # residual echo outlives the follow-up window (dot2 #7, docs/multi-device-design.md
     # §12.6). Effective only once the plane runs with this device's effective audio.
     post_playback_mute_ms: int | None = Field(default=None, ge=0, le=10000)
+    # How long to hold the gate after this device's own spoken cue, replacing the global
+    # `ack.echo_ignore_ms`. Under `voice` because it describes this device's microphone
+    # (a device-AEC plug keeps its cue's residual echo far longer than the 1200 ms the
+    # LX06 needs), but the value it overrides is the conversational `ack` setting.
+    # None = inherit. Resolved by `effective_ack_echo_ignore_ms()`, not by
+    # `effective_audio()` (the `ack` block is deliberately outside `audio`).
+    ack_echo_ignore_ms: int | None = Field(default=None, ge=0, le=5000)
 
 
 class DeviceCaptureOverride(BaseModel):
@@ -475,9 +482,31 @@ def effective_audio(audio: AudioConfig, override: DeviceAudioOverride | None) ->
         merged = block.model_dump()
         part = getattr(override, name) if override is not None else None
         if part is not None:
-            merged.update(part.model_dump(exclude_none=True))
+            values = part.model_dump(exclude_none=True)
+            # `voice.ack_echo_ignore_ms` replaces a conversational `ack` setting, not an
+            # audio one. VoiceConfig would ignore an unknown key, so drop it explicitly
+            # instead of letting a resolved-looking value vanish; `ack` is resolved by
+            # `effective_ack_echo_ignore_ms()`.
+            values.pop("ack_echo_ignore_ms", None)
+            merged.update(values)
         resolved[name] = type(block).model_validate(merged)
     return EffectiveAudio(**resolved)
+
+
+def effective_ack_echo_ignore_ms(ack: AckConfig, device: DeviceConfig | None) -> int:
+    """The spoken-cue echo window for one device: its override, else the global value.
+
+    `devices[].audio.voice.ack_echo_ignore_ms` lives under `voice` because it describes
+    this device's microphone (a device-AEC plug keeps the cue's residual echo far longer
+    than the 1200 ms an LX06 needs), but the value it replaces is the conversational
+    `ack.echo_ignore_ms`, which is deliberately outside the `audio` block. Keeping the
+    two resolved in one place is what stops the next caller from reading the global value
+    and re-introducing the self-hearing bug.
+    """
+    override = None
+    if device is not None and device.audio is not None and device.audio.voice is not None:
+        override = device.audio.voice.ack_echo_ignore_ms
+    return ack.echo_ignore_ms if override is None else override
 
 
 class ProviderConfig(BaseModel):
