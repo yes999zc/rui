@@ -95,9 +95,11 @@ const PANEL_ICONS: Record<string, string> = {
   phrases: 'quote',
   mcp: 'link',
   'assistant-session': 'chat',
+  'voice-assistant': 'chat',
   speaker: 'speaker',
   providers: 'plug',
   tools: 'wrench',
+  integrations: 'wrench',
   foundation: 'layers',
 }
 
@@ -126,8 +128,8 @@ interface UtilityNav {
  * daily destination (IA audit §2.3). `/setup` disappears after the wizard passes.
  */
 const UTILITIES: UtilityNav[] = [
-  { path: '/channels', labelKey: 'nav.channels', icon: 'chat', after: 'tools' },
-  { path: '/diagnostics', labelKey: 'nav.diagnostics', icon: 'activity', after: 'tools' },
+  { path: '/channels', labelKey: 'nav.channels', icon: 'chat', after: 'integrations' },
+  { path: '/diagnostics', labelKey: 'nav.diagnostics', icon: 'activity', after: 'integrations' },
   { path: '/setup', labelKey: 'nav.setup', icon: 'compass', after: 'foundation', setupOnly: true },
 ]
 

@@ -119,6 +119,7 @@ const zh = {
   'page.loading': '读取面板…',
   'page.blockUnknown': '未知区块类型：{type}',
   'page.configBeforeEnable': '面板关闭时仍可在这里完成配置；保存后由服务判断能否启用。',
+  'panel.tabs': '页面分区',
 
   // — blocks ————————————————————————————————————————————————
   'block.try': '试一试',
@@ -1629,6 +1630,7 @@ const en: Record<MsgKey, string> = {
   'page.loading': 'Loading panel…',
   'page.blockUnknown': 'Unknown block type: {type}',
   'page.configBeforeEnable': 'You can configure this panel while it is off; after saving, the service decides whether it can start.',
+  'panel.tabs': 'Page sections',
 
   'block.try': 'Try a sentence',
   'block.tryKicker': 'ONE TURN · FULL PATH',
@@ -3238,9 +3240,11 @@ export function localizeIssue(message: string | null | undefined): string {
 const PANEL_TITLE_KEYS: Record<string, MsgKey> = {
   providers: 'nav.models',
   tools: 'nav.integrations',
+  integrations: 'nav.integrations',
   foundation: 'nav.system',
   devices: 'nav.devicesAudio',
   'assistant-session': 'nav.assistant',
+  'voice-assistant': 'nav.assistant',
   music: 'nav.music',
   // Legacy ids keep their own page titles when reached by URL.
   speaker: 'nav.speaker',

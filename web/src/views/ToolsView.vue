@@ -1,13 +1,16 @@
 <script setup lang="ts">
 /**
  * A read-only reference page: the tools the model can actually see, plus the
- * exposure policy. Reachable from the Tools config panel; not in the main nav
- * because it is a lookup, not a place you visit every day.
+ * exposure policy. Reached at `/tools` and as the 注册工具 tab of
+ * `/panel/integrations`; `embedded` drops the page chrome there so the combined
+ * page has one title (and one exposure editor, in its own tab).
  */
 import { onMounted, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
 import { api, type Config } from '../api'
 import { exposeLabel, t, toolLabel } from '../i18n'
+
+defineProps<{ embedded?: boolean }>()
 
 const names = ref<string[]>([])
 const cfg = ref<Config | null>(null)
@@ -25,7 +28,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <header class="page-head">
+  <header v-if="!embedded" class="page-head">
     <div>
       <div class="kicker">{{ t('tools.kicker') }}</div>
       <h1>{{ t('tools.title') }}</h1>
@@ -36,12 +39,17 @@ onMounted(async () => {
     </div>
   </header>
 
+  <div v-if="embedded" class="tools-embedded-meta">
+    <span class="badge badge-ok">{{ t('tools.registered') }} · {{ names.length }}</span>
+    <span class="meta">{{ t('tools.lede') }}</span>
+  </div>
+
   <div v-if="error" class="banner banner-fail" role="alert">
     <AppIcon name="alert" :size="16" class="banner-icon" />
     <span>{{ error }}</span>
   </div>
 
-  <section v-if="cfg" class="block">
+  <section v-if="cfg && !embedded" class="block">
     <div class="block-head">
       <h2>{{ t('tools.policy') }}</h2>
     </div>
@@ -76,6 +84,18 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.tools-embedded-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s4);
+}
+
+.tools-embedded-meta .meta {
+  min-width: 0;
+}
+
 .tool-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

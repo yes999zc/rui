@@ -17,6 +17,8 @@ export const PANEL_COMPONENTS: Record<string, () => Promise<{ default: Component
   'phrasebook-editor': () => import('./PhrasebookEditor.vue'),
   'device-manager': () => import('./DeviceManager.vue'),
   'mcp-manager': () => import('./McpManager.vue'),
+  // The read-only registry, embedded as the 注册工具 tab of /panel/integrations.
+  'tools-view': () => import('../views/ToolsView.vue'),
   // Dedicated providers page (LLM/ASR/TTS chains, voice audition, advanced collapsed).
   'providers-v2': () => import('../views/ProvidersView.vue'),
 }

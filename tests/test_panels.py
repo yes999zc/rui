@@ -25,6 +25,7 @@ BLOCK_TYPES = {
     "stats", "now", "actions", "list", "form", "table", "log", "memory", "say", "volume",
     "credentials",  # music credentials form (write-only url/user/password)
     "config",       # inline catalog group (music enable/source while the page is off)
+    "component",    # hand-written view embedded in a tab (DeviceManager/McpManager/...)
 }
 
 CONSOLE_ROUTES = [
@@ -32,8 +33,10 @@ CONSOLE_ROUTES = [
     "/panel/memory", "/panel/settings", "/panel/music", "/panel/assistant-session",
     "/panel/speaker", "/panel/devices-admin", "/panel/providers", "/panel/tools",
     "/panel/phrases", "/panel/mcp", "/panel/foundation",
-    "/assistant", "/voice", "/models", "/tools", "/secrets", "/diagnostics", "/logs",
-    "/setup", "/channels",
+    # Phase 2 combined destinations.
+    "/panel/voice-assistant", "/panel/integrations",
+    "/assistant", "/settings", "/voice", "/models", "/tools", "/secrets",
+    "/diagnostics", "/logs", "/setup", "/channels",
 ]
 
 # The IA change hides some destinations but must not delete their routes/panel ids
@@ -103,8 +106,16 @@ def test_panels_have_ids_groups_and_known_block_types() -> None:
     for panel in found.values():
         assert panel["group"], panel["id"]
         assert isinstance(panel["order"], int), panel["id"]
+        tabs = [tab["id"] for tab in panel.get("tabs", [])]
+        assert len(tabs) == len(set(tabs)), panel["id"]
+        for tab in panel.get("tabs", []):
+            assert tab.get("title"), (panel["id"], tab)
         for block in panel["blocks"]:
             assert block["type"] in BLOCK_TYPES, (panel["id"], block["type"])
+            if block.get("tab"):
+                assert block["tab"] in tabs, (panel["id"], block["tab"])
+            if block["type"] == "component":
+                assert block.get("component"), panel["id"]
 
 
 def test_every_declared_source_answers() -> None:
@@ -147,8 +158,10 @@ CONFIG_CENTER_PANELS = {
     # tier 2: everything that follows the speaker hardware (devices + DSP + ack).
     "speaker": {"devices", "audio.capture", "audio.voice", "audio.playback",
                 "audio.aec", "ack"},
+    # Legacy tools page: music left for the music page in Phase 2; the combined
+    # integrations page splits these groups across tabs instead.
     "tools": {"tools.weather", "tools.news", "tools.search", "tools.ha",
-              "tools.mcp", "tools.exposure", "music"},
+              "tools.mcp", "tools.exposure"},
     # tier 1 process foundations only; assistant/session is its own panel.
     "foundation": {"system", "web", "security"},
 }
@@ -195,6 +208,106 @@ def test_the_config_center_panels_render_from_the_catalog() -> None:
     }
     assert settings_paths <= paths
     assert {"assistant", "session"} <= covered
+
+
+# Phase 2 (docs/console-ia-audit.md §3/§5): merged destinations and their tabs.
+COMBINED_TABS = {
+    "voice-assistant": ["reply", "phrases"],
+    "devices": ["status", "manage", "audio"],
+    "integrations": ["builtin", "mcp", "registry", "exposure"],
+}
+
+
+def _tab_blocks(panel: dict, tab_id: str) -> list[dict]:
+    return [block for block in panel["blocks"] if block.get("tab") == tab_id]
+
+
+def _config_groups(blocks: list[dict]) -> set[str]:
+    return {group for block in blocks if block["type"] == "config"
+            for group in block.get("groups", [])}
+
+
+def _component_ids(blocks: list[dict]) -> set[str]:
+    return {block["component"] for block in blocks if block["type"] == "component"}
+
+
+def _section_titles(blocks: list[dict]) -> list[str]:
+    out: list[str] = []
+    for block in blocks:
+        title = block.get("section_title")
+        text = title.get("zh") if isinstance(title, dict) else title
+        if text and (not out or out[-1] != text):
+            out.append(text)
+    return out
+
+
+def test_combined_pages_compose_existing_components() -> None:
+    """Phase 2 merges pages without copying their logic or adding a second save.
+
+    Each merged page is a tab list over the *existing* block vocabulary and
+    escape-hatch components: list/volume for the live speaker state, DeviceManager
+    for the lifecycle, ConfigCenter for catalog groups, McpManager/PhrasebookEditor
+    for the heavy editors. One `config` block per tab is what guarantees a single
+    sticky save bar is visible at a time.
+    """
+    c = client()
+    found = panels(c)
+    catalog = c.get("/api/v1/config/catalog").json()
+    declared_groups = {group["id"] for group in catalog["groups"]}
+
+    for panel_id, tab_ids in COMBINED_TABS.items():
+        panel = found[panel_id]
+        assert [tab["id"] for tab in panel["tabs"]] == tab_ids, panel_id
+        assert panel["source"], panel_id
+        for tab_id in tab_ids:
+            blocks = _tab_blocks(panel, tab_id)
+            assert blocks, (panel_id, tab_id)
+            configs = [block for block in blocks if block["type"] == "config"]
+            assert len(configs) <= 1, (panel_id, tab_id, "one sticky save per tab")
+            assert _config_groups(blocks) <= declared_groups, (panel_id, tab_id)
+
+    # 设备与音频: live state first, lifecycle second, hardware parameters third.
+    devices = found["devices"]
+    assert {"list", "volume"} <= {b["type"] for b in _tab_blocks(devices, "status")}
+    assert _component_ids(_tab_blocks(devices, "manage")) == {"device-manager"}
+    audio_groups = _config_groups(_tab_blocks(devices, "audio"))
+    assert audio_groups == {"devices", "audio.capture", "audio.voice",
+                            "audio.playback", "audio.aec", "ack"}
+
+    # 工具与集成: ConfigCenter no longer renders the HA/MCP writers; McpManager is
+    # the only hot-write path. The read-only registry is embedded, and exposure
+    # gets its own tab (not a duplicate policy editor inside the registry).
+    integrations = found["integrations"]
+    assert _config_groups(_tab_blocks(integrations, "builtin")) == {
+        "tools.weather", "tools.news", "tools.search"}
+    assert _component_ids(_tab_blocks(integrations, "mcp")) == {"mcp-manager"}
+    registry = _tab_blocks(integrations, "registry")
+    assert _component_ids(registry) == {"tools-view"}
+    assert registry[0]["component_args"]["embedded"] is True
+    assert _config_groups(_tab_blocks(integrations, "exposure")) == {"tools.exposure"}
+    all_integration_groups = {
+        group for block in integrations["blocks"] for group in block.get("groups", [])}
+    assert "music" not in all_integration_groups
+    # The HA/MCP fields still have a home: McpManager owns them.
+    assert {"tools.ha", "tools.mcp"} <= declared_groups
+
+    # 语音助手: behavior/replies and the phrasebook are one destination.
+    assistant = found["voice-assistant"]
+    assert _config_groups(_tab_blocks(assistant, "reply")) == {"assistant", "session"}
+    assert _component_ids(_tab_blocks(assistant, "phrases")) == {"phrasebook-editor"}
+
+    # 音乐: sections, not tabs; the config block lives under 高级 and keeps every
+    # music.* field editable, while credentials stay write-only.
+    music = found["music"]
+    assert "tabs" not in music
+    assert _section_titles(music["blocks"]) == ["正在播放", "音源与凭据", "高级"]
+    playback = [b for b in music["blocks"] if b["type"] in {"stats", "now", "actions", "list"}]
+    assert playback and all(b["section_title"]["zh"] == "正在播放" for b in playback)
+    credential = next(b for b in music["blocks"] if b["type"] == "credentials")
+    assert credential["section_title"]["zh"] == "音源与凭据"
+    music_config = next(b for b in music["blocks"] if b["type"] == "config")
+    assert music_config["section_title"]["zh"] == "高级"
+    assert music_config["groups"] == ["music"]
 
 
 def test_every_panel_has_an_english_title() -> None:

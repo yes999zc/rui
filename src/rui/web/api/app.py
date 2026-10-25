@@ -406,18 +406,42 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
         },
         {
-            "id": "devices", "title": "设备", "title_en": "Devices",
-            "icon": "⌸", "group": "status", "order": 20,
+            # Phase 2 merge (docs/console-ia-audit.md §3/§5): live status and volume,
+            # device lifecycle and speaker/audio parameters are one task. The three
+            # legacy ids (`devices`, `devices-admin`, `speaker`) stay declared and
+            # their routes redirect here for one release.
+            "id": "devices", "title": "设备与音频", "title_en": "Devices & audio",
+            "icon": "⌸", "group": "config", "order": 20,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/devices", "refresh_s": 10,
+            "tabs": [
+                {"id": "status", "title": {"zh": "状态与音量", "en": "Status & volume"}},
+                {"id": "manage", "title": {"zh": "设备管理", "en": "Device manager"}},
+                {"id": "audio", "title": {"zh": "音频与唤醒", "en": "Audio & wake"}},
+            ],
             "blocks": [
-                {"type": "list", "title": "在线设备", "items": "$",
+                {"type": "list", "tab": "status", "title": "在线设备", "items": "$",
                  "item_title": "$.room · $.id",
                  "item_sub": "$.host · $.adapter · $.model · $.status"},
-                {"type": "volume", "title": "设备音量", "href": "/api/v1/device/volume",
+                {"type": "volume", "tab": "status", "title": "设备音量",
+                 "href": "/api/v1/device/volume",
                  "label": "mysoftvol（设备原生刻度 0–255）", "min": 1, "max": 255,
                  "note": "读的是设备自己的混音器，不是配置里的 devices[].volume；厂商会自己改这个值，"
                          "所以这里显示的永远是设备实际音量。"},
+                {"type": "component", "tab": "manage", "component": "device-manager",
+                 "component_args": {}},
+                # Everything that follows the speaker hardware: the device list, the
+                # DSP/segmentation/playback numbers and the wake acknowledgement. These
+                # are tier 2 in the catalog, so the tab and the directory agree.
+                {"type": "config", "tab": "audio", "tier": 2,
+                 "groups": ["devices", "audio.capture", "audio.voice",
+                            "audio.playback", "audio.aec", "ack"],
+                 "section_title": {"zh": "跟随音箱硬件的参数", "en": "Speaker hardware"},
+                 "warning": {
+                     "zh": "这些参数跟随音箱硬件：换另一款音箱要重新量。改完重启音频面。",
+                     "en": "These follow the speaker hardware; re-measure for another "
+                           "model. Restart the audio plane after saving.",
+                 }},
             ],
         },
         {
@@ -444,6 +468,25 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
             "component": "config-center",
             "component_args": {"groups": ["assistant", "session"], "tier": 1},
+        },
+        {
+            # Phase 2 merge: assistant reply/session behaviour and the phrasebook are
+            # one task. `/panel/assistant-session` and `/panel/phrases` are aliases
+            # for one release (docs/console-ia-audit.md §5 Phase 2).
+            "id": "voice-assistant", "title": "语音助手", "title_en": "Voice assistant",
+            "icon": "☺", "group": "config", "order": 40,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config/catalog", "refresh_s": 0,
+            "tabs": [
+                {"id": "reply", "title": {"zh": "助手与回复", "en": "Assistant & replies"}},
+                {"id": "phrases", "title": {"zh": "话术", "en": "Phrasing"}},
+            ],
+            "blocks": [
+                {"type": "config", "tab": "reply", "tier": 1,
+                 "groups": ["assistant", "session"]},
+                {"type": "component", "tab": "phrases",
+                 "component": "phrasebook-editor", "component_args": {}},
+            ],
         },
         {
             "id": "speaker", "title": "音箱参数", "title_en": "Speaker",
@@ -491,10 +534,38 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
             "component": "config-center",
             "component_args": {
+                # Legacy page (redirects to /panel/integrations). Music moved to the
+                # music page in Phase 2, so this list no longer contains `music`.
                 "groups": ["tools.weather", "tools.news", "tools.search", "tools.ha",
-                           "tools.mcp", "tools.exposure", "music"],
+                           "tools.mcp", "tools.exposure"],
                 "tier": 4,
             },
+        },
+        {
+            # Phase 2 merge: built-in tools, MCP/HA, the read-only registry and the
+            # exposure policy are one destination. `tools.ha`/`tools.mcp` are owned
+            # by McpManager (the only hot-write path) instead of being re-rendered
+            # by ConfigCenter, so the old duplicate writer is gone.
+            "id": "integrations", "title": "工具与集成", "title_en": "Tools & integrations",
+            "icon": "⚒", "group": "config", "order": 44,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config/catalog", "refresh_s": 0,
+            "tabs": [
+                {"id": "builtin", "title": {"zh": "内置工具", "en": "Built-in tools"}},
+                {"id": "mcp", "title": {"zh": "MCP 与家庭助理", "en": "MCP & Home Assistant"}},
+                {"id": "registry", "title": {"zh": "注册工具", "en": "Registry"}},
+                {"id": "exposure", "title": {"zh": "暴露策略", "en": "Exposure policy"}},
+            ],
+            "blocks": [
+                {"type": "config", "tab": "builtin", "tier": 4,
+                 "groups": ["tools.weather", "tools.news", "tools.search"]},
+                {"type": "component", "tab": "mcp",
+                 "component": "mcp-manager", "component_args": {}},
+                {"type": "component", "tab": "registry",
+                 "component": "tools-view", "component_args": {"embedded": True}},
+                {"type": "config", "tab": "exposure", "tier": 4,
+                 "groups": ["tools.exposure"]},
+            ],
         },
         {
             "id": "phrases", "title": "话术", "title_en": "Phrasing",
@@ -564,15 +635,22 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "enabled_reason": music_reason,
             "source": "/api/v1/music", "refresh_s": 4,
             "blocks": [
-                {"type": "stats", "cards": [
+                # One page, three sections (docs/console-ia-audit.md §3): playback,
+                # write-only source credentials, and the catalog fields that tune the
+                # source. A section is only a heading — blocks keep rendering through
+                # the same components, so there is still one sticky save per page.
+                {"type": "stats", "section_title": {"zh": "正在播放", "en": "Now playing"},
+                 "cards": [
                     {"label": "状态", "value": "$.state",
                      "map": {"playing": "播放中", "paused": "已暂停", "idle": "空闲"},
                      "tone": {"playing": "ok", "paused": "warn"}},
                     {"label": "队列剩余", "value": "$.queue_left", "unit": "首"},
                 ]},
-                {"type": "now", "title": "$.track.title", "sub": "$.track.artist",
+                {"type": "now", "section_title": {"zh": "正在播放", "en": "Now playing"},
+                 "title": "$.track.title", "sub": "$.track.artist",
                  "empty": "没有在播的歌"},
-                {"type": "actions", "buttons": [
+                {"type": "actions", "section_title": {"zh": "正在播放", "en": "Now playing"},
+                 "buttons": [
                     {"id": "prev", "label": "上一首", "method": "POST",
                      "href": "/api/v1/music", "body": {"action": "prev"}, "refresh": True},
                     {"id": "pause", "label": "暂停", "method": "POST",
@@ -589,19 +667,15 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                      "href": "/api/v1/music", "body": {"action": "stop"}, "refresh": True,
                      "confirm": "停止并清空队列？", "danger": True},
                 ]},
-                {"type": "list", "title": "最近爱听", "items": "$.top",
+                {"type": "list", "section_title": {"zh": "正在播放", "en": "Now playing"},
+                 "title": "最近爱听", "items": "$.top",
                  "item_title": "$.artist", "item_sub": "$.plays 次",
                  "empty": "还没有播放记录", "max": 5},
-                # The enable toggle and source live in the catalog, not in a music-only
-                # API. Rendering that one group inline means the music page is also the
-                # place to turn music on when it is off (audit §2.1: no dead end).
-                {"type": "config",
-                 "title": {"zh": "音乐配置", "en": "Music settings"},
-                 "groups": ["music"], "tier": 4},
                 # Credentials are write-only: the block shows `credentials_present` and
                 # posts url/user/password to PUT /api/v1/music/credentials; Test calls
                 # POST /api/v1/music/test. Never renders a stored value.
                 {"type": "credentials",
+                 "section_title": {"zh": "音源与凭据", "en": "Source & credentials"},
                  "title": {"zh": "音乐凭据", "en": "Music credentials"},
                  "status_key": "credentials_present",
                  "fields": [
@@ -622,6 +696,14 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                  ],
                  "save": {"href": "/api/v1/music/credentials", "method": "PUT"},
                  "test": {"href": "/api/v1/music/test", "method": "POST"}},
+                # The enable toggle and source live in the catalog, not in a music-only
+                # API. Keeping that group on this page means the page that shows "off"
+                # is also where music is turned on (audit §2.1: no dead end). Advanced
+                # fields stay behind ConfigCenter's own "show advanced" toggle.
+                {"type": "config",
+                 "section_title": {"zh": "高级", "en": "Advanced"},
+                 "title": {"zh": "音乐配置", "en": "Music settings"},
+                 "groups": ["music"], "tier": 4},
             ],
         },
     ]

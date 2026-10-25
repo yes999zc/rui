@@ -1,16 +1,53 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 /**
- * Console routes (docs/console-redesign.md §3).
+ * Console routes (docs/console-redesign.md §3, docs/console-ia-audit.md §3/§5).
  *
  * Panels are registry-driven: `/panel/:id` renders whatever the backend declares.
- * The five config pages are ordinary PanelSpecs (component `config-center`), so
- * there is no per-setting route to maintain. Old bookmarks keep working through
- * redirects; the two renamed pages are aliased in PanelHost so a console can talk
- * to a control plane from either side of the rename.
+ * Phase 2 merged four destinations while keeping every old panel id declared for
+ * one release. Legacy panel URLs redirect to the combined page *and* the tab that
+ * used to be their job, so a bookmark lands on the same task, not just the page:
+ *
+ *   /panel/assistant-session, /panel/phrases, /panel/settings -> voice-assistant
+ *   /panel/speaker, /panel/devices-admin                      -> devices (audio/manage)
+ *   /panel/tools, /panel/mcp                                  -> integrations
+ *   /panel/providers, /panel/foundation                       -> unchanged (Phase 3)
+ *
+ * Static aliases are declared before `/panel/:id`; Vue Router ranks them higher
+ * than the dynamic segment, but keeping the order here documents the contract.
  */
 const routes = [
   { path: '/', redirect: '/panel/overview' },
+
+  // Old panel ids → combined pages (one release of compatibility).
+  {
+    path: '/panel/assistant-session',
+    redirect: { path: '/panel/voice-assistant', query: { tab: 'reply' } },
+  },
+  {
+    path: '/panel/settings',
+    redirect: { path: '/panel/voice-assistant', query: { tab: 'reply' } },
+  },
+  {
+    path: '/panel/phrases',
+    redirect: { path: '/panel/voice-assistant', query: { tab: 'phrases' } },
+  },
+  {
+    path: '/panel/speaker',
+    redirect: { path: '/panel/devices', query: { tab: 'audio' } },
+  },
+  {
+    path: '/panel/devices-admin',
+    redirect: { path: '/panel/devices', query: { tab: 'manage' } },
+  },
+  {
+    path: '/panel/tools',
+    redirect: { path: '/panel/integrations', query: { tab: 'builtin' } },
+  },
+  {
+    path: '/panel/mcp',
+    redirect: { path: '/panel/integrations', query: { tab: 'mcp' } },
+  },
 
   { path: '/panel/:id', component: () => import('./views/PanelHost.vue') },
 
@@ -23,12 +60,12 @@ const routes = [
   { path: '/diagnostics', component: () => import('./views/HealthView.vue') },
   { path: '/tools', component: () => import('./views/ToolsView.vue') },
 
-  // Old paths → their new homes (favorites and docs keep working).
+  // Old non-panel paths → their new homes (favorites and docs keep working).
   { path: '/overview', redirect: '/panel/overview' },
   { path: '/devices', redirect: '/panel/devices' },
   { path: '/logs', redirect: '/panel/logs' },
-  { path: '/assistant', redirect: '/panel/assistant-session' },
-  { path: '/settings', redirect: '/panel/assistant-session' },
+  { path: '/assistant', redirect: '/panel/voice-assistant' },
+  { path: '/settings', redirect: '/panel/voice-assistant' },
   { path: '/voice', redirect: '/panel/foundation' },
   { path: '/models', redirect: '/panel/providers' },
 

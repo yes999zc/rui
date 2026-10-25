@@ -370,14 +370,29 @@ def test_each_config_panel_owns_exactly_its_tier_groups(tmp_path) -> None:
     by_tier: dict[int, set[str]] = {}
     for group in catalog["groups"]:
         by_tier.setdefault(group["tier"], set()).add(group["id"])
+
+    def config_groups(panel: dict, tab: str | None = None) -> set[str]:
+        return {group for block in panel["blocks"]
+                if block["type"] == "config"
+                and (tab is None or block.get("tab") == tab)
+                for group in block.get("groups", [])}
+
+    # Phase 2: the speaker parameters moved to the 音频与唤醒 tab; the legacy panel
+    # stays declared (and reachable) for one release with the same groups.
     assert set(panels["speaker"]["component_args"]["groups"]) == by_tier[2]
+    assert config_groups(panels["devices"], "audio") == by_tier[2]
     # Providers moved to a dedicated page (providers-v2) but its tier-3 groups stay
     # catalogued, so every provider field keeps its single home.
     assert panels["providers"]["component"] == "providers-v2"
     assert {"providers.catalog", "providers.asr", "providers.tts",
             "providers.llm"} <= by_tier[3]
-    assert set(panels["tools"]["component_args"]["groups"]) == by_tier[4]
+    # Tier 4 is split by task: built-in tools/exposure in the integrations tabs,
+    # music on its own page, and tools.ha/tools.mcp owned by McpManager (the one
+    # hot-write path) instead of a second ConfigCenter form.
+    assert config_groups(panels["integrations"]) | {"music", "tools.ha", "tools.mcp"} == by_tier[4]
+    assert config_groups(panels["music"]) == {"music"}
     # Tier 1 is split by meaning: conversational fields vs process foundations.
+    assert config_groups(panels["voice-assistant"], "reply") == {"assistant", "session"}
     assert set(panels["assistant-session"]["component_args"]["groups"]) == {
         "assistant", "session"}
     assert set(panels["foundation"]["component_args"]["groups"]) == {

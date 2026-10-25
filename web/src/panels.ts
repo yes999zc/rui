@@ -39,6 +39,15 @@ export interface PanelField {
   options?: string[]
 }
 
+/** Backend copy can be a bare string or a bilingual `{zh, en}` pair. */
+export type PanelText = string | { zh?: string; en?: string }
+
+export interface PanelTab {
+  id: string
+  title: PanelText
+  title_en?: string
+}
+
 export interface PanelBlock {
   type: string
   title?: string
@@ -53,6 +62,15 @@ export interface PanelBlock {
   item_sub?: string
   section?: string
   apply?: string
+  /** `component` block: a hand-written view from panelComponents.ts. */
+  component?: string
+  component_args?: Record<string, unknown>
+  /** Tab this block belongs to when the PanelSpec declares `tabs`. */
+  tab?: string
+  /** Page section heading (music: 正在播放 / 音源与凭据 / 高级). */
+  section_title?: PanelText
+  /** `config` block: optional caution banner (hardware-following parameters). */
+  warning?: PanelText
   /** `config` block: catalog groups rendered inline by ConfigCenter. */
   groups?: string[]
   tier?: number
@@ -100,6 +118,8 @@ export interface PanelSpec {
   extra_sources?: Record<string, string>
   refresh_s?: number
   blocks: PanelBlock[]
+  /** Declarative tabs (device/audio, integrations, voice assistant). */
+  tabs?: PanelTab[]
   /** Escape hatch: a hand-written component id replaces the blocks (panelComponents.ts). */
   component?: string
   /** Props handed to the escape-hatch component (e.g. `groups` for config-center). */
@@ -192,17 +212,19 @@ export const PANEL_NAV_GROUPS: Record<string, string> = {
   turns: 'run',
   memory: 'run',
   logs: 'run',
-  'assistant-session': 'configure',
+  'voice-assistant': 'configure',
   devices: 'configure',
   music: 'configure',
   providers: 'configure',
-  tools: 'configure',
+  integrations: 'configure',
   foundation: 'configure',
   // Legacy ids stay reachable by URL (one release of compatibility) but are not
   // separate destinations: their task is already represented by a combined entry.
+  'assistant-session': 'configure',
   speaker: 'configure',
   'devices-admin': 'configure',
   phrases: 'configure',
+  tools: 'configure',
   mcp: 'configure',
 }
 
@@ -212,21 +234,23 @@ export function panelNavGroup(panel: { id: string; group: string }): string {
 
 /**
  * Panels that stay routes but leave the rail: their job is now part of a
- * combined destination. Old links keep working (PanelHost aliases + router);
- * this is the P0 "hide, do not delete" contract from the IA audit.
+ * combined destination. Old links keep working (router redirects + the declared
+ * panel ids); this is the P0 "hide, do not delete" contract from the IA audit.
  */
 export const HIDDEN_NAV_PANELS = new Set([
-  'speaker',          // 设备与音频 → /panel/devices
-  'devices-admin',    // 设备与音频 → /panel/devices (full merge is Phase 2)
-  'phrases',          // 语音助手 → /panel/assistant-session
-  'mcp',              // 工具与集成 → /panel/tools
+  'assistant-session', // 语音助手 → /panel/voice-assistant
+  'speaker',           // 设备与音频 → /panel/devices
+  'devices-admin',     // 设备与音频 → /panel/devices
+  'phrases',           // 语音助手 → /panel/voice-assistant
+  'tools',             // 工具与集成 → /panel/integrations
+  'mcp',               // 工具与集成 → /panel/integrations
 ])
 
 /** Which destination lights up while a legacy panel is open. */
 export const NAV_ACTIVE_ALIASES: Record<string, string[]> = {
-  'assistant-session': ['assistant-session', 'phrases'],
+  'voice-assistant': ['voice-assistant', 'assistant-session', 'phrases', 'settings'],
   devices: ['devices', 'speaker', 'devices-admin'],
-  tools: ['tools', 'mcp'],
+  integrations: ['integrations', 'tools', 'mcp'],
 }
 
 /**
@@ -238,6 +262,6 @@ export const NAV_GROUPS: { id: 'run' | 'configure'; panelIds: string[] }[] = [
   { id: 'run', panelIds: ['overview', 'turns', 'memory', 'logs'] },
   {
     id: 'configure',
-    panelIds: ['assistant-session', 'devices', 'music', 'providers', 'tools', 'foundation'],
+    panelIds: ['voice-assistant', 'devices', 'music', 'providers', 'integrations', 'foundation'],
   },
 ]

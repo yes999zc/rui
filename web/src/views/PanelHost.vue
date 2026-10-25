@@ -14,20 +14,11 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { usePanels } from '../composables/usePanels'
 import { PANEL_COMPONENTS } from '../components/panelComponents'
-import { groupTitle, localizeBackend, panelTitle, t } from '../i18n'
+import { groupTitle, localizeBackend, panelTitle, pickLocalized, t } from '../i18n'
 import { panelNavGroup } from '../panels'
 import AppIcon from '../components/AppIcon.vue'
-import BlockStats from '../components/BlockStats.vue'
-import BlockNow from '../components/BlockNow.vue'
-import BlockActions from '../components/BlockActions.vue'
-import BlockList from '../components/BlockList.vue'
-import BlockForm from '../components/BlockForm.vue'
-import BlockTable from '../components/BlockTable.vue'
-import BlockLog from '../components/BlockLog.vue'
-import BlockMemory from '../components/BlockMemory.vue'
-import BlockSay from '../components/BlockSay.vue'
-import BlockVolume from '../components/BlockVolume.vue'
 import BlockCredentials from '../components/BlockCredentials.vue'
+import PanelBlocks from '../components/PanelBlocks.vue'
 
 /**
  * The catalog editor is already a lazy route (panelComponents.ts); import it the
@@ -59,23 +50,40 @@ const setupBlocks = computed(() => {
     .sort((a, b) => (rank[a.type] ?? 9) - (rank[b.type] ?? 9))
 })
 
-/** Renamed pages stay reachable against a control plane from either release. */
-const ALIASES: Record<string, string> = {
-  settings: 'assistant-session',
-  'assistant-session': 'settings',
+/**
+ * Declarative tabs (docs/console-ia-audit.md §3): a PanelSpec may split its blocks
+ * into tabs. The active tab lives in `?tab=` so a legacy redirect can land on the
+ * right one (`/panel/speaker` -> `/panel/devices?tab=audio`). Hidden tabs are
+ * `v-show`n, not unmounted: an edited draft survives a switch, and `display:none`
+ * also hides that tab's sticky save bar, so only one can ever be visible.
+ */
+const tabs = computed(() => panel.value?.tabs ?? [])
+const activeTab = ref('')
+
+function normalizedTab(value: unknown): string {
+  const wanted = typeof value === 'string' ? value : ''
+  if (!tabs.value.length) return ''
+  return tabs.value.some((tab) => tab.id === wanted) ? wanted : tabs.value[0].id
 }
 
 watch(
-  [panel, ready],
+  [tabs, () => route.query.tab],
   () => {
-    if (panel.value || !ready.value || !panels.value.length) return
-    const alias = ALIASES[String(route.params.id)]
-    if (alias && panels.value.some((p) => p.id === alias)) {
-      void router.replace(`/panel/${alias}`)
-    }
+    const next = normalizedTab(route.query.tab)
+    if (next && next !== activeTab.value) activeTab.value = next
   },
   { immediate: true },
 )
+
+function selectTab(id: string): void {
+  if (activeTab.value === id) return
+  activeTab.value = id
+  void router.replace({ query: { ...route.query, tab: id } })
+}
+
+function blocksFor(tabId: string) {
+  return (panel.value?.blocks ?? []).filter((block) => block.tab === tabId)
+}
 
 /** Escape hatch: a spec that declares `component` renders a hand-written view. */
 const custom = computed(() => {
@@ -87,6 +95,7 @@ const custom = computed(() => {
 
 const componentArgs = computed<Record<string, unknown>>(() => panel.value?.component_args ?? {})
 
+/** Only the disabled-setup branch still needs this; blocks own their data in PanelBlocks. */
 function dataFor(block: { source?: string }): unknown {
   return block.source ? extras.value[block.source] : main.value
 }
@@ -225,41 +234,55 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
 
       <component :is="custom" v-else-if="custom" v-bind="componentArgs" :panel-id="panel.id" />
 
-      <div v-else class="blocks" :class="{ 'blocks-overview': panel.id === 'overview' }">
-        <div
-          v-for="(block, index) in panel.blocks"
-          :key="block.type + (block.title ?? '') + index"
-          class="block-slot"
-          :class="`b-${block.type}`"
-        >
-          <BlockStats v-if="block.type === 'stats'" :block="block" :data="dataFor(block)" />
-          <BlockNow v-else-if="block.type === 'now'" :block="block" :data="dataFor(block)" />
-          <BlockActions v-else-if="block.type === 'actions'" :block="block" :data="dataFor(block)" :refresh="poll" />
-          <BlockList v-else-if="block.type === 'list'" :block="block" :data="dataFor(block)" />
-          <BlockForm v-else-if="block.type === 'form'" :block="block" :data="dataFor(block)" :refresh="poll" />
-          <BlockTable v-else-if="block.type === 'table'" :block="block" :data="dataFor(block)" />
-          <BlockLog v-else-if="block.type === 'log'" :block="block" :data="dataFor(block)" :hide-title="!block.title" />
-          <BlockMemory v-else-if="block.type === 'memory'" :block="block" :data="dataFor(block)" :refresh="poll" />
-          <BlockSay v-else-if="block.type === 'say'" :block="block" :data="dataFor(block)" />
-          <BlockVolume v-else-if="block.type === 'volume'" :block="block" :data="dataFor(block)" />
-          <InlineConfig
-            v-else-if="block.type === 'config'"
-            :groups="block.groups"
-            :tier="block.tier"
-            :panel-id="panel.id"
-            @saved="reload()"
-          />
-          <BlockCredentials
-            v-else-if="block.type === 'credentials'"
-            :block="block"
-            :data="dataFor(block)"
-            :refresh="poll"
-          />
-          <div v-else class="banner banner-warn">
-            <AppIcon name="alert" :size="16" class="banner-icon" />
-            <span>{{ t('page.blockUnknown', { type: block.type }) }}</span>
+      <template v-else-if="tabs.length">
+        <nav class="panel-tabs" role="tablist" :aria-label="t('panel.tabs')">
+          <button
+            v-for="tab in tabs"
+            :id="`tab-${panel.id}-${tab.id}`"
+            :key="tab.id"
+            type="button"
+            role="tab"
+            class="panel-tab-btn"
+            :class="{ active: activeTab === tab.id }"
+            :aria-selected="activeTab === tab.id"
+            :aria-controls="`tabpanel-${panel.id}-${tab.id}`"
+            @click="selectTab(tab.id)"
+          >
+            {{ pickLocalized(tab.title) }}
+          </button>
+        </nav>
+        <div class="panel-tabs-body">
+          <div
+            v-for="tab in tabs"
+            v-show="activeTab === tab.id"
+            :id="`tabpanel-${panel.id}-${tab.id}`"
+            :key="tab.id"
+            class="blocks panel-tab"
+            :class="{ 'blocks-overview': panel.id === 'overview' }"
+            role="tabpanel"
+            :aria-labelledby="`tab-${panel.id}-${tab.id}`"
+          >
+            <PanelBlocks
+              :blocks="blocksFor(tab.id)"
+              :data="main"
+              :extras="extras"
+              :panel-id="panel.id"
+              :refresh="poll"
+              @saved="reload()"
+            />
           </div>
         </div>
+      </template>
+
+      <div v-else class="blocks" :class="{ 'blocks-overview': panel.id === 'overview' }">
+        <PanelBlocks
+          :blocks="panel.blocks"
+          :data="main"
+          :extras="extras"
+          :panel-id="panel.id"
+          :refresh="poll"
+          @saved="reload()"
+        />
       </div>
 
       <p v-if="panel.id === 'overview'" class="panel-footnote meta">{{ t('overview.footnote') }}</p>
@@ -298,6 +321,74 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
   line-height: 1.6;
 }
 
+/* — declarative tabs (docs/console-ia-audit.md §3) ——————————
+ * One line that scrolls horizontally on a phone instead of wrapping into two
+ * rows; the active tab is a rule, not a filled button, so it still reads as
+ * page structure rather than a second navigation. */
+.panel-tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 2px;
+  margin: 0 0 var(--s5);
+  border-bottom: 1px solid var(--line-strong);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.panel-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.panel-tab-btn {
+  flex: none;
+  padding: 9px 13px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.panel-tab-btn:hover {
+  color: var(--ink);
+}
+
+.panel-tab-btn.active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+.panel-tabs-body {
+  min-width: 0;
+}
+
+.panel-tab {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .panel-tabs {
+    margin-left: calc(0px - var(--s4));
+    margin-right: calc(0px - var(--s4));
+    padding: 0 var(--s4);
+  }
+
+  .panel-tab-btn {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 13.5px;
+  }
+}
+
 /*
  * Overview composition (docs/console-redesign.md §5.1): an asymmetric 7/5 grid —
  * the try-it composer and the one destructive action on the left, the telemetry
@@ -310,32 +401,32 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
   align-items: start;
 }
 
-.blocks-overview .block-slot {
+.blocks-overview :deep(.block-slot) {
   margin-top: 0 !important;
   min-width: 0;
 }
 
-.blocks-overview .b-say {
+.blocks-overview :deep(.b-say) {
   grid-column: 1;
   grid-row: 1;
 }
 
-.blocks-overview .b-actions {
+.blocks-overview :deep(.b-actions) {
   grid-column: 1;
   grid-row: 2;
 }
 
-.blocks-overview .b-stats:nth-child(2) {
+.blocks-overview :deep(.b-stats:nth-child(2)) {
   grid-column: 2;
   grid-row: 1;
 }
 
-.blocks-overview .b-stats:nth-child(3) {
+.blocks-overview :deep(.b-stats:nth-child(3)) {
   grid-column: 2;
   grid-row: 2;
 }
 
-.blocks-overview .block-slot:nth-child(n + 5) {
+.blocks-overview :deep(.block-slot:nth-child(n + 5)) {
   grid-column: 1 / -1;
 }
 
@@ -405,12 +496,12 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
     display: block;
   }
 
-  .blocks-overview .block-slot {
+  .blocks-overview :deep(.block-slot) {
     grid-column: auto;
     grid-row: auto;
   }
 
-  .blocks-overview .block-slot + .block-slot {
+  .blocks-overview :deep(.block-slot + .block-slot) {
     margin-top: var(--s7) !important;
   }
 }
