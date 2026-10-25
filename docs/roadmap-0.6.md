@@ -15,33 +15,33 @@
 
 ## 2. 里程碑与任务
 
-### M0 — 0.5.4 等价：Dot2 自听收口（dot2 侧，1 天）
+### M0 — 0.5.4 等价：Dot2 自听收口（dot2 侧，1 天）✅ 已完成（dot2 fbf923f，1.1.3；.34 回灌 4/4 干净）
 
 - 背景：0.5.3 已给 rui 侧 ack_echo_ignore_ms，但 vad.hold 的 buffer-and-replay 会把回声回放成请求；根因在「播放期间麦克风仍开着」。
 - 任务：dot2 adapter 默认在**播放期间静音麦克风**（PLAYBACK_LIVE_MS=0 + 播放后 gate 2500 ms），barge 继续走设备唤醒事件；plugin 1.1.3。
 - 判据：.34 合成客户端回灌 cue 音，窗口内 0 turn；真机连续 5 次唤醒 0 次自听。
 - 注意：**不需要 rui 发 0.5.4**（rui 0.5.3 已含设备级窗口），只有 dot2 镜像要重建。
 
-### M1 — 0.6 契约与中性默认（rui，3–4 天）
+### M1 — 0.6 契约与中性默认（rui，3–4 天）✅ 已完成（ae99f1b）
 
 - manifest `rui-device/v1` 增 `audio_defaults: {capture, playback, ack_echo_ignore_ms?}`；`runtime` 不变。
 - 核心默认改中性；启动时「设备默认 + 全局配置 + devices[].audio 覆盖」三层合成，缺一层不报错。
 - 兼容 shim：没有 audio_defaults 的旧 plug 用中性默认；xiaoai 的 manifest 声明 8ch/6mic/2ref/16000。
 - 判据：现有 config v3 原样启动；LX06 链路单测全过；新字段 schema/catalog/doctor 测试；plug-test 旧报告不回归。
 
-### M2 — 小爱 plug 化（rui，3–4 天，依赖 M1）
+### M2 — 小爱 plug 化（rui，3–4 天，依赖 M1）✅ 已完成（1fa96bd；生产镜像两个 plug 并列）
 
 - `src/rui/device/xiaoai/` → `plugs/xiaoai/`（镜像自带，manifest 加载），`adapter: xiaoai` 保持不变。
 - 删除 core 硬引用：plugins/builtin、registry、catalog 文案、web 默认值、setup 默认设备；保留一个 minor 的白名单别名。
 - 判据：`git grep -l xiaoai src/` 只剩白名单；全量测试；旧 config 安装零迁移；镜像内 plug 列表含 xiaoai 与 dot2。
 
-### M3 — 全屋路由与控制台（rui，3–4 天，依赖 M1）
+### M3 — 全屋路由与控制台（rui，3–4 天，依赖 M1）✅ 已完成（56f610a；dot2 1.2.0 ba0ba54）
 
 - session / owner / reminder / music 全部按房间：告别、提醒、音乐、停止都落到发起房间或 default_output。
 - 向导第一步：从已安装 plugs 选设备；控制台「设备与音频」逐设备状态、连接测试、音频覆盖。
 - 判据：两设备 mock 集成测试（告别房间、提醒房间、音乐房间、barge 归属）；控制台 typecheck+build；真机 8 项中的非硬件项通过。
 
-### M4 — 0.6.0 发布与真机验收（4–5 天，依赖 M2、M3、dot2 1.2.0）
+### M4 — 0.6.0 发布与真机验收（4–5 天，依赖 M2、M3、dot2 1.2.0）🟡 生产已跑 0.6.0 候选（sha-7d1c1f8），待 9 哥 真机 4 步后打 tag
 
 - dot2 1.2.0：rui_compat <0.7.0 + manifest audio_defaults + 回归测试；plug-test on 0.6.0。
 - .34 金丝雀 2 天（合成客户端 + 真 Dot2），生产灰度（先 0.6.0 一台 LX06，再加 Dot2），最后 LX06+2×Dot2 真机验收。
