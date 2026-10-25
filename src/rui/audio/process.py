@@ -1804,7 +1804,7 @@ class AudioPlane:
         # Cleared on success: an error that sticks forever makes the console report a
         # problem that was fixed an hour ago.
         self.ack_error = note
-        cue_ms = audio.size * 1000.0 / self.cfg.audio.playback.rate if audio.size else 0.0
+        cue_ms = audio.size * 1000.0 / self.effective.playback.rate if audio.size else 0.0
         # A spoken cue mutes the device microphone; a tone rings out through the device's
         # own 300 ms buffer. Both need more than their nominal length, so the hold carries
         # a floor - the old build used 250 ms for exactly this - and anything arriving
@@ -1941,7 +1941,12 @@ class AudioPlane:
         if adapter is None:
             return
         started = time.monotonic()
-        rate = self.cfg.audio.playback.rate
+        rate = self.effective.playback.rate
+        # The cue is rendered once at the *global* rate by the control plane; a plane
+        # whose device overrides playback.rate must resample it, not relabel it.
+        source = self.cfg.audio.playback.rate
+        if source != rate:
+            audio = resample(audio, source, rate)
         step = max(1, rate * PLAY_CHUNK_MS // 1000)
         try:
             for start in range(0, audio.size, step):
@@ -2078,7 +2083,7 @@ class AudioPlane:
             # owner=music forever, and every later reply waited on a dead player.
             self._release("music")
             return
-        target = self.cfg.audio.playback.rate
+        target = self.effective.playback.rate
         audio = np.clip(resample(pcm, rate, target) * float(gain), -1.0, 1.0)
         adapter = self.adapter
         if adapter is None:
@@ -2245,13 +2250,13 @@ class AudioPlane:
         times too fast: byte counts, pacing stats and tests all look right, and only the
         ear catches it. Resampled here, once, and paced by the resulting duration.
         """
-        target = self.cfg.audio.playback.rate
+        target = self.effective.playback.rate
         source = self.cfg.audio.voice.rate
         # The configured prebuffer is the *start* gate (below) and, when set, the
         # steady-state lead too: a reply that must hold 450 ms of audio before it begins
         # also wants the Pacer to keep ~450 ms in hand, or the device drains to the old
         # 320 ms cap. With the config at 0 the historical 250/320 ms pacing is unchanged.
-        prebuffer_s = self.cfg.audio.playback.prebuffer_ms / 1000.0
+        prebuffer_s = self.effective.playback.prebuffer_ms / 1000.0
         pacer = Pacer(
             prebuffer=max(PREBUFFER_S, prebuffer_s),
             max_lead=max(MAX_LEAD_S, prebuffer_s),
@@ -2634,7 +2639,7 @@ class AudioPlane:
         task = self._playback_task
         if task is None or task.done() or self._file_cfg is None:
             return
-        target = self.cfg.audio.playback.rate
+        target = self.effective.playback.rate
         self._file_position = max(0, self._file_position - int(self.PLAY_LAG_SECONDS * target))
         task.cancel()
         self._speech_paused = True
@@ -2663,7 +2668,7 @@ class AudioPlane:
             name="playback",
         )
         log.info("playback resumed after speech at %.1f s",
-                 self._file_position / self.cfg.audio.playback.rate)
+                 self._file_position / self.effective.playback.rate)
 
     async def _stop_playback(self) -> None:
         # A cue is playback too: StopAudio and shutdown must not leave it sounding.

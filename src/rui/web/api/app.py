@@ -1106,6 +1106,24 @@ def _primary_client(app: FastAPI) -> object | None:
     return _client_for(app)
 
 
+def _wake_in_flight(app: FastAPI) -> bool:
+    """True while a wake candidate is waiting for the arbiter's verdict."""
+    tasks = getattr(app.state, "wake_tasks", None)
+    return bool(tasks) and any(not task.done() for task in tasks)
+
+
+def _session_client(app: FastAPI) -> object | None:
+    """The room the open session belongs to, falling back to the primary.
+
+    The session is house-wide (one turn, one owner), but its voice is not: a goodbye,
+    a light repaint or a stop has to land in the room the person actually spoke to.
+    Using the primary client here made the LX06 say the farewell for a Dot 2 turn.
+    """
+    device_id = str(getattr(app.state, "turn_device", "") or "")
+    client = _client_for(app, device_id) if device_id else None
+    return client if client is not None else _primary_client(app)
+
+
 def _handle_for(app: FastAPI, device_id: str = "") -> object | None:
     """The stable per-room handle: callbacks and sends belong here."""
     fleet = _audio_fleet(app)
@@ -2629,8 +2647,17 @@ def create_app(
                 # Phase 2: the arbiter's owner/playing view must follow the planes, not
                 # the last reply (music keeps sounding after the answer drained).
                 _reconcile_owner(app)
-                client = _primary_client(app)
+                client = _session_client(app)
                 if client is None:
+                    continue
+                coordinator = getattr(app.state, "wake_coordinator", None)
+                # A wake that is being arbitrated, or a turn that just opened, owns the
+                # session: saying goodbye in that 400 ms window cut the new wake's gate
+                # and left turn_open stuck (measured 13:03:33 -> every later wake
+                # rejected). The goodbye waits for the next idle tick instead.
+                if coordinator is not None and (
+                    coordinator.arbiter.state.turn_open or _wake_in_flight(app)
+                ):
                     continue
                 # Playback is not silence: a 15 s news read or a song must not be
                 # interrupted by the goodbye (the old build hit this and fixed it).
@@ -2657,8 +2684,22 @@ def create_app(
                     log.warning("idle watch: %s", exc)
                     continue
                 if line:
-                    _light(app, "off")
+                    _light(app, "off", live=client)
                     log.info("session closed: %r", line)
+                    # The goodbye is our own audio: without this the plane never arms its
+                    # post-playback mute, and a device-AEC speaker hears its own farewell
+                    # tail as a request (measured 13:06:50: "这吗" -> "在的，你说吧。").
+                    finisher = getattr(client, "reply_finished", None)
+                    if callable(finisher):
+                        with contextlib.suppress(Exception):
+                            await finisher()
+                    if coordinator is not None:
+                        # This goodbye is our audio too. Clearing here is the safety net
+                        # for a wake the goodbye interrupted mid-arbitration.
+                        coordinator.set_turn_open(False)
+                        device_id = str(getattr(app.state, "turn_device", "") or "")
+                        if device_id:
+                            coordinator.touch(device_id)
 
         app.state.idle_task = asyncio.create_task(idle_watch(), name="idle-watch")
         # Managed channel gateway: auto-start when a channel is enabled, then watchdog.

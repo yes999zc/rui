@@ -331,3 +331,44 @@ def test_max_planes_is_an_explicit_warning(tmp_path, monkeypatch) -> None:
         warnings = app_module._device_warnings(app, app.state.cfg)
         over = [warning for warning in warnings if warning["code"] == "over_max_planes"]
         assert over and over[0]["details"]["refused_devices"] == ["study"]
+
+
+def test_session_client_follows_the_turn_device(monkeypatch) -> None:
+    """The goodbye must come from the room that spoke, not the primary one (D1)."""
+    from types import SimpleNamespace
+
+    from rui.web.api import app as app_module
+
+    class _App:
+        state = SimpleNamespace(turn_device="dot2")
+
+    monkeypatch.setattr(
+        app_module, "_client_for",
+        lambda app, device_id="": f"client:{device_id}" if device_id else None,
+    )
+    assert app_module._session_client(_App()) == "client:dot2"
+
+    _App.state.turn_device = ""
+    monkeypatch.setattr(app_module, "_primary_client", lambda app: "client:primary")
+    assert app_module._session_client(_App()) == "client:primary"
+
+
+def test_wake_in_flight_detects_pending_candidates() -> None:
+    """The goodbye must wait for a wake that is still being arbitrated."""
+    from types import SimpleNamespace
+
+    from rui.web.api import app as app_module
+
+    class _Task:
+        def __init__(self, done: bool) -> None:
+            self._done = done
+
+        def done(self) -> bool:
+            return self._done
+
+    app = SimpleNamespace(state=SimpleNamespace(wake_tasks={_Task(False)}))
+    assert app_module._wake_in_flight(app) is True
+    app.state.wake_tasks = {_Task(True)}
+    assert app_module._wake_in_flight(app) is False
+    app.state.wake_tasks = None
+    assert app_module._wake_in_flight(app) is False

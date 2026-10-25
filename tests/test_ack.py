@@ -625,3 +625,25 @@ def test_wake_idle_is_a_control_message() -> None:
     msg = CONTROL.validate_json('{"type":"wake_idle","waited_ms":6000}')
     assert isinstance(msg, WakeIdle)
     assert msg.waited_ms == 6000
+
+
+def test_cue_uses_the_device_playback_rate(tmp_path: Path) -> None:
+    """devices[].audio.playback.rate must reach the adapter (the Dot 2 wire is 48 kHz)."""
+    from rui.config import DeviceConfig
+    from rui.config.schema import DeviceAudioOverride, DevicePlaybackOverride
+
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    cfg.ack.mode = "earcon"  # type: ignore[assignment]
+    cfg.audio.aec.enabled = False
+    cfg.devices = [DeviceConfig(
+        id="dot2", adapter="dot2", host="dot2.local", room="卧室",
+        audio=DeviceAudioOverride(playback=DevicePlaybackOverride(rate=48000)),
+    )]
+    plane = AudioPlane(cfg, "dot2", tmp_path / "plane.sock")
+    adapter = FakeAdapter()
+    plane.adapter = adapter  # type: ignore[assignment]
+    cue = ack.tone(cfg)  # rendered once at the global rate
+    asyncio.run(plane._play_ack(cue))
+    assert adapter.calls
+    assert {rate for _, rate, _ in adapter.calls} == {48000}
