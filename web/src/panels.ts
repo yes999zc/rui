@@ -112,14 +112,29 @@ export interface PanelColumn {
   join?: boolean
 }
 
+/** Navigation section; the backend's `nav.section` is authoritative. */
+export type PanelSection = 'run' | 'configure'
+
+/**
+ * The backend-owned navigation manifest (docs/console-ia-audit.md §5, Phase 4).
+ * The rail reads this and nothing else: `hidden` panels stay reachable by URL but
+ * leave the rail (credentials), `icon` names an AppIcon, and `order` sorts the
+ * section (lower first). Utility routes and section titles live in web/src/nav.ts.
+ */
+export interface PanelNav {
+  section: PanelSection
+  order: number
+  hidden: boolean
+  icon: string
+}
+
 export interface PanelSpec {
   id: string
   title: string
   /** English title (contract, docs/config-catalog-contract.md); falls back to `title`. */
   title_en?: string
-  icon?: string
-  group: string
-  order: number
+  /** Authoritative nav placement/icon; the legacy group/order/icon fields are gone. */
+  nav: PanelNav
   enabled: boolean
   enabled_reason?: string
   source: string
@@ -186,95 +201,9 @@ export function enabledWhen(expr: string | undefined, data: unknown): boolean {
   return String(lookup(eq[0], data) ?? '') === eq[1]
 }
 
-/**
- * The two navigation groups (docs/console-ia-audit.md §2.6/§3). The console moved
- * from four task-less buckets to "what is happening now" vs "what I configure or
- * maintain". Backend groups are still the fallback for panels that predate this
- * manifest; legacy names map onto the two groups so an older control plane lands
- * in the right place.
+/*
+ * Navigation is NOT declared here anymore (Phase 4): every PanelSpec carries its
+ * own `nav` manifest from the backend, and the three hand-written utility routes
+ * plus the section headings live in web/src/nav.ts. This module only parses specs
+ * and evaluates their tiny expression language.
  */
-const LEGACY_GROUPS: Record<string, string> = {
-  status: 'run',
-  living: 'run',
-  life: 'run',
-  system: 'run',
-  config: 'configure',
-  maintain: 'configure',
-  run: 'run',
-  configure: 'configure',
-}
-
-export function navGroup(group: string | undefined): string {
-  if (!group) return 'run'
-  return LEGACY_GROUPS[group] ?? 'configure'
-}
-
-/**
- * Panel id → designed nav group. A few panels arrive in a historical group
- * (`devices` in `status`, `mcp`/`devices-admin` in `config`); the console cares
- * about where the operator looks for them, so the placement is explicit here and
- * shared by the rail and the page kicker (they used to disagree for Logs).
- */
-export const PANEL_NAV_GROUPS: Record<string, string> = {
-  overview: 'run',
-  turns: 'run',
-  memory: 'run',
-  logs: 'run',
-  'voice-assistant': 'configure',
-  devices: 'configure',
-  music: 'configure',
-  providers: 'configure',
-  integrations: 'configure',
-  system: 'configure',
-  foundation: 'configure',
-  credentials: 'configure',
-  // Legacy ids stay reachable by URL (one release of compatibility) but are not
-  // separate destinations: their task is already represented by a combined entry.
-  'assistant-session': 'configure',
-  speaker: 'configure',
-  'devices-admin': 'configure',
-  phrases: 'configure',
-  tools: 'configure',
-  mcp: 'configure',
-}
-
-export function panelNavGroup(panel: { id: string; group: string }): string {
-  return PANEL_NAV_GROUPS[panel.id] ?? navGroup(panel.group)
-}
-
-/**
- * Panels that stay routes but leave the rail: their job is now part of a
- * combined destination. Old links keep working (router redirects + the declared
- * panel ids); this is the P0 "hide, do not delete" contract from the IA audit.
- */
-export const HIDDEN_NAV_PANELS = new Set([
-  'assistant-session', // 语音助手 → /panel/voice-assistant
-  'speaker',           // 设备与音频 → /panel/devices
-  'devices-admin',     // 设备与音频 → /panel/devices
-  'phrases',           // 语音助手 → /panel/voice-assistant
-  'tools',             // 工具与集成 → /panel/integrations
-  'mcp',               // 工具与集成 → /panel/integrations
-  'foundation',        // 系统 → /panel/system
-  'credentials',       // hidden write-only ledger; linked from consumers
-])
-
-/** Which destination lights up while a legacy panel is open. */
-export const NAV_ACTIVE_ALIASES: Record<string, string[]> = {
-  'voice-assistant': ['voice-assistant', 'assistant-session', 'phrases', 'settings'],
-  devices: ['devices', 'speaker', 'devices-admin'],
-  integrations: ['integrations', 'tools', 'mcp'],
-  system: ['system', 'foundation'],
-}
-
-/**
- * The rail order. Only panels listed here are primary destinations; anything a
- * newer backend adds and this build does not know yet is appended to the
- * configure group rather than silently dropped.
- */
-export const NAV_GROUPS: { id: 'run' | 'configure'; panelIds: string[] }[] = [
-  { id: 'run', panelIds: ['overview', 'turns', 'memory', 'logs'] },
-  {
-    id: 'configure',
-    panelIds: ['voice-assistant', 'devices', 'music', 'providers', 'integrations', 'system'],
-  },
-]

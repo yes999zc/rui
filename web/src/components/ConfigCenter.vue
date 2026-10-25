@@ -234,7 +234,7 @@ const hasTierOne = computed(() => visibleTiers.value.includes(1))
 const warningText = computed(() => {
   const given = pickLocalized(props.warning)
   if (given) return given
-  if ((props.panelId === 'foundation' || props.panelId === 'system') && hasTierOne.value) {
+  if (props.panelId === 'system' && hasTierOne.value) {
     return tierHint(1)
   }
   return ''
@@ -251,13 +251,9 @@ const warningText = computed(() => {
  */
 const SECRET_CATEGORIES: Record<string, string[]> = {
   providers: ['provider'],
-  tools: ['search', 'ha'],
   // Integrations owns HA through McpManager, so only the search key is inline here.
   integrations: ['search'],
-  mcp: ['ha'],
-  speaker: ['device'],
   devices: ['device'],
-  foundation: ['console'],
   system: ['console'],
   music: ['music'],
 }
@@ -634,9 +630,6 @@ function beforeUnload(event: BeforeUnloadEvent): void {
 }
 
 const referenceLinks = computed(() => {
-  const extra = props.panelId === 'tools'
-    ? [{ href: '/tools', label: t('config.registeredTools') }]
-    : []
   const given = (props.links ?? []).map((link) => ({
     href: link.href,
     label: pickLocalized(link.label) || link.label_en || link.href,
@@ -644,7 +637,7 @@ const referenceLinks = computed(() => {
   const secrets = secretTotal.value
     ? [{ href: '/secrets', label: t('config.manageSecrets') }]
     : []
-  return [...given, ...extra, ...secrets]
+  return [...given, ...secrets]
 })
 
 onMounted(() => {

@@ -1,30 +1,19 @@
 <script setup lang="ts">
 /**
- * The index rail (docs/console-redesign.md §3/§5): registry-driven navigation,
- * plus the utilities the backend does not declare (channels, secrets, diagnostics,
- * setup) and the appearance controls. On a phone the same element becomes the
- * drawer — one instance, so state and listeners never double up.
+ * The index rail (docs/console-redesign.md §3/§5): registry-driven navigation.
+ * Every panel brings its own nav manifest from the backend; the only frontend-side
+ * destinations are the utility routes declared in web/src/nav.ts. On a phone the
+ * same element becomes the drawer — one instance, so state and listeners never
+ * double up.
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import AppIcon from './AppIcon.vue'
 import BrandMark from './BrandMark.vue'
 import { usePanels } from '../composables/usePanels'
-import {
-  HIDDEN_NAV_PANELS,
-  NAV_ACTIVE_ALIASES,
-  NAV_GROUPS,
-  type PanelSpec,
-} from '../panels'
-import {
-  groupTitle,
-  locale,
-  localizeBackend,
-  panelTitle,
-  setLocale,
-  t,
-  type MsgKey,
-} from '../i18n'
+import type { PanelSpec } from '../panels'
+import { buildNav } from '../nav'
+import { locale, localizeBackend, panelTitle, setLocale, t } from '../i18n'
 import { setThemePref, themePref } from '../theme'
 
 const props = defineProps<{
@@ -83,90 +72,15 @@ onMounted(async () => {
 const route = useRoute()
 const { panels } = usePanels()
 
-const PANEL_ICONS: Record<string, string> = {
-  overview: 'gauge',
-  devices: 'speaker',
-  turns: 'chat',
-  logs: 'list',
-  memory: 'bookmark',
-  music: 'note',
-  settings: 'sliders',
-  'devices-admin': 'gear',
-  phrases: 'quote',
-  mcp: 'link',
-  'assistant-session': 'chat',
-  'voice-assistant': 'chat',
-  speaker: 'speaker',
-  providers: 'plug',
-  tools: 'wrench',
-  integrations: 'wrench',
-  foundation: 'layers',
-}
-
-function iconFor(panel: PanelSpec): string {
-  return PANEL_ICONS[panel.id] ?? panel.icon ?? 'dot'
-}
-
-/** The rail and the page kicker share this placement (panels.ts). */
-type NavItem =
-  | { kind: 'panel'; key: string; panel: PanelSpec }
-  | { kind: 'route'; key: string; path: string; labelKey: MsgKey; icon: string }
-
-interface UtilityNav {
-  path: string
-  labelKey: MsgKey
-  icon: string
-  /** Render after this primary panel; the utilities are part of the task order. */
-  after: string
-  /** First-run only: hidden once `GET /api/v1/setup/step` reports complete. */
-  setupOnly?: boolean
-}
-
 /**
- * Hand-written destinations. `/secrets` is deliberately absent: it is a
- * write-only credential ledger linked from the pages that consume keys, not a
- * daily destination (IA audit §2.3). `/setup` disappears after the wizard passes.
+ * The rail is the backend nav manifest (panel.nav: section/order/hidden/icon) plus
+ * the hand-written utility routes from nav.ts. There are no id→group maps here.
  */
-const UTILITIES: UtilityNav[] = [
-  { path: '/channels', labelKey: 'nav.channels', icon: 'chat', after: 'integrations' },
-  { path: '/diagnostics', labelKey: 'nav.diagnostics', icon: 'activity', after: 'integrations' },
-  { path: '/setup', labelKey: 'nav.setup', icon: 'compass', after: 'foundation', setupOnly: true },
-]
-
-function utilityVisible(item: UtilityNav): boolean {
-  return !item.setupOnly || !props.setupComplete
-}
-
-/** Two groups in the designed order; unknown new panels land under Configure. */
-const groups = computed(() => {
-  const byId = new Map(panels.value.map((panel) => [panel.id, panel]))
-  const placed = new Set(NAV_GROUPS.flatMap((group) => group.panelIds))
-  const extras = [...panels.value]
-    .filter((panel) => !placed.has(panel.id) && !HIDDEN_NAV_PANELS.has(panel.id))
-    .sort((a, b) => a.order - b.order)
-  return NAV_GROUPS.map((group) => {
-    const items: NavItem[] = []
-    for (const panelId of group.panelIds) {
-      const panel = byId.get(panelId)
-      if (panel) items.push({ kind: 'panel', key: `panel:${panel.id}`, panel })
-      for (const utility of UTILITIES) {
-        if (utility.after === panelId && utilityVisible(utility)) {
-          items.push({ kind: 'route', key: `route:${utility.path}`, ...utility })
-        }
-      }
-    }
-    if (group.id === 'configure') {
-      for (const panel of extras) {
-        items.push({ kind: 'panel', key: `panel:${panel.id}`, panel })
-      }
-    }
-    return { id: group.id, title: groupTitle(group.id), items }
-  }).filter((group) => group.items.length > 0)
-})
+const groups = computed(() => buildNav(panels.value, Boolean(props.setupComplete)))
 
 function panelActive(panel: PanelSpec): boolean {
   const current = typeof route.params.id === 'string' ? route.params.id : ''
-  return current === panel.id || (NAV_ACTIVE_ALIASES[panel.id] ?? []).includes(current)
+  return current === panel.id
 }
 
 function utilityActive(path: string): boolean {
@@ -213,7 +127,7 @@ watch(
     <div class="nav-wrap" :class="{ scrollable: navScrollable, 'at-bottom': navAtBottom }">
       <nav ref="navEl" class="nav" :aria-label="t('nav.menu')" @scroll="onNavScroll">
       <template v-for="group in groups" :key="group.id">
-        <div class="nav-label">{{ group.title }}</div>
+        <div class="nav-label">{{ t(group.title) }}</div>
         <template v-for="item in group.items" :key="item.key">
           <RouterLink
             v-if="item.kind === 'panel'"
@@ -222,7 +136,7 @@ watch(
             :class="{ active: panelActive(item.panel), disabled: !item.panel.enabled }"
             :title="item.panel.enabled ? undefined : localizeBackend(item.panel.enabled_reason) || t('nav.disabledReason')"
           >
-            <AppIcon :name="iconFor(item.panel)" :size="16" />
+            <AppIcon :name="item.panel.nav.icon" :size="16" />
             <span class="nav-text">{{ panelTitle(item.panel) }}</span>
             <span v-if="!item.panel.enabled" class="nav-off">{{ t('common.disabled') }}</span>
           </RouterLink>

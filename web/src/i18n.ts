@@ -89,18 +89,6 @@ const zh = {
   'brand.latin': 'Rui',
   'nav.disabledReason': '面板未启用',
   'nav.expand': '展开导航',
-  'nav.assistant': '语音助手',
-  'nav.devicesAudio': '设备与音频',
-  'nav.music': '音乐',
-  'nav.models': '模型与语音服务',
-  'nav.integrations': '工具与集成',
-  'nav.system': '系统',
-  // Legacy label keys stay typed (old components may still ask for them).
-  'nav.providers': '模型与语音服务',
-  'nav.speaker': '语音与音箱',
-  'nav.foundation': '系统',
-  'nav.devicesLive': '在线设备',
-  'nav.devicesAdmin': '设备管理',
   'system.connectionTitle': '控制台连接',
   'system.connectionHint': '控制台监听地址与访问保护；下方字段是进程底子和出站安全。',
   'system.bind': '监听地址',
@@ -1723,17 +1711,6 @@ const en: Record<MsgKey, string> = {
   'brand.latin': '小瑞',
   'nav.disabledReason': 'Panel disabled',
   'nav.expand': 'Expand navigation',
-  'nav.assistant': 'Voice assistant',
-  'nav.devicesAudio': 'Devices & audio',
-  'nav.music': 'Music',
-  'nav.models': 'Models & voice services',
-  'nav.integrations': 'Tools & integrations',
-  'nav.system': 'System',
-  'nav.providers': 'Models & voice services',
-  'nav.speaker': 'Voice & speaker',
-  'nav.foundation': 'System',
-  'nav.devicesLive': 'Speakers',
-  'nav.devicesAdmin': 'Device manager',
   'system.connectionTitle': 'Console connection',
   'system.connectionHint': 'Where the console listens and how it is protected; the fields below are process basics and outbound security.',
   'system.bind': 'Bind address',
@@ -3474,48 +3451,15 @@ export function localizeIssue(message: string | null | undefined): string {
 }
 
 /**
- * Console-voice display names that override the backend's historical title for a
- * few pages whose old names described implementation, not the user's task.
+ * A panel's display title. Phase 4 made the backend the single source: `title` is
+ * the Chinese copy, `title_en` the English one, and there is no id→title override
+ * table in the console anymore. Unknown backend copy still falls through
+ * `localizeBackend` (a visible contract gap, never a silent rename).
  */
-const PANEL_TITLE_KEYS: Record<string, MsgKey> = {
-  providers: 'nav.models',
-  tools: 'nav.integrations',
-  integrations: 'nav.integrations',
-  system: 'nav.system',
-  foundation: 'nav.system',
-  credentials: 'secrets.title',
-  devices: 'nav.devicesAudio',
-  'assistant-session': 'nav.assistant',
-  'voice-assistant': 'nav.assistant',
-  music: 'nav.music',
-  // Legacy ids keep their own page titles when reached by URL.
-  speaker: 'nav.speaker',
-  'devices-admin': 'nav.devicesAdmin',
-}
-
-/** A panel's display title: an explicit console name first, then `title_en` / title. */
-export function panelTitle(panel: { id?: string; title: string; title_en?: string } | null | undefined): string {
+export function panelTitle(panel: { title: string; title_en?: string } | null | undefined): string {
   if (!panel) return ''
-  const override = panel.id ? PANEL_TITLE_KEYS[panel.id] : undefined
-  if (override) return t(override)
   if (locale.value === 'en' && panel.title_en) return panel.title_en
   return localizeBackend(panel.title)
-}
-
-const GROUP_KEY: Record<string, MsgKey> = {
-  run: 'nav.run',
-  status: 'nav.run',
-  living: 'nav.run',
-  life: 'nav.run',
-  system: 'nav.run',
-  configure: 'nav.configure',
-  config: 'nav.configure',
-  maintain: 'nav.configure',
-}
-
-export function groupTitle(group: string): string {
-  const key = GROUP_KEY[group]
-  return key ? t(key) : group
 }
 
 /** Locale-aware `H:MM:SS`, used by the signal ledger. */

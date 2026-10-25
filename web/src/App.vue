@@ -143,12 +143,12 @@ function onKeydown(event: KeyboardEvent): void {
   else if (drawerOpen.value) drawerOpen.value = false
 }
 
-/** Document title, localised and per-panel (browser tabs are part of the UI). */
+/** Document title, localised and per-panel (browser tabs are part of the UI).
+ * Only routes that still exist have a static title; panels come from the registry. */
 const STATIC_TITLES: Record<string, MsgKey> = {
   '/secrets': 'secrets.title',
   '/diagnostics': 'health.title',
   '/setup': 'setup.title',
-  '/tools': 'tools.title',
   '/channels': 'channels.title',
 }
 

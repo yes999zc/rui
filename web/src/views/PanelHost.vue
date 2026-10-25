@@ -14,8 +14,8 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api } from '../api'
 import { usePanels } from '../composables/usePanels'
 import { PANEL_COMPONENTS } from '../components/panelComponents'
-import { groupTitle, localizeBackend, panelTitle, pickLocalized, t } from '../i18n'
-import { panelNavGroup } from '../panels'
+import { localizeBackend, panelTitle, pickLocalized, t } from '../i18n'
+import { sectionTitle } from '../nav'
 import AppIcon from '../components/AppIcon.vue'
 import BlockCredentials from '../components/BlockCredentials.vue'
 import PanelBlocks from '../components/PanelBlocks.vue'
@@ -52,10 +52,10 @@ const setupBlocks = computed(() => {
 
 /**
  * Declarative tabs (docs/console-ia-audit.md §3): a PanelSpec may split its blocks
- * into tabs. The active tab lives in `?tab=` so a legacy redirect can land on the
- * right one (`/panel/speaker` -> `/panel/devices?tab=audio`). Hidden tabs are
- * `v-show`n, not unmounted: an edited draft survives a switch, and `display:none`
- * also hides that tab's sticky save bar, so only one can ever be visible.
+ * into tabs. The active tab lives in `?tab=` so a bookmarked tab keeps working
+ * across reloads, and the router owns no per-panel aliases anymore. Hidden tabs
+ * are `v-show`n, not unmounted: an edited draft survives a switch, and
+ * `display:none` also hides that tab's sticky save bar, so only one is visible.
  */
 const tabs = computed(() => panel.value?.tabs ?? [])
 const activeTab = ref('')
@@ -176,7 +176,7 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
   <template v-else>
     <header class="page-head">
       <div>
-        <div class="kicker">{{ groupTitle(panelNavGroup(panel)) }}</div>
+        <div class="kicker">{{ t(sectionTitle(panel.nav.section)) }}</div>
         <h1>{{ panelTitle(panel) }}</h1>
       </div>
       <div v-if="!panel.enabled" class="page-head-side">

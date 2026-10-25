@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
  * A read-only reference page: the tools the model can actually see, plus the
- * exposure policy. Reached at `/tools` and as the 注册工具 tab of
- * `/panel/integrations`; `embedded` drops the page chrome there so the combined
- * page has one title (and one exposure editor, in its own tab).
+ * exposure policy. Embedded as the 注册工具 tab of `/panel/integrations`; `embedded`
+ * drops the page chrome so the combined page has one title (and one exposure
+ * editor, in its own tab).
  */
 import { onMounted, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
