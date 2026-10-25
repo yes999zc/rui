@@ -12,7 +12,7 @@ phase-close: task-16
 |---|---|---|
 | 上游 rui 发布 | tag `v0.6.0` @ `adc4c2b`；镜像 `ghcr.io/yes999zc/rui@sha256:abef1f276c3c21e9155d97c98913ee6c2e98fdfe842e43b90f64a5db6c12b241`（tags `0.6.0`/`0.6`/`sha-adc4c2b`/`latest`，amd64+arm64）；Release <https://github.com/yes999zc/rui/releases/tag/v0.6.0> | `docker-publish` run 40209595988 success；`gh release view v0.6.0` |
 | 下游 pin | dot2 的 `deploy/downstream/Dockerfile` 与 compose 默认值 pin 上述 digest；`docs/canary-0.6.0-official-image.md` 记录 arm64 + x86_64 金丝雀；`docs/contract-report-0.6.0.json` 增 `upstream_pin` 块 | commit `9c696cd` |
-| 生产（NAS 168） | **v2 预览（M1–M6）** `rui-dot2:0.7.0-pre4-642d40b`（底座 `ghcr.io/yes999zc/rui@sha256:299e561b…ccca`，main @ 642d40b）；`/`、`/v2`、`/v2/devices/add`、`/v2/setup` 均 200；`/health` 0.6.0 / cv3 / devices 2 / errors 0 / 双 plane connected；回滚：`pre3-825b9e7`、`pre2-9e094e7`、`pre1-4ebf104`、`0.6.0-adc4c2b`；备份 `/vol1/rui/backup/20261026-<hhmm>-v2m6/` | 构建需 `DOCKER_BUILDKIT=0` |
+| 生产（NAS 168） | **v2 预览（M1–M6）** `rui-dot2:0.7.0-pre4-642d40b`（底座 `ghcr.io/yes999zc/rui@sha256:299e561b…ccca`，main @ 642d40b）；`/`、`/v2`、`/v2/devices/add`、`/v2/setup` 均 200；`/api/v2/setup/plan` 返回 8 步；`/health` 0.6.0 / cv3 / devices 2 / errors 0 / 双 plane connected / `ack.wav_exists=true`；插件列表只剩 2 条 builtin；回滚镜像 `pre3-825b9e7`、`pre2-9e094e7`、`pre1-4ebf104`、`0.6.0-adc4c2b` 全在 | 构建需 `DOCKER_BUILDKIT=0`；备份 `/vol1/rui/backup/20261026-0612-v2m6/`、`/vol1/rui-backups/plugs-*` |
 | 契约 C-001 | `rui-device/v1`（manifest `audio_defaults` + `ack_echo_ignore_ms`） | `docs/socket-plug-v1.md` §3.2；`src/rui/config/schema.py` |
 | 契约 C-002 | 控制台 v2 `/api/v2/*` 24 端点，1193 行，**冻结 PASS** | `docs/contracts/C-002-console-v2-api.md`；task-6 记录 |
 | 兼容边界 | rui `>=0.6.0, <0.7.0`；0.6.x v1 仅 `/turns` 加 additive `device_id` | 契约 §10.1 |
@@ -76,6 +76,7 @@ phase-close: task-16
 - **v2 未切默认**：旧控制台仍是 `/`，v2 在 `/v2`；0.7 才切。
 - **`/health` 离线即 unhealthy**：`rui-healthcheck` 在无音箱连上时 exit 1，属上游既有语义（切换后等设备回连约 12–60s）。
 - **第二台 Dot2 行为** *(unverified)*：无硬件。
+- **NAS 密码建议轮换**：2026-10-26 一次运维子代理的 `sudo -S` 曾把密码回显到本机会话日志（未写入仓库/未外传），建议轮换 `yes999zc` 的 NAS 密码并更新 `01_Code/device-inventory.md`。
 
 ## 关键文件
 - `docs/releases/v0.6.0.md` —— digest 与未验证项。
