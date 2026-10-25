@@ -409,6 +409,9 @@ async function save(): Promise<void> {
   saveError.value = null
   saveErrorRaw.value = null
   serverFields.value = {}
+  // A previous save's green restart banner must not sit next to this save's
+  // failure; the current attempt owns the whole result block.
+  lastRestart.value = null
   try {
     const response = await api.patchDevice(props.detail.id, payload)
     lastRestart.value = response.restart
@@ -421,6 +424,7 @@ async function save(): Promise<void> {
     confirmOpen.value = false
     emit('saved', response)
   } catch (err) {
+    lastRestart.value = null
     saveErrorRaw.value = err
     saveError.value = describeError(err)
     applyServerFields(err)

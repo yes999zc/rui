@@ -120,7 +120,11 @@ function clientErrors(): Record<string, string> {
     errors.model_id = t('v2.add.validation.model')
   }
   const value = id.value.trim()
-  if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(value)) {
+  // `/devices/add` is a static route and would shadow a device whose id is
+  // `add`, so that id (case-insensitive) is reserved; see router.ts.
+  if (/^add$/i.test(value)) {
+    errors.id = t('v2.add.validation.idReserved')
+  } else if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(value)) {
     errors.id = t('v2.add.validation.id')
   }
   if (multiDeviceEnabled.value && !room.value.trim()) {

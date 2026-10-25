@@ -115,7 +115,7 @@ temporary harnesses must live outside `web/src/v2/` and be deleted afterwards.
 
 ## Detail page split (M2/M3)
 
-`DeviceDetailView.vue` is layout + data assembly only. The six read-only
+`DeviceDetailView.vue` is layout + data assembly only. The five read-only
 sections live in `components/device/` (`Identity`, `Capabilities`,
 `AudioProvenance`, `Activity`, `Connection`), and the interactive panels are
 `TestPanel`, `ActionsPanel`, `ConfigPanel` and `DangerPanel`. Each section keeps

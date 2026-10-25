@@ -16,6 +16,8 @@ const routes = [
   { path: '/', redirect: '/devices' },
   { path: '/devices', name: 'devices', component: () => import('./views/DevicesView.vue') },
   {
+    // Reserved: `/devices/add` shadows a device with id `add`, so the create
+    // form rejects that id (case-insensitive). Keep this path per the design.
     path: '/devices/add',
     name: 'device-add',
     component: () => import('./views/AddDeviceView.vue'),
