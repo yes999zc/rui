@@ -150,7 +150,7 @@ def test_plugs_list_contains_the_builtin_lx06(wizard) -> None:
     assert lx06["source"] == "builtin"
     assert lx06["trust"] == "builtin"
     assert lx06["class"] == "A"
-    assert lx06["adapter"] == "xiaoai"
+    assert lx06["adapter"] == "lx06"
     assert lx06["transport"] == "inbound"
     assert lx06["available"] is True
     assert lx06["error"] is None
@@ -180,7 +180,7 @@ def test_plug_detail_includes_device_manifests_and_unknown_is_404(wizard) -> Non
     assert body["manifest"]["id"] == "xiaoai-lx06"
     assert body["manifest"]["devices"][0]["device_side"]["artifact"] == "client"
     assert body["manifest"]["devices"][0]["runtime"]["entrypoint"] == \
-        "rui.device.xiaoai:build"
+        "xiaoai_plug.adapter:build"
     assert {param["key"] for param in body["manifest"]["devices"][0]["params"]} == {
         "host", "room", "wake_words"}
     assert body["resolved"]["devices"][0]["listen_port"] == 4412

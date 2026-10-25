@@ -1,22 +1,29 @@
 """Adapter lookup: a name, and the function that builds it.
 
-Adding a speaker is one new module plus one line in `_BUILDERS` here. The table is the
-*only* place a vendor name appears; nothing above this file validates, branches on, or
-documents a vendor name, so a device that is not in this build can still be configured -
-it fails with a readable error instead of a validation failure.
+Adding a speaker is one plug directory, not one line here. Since 0.6 the adapter
+table contains only the vendor-neutral development adapter (mock); every device
+adapter comes from a manifest: the image plugs under /opt/rui-plugins are registered
+from their own runtime.entrypoint (docs/roadmap-0.6.md M2), and a downstream image
+registers through RUI_ADAPTER_PLUGINS / the rui.adapters entry-point group
+(device/loader.py). Nothing above this file validates, branches on, or documents a
+vendor name, so a device that is not in this build can still be configured - it
+fails with a readable error instead of a validation failure.
 
-A missing adapter must not take the control plane down: the console has to come up, list
-the device and say what is wrong with it. So building returns an AdapterSet (the adapters
-that exist plus one error string per device that does not) instead of raising out of
-application startup.
+A missing adapter must not take the control plane down: the console has to come up,
+list the device and say what is wrong with it. So building returns an AdapterSet (the
+adapters that exist plus one error string per device that does not) instead of raising
+out of application startup.
 """
 from __future__ import annotations
 
 import importlib
 import logging
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from ..adapter_aliases import ADAPTER_ALIASES, canonical_adapter
 from ..config.schema import Config, DeviceConfig
 from .contract import DeviceAdapter
 
@@ -24,30 +31,29 @@ log = logging.getLogger(__name__)
 
 Builder = Callable[[DeviceConfig, Config], DeviceAdapter]
 
-# A target is either a lazy "module:function" string (the built-ins) or a builder
-# callable. Downstream plugins (device/loader.py) register the callable directly, so a
-# plugin module is imported once at startup rather than once per device.
-Target = str | Builder
+# A target is either a lazy "module:function" string or a builder callable.
+T = str | Builder
 
 # name -> target. A function, not a class, because adapters do not share a
 # constructor: one needs the capture layout, another needs nothing but its id.
-_BUILDERS: dict[str, Target] = {
-    "xiaoai": "rui.device.xiaoai:build",
+_BUILDERS: dict[str, T] = {
     "mock": "rui.device.mock:build",
 }
 
-#: Names shipped in the image. Neither the env hook nor an entry point may replace
-#: one (Socket & Plug v1 §4.4): an operator who needs different behaviour registers a
-#: new name and selects it with ``devices[].adapter``.
-BUILTIN_TARGETS: dict[str, Target] = dict(_BUILDERS)
-BUILTIN_NAMES: frozenset[str] = frozenset(BUILTIN_TARGETS)
+#: Names shipped in the image (mock plus every image plug registered from its
+#: manifest). Neither the env hook nor an entry point may replace one (Socket & Plug
+#: v1 §4.4): an operator who needs different behaviour registers a new name and
+#: selects it with devices[].adapter.
+BUILTIN_TARGETS: dict[str, T] = dict(_BUILDERS)
+BUILTIN_NAMES: set[str] = set(BUILTIN_TARGETS)
 
-#: Manifest ``runtime`` defaults per downstream adapter name. The adapter loader
-#: records these when it gates a co-located/user manifest (it is the only component
-#: that knows which manifest backed the module); ``build_adapters`` applies them when
-#: the config does not already set a value. Kept in this module so the loader can set
-#: it without importing the plugin catalog during startup.
+#: Manifest runtime defaults per adapter name, recorded when a manifest-backed
+#: adapter is registered (the loader/registry is the only component that knows which
+#: manifest backed the module). build_adapters applies them when the config does not
+#: already set a value.
 RUNTIME_DEFAULTS: dict[str, dict[str, object]] = {}
+
+_IMAGE_LOADING = False
 
 
 def set_runtime_defaults(
@@ -84,19 +90,100 @@ class AdapterSet:
         return len(self.adapters)
 
 
-def register(name: str, target: Target, *, allow_builtin: bool = False) -> None:
+def _ensure_image_adapters() -> None:
+    """Register the adapters declared by the plugs the image ships.
+
+    Generic on purpose: the plug manifest names its module, so the registry never
+    mentions a device. Only image-wise plugs (builtin_plugins(), i.e. /opt/rui-plugins
+    or the development plugs/ tree) are executed here; a user plug under
+    <data_dir>/plugs still has to be named by the operator through
+    RUI_ADAPTER_PLUGINS, because a directory a user can write is not an execution
+    boundary.
+    """
+    global _IMAGE_LOADING
+    if _IMAGE_LOADING:
+        return
+    _IMAGE_LOADING = True
+    try:
+        from ..plugins.builtin import builtin_plugins
+
+        plugins = builtin_plugins()
+    except Exception as exc:  # noqa: BLE001 - a broken catalog must not stop startup
+        log.warning("image plugs: cannot read the catalog: %s", exc)
+        _IMAGE_LOADING = False
+        return
+    try:
+        for plugin in plugins:
+            if str(getattr(plugin, "trust", "")) not in {"builtin", "trusted"}:
+                continue
+            for device in plugin.devices:
+                runtime = getattr(device, "runtime", None)
+                if runtime is None:
+                    continue
+                if str(getattr(runtime, "mode", "")) != "in-process":
+                    continue
+                entrypoint = str(getattr(runtime, "entrypoint", "") or "")
+                name = str(getattr(device, "id", "") or "")
+                if not entrypoint or not name or name in _BUILDERS:
+                    continue
+                try:
+                    builder = _import_entrypoint(plugin.source_dir, entrypoint)
+                except Exception as exc:  # noqa: BLE001 - one broken plug is data
+                    log.warning(
+                        "image plug %r: cannot import %s: %s", plugin.id, entrypoint, exc
+                    )
+                    continue
+                _BUILDERS[name] = builder
+                BUILTIN_TARGETS[name] = builder
+                BUILTIN_NAMES.add(name)
+                set_runtime_defaults(
+                    name,
+                    listen_port=getattr(runtime, "listen_port", None),
+                    token_env=getattr(runtime, "token_env", "") or None,
+                )
+                log.info("image plug %r registered adapter %r", plugin.id, name)
+    finally:
+        _IMAGE_LOADING = False
+
+
+def _import_entrypoint(source_dir, entrypoint: str) -> Builder:
+    """Import a manifest runtime.entrypoint and return its callable.
+
+    The plug directory is added to sys.path (like the documented
+    PYTHONPATH=/opt/rui-plugins/... recipe) so a package next to plugin.yaml imports
+    without an install step. It stays on sys.path: doctor also imports the module
+    read-only to read its declared wire rate.
+    """
+    module_name, separator, attribute = entrypoint.partition(":")
+    if not separator or not module_name or not attribute:
+        raise ValueError(f"invalid runtime.entrypoint {entrypoint!r}")
+    path = str(getattr(source_dir, "resolve", lambda: source_dir)())
+    # Two layouts ship in the wild: <plug>/<package>/adapter.py (the LX06 image
+    # plug) and <plug>/adapter.py where <plug> is itself the top-level package (the
+    # Dot 2 downstream recipe, PYTHONPATH=/opt/rui-plugins). Make both importable.
+    for candidate in (path, str(Path(path).parent)):
+        if candidate not in sys.path:
+            sys.path.insert(0, candidate)
+    module = importlib.import_module(module_name)
+    obj = getattr(module, attribute, None)
+    if not callable(obj):
+        raise TypeError(f"{entrypoint!r} is not callable")
+    return obj
+
+
+def register(name: str, target: T, *, allow_builtin: bool = False) -> None:
     """Let a downstream build add a device without editing this file's table.
 
-    ``target`` is a ``module:function`` string or the builder itself. Passing the
-    callable is what the env/entry-point loader does; strings keep the built-ins lazy.
-    Replacing a name this image ships raises :class:`BuiltinAdapterName` unless the
-    caller is core code (``allow_builtin=True``); downstream channels register a new
-    name instead so ``/health`` and the config cannot silently change meaning.
+    target is a module:function string or the builder itself. Passing the callable
+    is what the env/entry-point loader does; strings keep the built-ins lazy.
+    Replacing a name this image ships raises BuiltinAdapterName unless the caller is
+    core code (allow_builtin=True); downstream channels register a new name instead
+    so /health and the config cannot silently change meaning.
     """
     if (
         not allow_builtin
         and name in BUILTIN_NAMES
-        and _BUILDERS.get(name) is BUILTIN_TARGETS[name]
+        and (name not in _BUILDERS or _BUILDERS.get(name) is BUILTIN_TARGETS.get(name))
     ):
         raise BuiltinAdapterName(
             f"adapter name {name!r} is built into this image and cannot be replaced; "
@@ -106,11 +193,26 @@ def register(name: str, target: Target, *, allow_builtin: bool = False) -> None:
 
 
 def available() -> list[str]:
-    return sorted(_BUILDERS)
+    """Adapter names that can be selected, including one-minor aliases.
+
+    Aliases are listed only while their canonical name is registered, so the console
+    and /health show that the old spelling still works without implying two adapters.
+    """
+    _ensure_image_adapters()
+    names = set(_BUILDERS)
+    for alias, canonical in ADAPTER_ALIASES.items():
+        if canonical in _BUILDERS:
+            names.add(alias)
+    return sorted(names)
 
 
 def _builder(name: str) -> Builder:
+    _ensure_image_adapters()
     target = _BUILDERS.get(name)
+    if target is None:
+        canonical = canonical_adapter(name)
+        if canonical != name:
+            target = _BUILDERS.get(canonical)
     if target is None:
         raise AdapterUnavailable(
             f"unknown adapter: {name!r} (this build has: {', '.join(available())})"
@@ -128,15 +230,15 @@ def _builder(name: str) -> Builder:
 def _resolve_plug(dev: DeviceConfig, cfg: Config):
     """Best-effort manifest lookup for one configured device (never raises).
 
-    ``plugins.resolve`` is imported lazily: it reads the plug catalog, which imports
-    the plugin models, which import this package's ``contract`` module. Importing at
-    module load time would create a cycle; per build call is cheap (once per device).
+    plugins.resolve is imported lazily: it reads the plug catalog, which imports the
+    plugin models, which import this package's contract module. Importing at module
+    load time would create a cycle; per build call is cheap (once per device).
     """
     params = dev.params if isinstance(dev.params, dict) else {}
     plug_id = str(params.get("plug_id") or "").strip()
     if not plug_id and dev.adapter in BUILTIN_NAMES:
-        # The image's own adapters need no catalog scan on every build; their manifest
-        # runtime defaults are the config defaults (xiaoai: 4412 / RUI_DEVICE_TOKEN).
+        # Manifest-backed image adapters already recorded their runtime defaults when
+        # they were registered, so no catalog scan is needed here.
         return None
     try:
         from ..plugins.resolve import resolve_device_plug
@@ -148,15 +250,17 @@ def _resolve_plug(dev: DeviceConfig, cfg: Config):
 
 
 def _apply_manifest_runtime(dev: DeviceConfig, resolved) -> DeviceConfig:
-    """Fill manifest ``runtime.listen_port``/``token_env`` when config leaves them unset.
+    """Fill manifest runtime.listen_port/token_env when config leaves them unset.
 
-    ``DeviceConfig.listen_port = None`` explicitly means "adapter default" and
-    ``token_env`` defaults to ``RUI_DEVICE_TOKEN``; the manifest can therefore supply
-    both without overwriting an explicit operator value (Socket & Plug v1 §4.1/P1-7).
-    The adapter sees the resolved copy, never a mutated config.
+    DeviceConfig.listen_port = None explicitly means "adapter default" and token_env
+    defaults to RUI_DEVICE_TOKEN; the manifest can therefore supply both without
+    overwriting an explicit operator value (Socket & Plug v1 §4.1/P1-7). The adapter
+    sees the resolved copy, never a mutated config.
     """
     runtime = getattr(getattr(resolved, "device", None), "runtime", None)
-    cached = RUNTIME_DEFAULTS.get(dev.adapter, {})
+    cached = RUNTIME_DEFAULTS.get(dev.adapter) or RUNTIME_DEFAULTS.get(
+        canonical_adapter(dev.adapter), {}
+    )
     listen_port = (
         int(runtime.listen_port) if runtime is not None and runtime.listen_port
         else cached.get("listen_port")
@@ -180,6 +284,7 @@ def _apply_manifest_runtime(dev: DeviceConfig, resolved) -> DeviceConfig:
 
 
 def build_adapters(cfg: Config) -> AdapterSet:
+    _ensure_image_adapters()
     out = AdapterSet()
     for dev in cfg.devices:
         if not dev.enabled:

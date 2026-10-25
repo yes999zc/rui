@@ -54,7 +54,15 @@ ENV RUI_ADAPTER_PLUGINS=my_plugin.adapter:build
 随 adapter 模块/包放在同一目录（`_module_plugin_roots` 会向上找一层），或安装到
 `<data_dir>/plugs/*` 并设置 `RUI_DATA_DIR=<data_dir>`；manifest 的 `trust` 必须是
 `builtin` 或 `trusted`。没有 manifest 的 entry 只记 warning、不注册；`third-party`
-不得 in-process；`xiaoai`/`mock` 等内置名字不可覆盖。
+不得 in-process；`mock` 与镜像自带插头的名字不可覆盖。
+
+镜像自带插头（0.6 M2）：把目录放到 `/opt/rui-plugins/<plug>/`（manifest + 可选
+adapter 包），核心的 image-plug catalog 会扫描它，所以 `GET /api/v1/plugs`、向导和
+`rui doctor` 都能看到，不再需要复制到 `<data_dir>/plugs`。开发时可用
+`RUI_PLUGINS_DIR`（冒号分隔）追加别的根目录（镜像的 `/opt/rui-plugins` 始终保留，
+不会被覆盖掉）；官方镜像自己就是这么加载
+`plugs/xiaoai` 的，adapter 由 manifest 的 `runtime.entrypoint` 注册，不需要
+`RUI_ADAPTER_PLUGINS`。下行镜像继续用 `RUI_ADAPTER_PLUGINS` 注册自己的 adapter。
 
 `devices[].adapter` 必须与注册名一致。上例未写 `name=`，注册名就是模块名
 `my_plugin.adapter`；推荐写成 `ENV RUI_ADAPTER_PLUGINS=dot2=my_plugin.adapter:build`，
@@ -94,17 +102,20 @@ python -m rui plug-test examples/plugin-example \
   --adapter examples/plugin-example/rui_plugin_example.py:build --json
 ```
 
-真实设备的参考插头（LX06，v0/RUI KWS）在 `plugins/rui-plugin-xiaoai/`：
+真实设备的参考插头（LX06，v1/RUI KWS）就是镜像自带的 `plugs/xiaoai/`
+（0.6 M2：核心不再有 `src/rui/device/xiaoai/`）：
 
 ```bash
-python -m rui plug-test plugins/rui-plugin-xiaoai
-python -m rui plug-test plugins/rui-plugin-xiaoai \
-  --adapter rui_plugin_xiaoai.adapter:build --json
+python -m rui plug-test plugs/xiaoai
+python -m rui plug-test plugs/xiaoai \
+  --adapter xiaoai_plug.adapter:build --json
 ```
 
-它是 inbound 设备：`probe()` 和 adapter 表面可在无音箱时验收，`open()`/帧/播放在
-client 拨入前不存在，因此这些 live-I/O 检查为 SKIP；详见下文
-`kit_live_device_required`。退出码仍是 `0`。
+预期 16 PASS / 0 FAIL / 0 WARN / 5 SKIP。它是 inbound 设备：`probe()` 和 adapter
+表面可在无音箱时验收，`open()`/帧/播放在 client 拨入前不存在，因此这些 live-I/O
+检查为 SKIP；详见下文 `kit_live_device_required`。退出码仍是 `0`。
+（Dot 2 那种 `device_wake` 插头的报告是 15/0/2/5：多出的两条 WARN 来自
+`device.probe_layout` 与 `device.device_wake_effective`，不是所有插头的固定目标。）
 
 退出码：`0` = 没有 `FAIL`（`WARN`/`SKIP` 不阻断）；`1` = 至少一个 `FAIL`，或目录/
 adapter 无法读取/加载。
@@ -205,7 +216,7 @@ inbound 插头（如 LX06）的 `probe()` 和 adapter 表面可以在没有设�
 `capture.frames`、`capture.cadence`、`playback.sink` 记为 `SKIP`（不是 PASS），
 `probe()`、方法表面、两个 drain 和幂等 `close()` 仍照常检查。提示没有运行时含义，
 也不改变 `DeviceAdapter`；不要在提示里写地址、token 或 secret。参考实现：
-`plugins/rui-plugin-xiaoai/rui_plugin_xiaoai/adapter.py`。
+`plugs/xiaoai/xiaoai_plug/adapter.py`。
 
 ## CI（第三方插头仓库）
 

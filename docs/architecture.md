@@ -35,12 +35,12 @@ listed in §6 as a debt with a name, not left as an intention.
                      the device dials ws://<us>:<port>
 ┌───────────────────────────────▼────────────────────────────────────────────┐
 │ L6 device = the socket      device/{contract,registry}.py                   │
-│                             device/xiaoai/{adapter,protocol}.py             │
+│                             plugs/<plug>/ (image: /opt/rui-plugins/<plug>/)   │
 │   adapter   speaks the wire protocol, converts frames, declares a profile    │
 │   contract  DeviceInfo · Capability · DeviceServices (optional per device)   │
-│   registry  name -> class; an unknown name becomes AdapterSet.errors, not a  │
-│             crash, so the console can still explain what is wrong            │
-│   ⚠ the only place a vendor name appears                                    │
+│   registry  name -> manifest runtime.entrypoint; an unknown name becomes     │
+│             AdapterSet.errors, not a crash, so the console can explain it   │
+│   ⚠ no vendor name above plugins/ and their manifests                       │
 └───────────────────────────────┬────────────────────────────────────────────┘
           frames (N channels + reference) ↑        ↓ PCM · device commands
 ┌───────────────────────────────▼────────────────────────────────────────────┐
@@ -155,8 +155,8 @@ anywhere else**. That test is the architecture; if it goes red, a layer still kn
 
 | Debt | Where | Why it breaks the goal |
 |---|---|---|
-| `AdapterName = Literal["xiaoai","mock"]` | `config/schema.py` | config validation rejects any adapter outside the literal, so a registered device cannot even be configured |
-| `registry._build()` if/elif | `device/registry.py` | every new device edits a core file |
+| ~~`AdapterName = Literal["xiaoai","mock"]`~~ (fixed in 0.3: adapter is a free string) | `config/schema.py` |—|
+| ~~`registry._build()` if/elif~~ (fixed in 0.6 M2: image plugs register from their manifest's `runtime.entrypoint`) | `device/registry.py` |—|
 | `audio.capture/voice/playback` are global | `config/schema.py` | two devices with different layouts cannot coexist; a 4-mic speaker changes the global shape |
 | DSP assumes 8 ch + 2 reference + playback | `audio/process.py` | a device without a reference channel cannot use the AEC path safely |
 | `amixer -c 0 cget numid=177` in the API | `web/api/app.py` | a vendor detail above the device layer |

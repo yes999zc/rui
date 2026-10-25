@@ -11,7 +11,7 @@ Import surface for the upcoming wizard/API::
 """
 from __future__ import annotations
 
-from .builtin import BUILTIN_PLUGINS, builtin_plugin, builtin_plugins
+from .builtin import builtin_plugin, builtin_plugin_errors, builtin_plugins
 from .errors import PluginError
 from .loader import PluginScan, discover_plugins, load_plugin, running_version
 from .models import (
@@ -50,7 +50,6 @@ __all__ = [
     "DEVICE_SCHEMA",
     "DEVICE_SCHEMA_V1",
     "PLUGIN_SCHEMA",
-    "BUILTIN_PLUGINS",
     "Acceptance",
     "Comparator",
     "Compatibility",
@@ -77,6 +76,7 @@ __all__ = [
     "WakeSource",
     "WakeSpec",
     "builtin_plugin",
+    "builtin_plugin_errors",
     "builtin_plugins",
     "discover_plugins",
     "load_plugin",

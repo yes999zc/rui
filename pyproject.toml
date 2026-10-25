@@ -55,3 +55,7 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# The image-shipped LX06 plug lives at plugs/xiaoai/xiaoai_plug and is copied to
+# /opt/rui-plugins/xiaoai (PYTHONPATH there). Tests import the same package from the
+# checkout; src stays first so rui itself is always the source tree.
+pythonpath = ["src", "plugs/xiaoai"]

@@ -231,7 +231,7 @@ audio:
 
 devices:
   - id: lx06
-    adapter: xiaoai
+    adapter: lx06            # 旧配置的 adapter: xiaoai 仍是单 minor 别名
     room: 客厅
     host: lx06.local
     listen_port: 4412
@@ -275,8 +275,9 @@ multi_device:
 ~~~
 
 - 核心默认改为中性：capture 16000 Hz / 1 ch / 0 ref、playback 16000 Hz / 1 ch、ack earcon；
-  LX06 的 8 ch / 6 mic / 2 ref / 48 kHz 由 `src/rui/plugins/builtin.py` 的 manifest 声明，
-  不再硬编码在 `CaptureConfig` 里。
+  LX06 的 8 ch / 6 mic / 2 ref / 48 kHz 由它自己的 plug manifest
+  （`plugs/xiaoai/devices/lx06.yaml`，镜像内 `/opt/rui-plugins`）声明，不再硬编码在
+  `CaptureConfig` 或核心代码里。
 - 缺任一层都不报错：没有 `audio_defaults` 的旧 plug 继续拿中性默认；没有
   `devices[].audio` 的设备继续继承全局块。
 - 「全局 config」只认**配置文件里显式写下的字段**（`model_fields_set`）：生产模板把

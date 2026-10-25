@@ -1286,10 +1286,11 @@ def _device_fields(cfg: Config) -> list[dict]:
                    effect="restart", advanced=True),
             _field(f"{prefix}.adapter", "devices", "text",
                    {"zh": f"{name} · 驱动类型", "en": f"{name} · adapter"},
-                   _t("用哪种驱动（当前 xiaoai / mock）。换管理方式时改；填错设备会不可用。"
-                      "改完重启音频面。",
-                      "Which driver runs this speaker (xiaoai / mock today). A wrong value "
-                      "makes it unavailable; restart the audio plane."),
+                   _t("用哪种驱动：填已安装 plug 的 manifest 里声明的机型 id（设备管理页会列出），"
+                      "或 mock。填错设备会不可用；改完重启音频面。",
+                      "Which driver runs this speaker: the device id declared by an installed "
+                      "plug manifest (the Device manager lists them), or mock. A wrong "
+                      "value makes it unavailable; restart the audio plane."),
                    effect="restart", advanced=True),
             _field(f"{prefix}.host", "devices", "text",
                    {"zh": f"{name} · 地址", "en": f"{name} · host"},

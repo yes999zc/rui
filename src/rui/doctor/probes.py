@@ -14,6 +14,7 @@ import platform
 import re
 import shutil
 import socket
+import sys
 import time
 import wave
 from dataclasses import dataclass, field
@@ -364,7 +365,9 @@ def _wire_rate_from_module(module: object) -> tuple[int | None, str]:
     return None, ""
 
 
-def _wire_rate_from_entrypoint(entrypoint: str) -> tuple[int | None, str]:
+def _wire_rate_from_entrypoint(
+    entrypoint: str, source_dir: Path | None = None
+) -> tuple[int | None, str]:
     """Read the wire rate a plug's in-process adapter declares as a module constant.
 
     The manifest's runtime.entrypoint is a string the loader never imports; the trusted
@@ -372,14 +375,31 @@ def _wire_rate_from_entrypoint(entrypoint: str) -> tuple[int | None, str]:
     read-only to read a constant - it never calls the entrypoint - and a module that
     cannot be imported simply declares nothing (not_applicable), because a broken plug
     is already reported by the device/plane rows.
+
+    ``source_dir`` is the plug directory: the image copies plugs to a directory on no
+    import path (only the image's PYTHONPATH reaches the plug package), and doctor must
+    still be able to read the constant. Doctor adds it for the import only.
     """
     module_name = str(entrypoint or "").split(":", 1)[0].strip()
     if not module_name:
         return None, ""
+    added: list[str] = []
+    if source_dir is not None:
+        text = str(source_dir)
+        for candidate in (text, str(Path(text).parent)):
+            if candidate not in sys.path:
+                sys.path.insert(0, candidate)
+                added.append(candidate)
     try:
         module = importlib.import_module(module_name)
     except Exception:  # noqa: BLE001 - doctor must not fail because a plug cannot import
         return None, ""
+    finally:
+        for candidate in added:
+            try:
+                sys.path.remove(candidate)
+            except ValueError:  # pragma: no cover - another thread removed it
+                pass
     rate, attr = _wire_rate_from_module(module)
     return rate, (f"{module_name}.{attr}" if attr else "")
 
@@ -410,7 +430,10 @@ def _declared_wire_rate(cfg: Config, device: object) -> tuple[int | None, str]:
     if resolved is None:
         return None, ""
     runtime = getattr(resolved.device, "runtime", None)
-    return _wire_rate_from_entrypoint(str(getattr(runtime, "entrypoint", "") or ""))
+    return _wire_rate_from_entrypoint(
+        str(getattr(runtime, "entrypoint", "") or ""),
+        getattr(resolved.plugin, "source_dir", None),
+    )
 
 
 def _audio_rates_check(cfg: Config) -> Check:

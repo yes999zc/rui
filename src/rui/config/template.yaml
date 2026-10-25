@@ -1,7 +1,8 @@
 # What `rui setup` writes on a fresh install (production: /config/config.yaml).
 #
 # Every value here is one we run: the capture/voice/playback numbers are the
-# measured LX06 values, the provider chains are the order production uses (local
+# measured values of the reference speaker (a device plug's manifest may override
+# them with its own audio_defaults), the provider chains are the order production uses (local
 # ASR first, 讯飞 TTS first with SiliconFlow behind it, DeepSeek for the LLM),
 # and the model directories are where `rui fetch-models` puts the files.
 # `{config_dir}` is replaced by setup with the directory the config lives in.

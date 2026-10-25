@@ -1,15 +1,18 @@
 """Resolve a configured device to the plug manifest that describes it (P2.4).
 
 ``devices[].params.plug_id`` is the explicit answer; a device written before that key
-existed is resolved through its adapter (``adapter: xiaoai`` -> built-in
-``xiaoai-lx06``). The catalog is read-only and uses the same loader/builtin registry as
-the wizard, so an unknown or broken plug simply resolves to ``None`` instead of raising.
+existed is resolved through its adapter (the adapter name is the plug manifest's device
+id). A one-minor alias (src/rui/adapter_aliases.py) maps the pre-0.6 spelling, so an old
+config keeps resolving to the same plug. The catalog is read-only and uses the same
+loader/builtin registry as the wizard, so an unknown or broken plug simply resolves to
+``None`` instead of raising.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..adapter_aliases import canonical_adapter
 from .builtin import builtin_plugins
 from .loader import discover_plugins
 from .models import DeviceManifest, Plugin
@@ -41,15 +44,23 @@ class ResolvedPlug:
 
 
 class PlugCatalog:
-    """Built-in plus optional user plugs, loaded once per request.
+    """Image plus optional user plugs, loaded once per request.
 
-    Built-in ids win over a user plug with the same id (the built-in is what the
-    image ships); ``discover_plugins`` already keeps a broken plug as data.
+    Image (builtin) ids win over a user plug with the same id (the image's plug is
+    what ships); ``discover_plugins`` already keeps a broken plug as data. Since 0.6
+    the image plugs come from the plug directory (plugs/ in a checkout,
+    /opt/rui-plugins in the image), not from an in-code table.
     """
 
-    def __init__(self, data_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        data_dir: str | Path | None = None,
+        *,
+        plugin_dirs: list[Path] | tuple[Path, ...] | None = None,
+    ) -> None:
         entries: dict[str, PlugEntry] = {
-            plugin.id: PlugEntry(plugin, "builtin") for plugin in builtin_plugins()
+            plugin.id: PlugEntry(plugin, "builtin")
+            for plugin in builtin_plugins(plugin_dirs)
         }
         scan = discover_plugins(data_dir)
         for plugin in scan.plugins:
@@ -69,22 +80,29 @@ class PlugCatalog:
         """
         explicit = (plug_id or "").strip()
         wanted_adapter = (adapter or "").strip()
+        canonical = canonical_adapter(wanted_adapter)
         if explicit:
             entry = self.get(explicit)
             if entry is None or not entry.plugin.devices:
                 return None
             device = next(
                 (item for item in entry.plugin.devices if item.id == wanted_adapter),
-                entry.plugin.devices[0],
+                next(
+                    (item for item in entry.plugin.devices if item.id == canonical),
+                    entry.plugin.devices[0],
+                ),
             )
             return ResolvedPlug(entry.plugin, device, entry.source, entry.plugin.id, "plug_id")
         if not wanted_adapter:
             return None
-        for entry in self.entries.values():
-            for device in entry.plugin.devices:
-                if device.id == wanted_adapter:
-                    return ResolvedPlug(
-                        entry.plugin, device, entry.source, entry.plugin.id, "adapter")
+        for wanted in (wanted_adapter, canonical):
+            if not wanted:
+                continue
+            for entry in self.entries.values():
+                for device in entry.plugin.devices:
+                    if device.id == wanted:
+                        return ResolvedPlug(
+                            entry.plugin, device, entry.source, entry.plugin.id, "adapter")
         return None
 
 

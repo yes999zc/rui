@@ -369,7 +369,8 @@ outbound 机型没有 inbound 回连，才用 host probe 作为通过证据。
 ```yaml
 devices:
   - id: living
-    adapter: xiaoai
+    adapter: lx06            # 0.6 起用 manifest 的机型 id；旧配置的 adapter: xiaoai
+                             # 仍可用一个 minor（src/rui/adapter_aliases.py）
     host: <speaker-ip>        # 向导 params 步填写；inbound 下只用于显示和 doctor 的 SSH 探测
     room: 客厅
     wake_words: ["你好小瑞"]
@@ -587,7 +588,7 @@ audio:
 
 devices:
   - id: living            # 客厅 LX06：全部继承全局
-    adapter: xiaoai
+    adapter: lx06          # 旧配置写 xiaoai 也可（单 minor 别名）
     host: living-room-speaker   # 音箱的局域网地址或主机名
     room: 客厅
   - id: bedroom           # 卧室 Dot 2：设备侧 AEC + 48 kHz wire

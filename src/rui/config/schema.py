@@ -2,7 +2,7 @@
 
 Version history:
   1 - one flat `audio` block with a single sample rate and channel count.
-      Wrong for every real speaker we measured: an LX06 captures 48 kHz / 8 ch / 32 bit
+      Wrong for every real speaker we measured: one captures 48 kHz / 8 ch / 32 bit
       and plays 48 kHz / 2 ch, while the voice pipeline runs at 16 kHz.
   2 - rates and channel counts are explicit per direction (`capture`, `voice`,
       `playback`); providers are a catalog plus an ordered fallback chain per stage.
@@ -19,6 +19,8 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+
+from ..adapter_aliases import LEGACY_DEFAULT_ADAPTER
 
 CONFIG_VERSION = 3
 
@@ -243,23 +245,25 @@ class DeviceAudioOverride(BaseModel):
 
 class DeviceConfig(BaseModel):
     id: str = Field(min_length=1, max_length=32)
-    # A name, not an enum: the registry decides what exists. Keeping the two shipped
-    # names in a Literal meant config validation rejected any adapter a future build
-    # registers, so "add a speaker" touched this file - the layer that must not care.
-    adapter: str = "xiaoai"
+    # A name, not an enum: a plug manifest declares it as its device id and the
+    # registry registers it, so config validation never rejects an adapter a future
+    # build adds. The default is the pre-0.6 spelling kept for one minor by
+    # src/rui/adapter_aliases.py (a config that never stated the key must keep
+    # resolving to the same plug); new configs are written with the manifest id.
+    adapter: str = LEGACY_DEFAULT_ADAPTER
     host: str
     room: str = ""
     enabled: bool = True
     wake_words: list[str] = Field(default_factory=lambda: ["你好小瑞"])
     volume: int = Field(default=60, ge=0, le=100)
-    # Inbound transports: the LX06 client dials us (ws://<server>:<port>/?token=...).
+    # Inbound transports: the device's client dials us (ws://<server>:<port>/?token=...).
     # None means "adapter default". The token value lives in the environment only.
     listen_port: int | None = Field(default=None, ge=1, le=65535)
     token_env: str = "RUI_DEVICE_TOKEN"
-    # Development only. The LX06's boot script hands the client a bare
-    # ws://host:port with no query string, so a tokenless listener is the only way to
-    # test against a speaker whose boot script cannot be edited. Off by default and it
-    # says so in the log: anyone on the LAN can open the microphone while it is on.
+    # Development only. Some device boot scripts hand the client a bare ws://host:port
+    # with no query string, so a tokenless listener is the only way to test against a
+    # speaker whose boot script cannot be edited. Off by default and it says so in the
+    # log: anyone on the LAN can open the microphone while it is on.
     allow_no_token: bool = False
     led: LedConfig = Field(default_factory=LedConfig)
     # Plug-declared, non-secret values (see docs/install-wizard-design.md §7.1).

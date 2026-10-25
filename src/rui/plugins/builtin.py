@@ -1,185 +1,158 @@
-"""Built-in Socket & Plug manifests, validated in code rather than read from disk.
+"""Image-shipped Socket & Plug manifests, loaded from a plug directory.
 
-Only the LX06 reference plug lives here for now. Keeping the manifest in code means a
-fresh install has a working plug before ``data/plugs/`` exists, and the same Pydantic
-models validate it as an on-disk ``plugin.yaml``.
+0.6 M2 (docs/roadmap-0.6.md): the LX06 manifest is no longer in code. The image
+copies the repository's plugs/ tree to /opt/rui-plugins, and this module is the
+catalog over that directory; a source checkout falls back to its own plugs/
+directory, so "uv run rui" and the test suite see the same manifests the image
+ships. Nothing here names a device.
 
-Nothing in this module imports or executes ``runtime.entrypoint``; it is a string, as
-required by ``docs/socket-plug.md``.
+Ordering:
+* RUI_PLUGINS_DIR - extra operator roots, os.pathsep-separated;
+* /opt/rui-plugins - the image path, always kept so an operator override cannot
+  hide the adapter an existing config selects;
+* <repo>/plugs - development fallback (only when neither of the above exists).
 
-The LX06 model is mirrored as the on-disk reference plug in
-``plugins/rui-plugin-xiaoai/`` (v0, RUI KWS). That package is for contract testing,
-not a runtime path: this in-code registry stays the fresh-install default until the
-0.4 extraction. ``tests/test_reference_plugin.py`` pins capability/param parity so
-the two copies cannot drift silently.
+Each root contains one directory per plug (<root>/<plug>/plugin.yaml), the same
+shape a downstream image copies its package into. Directories without a
+plugin.yaml are ignored, symlinks are skipped, and one broken manifest never hides
+the others: the failure is logged and exposed via builtin_plugin_errors(), as data,
+not an exception at import.
 """
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 
-import rui
+from ..env import get as env_get
+from .errors import PluginError
+from .loader import load_plugin
+from .models import Plugin
 
-from .models import (
-    DEVICE_SCHEMA_V1,
-    PLUGIN_SCHEMA,
-    DeviceManifest,
-    Plugin,
-)
-from .semver import parse_range
+__all__ = [
+    "ENV_VAR",
+    "IMAGE_DIR",
+    "builtin_plugin",
+    "builtin_plugin_errors",
+    "builtin_plugins",
+    "plugin_dirs",
+]
 
-__all__ = ["BUILTIN_PLUGINS", "LX06_PLUG_ID", "builtin_plugin", "builtin_plugins"]
+log = logging.getLogger(__name__)
 
-LX06_PLUG_ID = "xiaoai-lx06"
-# The device manifest id is also the adapter name used by ``devices[].adapter``.
-LX06_ADAPTER = "xiaoai"
+#: Colon-separated roots (like PATH) that hold one directory per plug.
+ENV_VAR = "RUI_PLUGINS_DIR"
+#: Where the image copies plugs/ (docs/plug-test-kit.md downstream recipe).
+IMAGE_DIR = Path("/opt/rui-plugins")
 
-_SOURCE_DIR = Path(__file__).resolve().parent
+#: repo root from src/rui/plugins/builtin.py; only used when it actually has plugs/
+_DEV_ROOT = Path(__file__).resolve().parents[3]
+_DEV_DIR = _DEV_ROOT / "plugs"
 
-_XIAOAI_LX06 = {
-    # 0.6: the built-in LX06 manifest is rui-device/v1 so it can declare the hardware
-    # defaults the core no longer hard-codes (docs/roadmap-0.6.md M1). It still wakes
-    # through RUI KWS: no `wake` block means `source: rui` by the v1 default, and the
-    # manifest never declares device_wake / barge_via_device.
-    "schema": DEVICE_SCHEMA_V1,
-    "id": LX06_ADAPTER,
-    "name": "Xiaomi AI Speaker Pro (LX06)",
-    "vendor": "Xiaomi",
-    "class": "A",
-    "transport": "inbound",
-    "protocol": {"kind": "ws", "version": "1"},
-    "capabilities": ["mic_array", "reference", "playback", "led", "keys", "volume"],
-    # What the core used to bake into CaptureConfig (0.5 and earlier): S32_LE, 8
-    # interleaved channels at 48 kHz, ch0..ch5 mics, ch6/ch7 playback reference, and
-    # the measured shifts. This is the bottom layer of the audio merge: a config that
-    # states its own values (the production template asks the client for 16 kHz to save
-    # wifi bandwidth) keeps them.
-    "audio_defaults": {
-        "capture": {
-            "rate": 48000,
-            "channels": 8,
-            "mic_channels": 6,
-            "ref_channels": 2,
-            "bits": 32,
-            "mic_shift": 12,
-            "ref_shift": 16,
-        },
-        # The LX06's measured own-cue echo tail (AckConfig documents 1200 ms).
-        "ack_echo_ignore_ms": 1200,
-    },
-    "device_side": {
-        "artifact": "client",
-        "name": "open-xiaoai client",
-        "source": "https://github.com/coderzc/open-xiaoai",
-        "version_min": "v0.x",
-        "install_steps": [
-            "记下音箱的局域网 IP，并在路由器里给它做 DHCP 固定租约：IP 一变，SSH 和客户端的回连地址都会失效。",
-            "按 open-xiaoai 的刷机/root 说明打开音箱 SSH，记录 root 密码和登录方式"
-            "（通常是 ssh root@<speaker-ip>）。",
-            "安装 open-xiaoai client，记下它的安装路径（常见为 /data/open-xiaoai/）"
-            "以及保存连接配置的文件或启动脚本（server.txt、start.sh 里的 WS_URL 等）。",
-            "在 client 配置里填 ws://<server-lan-ip>:4412/?token=<device-token>："
-            "device token 由本向导的 connect 步骤给出，服务端和客户端必须用同一个值。",
-            "重启 client（重跑启动脚本或重启音箱），在 client 日志里确认出现 "
-            "connected / 已连接 ws://...；日志路径或查看命令也要记下来。",
-            "回到向导 connect 步骤点「重试」，speaker_connected 变成 true 才继续；"
-            "若 client 日志是 401 / close 1008，先核对两边的 token。",
-            "记下回滚方法：停止并移除 client、恢复原启动脚本；原厂固件/分区不动。",
-        ],
-        "rollback": "Stop and remove the open-xiaoai client, restore the stock boot script; "
-                    "the stock firmware and partitions are untouched.",
-    },
-    "runtime": {
-        "mode": "in-process",
-        "entrypoint": "rui.device.xiaoai:build",
-        "listen_port": 4412,
-        "token_env": "RUI_DEVICE_TOKEN",
-    },
-    "params": [
-        {
-            "key": "host",
-            "label": "音箱地址",
-            "type": "string",
-            "required": True,
-            "placeholder": "<speaker-ip>",
-        },
-        {
-            "key": "room",
-            "label": "房间名",
-            "type": "string",
-            "default": "客厅",
-        },
-        {
-            "key": "wake_words",
-            "label": "唤醒词",
-            "type": "list",
-            "default": ["你好小瑞"],
-            "max": 3,
-        },
-    ],
-    "compatibility": {
-        "rui_min": "0.3.0",
-        "tested_with": ["0.3.2", "0.5.3"],
-        # Socket & Plug v1: the LX06 is a closed device (open-xiaoai client only), so
-        # there is no device-side RUI wake model. Omitting `wake` means
-        # `wake.source: rui`; the manifest must never declare device_wake.
-        "notes": "A-class coexistence with the stock firmware; open-xiaoai client required. "
-                 "Wake is RUI KWS (v1 default when wake is omitted), not device_wake. "
-                 "audio_defaults declares the 8 ch / 6 mic / 2 ref / 48 kHz layout.",
-    },
-    "acceptance": {
-        "verified": True,
-        "last_verified": "2026-10-24",
-        "evidence": "Real LX06 wake/playback/yield checks; see the plug README.",
-    },
-}
-
-_XIAOAI_LX06_PLUGIN = {
-    "schema": PLUGIN_SCHEMA,
-    "id": LX06_PLUG_ID,
-    "name": "Xiaomi AI Speaker Pro (LX06)",
-    "version": "0.2.0",
-    # v1 matrix (docs/socket-plug-v1.md §7): a rui-device/v1 manifest is only loadable
-    # from 0.3.0 on, so the range floor moves with the schema. The builtins bypass
-    # ``load_plugin``'s compat check, so this is also asserted in ``_build`` below and
-    # in tests/test_plugins.py.
-    "rui_compat": ">=0.3.0 <0.6.0",
-    "license": "MIT",
-    "maintainer": "rui maintainers",
-    "homepage": "https://github.com/coderzc/open-xiaoai",
-    "trust": "builtin",
-}
+# key -> (plugins, errors). The key is the resolved directory list, so a test that
+# points RUI_PLUGINS_DIR at a fixture gets its own scan without reloading the module.
+_CACHE: dict[tuple[str, ...], tuple[tuple[Plugin, ...], tuple[str, ...]]] = {}
 
 
-def _build() -> tuple[Plugin, ...]:
-    # A builtin bypasses load_plugin()'s compat gate, so check its own range here: an
-    # image whose manifest excludes its own version is a release bug, not a warning.
-    if not parse_range(_XIAOAI_LX06_PLUGIN["rui_compat"]).matches(rui.__version__):
-        raise RuntimeError(
-            f"builtin plug {_XIAOAI_LX06_PLUGIN['id']!r} declares rui_compat "
-            f"{_XIAOAI_LX06_PLUGIN['rui_compat']!r}, which excludes this build "
-            f"({rui.__version__})"
-        )
-    device = DeviceManifest.model_validate(_XIAOAI_LX06)
-    plugin = Plugin.model_validate(
-        {**_XIAOAI_LX06_PLUGIN, "devices": [device], "source_dir": _SOURCE_DIR}
-    )
-    return (plugin,)
+def plugin_dirs() -> list[Path]:
+    """The roots to scan, highest priority first.
 
-
-BUILTIN_PLUGINS: tuple[Plugin, ...] = _build()
-
-
-def builtin_plugins() -> list[Plugin]:
-    """Every plug compiled into this build, in stable order.
-
-    A fresh list is returned so a caller cannot mutate the registry.
+    RUI_PLUGINS_DIR adds roots; it never replaces the image directory, because an
+    existing config that selects an image plug must not break just because an
+    operator pointed the variable at an extra directory (include both explicitly
+    only if a root should be scanned before the image: the image is appended last).
     """
-    return list(BUILTIN_PLUGINS)
+    raw = env_get(ENV_VAR).strip()
+    roots = [
+        Path(part).expanduser()
+        for part in raw.split(os.pathsep)
+        if part.strip()
+    ] if raw else []
+    if IMAGE_DIR.is_dir():
+        roots.append(IMAGE_DIR)
+    elif not roots and _DEV_DIR.is_dir():
+        roots.append(_DEV_DIR)
+    return _dedupe(roots)
+
+
+def builtin_plugins(dirs: list[Path] | tuple[Path, ...] | None = None) -> list[Plugin]:
+    """Every plug shipped with this build, in stable directory order.
+
+    Passing dirs overrides the environment/development discovery (tests and
+    embedders); it is not an operator-facing knob. A fresh list is returned.
+    """
+    roots = plugin_dirs() if dirs is None else _dedupe(Path(d) for d in dirs)
+    plugins, _errors = _scan(roots)
+    return list(plugins)
 
 
 def builtin_plugin(plugin_id: str) -> Plugin | None:
-    """The built-in plug with ``plugin_id``, or None."""
-    for plugin in BUILTIN_PLUGINS:
-        if plugin.id == plugin_id:
+    """The image plug with plugin_id, or None."""
+    wanted = (plugin_id or "").strip()
+    for plugin in builtin_plugins():
+        if plugin.id == wanted:
             return plugin
     return None
+
+
+def builtin_plugin_errors(dirs: list[Path] | tuple[Path, ...] | None = None) -> list[str]:
+    """One bounded line per broken image plug, for the console/doctor to display."""
+    roots = plugin_dirs() if dirs is None else _dedupe(Path(d) for d in dirs)
+    _plugins, errors = _scan(roots)
+    return list(errors)
+
+
+def _dedupe(paths) -> list[Path]:
+    seen: list[Path] = []
+    for path in paths:
+        try:
+            resolved = Path(path).expanduser().resolve()
+        except (OSError, RuntimeError, ValueError):  # a bad env entry is not fatal
+            continue
+        if resolved not in seen:
+            seen.append(resolved)
+    return seen
+
+
+def _scan(dirs: list[Path]) -> tuple[tuple[Plugin, ...], tuple[str, ...]]:
+    key = tuple(str(path) for path in dirs)
+    cached = _CACHE.get(key)
+    if cached is not None:
+        return cached
+    plugins: list[Plugin] = []
+    errors: list[str] = []
+    seen_ids: set[str] = set()
+    for root in dirs:
+        try:
+            if not root.is_dir():
+                continue
+            children = sorted(root.iterdir(), key=lambda item: item.name)
+        except OSError as exc:
+            errors.append(f"cannot read plug directory {root}: {exc}")
+            continue
+        for child in children:
+            try:
+                if child.is_symlink() or not child.is_dir():
+                    continue
+                if not (child / "plugin.yaml").is_file():
+                    continue
+            except OSError:
+                continue
+            try:
+                plugin = load_plugin(child)
+            except PluginError as exc:
+                errors.append(str(exc))
+                log.warning("image plug %s cannot be loaded: %s", child, exc)
+                continue
+            except Exception as exc:  # noqa: BLE001 - one plug must not break the image
+                errors.append(f"{child}: unexpected error while loading plug: {exc}")
+                log.warning("image plug %s cannot be loaded: %s", child, exc)
+                continue
+            if plugin.id in seen_ids:
+                errors.append(f"{child}: duplicate plugin id {plugin.id!r}; skipped")
+                continue
+            seen_ids.add(plugin.id)
+            plugins.append(plugin)
+    result = (tuple(plugins), tuple(errors))
+    _CACHE[key] = result
+    return result

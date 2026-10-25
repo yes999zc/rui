@@ -1,0 +1,66 @@
+# LX06 device manifest (rui-device/v1). Moved out of src/rui/device/xiaoai/ in 0.6
+# M2: the hardware layout and the client instructions now live with the plug.
+#
+# Wake is RUI KWS: omitting the wake block means source: rui (the v1 default), and
+# the manifest must never declare device_wake / barge_via_device. RUI still owns the
+# final turn/barge decision.
+schema: rui-device/v1
+# Canonical adapter name since 0.6. Old configs that say `adapter: xiaoai` keep
+# working for one minor through the alias in src/rui/adapter_aliases.py.
+id: lx06
+model: "LX06"
+name: "Xiaomi AI Speaker Pro (LX06)"
+vendor: "Xiaomi"
+class: A
+transport: inbound
+protocol: {kind: ws, version: "1"}
+capabilities: [mic_array, reference, playback, led, keys, volume]
+# What the core used to bake into CaptureConfig (0.5 and earlier): S32_LE, 8
+# interleaved channels at 48 kHz, ch0..ch5 mics, ch6/ch7 playback reference, and the
+# measured shifts. This is the bottom layer of the audio merge: a config that states
+# its own values (the production template asks the client for 16 kHz to save wifi
+# bandwidth) keeps them.
+audio_defaults:
+  capture:
+    rate: 48000
+    channels: 8
+    mic_channels: 6
+    ref_channels: 2
+    bits: 32
+    mic_shift: 12
+    ref_shift: 16
+  # The LX06's measured own-cue echo tail (AckConfig documents 1200 ms).
+  ack_echo_ignore_ms: 1200
+device_side:
+  artifact: client
+  name: "open-xiaoai client"
+  source: "https://github.com/coderzc/open-xiaoai"
+  version_min: "v0.x"
+  install_steps:
+    - "记下音箱的局域网 IP，并在路由器里给它做 DHCP 固定租约：IP 一变，SSH 和客户端的回连地址都会失效。"
+    - "按 open-xiaoai 的刷机/root 说明打开音箱 SSH，记录 root 密码和登录方式（通常是 ssh root@<speaker-ip>）。"
+    - "安装 open-xiaoai client，记下它的安装路径（常见为 /data/open-xiaoai/）以及保存连接配置的文件或启动脚本（server.txt、start.sh 里的 WS_URL 等）。"
+    - "在 client 配置里填 ws://<server-lan-ip>:4412/?token=<device-token>：device token 由本向导的 connect 步骤给出，服务端和客户端必须用同一个值。"
+    - "重启 client（重跑启动脚本或重启音箱），在 client 日志里确认出现 connected / 已连接 ws://...；日志路径或查看命令也要记下来。"
+    - "回到向导 connect 步骤点「重试」，speaker_connected 变成 true 才继续；若 client 日志是 401 / close 1008，先核对两边的 token。"
+    - "记下回滚方法：停止并移除 client、恢复原启动脚本；原厂固件/分区不动。"
+  rollback: "Stop and remove the open-xiaoai client, restore the stock boot script; the stock firmware and partitions are untouched."
+runtime:
+  mode: in-process
+  # The image sets PYTHONPATH=/opt/rui-plugins/xiaoai so this module resolves; the
+  # loader also adds the plug's own directory when it auto-registers image plugs.
+  entrypoint: "xiaoai_plug.adapter:build"
+  listen_port: 4412
+  token_env: RUI_DEVICE_TOKEN
+params:
+  - {key: host, label: "音箱地址", type: string, required: true, placeholder: "<speaker-ip>"}
+  - {key: room, label: "房间名", type: string, default: "客厅"}
+  - {key: wake_words, label: "唤醒词", type: list, default: ["你好小瑞"], max: 3}
+compatibility:
+  rui_min: "0.3.0"
+  tested_with: ["0.3.2", "0.5.3"]
+  notes: "A-class coexistence with the stock firmware; open-xiaoai client required. Wake is RUI KWS (v1 default when wake is omitted), not device_wake. audio_defaults declares the 8 ch / 6 mic / 2 ref / 48 kHz layout."
+acceptance:
+  verified: true
+  last_verified: "2026-10-24"
+  evidence: "Real LX06 wake/playback/yield checks on 0.5.x; manifest and adapter surface re-verified with rui plug-test in 0.6 M2."

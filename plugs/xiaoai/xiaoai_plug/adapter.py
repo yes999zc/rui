@@ -23,17 +23,23 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
-from ... import secrets
-from ...config.schema import CaptureConfig, DeviceConfig, VoiceConfig
-from ...trace import now_ms
-from ..contract import AudioFrame, Capability, DeviceAdapter, DeviceInfo, Transport
+from rui import secrets
+from rui.config.schema import (
+    CaptureConfig,
+    Config,
+    DeviceConfig,
+    VoiceConfig,
+    effective_device_audio,
+)
+from rui.trace import now_ms
+from rui.device.contract import AudioFrame, Capability, DeviceAdapter, DeviceInfo, Transport
 from . import protocol
 from .led import LedRing
 
@@ -75,6 +81,16 @@ VENDOR_PAUSE_SCRIPT = (
 
 
 class XiaoaiAdapter(DeviceAdapter):
+    #: Contract-kit-only hint (docs/plug-test-kit.md): the LX06 is an inbound
+    #: transport, so open()/frames()/play() need the open-xiaoai client to dial in
+    #: and a host-free kit run must record those checks as SKIP. The audio plane
+    #: ignores it.
+    kit_live_device_required = True
+    kit_live_device_reason = (
+        "inbound LX06: open() listens on ws://:<port> and capture/playback need the "
+        "open-xiaoai client to dial in; probe() and the method surface were still exercised"
+    )
+
     def __init__(self, dev: DeviceConfig, capture: CaptureConfig, voice: VoiceConfig) -> None:
         self.dev = dev
         self.capture = capture
@@ -138,7 +154,7 @@ class XiaoaiAdapter(DeviceAdapter):
         self._consumed_event = asyncio.Event()
         self.info = DeviceInfo(
             id=dev.id,
-            adapter="xiaoai",
+            adapter=str(dev.adapter or DEFAULT_ADAPTER),
             model="LX06",
             host=dev.host,
             room=dev.room,
@@ -546,4 +562,43 @@ def pcm_to_array(pcm: bytes, channels: int) -> np.ndarray:
     return np.frombuffer(pcm, dtype="<i2").reshape(-1, channels)
 
 
-__all__ = ["DEFAULT_LISTEN_PORT", "XiaoaiAdapter", "pcm_to_array"]
+__all__ = ["DEFAULT_ADAPTER", "DEFAULT_LISTEN_PORT", "XiaoaiAdapter", "build", "pcm_to_array"]
+
+DEFAULT_ADAPTER = "lx06"
+
+
+def build(dev: DeviceConfig | None = None, cfg: Config | None = None) -> XiaoaiAdapter:
+    """Build the LX06 adapter from a device spec and the runtime config.
+
+    ``cfg`` may be omitted by the contract kit, whose fake config has no audio block:
+    the device manifest's ``audio_defaults`` then supplies the 8 ch / 48 kHz layout
+    (resolve_device_plug reads the plug catalog; a host without the manifest keeps the
+    neutral core layout and only probe() would show it).
+    """
+    if dev is None:
+        raise TypeError("the LX06 adapter needs a device spec")
+    if not isinstance(dev, DeviceConfig):  # the contract kit passes a SimpleNamespace
+        dev = _device_config(dev)
+    runtime = cfg if cfg is not None and hasattr(cfg, "audio") else Config()
+    effective = effective_device_audio(runtime, dev)
+    return XiaoaiAdapter(dev, effective.capture, effective.voice)
+
+
+def _device_config(spec: object) -> DeviceConfig:
+    """Coerce a kit fake device (id/host/room/params) into a DeviceConfig."""
+    raw_params = getattr(spec, "params", None)
+    params = dict(raw_params) if isinstance(raw_params, Mapping) else {}
+    host = str(getattr(spec, "host", "") or params.get("host") or "127.0.0.1")
+    return DeviceConfig(
+        id=str(getattr(spec, "id", "") or "speaker"),
+        adapter=str(getattr(spec, "adapter", "") or DEFAULT_ADAPTER),
+        host=host,
+        room=str(getattr(spec, "room", "") or params.get("room") or ""),
+        params=params,
+        token_env=str(getattr(spec, "token_env", "") or "RUI_DEVICE_TOKEN"),
+        listen_port=getattr(spec, "listen_port", None),
+        allow_no_token=bool(
+            getattr(spec, "allow_no_token", False) or params.get("allow_no_token", False)
+        ),
+    )
+

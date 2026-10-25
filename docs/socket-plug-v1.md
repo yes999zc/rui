@@ -144,7 +144,8 @@ acceptance: {verified: false, last_verified: "", evidence: "待真机验收；�
   ref_channels == channels`），失败指向具体设备而不是在音频面里崩帧长。
 - 核心默认是**中性**的：capture 16000 Hz / 1 ch / 0 ref、playback 16000 Hz / 1 ch、ack `earcon`。
   LX06 的 8 ch / 6 mic / 2 ref / 48 kHz 由它自己的 manifest 声明
-  （`src/rui/plugins/builtin.py`），核心不再硬编码任何机型数字。
+  （`plugs/xiaoai/devices/lx06.yaml`，镜像内为 `/opt/rui-plugins/xiaoai/devices/lx06.yaml`），
+  核心不再硬编码任何机型数字。
 - 「全局 config」按**文件里是否写了该字段**判定：没写的字段继续落到设备默认；显式写下的值
   （例如生产模板把 capture.rate 写成 16000 以省 wifi 带宽）永远赢。`save_config` 因此
   不会把核心默认值（audio 各字段与 `ack.echo_ignore_ms`）写回文件，避免一次控制台保存
@@ -152,9 +153,10 @@ acceptance: {verified: false, last_verified: "", evidence: "待真机验收；�
 - `ack_echo_ignore_ms` 属于唤醒应答（`ack.echo_ignore_ms`）而不是 DSP 参数，所以放在
   `audio_defaults` 顶层，由 `effective_ack_echo_ignore_ms()` 单独合成；它不进
   `effective_audio()` 的 `audio` 块，避免看起来生效实际被忽略的假旋钮。
-- 内置 LX06 manifest 自 0.6 起是 `rui-device/v1`（唤醒仍走 RUI KWS：省略 `wake` 即
-  `source: rui`）；`plugins/rui-plugin-xiaoai/` 的 v0 参考包继续作为「没有
-  audio_defaults 的旧 plug」兼容样本。
+- LX06 manifest 自 0.6 起是 `rui-device/v1`（唤醒仍走 RUI KWS：省略 `wake` 即
+  `source: rui`），随镜像放在 `plugs/xiaoai/`；没有 `audio_defaults` 的旧 plug
+  兼容样本由 `examples/plugin-example` 与测试 fixture 覆盖（v0 参考包在 0.6 M2 随
+  核心目录一起移除）。
 
 ### 3.3 `wake` 块与校验
 
@@ -392,26 +394,31 @@ dot2 = "my_plugin.adapter:build"
 
 控制/数据两条 socket 若存在，起播/flush 屏障按 `docs/playback-path.md` §6.4 的 P3 设计；**gap/boundary harness 在 0.3.2 未交付**，dot2 需保留自己的 flush+pong/预缓冲（0.4 再评估）。无 `reference` 合法（依赖设备侧 AEC）；`wake: {source: device, barge_via_device: true}` + 对应能力，`drain_wakes()` 映射 EchoMuse `oww_wake` 的 `score/threshold/ageMs/capturedMono/barge/level`；barge 只是建议，RUI 按 §5 最终判定；0.3 前可先用 v0 manifest 跑 KWS，`drain_wakes()` 可先实现但不会被 0.2 调用。
 
-### 6.5 参考插头：LX06（`plugins/rui-plugin-xiaoai/`）
+### 6.5 镜像自带插头：LX06（`plugs/xiaoai/`）
 
-P3.1 把已内置的 LX06 能力落成一个可被 `load_plugin()` 读取的**参考插头**，用来证明 v1 契约不需要核心品牌分支。它**不是新的运行时路径**：0.2.x/0.3.x 仍以内置 manifest + `src/rui/device/xiaoai/` 为默认，参考包只用于对照和 kit 验收；同 id 时 builtin 优先。
+0.6 M2（`docs/roadmap-0.6.md`）把 `src/rui/device/xiaoai/` 搬成与 dot2 同构的插头：核心没有 LX06 分支，镜像把 `plugs/` 复制到 `/opt/rui-plugins`，manifest loader 扫描该目录，registry 再从 manifest 的 `runtime.entrypoint` 注册 adapter。它**是**生产运行时路径，不再是参考包。
 
 | 部件 | 内容 | 对应规范 |
 |---|---|---|
-| `plugin.yaml` | id `xiaoai-lx06`，trust `builtin`，`rui_compat: ">=0.2.0 <0.6.0"` | §3.1 / §3.2 |
-| `devices/lx06.yaml` | `rui-device/v0`，class A，inbound，`ws`，in-process，能力 `mic_array` / `reference` / `playback` / `led` / `keys` / `volume`，参数 `host` / `room` / `wake_words` | §3、§7 |
-| `rui_plugin_xiaoai/adapter.py` | `build(spec, config)` 转调 `rui.device.xiaoai.build`，不复制 LX06 行为；`set_volume(0–100)` 映射到 `services.set_volume(0–255)` | §4.1 |
-| `wake` | 无；v0 默认 `source: rui`，LX06 继续走 RUI KWS | §2、§7 |
+| `plugin.yaml` | id `xiaoai-lx06`，trust `builtin`，`rui_compat: ">=0.3.0 <0.7.0"` | §3.1 / §3.2 |
+| `devices/lx06.yaml` | `rui-device/v1`，id `lx06`，class A，inbound，`ws`，in-process，能力 `mic_array` / `reference` / `playback` / `led` / `keys` / `volume`，`audio_defaults` 48000/8 ch/6 mic/2 ref/32 bit/>>12/>>16 + `ack_echo_ignore_ms: 1200`，参数 `host` / `room` / `wake_words` | §3、§7 |
+| `xiaoai_plug/` | adapter / wire protocol / LED ring / mixer services；`build(dev, cfg)`，`kit_live_device_required = True` | §4.1 |
+| `wake` | 无；v1 默认 `source: rui`，LX06 继续走 RUI KWS | §2、§7 |
 
 ```bash
-python -m rui plug-test plugins/rui-plugin-xiaoai
-python -m rui plug-test plugins/rui-plugin-xiaoai \
-  --adapter rui_plugin_xiaoai.adapter:build --json
+python -m rui plug-test plugs/xiaoai
+python -m rui plug-test plugs/xiaoai \
+  --adapter xiaoai_plug.adapter:build --json
 ```
 
-预期：`manifest.*`、`adapter.import/construct/methods`、`device.ready/probe_layout`、两个 `poll.*`、`lifecycle.*` 通过；`device.open`、`capture.frames`、`capture.cadence`、`playback.sink` 记为 **SKIP**，因为 LX06 是 inbound，必须等 open-xiaoai client 拨入才能跑帧/播放；`wake.inject` 也 SKIP（v0/RUI KWS）。这些 SKIP 由 adapter 的 kit-only 提示 `kit_live_device_required` 标明（`docs/plug-test-kit.md`），不改变生产行为、不伪造设备，也不把 SKIP 记成 PASS。
+预期 16 PASS / 0 FAIL / 0 WARN / 5 SKIP（0.5.3 + 0.6 M2，同步记录在 `plugs/xiaoai/README.md`）：`manifest.*`、`adapter.import/construct/methods`、`device.ready/probe_layout`、两个 `poll.*`、`lifecycle.*` 通过；`device.open`、`capture.frames`、`capture.cadence`、`playback.sink` 记为 **SKIP**，因为 LX06 是 inbound，必须等 open-xiaoai client 拨入才能跑帧/播放；`wake.inject` 也 SKIP（RUI KWS，没有 device_wake）。这些 SKIP 由 adapter 的 kit-only 提示 `kit_live_device_required` 标明（`docs/plug-test-kit.md`），不改变生产行为、不伪造设备，也不把 SKIP 记成 PASS。
 
-0.4 才把 `src/rui/device/xiaoai/` 提取进本包；见 §7。
+> 15/0/2/5 是 **device_wake 类插头**（Dot 2）的报告：多出的两条 WARN 是
+> `device.probe_layout` 与 `device.device_wake_effective`。LX06 走 RUI KWS 且
+> probe 报全布局，所以没有这两条 WARN；不能用伪造 WARN 去对齐数字。
+
+迁移：`adapter: xiaoai` 在 0.6.x 仍可用（`src/rui/adapter_aliases.py` 的单 minor
+别名），新配置写 manifest 的机型 id `adapter: lx06`。旧 config 零迁移即启动。
 
 ## 7. 迁移与兼容
 
@@ -427,7 +434,7 @@ python -m rui plug-test plugins/rui-plugin-xiaoai \
 | 音频默认 | 无（核心写死 LX06） | 新增可选 `audio_defaults`（0.6）：`capture`/`playback`/`ack_echo_ignore_ms` |
 | 验收 | 手工 + 既有 pytest | 增加 manifest validator、wake injection、playback gap 工具 |
 
-**兼容规则**：loader 接受 v0，按 `wake.source=rui`、`barge_via_device=false` 处理；v0 不得声明 `wake`/`device_wake`/`barge_via_device`/`model`/`audio_defaults`（否则报错，不静默升级）。0.6 起 LX06 内置 manifest 升为 `rui-device/v1` 以声明 `audio_defaults`（唤醒仍走 RUI KWS，省略 `wake` 即 `source: rui`）；`plugins/rui-plugin-xiaoai/` 的 v0 参考包保留为「无 audio_defaults 的旧 plug」兼容样本，`src/rui/device/xiaoai/` 不实现 `drain_wakes()`，KWS 路径不变。v0 + 新字段、v1 + 未知字段、`rui_compat` 不匹配都报文件/字段。`devices[].params` 仍是值字典，`params.plug_id` 继续作为 adapter→plug 兜底（`src/rui/plugins/resolve.py`）。
+**兼容规则**：loader 接受 v0，按 `wake.source=rui`、`barge_via_device=false` 处理；v0 不得声明 `wake`/`device_wake`/`barge_via_device`/`model`/`audio_defaults`（否则报错，不静默升级）。0.6 起 LX06 的 manifest（`plugs/xiaoai`，镜像内 `/opt/rui-plugins/xiaoai`）升为 `rui-device/v1` 以声明 `audio_defaults`（唤醒仍走 RUI KWS，省略 `wake` 即 `source: rui`）；LX06 adapter 不实现 `drain_wakes()`，KWS 路径不变。v0 兼容样本改由 `examples/plugin-example` 与测试 fixture 覆盖。v0 + 新字段、v1 + 未知字段、`rui_compat` 不匹配都报文件/字段。`devices[].params` 仍是值字典，`params.plug_id` 继续作为 adapter→plug 兜底（`src/rui/plugins/resolve.py`）。
 
 **sidecar（0.3.x 明确未实现）**：manifest 仍可写 `runtime.mode: sidecar` 并通过 schema 校验，但 0.3.x **没有 sidecar runner/RPC**。向导返回 `sidecar_not_supported`；`build_adapters()` 对解析到 sidecar 的设备返回明确错误 `runtime.mode 'sidecar' is not implemented in 0.3.x; run the plug in-process with trust: trusted (or wait for the 0.4 sidecar runner)`，不会静默降级成 in-process，也不会把它当成“未知 adapter”。第三方插头在 0.3.x 因此不可运行，这是有意的最小安全面（§Q8）。sidecar 内部 RPC 由插头定义，v1 不标准化。
 
@@ -439,8 +446,8 @@ python -m rui plug-test plugins/rui-plugin-xiaoai \
 | 机型级 | `compatibility.rui_min` | `0.2.0`（可更低） | `0.3.0` |
 | 允许的 schema | `rui-device/*` | v0 | v1；0.3 loader 同时读 v0 |
 
-- builtin `xiaoai-lx06`：0.6 起为 v1 矩阵 `rui_compat: ">=0.3.0 <0.6.0"`、`rui_min: "0.3.0"`（声明 `audio_defaults` 需要 v1；0.6 之前它是 `>=0.2.0 <0.6.0` / `0.2.0`）。因为 builtin 绕过 `load_plugin()` 的兼容检查，`plugins/builtin.py` 在 import 时用 `parse_range(...).matches(rui.__version__)` 自检（不匹配直接 RuntimeError，视为 release bug）。
-- 参考包 `plugins/rui-plugin-xiaoai/`：仍用 v0 矩阵（`>=0.2.0 <0.6.0` / `0.2.0`），作为没有 `audio_defaults` 的旧 plug 样本。
+- 镜像 LX06 插头 `plugs/xiaoai`：v1 矩阵 `rui_compat: ">=0.3.0 <0.7.0"`、`rui_min: "0.3.0"`。它由 `load_plugin()` 加载，兼容上下限由 loader 强制（0.6 M2 之前这是绕过 loader 的 in-code builtin，上限 `<0.6.0`）。
+- 旧的 v0 参考包已随 0.6 M2 移除；v0 manifest 的支持本身仍在（synthetic fixtures + `examples/plugin-example` 的 v1 对照）。
 - 示例包 `examples/plugin-example/`：v1 矩阵 `>=0.3.0 <0.4.0` / `rui_min: "0.3.0"`，不再对 0.2 宣称可用。
 - `rui_compat` 是**唯一插件级**版本门；`rui_min` 是机型下限。能力可用性在运行时按 §4.3 判定，不用版本号猜能力。
 
@@ -472,15 +479,15 @@ compatibility: {rui_min: "0.3.0", tested_with: ["0.3.2"]}
 
 不要给 v0 manifest 加 `wake` 试图“渐进升级”：loader 会拒绝（§3.3 更正）。0.2 用户只能收到 v0 分支/开发分支的 manifest，不能收到 v1。
 
-**弃用**：`rui-device/v0` 在 0.3.x–0.5.x 继续支持，最早 0.6.0 移除（0.5.0 保留 v0，因为内置 LX06 参考插头仍是 v0）。0.3.2 起 `load_plugin()` 每个 v0 manifest 路径每进程记一次 warning（`src/rui/plugins/loader.py:_warn_v0_once`），避免每请求刷屏；`native_kws` 自 v1 弃用（v1 manifest 直接拒绝）；`streaming_asr` 保留为未定义值；`VendorSignalMsg`/`drain_signals()`/厂商让路窗口不弃用、不改语义；任何字段移除都“先警告、后 minor、再移除”，不得在 patch 移除。
+**弃用**：`rui-device/v0` 在 0.3.x–0.5.x 继续支持，最早 0.6.0 移除（0.5.0 保留 v0，因为当时的 LX06 参考插头仍是 v0；0.6 M2 起自带插头已是 v1）。0.3.2 起 `load_plugin()` 每个 v0 manifest 路径每进程记一次 warning（`src/rui/plugins/loader.py:_warn_v0_once`），避免每请求刷屏；`native_kws` 自 v1 弃用（v1 manifest 直接拒绝）；`streaming_asr` 保留为未定义值；`VendorSignalMsg`/`drain_signals()`/厂商让路窗口不弃用、不改语义；任何字段移除都“先警告、后 minor、再移除”，不得在 patch 移除。
 
-**0.4 提取计划（P3.1 只留参考包，不搬代码）**：`plugins/rui-plugin-xiaoai/` 现在是可验收的参考插头；`src/rui/device/xiaoai/` 与 `src/rui/plugins/builtin.py` 的内置 manifest 仍是 0.2.x/0.3.x 的默认回退（同 id 时 builtin 优先）。0.4 计划：
+**提取已完成（0.6 M2，取代旧的 0.4 计划）**：`src/rui/device/xiaoai/` 的实现已移入 `plugs/xiaoai/`，核心 registry 不再有任何设备适配器表项；`plugins/builtin.py` 只扫描镜像插头目录（`/opt/rui-plugins`）并交给同一个 manifest loader，`src/rui/plugins/builtin.py` 里没有任何机型数据；adapter entrypoint 为 `xiaoai_plug.adapter:build`，manifest 的 device id 是 `lx06`，而旧配置的 `devices[].adapter: xiaoai` 通过 `src/rui/adapter_aliases.py` 的单 minor 别名继续工作（计划 0.7.0 移除）。本切片不删除 v0 schema 支持。
 
-1. 把 `src/rui/device/xiaoai/` 的实现移入插件包（或独立发行包），核心 registry 只保留发现与兼容 shim；
-2. 把 `builtin.py` 的内置 manifest 改为“参考包缺失时的最小回退”，至少提前一个 minor 在日志/控制台提示迁移；
-3. adapter entrypoint 从 `rui.device.xiaoai:build` 切到 `rui_plugin_xiaoai.adapter:build`，`devices[].adapter` 仍为 `xiaoai`，配置不变。
+清单：
 
-v0 schema 的最早移除仍是 0.5（见上），0.4 不删除 v0 支持。本切片不移动核心目录、不改默认行为；参考包仍通过 `rui_plugin_xiaoai.adapter:build` 转调核心 builder。
+1. ✅ manifest 加载：`plugs/xiaoai/{plugin.yaml,devices/lx06.yaml}`，镜像内 `/opt/rui-plugins/xiaoai`；
+2. ✅ registry/loader 只发现不硬编码：image plug 从 manifest `runtime.entrypoint` 注册；
+3. ✅ 名称别名：`xiaoai` → `lx06`，一个 minor，旧 config 零迁移。
 
 **0.3 实现落点（计划）**：
 

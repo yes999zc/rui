@@ -617,7 +617,9 @@ def _restore_builtins(report: AdapterPluginReport, *, source: str) -> None:
     """Undo a hook that imported the real registry and replaced an image adapter."""
     restored: list[str] = []
     for name, target in registry.BUILTIN_TARGETS.items():
-        if registry._BUILDERS.get(name) is not target:
+        # Only undo a *replacement*: a name that is absent was removed by a test or
+        # an embedding and must not be resurrected from a stale protection table.
+        if name in registry._BUILDERS and registry._BUILDERS[name] is not target:
             registry._BUILDERS[name] = target
             restored.append(name)
     if restored:

@@ -9,10 +9,10 @@ import time
 import numpy as np
 import pytest
 from websockets.asyncio.client import connect
+from xiaoai_plug import protocol
 
 from rui.audio.client import AudioPlaneSupervisor
 from rui.config import load_config
-from rui.device.xiaoai import protocol
 
 TOKEN_ENV = "RUI_E2E_TOKEN"
 TOKEN = "e2e-token"

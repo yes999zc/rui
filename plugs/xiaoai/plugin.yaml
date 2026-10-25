@@ -1,0 +1,18 @@
+schema: rui-plugin/v0
+id: xiaoai-lx06
+name: "Xiaomi AI Speaker Pro (LX06)"
+version: 0.3.0
+# 0.6 M2: this package is image-shipped at /opt/rui-plugins/xiaoai and loaded by the
+# same manifest loader as a downstream plug. The floor moves with rui-device/v1 and
+# the ceiling leaves room for the 0.6/0.6.x line; 0.7.0 is the earliest the name
+# alias for old configs may go away (docs/roadmap-0.6.md M2).
+rui_compat: ">=0.3.0 <0.7.0"
+license: MIT
+maintainer: "rui maintainers"
+homepage: "https://github.com/coderzc/open-xiaoai"
+# Image-owned and executed in-process by the audio plane, exactly like the 0.5.x
+# in-code manifests; trust=builtin is what lets the loader register it without an
+# operator RUI_ADAPTER_PLUGINS entry.
+trust: builtin
+devices:
+  - devices/lx06.yaml
