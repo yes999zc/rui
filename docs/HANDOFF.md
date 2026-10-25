@@ -104,8 +104,9 @@ scripts/restore.sh <archive> --home /tmp/rui-restore-smoke
 docker compose exec -T rui rui config restore --last-good
 ```
 
-- 升级/回滚：改 `.env` 的 `RUI_IMAGE`（当前 `ghcr.io/yes999zc/rui:0.4.0`）→ `docker compose up -d`；
-  回滚用 `ghcr.io/yes999zc/rui:acceptance-f2abcef`。
+- 升级/回滚：改 `.env` 的 `RUI_IMAGE`（当前 `ghcr.io/yes999zc/rui:0.4.2`）→ `docker compose up -d`；
+  回滚改回 `ghcr.io/yes999zc/rui:0.4.1`（或 `0.4.0`）再 `docker compose up -d`；改 `.env` 前先备份
+  （最近：`.env.bak.20261025-152606` 为 0.4.2 部署前）。
 - 验收记录器：`python3 scripts/acceptance-v1.py wake|barge --url http://<NAS-IP>:8080 --out <dir>`（纯 stdlib）。
 - 开发：`.venv/bin/python -m pytest -o addopts="" -q`；`ruff check .`；`cd web && npm run typecheck && npm run build`。
 - 模型测试：`RUI_TEST_MODELS=/path/with/silero_vad.onnx+model dirs`。

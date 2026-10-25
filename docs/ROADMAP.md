@@ -1,6 +1,6 @@
 # ROADMAP — rui / 小瑞
 
-> 目标载体：**NAS**。当前：**0.4.0 已发布并部署（非 root）**，控制台 IA 重构 Phase 1–3 完成；下一步 Phase 4 + P4。
+> 目标载体：**NAS**。当前：**0.4.2 已发布并部署（非 root）**，控制台 IA 重构 Phase 1–4 完成；下一步多设备 Phase 1（config v3，仍单 active）+ 只读 YAML 代码视图。
 > 每条都要有可复现判据；过程数字在 `HANDOFF` 与验收工作区，详细历史在
 > `docs/archive/HANDOFF-history-to-2026-10-24.md`。
 
