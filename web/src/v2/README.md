@@ -1,4 +1,4 @@
-# Console v2 (M3 — device create / edit / delete)
+# Console v2 (M4 — audio overrides & provenance)
 
 A second, side-by-side console. The legacy console at `/` keeps working and none
 of its files (`panels.ts`, `PanelHost.vue`, legacy `views/`) are imported here.
@@ -11,13 +11,14 @@ web/src/v2/main.ts             app bootstrap (shared theme + language init)
 web/src/v2/router.ts           createWebHistory('/v2/')
 web/src/v2/App.vue             shell: Run / Devices / Config, language, theme, token
 web/src/v2/api.ts              hand-written C-002 client (`/api/v2/*` only)
+web/src/v2/audio.ts            override surface + provenance row model for the audio tab
 web/src/v2/i18n.ts             v2-owned zh-Hans + en copy
 web/src/v2/views/              DevicesView, AddDeviceView, DeviceDetailView, RunView, ConfigView, 404
 web/src/v2/components/         StateBlock, StatusBadge, CapabilityChips, ProvenanceTag,
                                TokenDialog, ConfirmDialog
-web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, Activity, Connection,
-                               TestPanel, ActionsPanel, ConfigPanel, DangerPanel, RestartNotice,
-                               PlaneCard, SetupCard, ParamsCard, ErrorNotice
+web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, AudioPanel, Activity,
+                               Connection, TestPanel, ActionsPanel, ConfigPanel, DangerPanel,
+                               RestartNotice, PlaneCard, SetupCard, ParamsCard, ErrorNotice
 ```
 
 ## Pages
@@ -27,8 +28,20 @@ web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, Activity
   id/room/host/listen_port/wake_words → `POST /devices` (201 → device detail;
   409 `device_exists` links to the existing device; 422 `port_conflict` names
   the port and owning device ids).
-- `/v2/devices/:id?tab=overview|config|test|activity|connect|danger` — device detail:
+- `/v2/devices/:id?tab=overview|audio|config|test|activity|connect|danger` — device detail:
   - **overview** — identity, capabilities, audio provenance, plane/setup/params.
+  - **audio** — `GET /devices/{id}/audio` grouped by capture/voice/playback/aec/ack.
+    Every leaf shows its effective value, the `source` badge and an expandable
+    four-layer view (core/manifest/global/device). Only leaves the C-001
+    `DeviceAudioOverride` schema can store are editable; the rest are explicit
+    read-only. A save sends a **field-level diff** (`PATCH /devices/{id}/audio`)
+    after a second confirmation that states the fleet restart; a
+    `restart.status="failed"` response is rendered red, never as a saved state.
+    "Restore inheritance" sends `null` for one leaf, then re-reads `/audio` and
+    verifies both the source (manifest/global/core) and that the path left
+    `overrides`. A global value that explicitly shadows a manifest default is
+    called out inline, and `plug_resolved=false` keeps the table with an
+    `unresolved` explanation instead of an error page.
   - **config** — edits `room/host/enabled/wake_words/volume_target/listen_port`
     with one atomic `PATCH /devices/{id}`. Save requires a second confirmation
     that states "rebuilds the whole-house audio fleet (fleet restart)"; the
@@ -113,17 +126,23 @@ temporary harnesses must live outside `web/src/v2/` and be deleted afterwards.
   page therefore has no secret section and the types omit both fields.
   Capabilities and params schema are the only device-shape sources.
 
-## Detail page split (M2/M3)
+## Detail page split (M2/M3/M4)
 
-`DeviceDetailView.vue` is layout + data assembly only. The five read-only
-sections live in `components/device/` (`Identity`, `Capabilities`,
-`AudioProvenance`, `Activity`, `Connection`), and the interactive panels are
+`DeviceDetailView.vue` is layout + data assembly only. The read-only sections
+live in `components/device/` (`Identity`, `Capabilities`, `AudioProvenance`,
+`Activity`, `Connection`), and the interactive panels are `AudioPanel`,
 `TestPanel`, `ActionsPanel`, `ConfigPanel` and `DangerPanel`. Each section keeps
 its own loading/error/retry state; a failed write never clears loaded device
 data, and every write disables its submit control while in flight.
 
 ## Rules for follow-up work
 
+- **Gate before M5:** `AudioPanel.vue` stays a single file for M4 because the
+  draft baseline, field-level diff, restore verification and the three outcome
+  banners share one state machine (the table, both confirm dialogs and the
+  banners bind the same refs). Before M5 (global audio) adds another editing
+  surface, extract `AudioLeafRow` and a `useAudioDraft` composable; do not grow
+  M5 work inside the current monolith.
 - No model-name branches. Every device difference is read from `capabilities`,
   `params`, or the plugin catalog.
 - Action controls are driven by `effective_capabilities`; when a capability is
@@ -140,9 +159,9 @@ data, and every write disables its submit control while in flight.
 
 ## Integration status
 
-M3 is typed and built against C-002/1. The Python `/api/v2` implementation is
+M4 is typed and built against C-002/1. The Python `/api/v2` implementation is
 being finished by a separate workstream, so **live end-to-end integration has
 not been run** from this checkout; rendering and interaction flows were checked
-with a temporary headless Playwright mock outside the repository (config save
-confirmation, 422 field mapping, restart error/retry, typed delete, 409/422
-create errors, create navigation).
+with a temporary headless Playwright mock outside the repository (field-level
+audio diff, `null` restore + re-read verification, failed fleet restart, global
+shadow hint, `plug_resolved=false`, 500/retry, zh/en copy).

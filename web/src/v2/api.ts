@@ -279,6 +279,17 @@ export interface PatchDeviceAudioResponse {
   restart: Restart
 }
 
+/**
+ * `PATCH /devices/{id}/audio` body (contract §7.16).
+ *
+ * Only `audio` is accepted; `null` clears one leaf, `audio: null` clears every
+ * override. The editor sends a field-level diff, so the object contains exactly
+ * the leaves the operator changed (ack lives under `voice.ack_echo_ignore_ms`).
+ */
+export interface PatchDeviceAudioRequest {
+  audio: Record<string, unknown> | null
+}
+
 /** `DELETE /devices/{id}?confirm=...` — 200 `{removed, device_id}`. */
 export interface DeleteDeviceResponse {
   removed: boolean
@@ -672,6 +683,20 @@ export const api = {
     ),
   deviceAudio: (id: string): Promise<DeviceAudio> =>
     request<DeviceAudio>(`/api/v2/devices/${encodeId(id)}/audio`),
+  /**
+   * `PATCH /devices/{id}/audio` — 200 `{audio, device, restart}`.
+   *
+   * The write rebuilds the whole audio fleet; callers must confirm first and
+   * render `restart` even when the status is not `ok` (contract §4.5/§7.16).
+   */
+  patchDeviceAudio: (
+    id: string,
+    body: PatchDeviceAudioRequest,
+  ): Promise<PatchDeviceAudioResponse> =>
+    request<PatchDeviceAudioResponse>(`/api/v2/devices/${encodeId(id)}/audio`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
   deviceActivity: (id: string, query: ActivityQuery = {}): Promise<ActivityPage> => {
     const params = new URLSearchParams()
     params.set('limit', String(query.limit ?? 50))

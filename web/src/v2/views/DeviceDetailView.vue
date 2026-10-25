@@ -18,6 +18,7 @@ import StateBlock from '../components/StateBlock.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import ActionsPanel from '../components/device/ActionsPanel.vue'
 import ActivityPanel from '../components/device/Activity.vue'
+import AudioPanel from '../components/device/AudioPanel.vue'
 import AudioProvenance from '../components/device/AudioProvenance.vue'
 import Capabilities from '../components/device/Capabilities.vue'
 import ConfigPanel from '../components/device/ConfigPanel.vue'
@@ -33,6 +34,7 @@ import {
   promptForToken,
   type ActivityKind,
   type DeviceAudio,
+  type DeviceDetail,
   type PatchDeviceResponse,
 } from '../api'
 import { loadCapabilities } from '../capabilities'
@@ -41,10 +43,11 @@ import { metaFeature } from '../meta'
 import { t, transportLabel, type MsgKey } from '../i18n'
 import { useResource } from '../useResource'
 
-type DetailTab = 'overview' | 'config' | 'test' | 'activity' | 'connect' | 'danger'
+type DetailTab = 'overview' | 'audio' | 'config' | 'test' | 'activity' | 'connect' | 'danger'
 
 const TABS: Array<{ id: DetailTab; key: MsgKey }> = [
   { id: 'overview', key: 'v2.detail.tab.overview' },
+  { id: 'audio', key: 'v2.detail.tab.audio' },
   { id: 'config', key: 'v2.detail.tab.config' },
   { id: 'test', key: 'v2.detail.tab.test' },
   { id: 'activity', key: 'v2.detail.tab.activity' },
@@ -62,21 +65,28 @@ const tab = computed<DetailTab>(() => {
 })
 
 /**
- * The config tab unmounts on every tab change (`v-else-if`), which throws away
- * its local draft. `ConfigPanel` reports whether it has unsaved edits; switching
- * away then needs an explicit confirmation. A browser unload is guarded by
- * `beforeunload` (native prompt) because there is no in-app surface for it.
+ * The config/audio tabs unmount on every tab change (`v-else-if`), which throws
+ * away their local drafts. Both panels report unsaved edits; switching away then
+ * needs an explicit confirmation. A browser unload is guarded by `beforeunload`
+ * (native prompt) because there is no in-app surface for it.
  */
 const configDirty = ref(false)
+const audioDirty = ref(false)
 const pendingTab = ref<DetailTab | null>(null)
 
 function onConfigDirty(value: boolean): void {
   configDirty.value = value
 }
 
+function onAudioDirty(value: boolean): void {
+  audioDirty.value = value
+}
+
+const hasDraft = computed(() => configDirty.value || audioDirty.value)
+
 function selectTab(next: DetailTab): void {
   if (next === tab.value) return
-  if (configDirty.value) {
+  if (hasDraft.value) {
     // Keep the current tab rendered; only navigate after the operator confirms.
     pendingTab.value = next
     return
@@ -87,6 +97,7 @@ function selectTab(next: DetailTab): void {
 function goToTab(next: DetailTab): void {
   pendingTab.value = null
   configDirty.value = false
+  audioDirty.value = false
   void router.replace({ query: { ...route.query, tab: next } })
 }
 
@@ -100,7 +111,7 @@ function cancelTabLeave(): void {
 }
 
 function onBeforeUnload(event: BeforeUnloadEvent): void {
-  if (!configDirty.value) return
+  if (!hasDraft.value) return
   event.preventDefault()
   // Required by older Chromium/Firefox to show the native confirmation.
   event.returnValue = ''
@@ -182,6 +193,27 @@ function onSaved(response: PatchDeviceResponse): void {
   void houseResource.load()
 }
 
+/** Audio tab write (override save or verified restore) returned fresh state. */
+function onAudioUpdated(payload: { audio: DeviceAudio; device?: DeviceDetail }): void {
+  audioResource.data.value = payload.audio
+  // A verified re-read supersedes any earlier read error; leaving it set would
+  // keep the panel's red banner above data that is now known to be fresh.
+  audioError.value = null
+  if (payload.device) deviceResource.data.value = payload.device
+  void houseResource.load()
+}
+
+function refreshAudio(): void {
+  // Read-only retry: reload the audio provenance (and the counters/device view
+  // used next to it); never re-submit a write.
+  if (!audioProvenanceEnabled) return
+  void Promise.allSettled([
+    audioResource.load(),
+    deviceResource.load(),
+    houseResource.load(),
+  ])
+}
+
 function onDeleted(): void {
   void router.push({ name: 'devices' })
 }
@@ -201,6 +233,7 @@ watch(
     activityResource.reset()
     connectionResource.reset()
     configDirty.value = false
+    audioDirty.value = false
     pendingTab.value = null
     void loadAll()
   },
@@ -273,7 +306,7 @@ onMounted(() => {
         </div>
         <div class="v2-page-actions">
           <StatusBadge :status="detail.status" :reason="detail.status_reason" />
-          <span class="badge badge-muted">{{ t('v2.detail.m3badge') }}</span>
+          <span class="badge badge-muted">{{ t('v2.detail.audioBadge') }}</span>
           <button type="button" class="btn btn-sm" @click="loadAll">
             <AppIcon name="refresh" :size="14" />
             {{ t('v2.common.refresh') }}
@@ -318,6 +351,22 @@ onMounted(() => {
           <ParamsCard :params="detail.params" :unknown-params="detail.unknown_params" />
         </aside>
       </div>
+
+      <!-- audio overrides (M4) -->
+      <AudioPanel
+        v-else-if="tab === 'audio'"
+        :device-id="detail.id"
+        :audio="audio"
+        :loading="audioLoading"
+        :error-copy="audioErrorCopy"
+        :provenance-enabled="audioProvenanceEnabled"
+        :write-enabled="deviceWriteEnabled"
+        :refreshing="audioLoading || deviceLoading"
+        :planes-running="house?.multi_device?.planes_running ?? null"
+        @retry="refreshAudio"
+        @updated="onAudioUpdated"
+        @dirty-change="onAudioDirty"
+      />
 
       <!-- config -->
       <ConfigPanel
