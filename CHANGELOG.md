@@ -33,8 +33,7 @@ canonical per-version record.
   `last_active_window_s`, `on_no_speech`). Unknown ids in `default_output` /
   `room_priority`, duplicate priorities and `room`-less devices with
   `multi_device.enabled=true` are rejected; `config_warnings()` reports legal-but-wrong
-  combinations (double AEC cancellation, more enabled devices than `max_planes`, and
-  the fact that multi-plane scheduling is still Phase 2).
+  combinations (double AEC cancellation, and more enabled devices than `max_planes`).
 - **v2 configs stay v2.** A v2 file loads with identical behaviour and is only written
   as `version: 3` once a v3-only field is actually used, so rolling back to a 0.4.x
   image keeps working without editing the file.
@@ -58,6 +57,47 @@ canonical per-version record.
   reconnects — that card is the one place to rotate the HA token. New regression tests
   pin it: a replacement token overwrites the old one, leaving the token field empty
   keeps the stored value, and a new URL + token apply in a single save.
+
+- **Phase 2 — one audio plane per room, arbitrated in the control plane.** With
+  `multi_device.enabled: true` the app starts a `PlaneFleet` (one supervised child per
+  enabled inbound device, each with its own socket and crash watchdog) and wires every
+  plane into the turn path through `_wire_plane()`; `false` keeps the 0.4.x
+  single-plane path unchanged. Planes report `wake_candidate` without arming anything;
+  the `WakeArbiter` (room priority -> source group -> score margin -> last active ->
+  device order) and `WakeCoordinator` answer `wake_admit`/`wake_reject`, so one house
+  has one turn and one output owner. Barge is only accepted from the playing owner; a
+  second device in the same room is suppressed as cross-echo; the same word inside
+  `duplicate_window_ms` is a duplicate; a plane that gets no verdict drops its
+  candidate (`admit_timeout`) instead of starting a turn on its own; `max_planes`
+  refuses extras with an explicit warning (no queueing), and one crashed plane does not
+  take the other rooms down.
+- **Per-device audio that the plane can win with.** `devices[].audio.aec.who` decides
+  which side cancels echo (`device`/`controller`/`both`/`none`), and
+  `devices[].audio.voice.post_playback_mute_ms` drops the microphone for a window after
+  the speaker drains (default 0; the plane skips the follow-up gate when the window is
+  at least `followup_delay_ms`). Barge during playback is unaffected.
+- **Health and status per plane, without breaking the old contract.** `/health` keeps
+  every old top-level field (`devices` is still the count) and adds `audio_devices[]`
+  rows (`running`, `speaker_connected`, `restarts`, `error`, `wake_candidates`,
+  `wake_admitted`, `wake_admit_timeouts`, `wake_rejected`, `utterances`) plus a
+  `multi_device` block. A room whose plane is down produces
+  `plane_not_running`/`fleet_start_failed`/`over_max_planes` warnings instead of the
+  old `multiple_enabled_inbound` notice, and `/api/v1/audio` gained a `planes` map.
+  `speaker_connected` means *any* room is connected, so one dead room does not mark the
+  container unhealthy. Device rows, status and the connection test read that device's
+  own plane instead of the aggregate.
+
+### Changed
+
+- **`rui_compat` ceiling raised to `<0.6.0`** for the built-in LX06 plug, the example
+  plug and their tests: without it a 0.5.0 core would refuse the bundled plug and fail
+  to start. The matching semantics (version range) are unchanged.
+
+### Fixed
+
+- **`PlaneHandle` lost `on_wake_idle` on every plane restart.** The callback was set on
+  the facade but never re-applied to the new connection, so the "wake heard nothing"
+  path went silent after a crash; `on_wake_candidate` is rebound the same way now.
 
 <!-- Add changes here as they land; move them under the next version at release time. -->
 

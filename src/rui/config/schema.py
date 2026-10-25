@@ -998,11 +998,6 @@ def config_warnings(cfg: Config) -> list[str]:
             f"multi_device.max_planes={md.max_planes} but {len(enabled)} devices are "
             "enabled; the extra planes will not start (there is no queueing)"
         )
-    if md.enabled:
-        warnings.append(
-            "multi_device.enabled=true: this build still runs a single active audio "
-            "plane (Phase 1 is config v3 only); multi-plane scheduling lands in Phase 2"
-        )
     if md.enabled and md.default_output is None:
         warnings.append(
             "multi_device.default_output is empty; reminders with no source room will "

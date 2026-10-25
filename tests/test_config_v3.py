@@ -7,8 +7,8 @@ The decisions under test are frozen in `docs/multi-device-design.md` §9/§11:
 - a file only becomes `version: 3` on disk once a v3-only field is actually used;
 - every v3 profile is validated against the device list (unknown ids are typos).
 
-Phase 1 is parsing/inheritance/validation only: multi-plane scheduling is Phase 2,
-so `multi_device.enabled=true` is legal but still runs one active plane and says so.
+Phase 2 wires the fleet: `multi_device.enabled=true` starts one plane per enabled
+inbound device, so the old "still runs a single active plane" warning is gone.
 """
 from __future__ import annotations
 
@@ -265,9 +265,10 @@ def test_warnings_flag_double_cancellation(tmp_path: Path) -> None:
     assert not any("aec.who=device" in m for m in clean)
 
 
-def test_warnings_say_multiple_planes_are_not_live_yet(tmp_path: Path) -> None:
+def test_warnings_no_longer_claim_a_single_active_plane(tmp_path: Path) -> None:
+    # Phase 2 starts every enabled inbound device, so the old warning would be a lie.
     messages = config_warnings(load_config(_write(tmp_path, V3_CONFIG)))
-    assert any("single active audio plane" in m for m in messages)
+    assert not any("single active audio plane" in m for m in messages)
 
 
 def test_warnings_flag_too_many_planes(tmp_path: Path) -> None:

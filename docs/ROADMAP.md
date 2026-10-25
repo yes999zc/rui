@@ -106,7 +106,7 @@
 | # | 任务 | 状态/判据 |
 |---|---|---|
 | P5.1 ✅ | Phase 1：config v3（`devices[].audio` 覆盖、`multi_device` 块、`effective_audio()` 继承、引用/房间校验、v2 文件保持 v2） | `tests/test_config_v3.py` 21 用例；全量 1173/18；LX06 行为零差异 |
-| P5.2 🟡 | Phase 2：音频面候选/准入 + `post_playback_mute_ms` ✅、`fleet.py` ✅、`arbiter.py` ✅、`coordinator.py` ✅；**剩 `app.py` 接线**（fleet 启动 / 逐设备回调 / 仲裁 / `devices[]` 健康） | 接线后：app 级测试 + §7.2 共存/各自唤醒/同时听到/播放中打断/故障隔离；真机 9哥 保留 |
+| P5.2 ✅ | Phase 2 全部落地（`1b71584` 音频面、`a34cba5` fleet、`c0c2fc9` arbiter、`bd7c737` coordinator、`fce8d8c` 抽取接线、`e84fac4` fleet+仲裁接线、`ec8cf44` 逐设备健康）：候选/准入 + `post_playback_mute_ms`、每设备平面与看门狗、中央仲裁、fleet 启动/逐设备回调/`audio_devices` 健康/告警替换/设备写 fleet 重建 | app 级 fake `PlaneFleet` 测试 7 例；全量 **1266 passed / 18 skipped**；2×mock 真进程 smoke（2 plane、干净退出、无残留）；真机 §7.2 由 9哥 保留 |
 | P5.3 | Phase 1b：控制台“未启用多设备”状态 + `multi_device.*` / `devices[].audio.*` 目录字段 | 面板/目录契约测试；不改单 active 语义 |
 | P5.4 | 打磨批：HA 控制台表单/状态、install.sh 升级提示、healthcheck 根因提示、release note 占位注释、adapter 音量换算文档 | 随 v0.5.0 一起发，不单独发版 |
 | P5.5 | Phase 3（v0.5.x）：房间策略与输出体验（room_priority/last_active、房间视图、全局 stop 语义） | 多房间一周误唤醒/抢占统计 |

@@ -309,7 +309,7 @@ multi_device:
   - WakeArbiter：§4 的顺序表，输入 WakeCandidate，输出 admit/reject；所有计数器进 trace。
   - OutputOwner（跨设备）：收到 speak/play 请求时决定目标 device，向对应平面发 Speak/PlayFile；平面内 _owner 继续作为本地安全闸。第一版“语音回答只去起源房间”；提醒/音乐用 default_output。
   - 每个 device 一个 AudioPlaneClient；控制面的 /api/v1/audio、/health、设备状态按 device 聚合。
-- **健康/指标**：/health 保留顶层聚合字段（向后兼容），新增 devices: [{id, room, audio_plane, speaker_connected, last_seen, restarts, error, wake_count, ...}]；控制台设备列表/详情/状态按设备展示；删掉 max_active_inbound=1 的 warning，改为“某设备平面崩溃/未启动”的明确 warning。
+- **健康/指标**：/health 保留顶层聚合字段（向后兼容，`devices` 仍是设备数量整数），新增 `audio_devices: [{id, room, running, speaker_connected, restarts, error, wake_candidates, wake_admitted, wake_admit_timeouts, wake_rejected, utterances, ...}]` 与 `multi_device {enabled, max_planes, default_output, refused, error}`；控制台设备列表/详情/状态按设备展示；删掉 max_active_inbound=1 的 warning，改为“某设备平面崩溃/未启动/超 max_planes”的明确 warning。
 - **故障隔离**：一个平面崩溃只影响该房间；其 supervisor 独立重启；输出 owner 在该设备 crash 时释放 claim 并按 default_output 回退（或静默结束，按 §9 决策）。
 - **配置重载**：改动某台设备的端口/AEC/params 只重启该设备的平面；全局音频默认值变化 → 重启所有平面。
 
@@ -340,14 +340,14 @@ multi_device:
 - **IPC 候选/准入**：赢家收 admit 才 arm gate；输家收 reject 后不产生 Utterance；超时/平面崩溃时控制面不悬挂。
 - **Supervisor N 平面**：每台独立启动/停止/重启；端口冲突拒绝；一台崩溃其他不受影响；socket 命名与清理。
 - **配置**：v2 文件加载为 v3 默认行为；非法 default_output/room_priority/重复端口报 422；迁移/回滚 round-trip。
-- **API/健康**：/health 顶层兼容 + devices 数组；设备列表 active/last-seen/restarts；/api/v1/audio 按设备。
+- **API/健康**：/health 顶层兼容 + `audio_devices` 数组；设备列表 active/last-seen/restarts；/api/v1/audio 保留旧字段并增加 `planes` 映射。
 - **契约/插头**：既有 rui plug-test 不回归；fake adapter 注入两个房间的 DeviceWake；LX06（KWS）与 Dot2（device_wake）混合候选。
 
 ### 7.2 真机验收（LX06 + Dot2）
 
 | 项 | 判据 |
 |---|---|
-| 共存 | 两台都 online：4412 与 8870 各由对应平面监听；/health devices=2、每台 speaker_connected=true；无 multiple_enabled 警告 |
+| 共存 | 两台都 online：4412 与 8870 各由对应平面监听；/health `audio_devices` 两行、每台 speaker_connected=true；无 multiple_enabled 警告 |
 | 各自唤醒 | 在客厅说 → 客厅答；在书房说 → 书房答；另一房间不被误触发 |
 | 同时听到 | 同一唤醒词两房间同时命中 → **只产生一个 turn**；日志/trace 有 candidate/lost 计数；回答只从赢家出 |
 | 播放中打断 | 正在播放的房间 barge=true → 停播并起 turn；另一房间说话不打断它 |
@@ -475,7 +475,7 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 ## 12. Phase 2 契约草案 v0.1（2026-10-25，供实现与 dot2 对齐）
 
 > 状态：**草案 v0.1，已确认**。9 哥 已确认方向；Phase 2 开工时冻结为 v1（字段若有调整会在 #11 说明）。
-> 实现进度（2026-10-25）：音频面候选/准入 + `post_playback_mute_ms`、`fleet.py`、`arbiter.py`、`coordinator.py` 已落地并有测试；**剩 `app.py` 接线与 `devices[]` 健康聚合**。
+> 实现进度（2026-10-25 17:25，已接通）：音频面候选/准入 + `post_playback_mute_ms`、`fleet.py`、`arbiter.py`、`coordinator.py`、**`app.py` 接线与逐设备健康聚合**全部落地。落地提交：`1b71584` 音频面、`a34cba5` fleet、`c0c2fc9` arbiter、`bd7c737` coordinator、`fce8d8c` 抽取接线、`e84fac4` fleet+仲裁接线、`ec8cf44` 逐设备健康。app 级测试用 fake `PlaneFleet` 覆盖启动集合/候选→admit/reject/健康行/告警替换（7 用例）；全量 1266 passed / 18 skipped。剩余：真机验收（9哥 保留）。
 > 范围：单实例多 plane 的内部 IPC + 配置字段。**对 adapter/manifest 零改动**。
 
 ### 12.1 不变量（沿用 §2，且是这次实现要守的）
@@ -566,7 +566,8 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 | `multi_device.arbitration.*` | §5.3 | 已在 Phase 1 落地：`source_priority`、`candidate_merge_window_ms`、`duplicate_window_ms`、`room_priority`、`prefer_playing_room`、`last_active_window_s`、`on_no_speech` |
 
 兼容承诺：不改 `devices[]` 现有字段语义；不改 `/api/v1/*` 现有路径；`/health` 顶层字段保留、
-新增 `devices[]` 数组；旧 config（v2/v3 且 `enabled=false`）行为不变。
+新增 `audio_devices[]` 数组（`devices` 仍是数量整数，0.4.x 的 healthcheck/控制台不改）；
+旧 config（v2/v3 且 `enabled=false`）行为不变。
 
 ### 12.7 对插头/适配器作者（含 dot2）的影响 = 无接口改动
 
@@ -581,6 +582,8 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 
 - 表驱动 Arbiter：空闲多候选/播放中 barge/非 barge/turn 已开/重复/优先级/平票/跨来源不可比；
 - IPC：赢家收 admit 才 arm、输家不产生 Utterance、超时不悬挂、平面崩溃不悬挂；
+- app 接线（fake `PlaneFleet`，不 spawn 子进程）：enabled inbound 集合、`audio_devices` 行、
+  告警替换、candidate→coordinator→admit/reject、turn_open/owner 生命周期、超 max_planes；
 - 配置：`enabled=true` 缺 room 422、`post_playback_mute_ms` 继承/覆盖、v2 行为零差异；
 - 真机：LX06 + 2 台 Dot2 同在线、各自唤醒、同时听到只一个 turn、播放中打断只归播放设备、
   杀一个平面其余可用；记录 RSS/CPU 与唤醒→首字延迟。
