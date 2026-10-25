@@ -17,6 +17,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from _plugin_compat import fixture_compat_range
 
 from rui.config import Config
 from rui.config.schema import DeviceConfig
@@ -54,7 +55,7 @@ def _write_manifest(root, *, trust: str = "trusted", device_id: str = "test-devi
             id: test-plug
             name: "Test plug"
             version: 1.0.0
-            rui_compat: ">=0.2.0 <0.4.0"
+            rui_compat: "{fixture_compat_range()}"
             license: MIT
             maintainer: "Test <test@example.invalid>"
             trust: {trust}
@@ -587,12 +588,12 @@ def _write_runtime_manifest(
     _write_manifest(plug)
     (plug / "plugin.yaml").write_text(
         textwrap.dedent(
-            """
+            f"""
             schema: rui-plugin/v0
             id: runtime-plug
             name: "Runtime plug"
             version: 1.0.0
-            rui_compat: ">=0.2.0 <0.4.0"
+            rui_compat: "{fixture_compat_range()}"
             license: MIT
             maintainer: "Test <test@example.invalid>"
             trust: trusted
@@ -705,12 +706,12 @@ def test_co_located_manifest_runtime_defaults_apply(tmp_path, monkeypatch) -> No
     )
     (plug / "plugin.yaml").write_text(
         textwrap.dedent(
-            """
+            f"""
             schema: rui-plugin/v0
             id: colocated-plug
             name: "Colocated plug"
             version: 1.0.0
-            rui_compat: ">=0.2.0 <0.4.0"
+            rui_compat: "{fixture_compat_range()}"
             license: MIT
             maintainer: "Test <test@example.invalid>"
             trust: trusted

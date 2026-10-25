@@ -78,7 +78,7 @@ schema 里的这四个字段标记为 `exclude=True`，因此 `save_config` 永�
 
 ```json
 {
-  "url": "http://192.168.5.10:4533",
+  "url": "http://<nas-ip>:4533",
   "user": "bakey",
   "password": "……"
 }

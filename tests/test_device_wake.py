@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _plugin_compat import fixture_compat_range
 
 from rui.audio.process import (
     DEVICE_WAKE_MAX_INVALID,
@@ -503,7 +504,7 @@ def _write_wake_plug(
         "id: dot2-plug\n"
         "name: Dot2 Plug\n"
         "version: 1.0.0\n"
-        'rui_compat: ">=0.2.0 <0.4.0"\n'
+        f'rui_compat: "{fixture_compat_range()}"\n'
         "license: MIT\n"
         "maintainer: Test <test@example.invalid>\n"
         f"trust: {trust}\n"

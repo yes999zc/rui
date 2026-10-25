@@ -377,7 +377,10 @@ def test_secret_scan_workflow_covers_the_agreed_patterns() -> None:
         "[/]Users[/]",
         r"192\.168\.",
         r"10\.[0-9]",
-        "password[[:space:]]*[:=]",
+        # The password rule is narrowed to literal assignments: annotations,
+        # lookups and comparisons are not credentials. Pin both branches of it.
+        "passw[o]rd[[:space:]]*[:=][[:space:]]*[",
+        "[0-9][^",
         "Bearer [A-Za-z0-9_-]{20,}",
         # Round-2 audits are excluded too (they quote reviewed evidence).
         "docs/*audit*",
