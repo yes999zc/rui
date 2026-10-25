@@ -45,6 +45,8 @@ class FakeClient:
         self.on_wake = None
         self.on_vendor = None
         self.on_playback_finished = None
+        self.on_wake_idle = None
+        self.on_wake_candidate = None
         self.value = 1
 
     def ping(self) -> str:
@@ -81,6 +83,16 @@ def test_handle_reapplies_callbacks_to_every_connection() -> None:
     assert second.on_wake is None
     handle.on_wake = lambda msg: None
     assert second.on_wake is not None
+
+    # The callbacks that were missing from the rebind list: a wake that heard nothing
+    # and a Phase 2 candidate must both still reach a restarted plane's handler.
+    idle_calls: list[object] = []
+    handle.on_wake_idle = lambda msg: idle_calls.append(msg)
+    assert second.on_wake_idle is not None
+    second.on_wake_idle("idle")
+    assert idle_calls == ["idle"]
+    handle.on_wake_candidate = lambda msg: None
+    assert second.on_wake_candidate is not None
 
 
 def test_watchdog_stays_idle_with_no_device(tmp_path) -> None:

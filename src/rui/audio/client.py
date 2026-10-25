@@ -36,6 +36,7 @@ from .protocol import (
     SpeakStart,
     VendorSignalMsg,
     Wake,
+    WakeCandidate,
     WakeIdle,
     decode_pcm,
     encode_json,
@@ -70,12 +71,15 @@ class AudioPlaneClient:
         self.last_voice_ms: float | None = None
         self.wakes = 0
         self.wake_idles = 0
+        self.wake_candidates = 0
         self.last_wake: Wake | None = None
         self.vendor_signals = 0
         # The control plane decides what a vendor wake means; the client only delivers it.
         self.on_vendor: Callable[[str, str], object] | None = None
         self.on_wake: Callable[[Wake], object] | None = None
         self.on_wake_idle: Callable[[WakeIdle], object] | None = None
+        # Phase 2: candidate reported by the plane before it arms anything.
+        self.on_wake_candidate: Callable[[object], object] | None = None
         # One non-looping file reached its natural end (the music queue advances
         # here); async because advancing resolves the next track.
         self.on_playback_finished: Callable[[str], Awaitable[None]] | None = None
@@ -178,6 +182,10 @@ class AudioPlaneClient:
             self.wake_idles += 1
             if self.on_wake_idle is not None:
                 self.on_wake_idle(msg)
+        elif isinstance(msg, WakeCandidate):
+            self.wake_candidates += 1
+            if self.on_wake_candidate is not None:
+                self.on_wake_candidate(msg)
         elif isinstance(msg, VendorSignalMsg):
             self.vendor_signals += 1
             self.last_vendor = msg
@@ -322,7 +330,12 @@ class PlaneHandle:
     every utterance silently dropped.
     """
 
-    _CALLBACKS = ("on_utterance", "on_wake", "on_vendor", "on_playback_finished")
+    # Every callback the control plane wires on the handle. `on_wake_idle` was missing,
+    # so its handler was set on the facade and never reached the connection - the
+    # "wake heard nothing" path was silent in production. The Phase 2 candidate hook
+    # belongs here too: a restarted plane must keep reporting candidates.
+    _CALLBACKS = ("on_utterance", "on_wake", "on_wake_idle", "on_wake_candidate",
+                  "on_vendor", "on_playback_finished")
 
     def __init__(self) -> None:
         self._callbacks: dict[str, object] = {}
