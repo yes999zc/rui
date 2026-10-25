@@ -74,6 +74,27 @@ def test_setup_output_distinguishes_the_installer_path(monkeypatch, capsys, tmp_
     assert "install.sh writes .env" in installer
 
 
+def test_setup_never_prints_the_console_token(monkeypatch, capsys, tmp_path) -> None:
+    """dot2 #13: install logs get pasted, and the console token is the password.
+
+    Both paths are checked: the installer's [2/5] output goes straight to the operator's
+    terminal, and a manual `rui setup` output is just as easy to share by accident.
+    """
+    for label, installer in (("installer", True), ("manual", False)):
+        if installer:
+            monkeypatch.setenv("RUI_INSTALLER", "1")
+        else:
+            monkeypatch.delenv("RUI_INSTALLER", raising=False)
+        path = tmp_path / f"{label}.yaml"
+        assert main(["setup", "--config", str(path)]) == 0
+        captured = capsys.readouterr()
+        token = load_config(path).web.auth_token
+        assert token, label
+        assert token not in captured.out + captured.err, label
+        assert "console token: generated" in captured.out, label
+        assert "rui token" in captured.out, label
+
+
 def test_setup_generates_the_keywords_file_with_the_measured_gate(tmp_path) -> None:
     path = tmp_path / "config.yaml"
     main(["setup", "--config", str(path)])

@@ -365,9 +365,9 @@ if [ "$i" -ge 120 ]; then
   exit 1
 fi
 
-# Persist the console token where the operator can find it later (issue #4): the
-# `console token:` line from "2/5" scrolls away, and the only recovery was to
-# remember `docker compose exec`. Ask the running container for the same value the
+# Persist the console token where the operator can find it later (issue #4): setup
+# generates it at "2/5" and never prints it (dot2 #13), so without this file the only
+# recovery was to remember `docker compose exec`. Ask the running container for the same value the
 # console expects (the `rui token` CLI; docs/deploy.md §2.4) and write it 0600.
 # The token is captured, never echoed again. Idempotent: an existing file is kept
 # byte for byte, so a rerun/upgrade never replaces a secret the operator may have

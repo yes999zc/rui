@@ -105,8 +105,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if not cfg.web.auth_token and not cfg.web.allow_anonymous:
         cfg.web.auth_token = _new_web_token()
         save_config(path, cfg)
-        print("console token: " + cfg.web.auth_token)
-        print("  (the console asks for it as X-Auth-Token; `rui token` prints it later)")
+        # dot2 #13: install logs are pasted into issues, and this token is the console
+        # password. Never echo the value here; point at the two places that can read it
+        # back (the container CLI and, after an install, console-token.txt).
+        print("console token: generated (read it with 'rui token'; install.sh saves it "
+              "to console-token.txt)")
     print(f"wrote {path}")
     if env_get("RUI_INSTALLER") == "1":
         # Called by deploy/install.sh: that script writes .env and runs fetch-models

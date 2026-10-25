@@ -26,14 +26,18 @@ def test_an_exposed_console_without_a_token_refuses_to_start() -> None:
     assert insecure_bind("0.0.0.0", "", True) == ""
 
 
-def test_setup_generates_a_console_token(tmp_path, capsys) -> None:
+def test_setup_generates_a_console_token_without_printing_it(tmp_path, capsys) -> None:
     path = tmp_path / "config.yaml"
     rc = cmd_setup(SimpleNamespace(config=str(path), force=True, wake_word=None))
     assert rc == 0
     token = load_config(path).web.auth_token
     assert len(token) >= 24
-    # printed once so a headless install can hand it to the phone
-    assert token in capsys.readouterr().out
+    # dot2 #13: setup stdout is part of install logs that get pasted into issue
+    # reports; the token is the console password, so only the command to read it back
+    # is printed. install.sh saves the value to console-token.txt (mode 600) instead.
+    out = capsys.readouterr().out
+    assert token not in out
+    assert "rui token" in out
 
 
 def test_the_token_command_prints_and_rotates(tmp_path, capsys) -> None:
