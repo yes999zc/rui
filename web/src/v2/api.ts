@@ -220,9 +220,34 @@ export interface DeviceList {
   total: number
 }
 
-// — write responses (M3/M4) —
-// TODO(console-v2 M3/M4 — task id to be issued): wire these when device create/patch/audio/setup land;
-// keep them in sync with contract §7.11–7.16. M1 only issues GETs.
+// — device writes (M3) ————————————————————————————————————————
+// Contract §7.11–7.14. `params` / `audio` stay typed as opaque maps here: the
+// config tab only edits the promoted public fields and leaves audio to M4.
+
+export interface CreateDeviceRequest {
+  id: string
+  room?: string
+  plugin_id: string
+  model_id?: string
+  host: string
+  listen_port?: number | null
+  wake_words?: string[]
+  volume_target?: number
+  enabled?: boolean
+  params?: Record<string, unknown>
+}
+
+/** `PATCH /devices/{id}` — every field optional, one atomic write. */
+export interface PatchDeviceRequest {
+  room?: string
+  host?: string
+  enabled?: boolean
+  wake_words?: string[]
+  volume_target?: number
+  listen_port?: number | null
+  params?: Record<string, unknown> | null
+  audio?: Record<string, unknown> | null
+}
 
 export interface Restart {
   scope: 'fleet' | 'service' | 'audio_plane' | string
@@ -627,6 +652,24 @@ export const api = {
   devices: (): Promise<DeviceList> => request<DeviceList>('/api/v2/devices'),
   device: (id: string): Promise<DeviceDetail> =>
     request<DeviceDetail>(`/api/v2/devices/${encodeId(id)}`),
+  /** `POST /devices` — 201 `{device, restart}`; 409 `device_exists` is final. */
+  createDevice: (body: CreateDeviceRequest): Promise<CreateDeviceResponse> =>
+    request<CreateDeviceResponse>('/api/v2/devices', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  /** `PATCH /devices/{id}` — 200 `{device, restart}`; never carries a token. */
+  patchDevice: (id: string, body: PatchDeviceRequest): Promise<PatchDeviceResponse> =>
+    request<PatchDeviceResponse>(`/api/v2/devices/${encodeId(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  /** `DELETE /devices/{id}?confirm=<id>` — 200 `{removed, device_id}`. */
+  deleteDevice: (id: string, confirm: string): Promise<DeleteDeviceResponse> =>
+    request<DeleteDeviceResponse>(
+      `/api/v2/devices/${encodeId(id)}?confirm=${encodeURIComponent(confirm)}`,
+      { method: 'DELETE' },
+    ),
   deviceAudio: (id: string): Promise<DeviceAudio> =>
     request<DeviceAudio>(`/api/v2/devices/${encodeId(id)}/audio`),
   deviceActivity: (id: string, query: ActivityQuery = {}): Promise<ActivityPage> => {

@@ -1,4 +1,4 @@
-# Console v2 (M2 — device detail interactions)
+# Console v2 (M3 — device create / edit / delete)
 
 A second, side-by-side console. The legacy console at `/` keeps working and none
 of its files (`panels.ts`, `PanelHost.vue`, legacy `views/`) are imported here.
@@ -12,17 +12,35 @@ web/src/v2/router.ts           createWebHistory('/v2/')
 web/src/v2/App.vue             shell: Run / Devices / Config, language, theme, token
 web/src/v2/api.ts              hand-written C-002 client (`/api/v2/*` only)
 web/src/v2/i18n.ts             v2-owned zh-Hans + en copy
-web/src/v2/views/              DevicesView, DeviceDetailView, RunView, ConfigView, 404
-web/src/v2/components/         StateBlock, StatusBadge, CapabilityChips, ProvenanceTag, TokenDialog
+web/src/v2/views/              DevicesView, AddDeviceView, DeviceDetailView, RunView, ConfigView, 404
+web/src/v2/components/         StateBlock, StatusBadge, CapabilityChips, ProvenanceTag,
+                               TokenDialog, ConfirmDialog
 web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, Activity, Connection,
-                               TestPanel, ActionsPanel, PlaneCard, SetupCard, ParamsCard, ErrorNotice
+                               TestPanel, ActionsPanel, ConfigPanel, DangerPanel, RestartNotice,
+                               PlaneCard, SetupCard, ParamsCard, ErrorNotice
 ```
 
 ## Pages
 
-- `/v2/devices` — room-grouped device list, status/capability badges.
-- `/v2/devices/:id?tab=overview|test|activity|connect` — device detail:
+- `/v2/devices` — room-grouped device list, status/capability badges, Add entry.
+- `/v2/devices/add` — minimal M3 create flow: `GET /plugins` → plugin/model →
+  id/room/host/listen_port/wake_words → `POST /devices` (201 → device detail;
+  409 `device_exists` links to the existing device; 422 `port_conflict` names
+  the port and owning device ids).
+- `/v2/devices/:id?tab=overview|config|test|activity|connect|danger` — device detail:
   - **overview** — identity, capabilities, audio provenance, plane/setup/params.
+  - **config** — edits `room/host/enabled/wake_words/volume_target/listen_port`
+    with one atomic `PATCH /devices/{id}`. Save requires a second confirmation
+    that states "rebuilds the whole-house audio fleet (fleet restart)"; the
+    response's `restart` always renders scope/status, and a non-empty
+    `restart.error` turns red with a read-only retry. 422 `details.fields[]`
+    paths (`devices[0].host`, `wake_words[1]`, …) highlight their inputs.
+    id/plugin/model/adapter are read-only with the "delete + re-add to change
+    the model" rule.
+  - **danger** — explains disable vs delete; deletion is a second confirmation
+    that additionally requires typing the exact device id (sent as
+    `?confirm=<id>`), warns when deleting the last enabled device stops the
+    audio plane, and returns to the list on success.
   - **test / actions** — evidence-only `POST /test` (ok/fail/not_applicable with
     code/hint) and capability-gated `POST /actions` (`volume.read/set`, `led.set`,
     `audio.say/play/stop`). Missing capabilities stay visible but disabled, with
@@ -87,21 +105,22 @@ temporary harnesses must live outside `web/src/v2/` and be deleted afterwards.
 - Write responses are envelopes: `POST /devices` → `{device, restart}`,
   `PATCH /devices/{id}` → `{device, restart}`, `PATCH /devices/{id}/audio` →
   `{audio, device, restart}`, `DELETE /devices/{id}` → `{removed: true, device_id}`,
-  `POST /house/audio/restart` → `{restart}`. These are typed in
-  `api.ts` even though M2 only adds device test/action/activity/token calls.
+  `POST /house/audio/restart` → `{restart}`. The device create/patch/delete
+  calls are wired in `api.ts` since M3.
 - `DeviceDetail.unknown_params` lists legacy keys kept in config but not declared
   by the manifest; the detail page shows them read-only.
 - The backend does not expose `requires_socket` or `secret_params`; the detail
   page therefore has no secret section and the types omit both fields.
   Capabilities and params schema are the only device-shape sources.
 
-## M2 split (done)
+## Detail page split (M2/M3)
 
-`DeviceDetailView.vue` is now layout + data assembly only (well under 400 lines).
-The five read-only sections live in `components/device/` (`Identity`,
-`Capabilities`, `AudioProvenance`, `Activity`, `Connection`), and the M2 write
-interactions live in `TestPanel` and `ActionsPanel`. Each section keeps its own
-loading/error/retry state; a failed write never clears loaded device data.
+`DeviceDetailView.vue` is layout + data assembly only. The six read-only
+sections live in `components/device/` (`Identity`, `Capabilities`,
+`AudioProvenance`, `Activity`, `Connection`), and the interactive panels are
+`TestPanel`, `ActionsPanel`, `ConfigPanel` and `DangerPanel`. Each section keeps
+its own loading/error/retry state; a failed write never clears loaded device
+data, and every write disables its submit control while in flight.
 
 ## Rules for follow-up work
 
@@ -121,7 +140,9 @@ loading/error/retry state; a failed write never clears loaded device data.
 
 ## Integration status
 
-M2 is typed and built against C-002/1. The Python `/api/v2` implementation is
+M3 is typed and built against C-002/1. The Python `/api/v2` implementation is
 being finished by a separate workstream, so **live end-to-end integration has
 not been run** from this checkout; rendering and interaction flows were checked
-with a temporary mock server outside the repository.
+with a temporary headless Playwright mock outside the repository (config save
+confirmation, 422 field mapping, restart error/retry, typed delete, 409/422
+create errors, create navigation).

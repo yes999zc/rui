@@ -1101,6 +1101,8 @@
 
 .v2-dialog {
   width: min(460px, 100%);
+  max-height: min(88vh, 760px);
+  overflow-y: auto;
   border: 1px solid var(--line-strong);
   border-radius: var(--r-lg);
   background: var(--surface);
@@ -1643,5 +1645,152 @@
 
   .v2-manage-row {
     align-items: flex-start;
+  }
+}
+
+/* — M3: config / danger / restart ————————————————————————— */
+
+.v2-save-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+.v2-save-state {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
+.v2-wake-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px var(--s2);
+  margin-bottom: var(--s2);
+}
+
+.v2-wake-row .field-error {
+  grid-column: 1 / -1;
+}
+
+.v2-wake-add {
+  margin-top: var(--s1);
+}
+
+.v2-wake-empty {
+  margin: 0 0 var(--s2);
+}
+
+.v2-confirm-lead {
+  margin: 0;
+}
+
+.v2-confirm-changes {
+  margin: var(--s2) 0;
+  padding-left: 1.2em;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.v2-confirm-kv {
+  margin-top: var(--s3);
+}
+
+.v2-restart {
+  align-items: flex-start;
+}
+
+.v2-restart-kv {
+  margin-top: var(--s3);
+  margin-bottom: var(--s3);
+}
+
+.v2-restart-error {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: var(--s2) 0 var(--s3);
+  padding: var(--s2) var(--s3);
+  border-left: 3px solid var(--fail);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--fail-soft);
+  color: var(--fail);
+  font-size: 12.5px;
+}
+
+.v2-danger-explain {
+  display: flex;
+  gap: var(--s3);
+  align-items: flex-start;
+  margin-top: var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.v2-danger-explain h3,
+.v2-danger-delete h3 {
+  margin: 0 0 var(--s1);
+  font-size: 15px;
+}
+
+.v2-danger-explain .btn {
+  margin-top: var(--s2);
+}
+
+.v2-danger-delete {
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+.v2-danger-last {
+  margin: var(--s3) 0;
+}
+
+.v2-danger-delete > .btn {
+  margin-top: var(--s3);
+}
+
+.v2-danger-typed {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--line);
+}
+
+.v2-danger-typed .field-label {
+  display: block;
+  margin-bottom: var(--s2);
+}
+
+.v2-danger-typed .field-error {
+  margin-top: 5px;
+}
+
+.v2-add-existing {
+  margin-top: var(--s2);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-sm);
+  background: var(--warn-soft);
+}
+
+.v2-add-existing .note {
+  margin: 0 0 var(--s2);
+}
+
+@media (max-width: 560px) {
+  .v2-save-bar .btn,
+  .v2-save-bar .btn-primary {
+    flex: 1 1 auto;
+  }
+
+  .v2-wake-row {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 }

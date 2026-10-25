@@ -23,6 +23,8 @@ export interface ErrorCopy {
   backendHint: string
   requestId: string | null
   retryable: boolean
+  /** Seconds advertised by a 429, when the server sent one. */
+  retryAfterS: number | null
   fields: FieldIssue[]
 }
 
@@ -60,6 +62,23 @@ const CODE_KEYS: Record<string, { title: MsgKey; hint: MsgKey }> = {
   secret_rejected: { title: 'v2.error.secretRejected', hint: 'v2.error.secretRejectedHint' },
   unavailable: { title: 'v2.error.unavailable', hint: 'v2.error.unavailableHint' },
   conflict: { title: 'v2.error.conflict', hint: 'v2.error.conflictHint' },
+  device_exists: { title: 'v2.error.deviceExists', hint: 'v2.error.deviceExistsHint' },
+  confirm_required: {
+    title: 'v2.error.confirmRequired',
+    hint: 'v2.error.confirmRequiredHint',
+  },
+  plug_unavailable: {
+    title: 'v2.error.plugUnavailable',
+    hint: 'v2.error.plugUnavailableHint',
+  },
+  plug_mismatch: { title: 'v2.error.plugMismatch', hint: 'v2.error.plugMismatchHint' },
+  model_required: { title: 'v2.error.modelRequired', hint: 'v2.error.modelRequiredHint' },
+  immutable_field: {
+    title: 'v2.error.immutableField',
+    hint: 'v2.error.immutableFieldHint',
+  },
+  port_conflict: { title: 'v2.error.portConflict', hint: 'v2.error.portConflictHint' },
+  no_config: { title: 'v2.error.noConfig', hint: 'v2.error.noConfigHint' },
 }
 
 const STATUS_KEYS: Record<number, { title: MsgKey; hint: MsgKey }> = {
@@ -85,6 +104,7 @@ function generic(message: string): ErrorCopy {
     backendHint: '',
     requestId: null,
     retryable: false,
+    retryAfterS: null,
     fields: [],
   }
 }
@@ -101,6 +121,7 @@ export function describeError(err: unknown): ErrorCopy {
       backendHint: err.hint,
       requestId: err.requestId,
       retryable: err.retryable || err.status >= 500,
+      retryAfterS: apiRetryAfterSeconds(err),
       fields: err.fields.map((field) => ({
         path: field.path,
         message: field.message ?? field.code ?? '',
@@ -119,6 +140,7 @@ export function describeError(err: unknown): ErrorCopy {
       backendHint: '',
       requestId: null,
       retryable: true,
+      retryAfterS: null,
       fields: [],
     }
   }
@@ -139,6 +161,23 @@ export function apiErrorDetail(err: unknown, key: string): unknown {
   if (!(err instanceof V2ApiError)) return undefined
   if (!err.details || typeof err.details !== 'object') return undefined
   return (err.details as Record<string, unknown>)[key]
+}
+
+/**
+ * Map a contract 422 field path onto a config input id.
+ *
+ * The backend reports the stored shape (`devices[0].room`, occasionally
+ * `devices[0].wake_words[1]`); the M3 form edits promoted fields one level up.
+ * Unknown paths are returned unchanged so the generic field list still shows
+ * them instead of losing the server's explanation.
+ */
+export function normalizeFieldPath(path: string): string {
+  let next = path.trim()
+  next = next.replace(/^devices\[\d+\]\./, '')
+  next = next.replace(/^devices\.\d+\./, '')
+  next = next.replace(/^device\./, '')
+  if (next === 'port' || next === 'params.port') return 'listen_port'
+  return next
 }
 
 /**

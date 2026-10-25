@@ -5,7 +5,8 @@ import { createRouter, createWebHistory } from 'vue-router'
  * Run / Devices / Config — and M1 only implements the device domain:
  *
  *   /v2/devices          device list grouped by room
- *   /v2/devices/:id      read-only device detail
+ *   /v2/devices/add      create a device from an available plugin (M3)
+ *   /v2/devices/:id      device detail (`?tab=config|danger` are M3 writes)
  *   /v2/run, /v2/config  honest "not in this milestone" states
  *
  * There is deliberately no import of the legacy panel registry, PanelHost, or
@@ -14,6 +15,11 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   { path: '/', redirect: '/devices' },
   { path: '/devices', name: 'devices', component: () => import('./views/DevicesView.vue') },
+  {
+    path: '/devices/add',
+    name: 'device-add',
+    component: () => import('./views/AddDeviceView.vue'),
+  },
   {
     path: '/devices/:id',
     name: 'device-detail',

@@ -32,6 +32,9 @@ const emit = defineEmits<{ retry: [] }>()
       <strong>{{ error.title }}</strong>
       <p v-if="error.detail" class="note mono v2-break">{{ error.detail }}</p>
       <p v-if="error.hint" class="note">{{ error.hint }}</p>
+      <p v-if="error.status === 429 && error.retryAfterS" class="note">
+        {{ t('v2.error.retryAfter', { n: error.retryAfterS }) }}
+      </p>
       <p
         v-if="error.backendHint && error.backendHint !== error.hint"
         class="note mono v2-break"

@@ -29,6 +29,7 @@ const { data: deviceData, error: deviceError, loading: devicesLoading } = device
 const { data: houseData, error: houseError } = houseResource
 
 const featureEnabled = metaFeature('devices')
+const createEnabled = metaFeature('device_create')
 
 const deviceErrorCopy = computed(() => (deviceError.value ? describeError(deviceError.value) : null))
 const houseErrorCopy = computed(() => (houseError.value ? describeError(houseError.value) : null))
@@ -148,6 +149,15 @@ onMounted(() => {
       </div>
       <div class="v2-page-actions">
         <span v-if="meta" class="badge badge-muted mono">{{ meta.contract }}</span>
+        <RouterLink
+          v-if="createEnabled"
+          class="btn btn-primary btn-sm"
+          to="/devices/add"
+          data-testid="devices-add"
+        >
+          <AppIcon name="plus" :size="14" />
+          {{ t('v2.devices.add') }}
+        </RouterLink>
         <button type="button" class="btn btn-sm" :disabled="devicesLoading" @click="refresh">
           <AppIcon name="refresh" :size="14" />
           {{ t('v2.common.refresh') }}
@@ -194,9 +204,12 @@ onMounted(() => {
       v-else-if="!deviceData || deviceData.items.length === 0"
       kind="empty"
       :title="t('v2.devices.empty')"
-      :hint="t('v2.devices.emptyHint')"
+      :hint="createEnabled ? t('v2.devices.emptyHint') : t('v2.devices.emptyLegacyHint')"
     >
-      <a class="btn btn-primary" href="/">{{ t('v2.devices.emptyAction') }}</a>
+      <RouterLink v-if="createEnabled" class="btn btn-primary" to="/devices/add">
+        {{ t('v2.devices.emptyAction') }}
+      </RouterLink>
+      <a v-else class="btn btn-primary" href="/">{{ t('v2.devices.emptyAction') }}</a>
     </StateBlock>
 
     <template v-else>

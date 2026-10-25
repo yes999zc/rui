@@ -1,25 +1,28 @@
 <script setup lang="ts">
 /**
- * Device detail (M2): layout + data assembly only.
+ * Device detail: layout + data assembly only.
  *
- * Tabs map to the design IA (`?tab=overview|test|activity|connect`). Every
- * section still loads independently and keeps its own error/loading state, so a
- * flaky `/activity` or `/connection` never blanks identity/capabilities/audio.
+ * Tabs map to the design IA (`?tab=overview|config|test|activity|connect|danger`).
+ * Every section still loads independently and keeps its own error/loading state,
+ * so a flaky `/activity` or `/connection` never blanks identity/capabilities.
  * Rendering of each section lives in `components/device/*`.
  *
- * M2 adds interactions (test evidence, capability-gated actions, reveal/rotate)
- * but no config writes; those stay in M3/M4.
+ * M3 adds config writes and the danger zone; both go through their own panel so
+ * a failed save/delete only sets local error state on top of loaded data.
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import StateBlock from '../components/StateBlock.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import ActionsPanel from '../components/device/ActionsPanel.vue'
 import ActivityPanel from '../components/device/Activity.vue'
 import AudioProvenance from '../components/device/AudioProvenance.vue'
 import Capabilities from '../components/device/Capabilities.vue'
+import ConfigPanel from '../components/device/ConfigPanel.vue'
 import Connection from '../components/device/Connection.vue'
+import DangerPanel from '../components/device/DangerPanel.vue'
 import Identity from '../components/device/Identity.vue'
 import ParamsCard from '../components/device/ParamsCard.vue'
 import PlaneCard from '../components/device/PlaneCard.vue'
@@ -30,6 +33,7 @@ import {
   promptForToken,
   type ActivityKind,
   type DeviceAudio,
+  type PatchDeviceResponse,
 } from '../api'
 import { loadCapabilities } from '../capabilities'
 import { describeError, isNotFound } from '../errors'
@@ -37,13 +41,15 @@ import { metaFeature } from '../meta'
 import { t, transportLabel, type MsgKey } from '../i18n'
 import { useResource } from '../useResource'
 
-type DetailTab = 'overview' | 'test' | 'activity' | 'connect'
+type DetailTab = 'overview' | 'config' | 'test' | 'activity' | 'connect' | 'danger'
 
 const TABS: Array<{ id: DetailTab; key: MsgKey }> = [
   { id: 'overview', key: 'v2.detail.tab.overview' },
+  { id: 'config', key: 'v2.detail.tab.config' },
   { id: 'test', key: 'v2.detail.tab.test' },
   { id: 'activity', key: 'v2.detail.tab.activity' },
   { id: 'connect', key: 'v2.detail.tab.connect' },
+  { id: 'danger', key: 'v2.detail.tab.danger' },
 ]
 
 const route = useRoute()
@@ -55,10 +61,53 @@ const tab = computed<DetailTab>(() => {
   return (TABS.some((entry) => entry.id === raw) ? raw : 'overview') as DetailTab
 })
 
+/**
+ * The config tab unmounts on every tab change (`v-else-if`), which throws away
+ * its local draft. `ConfigPanel` reports whether it has unsaved edits; switching
+ * away then needs an explicit confirmation. A browser unload is guarded by
+ * `beforeunload` (native prompt) because there is no in-app surface for it.
+ */
+const configDirty = ref(false)
+const pendingTab = ref<DetailTab | null>(null)
+
+function onConfigDirty(value: boolean): void {
+  configDirty.value = value
+}
+
 function selectTab(next: DetailTab): void {
   if (next === tab.value) return
+  if (configDirty.value) {
+    // Keep the current tab rendered; only navigate after the operator confirms.
+    pendingTab.value = next
+    return
+  }
+  goToTab(next)
+}
+
+function goToTab(next: DetailTab): void {
+  pendingTab.value = null
+  configDirty.value = false
   void router.replace({ query: { ...route.query, tab: next } })
 }
+
+function confirmTabLeave(): void {
+  const next = pendingTab.value
+  if (next) goToTab(next)
+}
+
+function cancelTabLeave(): void {
+  pendingTab.value = null
+}
+
+function onBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!configDirty.value) return
+  event.preventDefault()
+  // Required by older Chromium/Firefox to show the native confirmation.
+  event.returnValue = ''
+}
+
+onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload))
 
 const deviceResource = useResource(() => api.device(id.value))
 const audioResource = useResource(() => api.deviceAudio(id.value))
@@ -69,16 +118,19 @@ const activityResource = useResource(() =>
 )
 const connectionResource = useResource(() => api.deviceConnection(id.value))
 const pluginResource = useResource(() => api.plugins())
+const houseResource = useResource(() => api.house())
 
 const { data: detail, error: deviceError, loading: deviceLoading } = deviceResource
 const { data: audioFromApi, error: audioError, loading: audioLoading } = audioResource
 const { data: activityPage, error: activityError, loading: activityLoading } = activityResource
 const { data: connection, error: connectionError, loading: connectionLoading } = connectionResource
+const house = houseResource.data
 
 const devicesEnabled = metaFeature('devices')
 const audioProvenanceEnabled = metaFeature('device_audio_provenance')
 const activityEnabled = metaFeature('device_activity')
 const actionsEnabled = metaFeature('device_actions')
+const deviceWriteEnabled = metaFeature('device_create')
 
 const deviceErrorCopy = computed(() => (deviceError.value ? describeError(deviceError.value) : null))
 const notFound = computed(() => isNotFound(deviceError.value))
@@ -111,6 +163,7 @@ async function loadAll(): Promise<void> {
     deviceResource.load(),
     connectionResource.load(),
     pluginResource.load(),
+    houseResource.load(),
   ]
   if (audioProvenanceEnabled) jobs.push(audioResource.load())
   if (activityEnabled) jobs.push(activityResource.load())
@@ -122,6 +175,22 @@ function onSpoken(): void {
   if (activityEnabled) void activityResource.load()
 }
 
+function onSaved(response: PatchDeviceResponse): void {
+  // Keep the page header/identity in sync with the write response, then refresh
+  // the house counters used by the restart/delete wording.
+  deviceResource.data.value = response.device
+  void houseResource.load()
+}
+
+function onDeleted(): void {
+  void router.push({ name: 'devices' })
+}
+
+function refreshState(): void {
+  // Retry reads only; this must never re-submit the failed write.
+  void Promise.allSettled([deviceResource.load(), houseResource.load()])
+}
+
 watch(
   id,
   () => {
@@ -131,6 +200,8 @@ watch(
     audioResource.reset()
     activityResource.reset()
     connectionResource.reset()
+    configDirty.value = false
+    pendingTab.value = null
     void loadAll()
   },
   { immediate: true },
@@ -202,7 +273,7 @@ onMounted(() => {
         </div>
         <div class="v2-page-actions">
           <StatusBadge :status="detail.status" :reason="detail.status_reason" />
-          <span class="badge badge-muted">{{ t('v2.detail.m2badge') }}</span>
+          <span class="badge badge-muted">{{ t('v2.detail.m3badge') }}</span>
           <button type="button" class="btn btn-sm" @click="loadAll">
             <AppIcon name="refresh" :size="14" />
             {{ t('v2.common.refresh') }}
@@ -248,6 +319,19 @@ onMounted(() => {
         </aside>
       </div>
 
+      <!-- config -->
+      <ConfigPanel
+        v-else-if="tab === 'config'"
+        :detail="detail"
+        :plugin="plugin"
+        :house="house"
+        :feature-enabled="deviceWriteEnabled"
+        :refreshing="deviceLoading"
+        @saved="onSaved"
+        @refresh="refreshState"
+        @dirty-change="onConfigDirty"
+      />
+
       <!-- test / actions -->
       <div v-else-if="tab === 'test'" class="v2-detail-stack">
         <TestPanel :device-id="detail.id" />
@@ -271,6 +355,16 @@ onMounted(() => {
         @refresh="activityResource.load()"
       />
 
+      <!-- danger zone -->
+      <DangerPanel
+        v-else-if="tab === 'danger'"
+        :detail="detail"
+        :house="house"
+        :feature-enabled="deviceWriteEnabled"
+        @deleted="onDeleted"
+        @refresh="refreshState"
+      />
+
       <!-- connection -->
       <div v-else class="v2-detail-stack">
         <Connection
@@ -283,5 +377,16 @@ onMounted(() => {
         />
       </div>
     </template>
+
+    <ConfirmDialog
+      v-if="pendingTab"
+      :title="t('v2.detail.unsavedTitle')"
+      :confirm-label="t('v2.detail.unsavedConfirm')"
+      :cancel-label="t('v2.detail.unsavedCancel')"
+      @confirm="confirmTabLeave"
+      @cancel="cancelTabLeave"
+    >
+      <p class="note v2-confirm-lead">{{ t('v2.detail.unsavedBody') }}</p>
+    </ConfirmDialog>
   </div>
 </template>
