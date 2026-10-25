@@ -14,6 +14,38 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [0.5.3] - 2026-10-25
+
+Stabilization release for the first multi-device production install (LX06 + Echo Dot 2).
+Every item below was measured on that install and has a regression test. No config-schema
+break (one nullable per-device field), no plug-contract change.
+
+### Fixed
+
+- **A device's own audio settings are the ones that play.** The plane's playback path read
+  the global `audio.playback.rate`, so a per-device override (Dot 2 = 48 kHz) was raised at
+  speak time: the turn finished, the ring said `speaking`, no sound. The play path, the wake
+  cue and the pacer now use the device's effective audio; the pre-rendered cue is resampled.
+- **The house-wide session speaks in the room that spoke.** The idle goodbye and its LED used
+  the primary client, so the LX06 said farewell for a Dot 2 turn. Session speak / LED / stop
+  follow `turn_device`, and a new wake cancels the goodbye instead of racing it.
+- **A goodbye can no longer lock the house.** A goodbye between wake detection and admission
+  disarmed the new wake gate, so `on_wake_idle` never ran and `turn_open` stayed true: every
+  later wake was rejected. The idle loop skips while a wake is in flight or a turn is open,
+  and clears `turn_open` after the goodbye.
+- **A speaker no longer answers itself.** The wake cue used a global 1.2 s echo window; a
+  device-AEC speaker leaks longer, and the Dot 2 turned its own `在呢。` into a request.
+  `devices[].audio.voice.ack_echo_ignore_ms` lets a device declare its own window (Dot 2:
+  2500 ms), and the goodbye now sends `reply_finished` so the post-playback mute arms.
+
+### Added
+
+- **Doctor rows for the three failures this install hit**: `audio_rates` (wire rate vs
+  effective playback rate per device), `channels` (gateway last error, e.g. a Telegram 409
+  from a second poller), `console_token` (`console-token.txt` vs `web.auth_token`).
+- `docs/deploy.md`: multi-device template (rooms, per-device rate/AEC/mute, `max_planes`,
+  `default_output`, one bot per poller).
+
 ## [0.5.2] - 2026-10-25
 
 Patch release for the install path and for satellite management in the console. Found
