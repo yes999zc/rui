@@ -588,7 +588,7 @@ audio:
 devices:
   - id: living            # 客厅 LX06：全部继承全局
     adapter: xiaoai
-    host: 192.168.5.61
+    host: living-room-speaker   # 音箱的局域网地址或主机名
     room: 客厅
   - id: bedroom           # 卧室 Dot 2：设备侧 AEC + 48 kHz wire
     adapter: dot2
