@@ -799,6 +799,25 @@ cd ~/rui && docker compose up -d --force-recreate
 然后在控制台「通道」页填 bot token 并启用 Telegram。验收看 `GET /api/v1/channels`：
 `telegram.token_configured=true` 且 `gateway.status.running=true`；`telegram.enabled=false` 时网关
 不启动是正常的（新用户默认关闭，想用再开）。
+
+### 7.4 混合房子的每设备覆盖（LX06 + Dot 2）
+
+0.6 的合成顺序是「设备 manifest 默认 < 全局 config < `devices[].audio`」，而**全局 `audio.capture`
+是显式配置**，会盖过 Dot 2 manifest 里的 1ch 默认值。两台混装时请给 Dot 2 写全：
+
+```yaml
+devices:
+  - id: dot2
+    adapter: dot2
+    audio:
+      capture: {rate: 16000, channels: 1, mic_channels: 1, ref_channels: 0, bits: 16}
+      playback: {rate: 48000}
+      aec: {enabled: false}
+      voice: {ack_echo_ignore_ms: 2500, post_playback_mute_ms: 2500}
+```
+
+`ack_echo_ignore_ms` 同理：全局 `ack.echo_ignore_ms`（默认 1200）会盖过 manifest 的 2500。
+控制台「设备与音频 → 设备管理 → 音频（按设备生效值）」可以直接看到合成结果与哪些字段被覆盖。
 ### 7.3 一个 bot 只能有一个 poller（Telegram 409）
 
 Telegram 的 `getUpdates` 对同一个 bot token 只允许一个消费者。控制台已经自动起了一个
@@ -856,16 +875,3 @@ uv run rui serve
 - **音频面崩溃后的自愈已补**（`AudioPlaneSupervisor.watch()`，1 s 轮询 + 1→60 s 退避）：
   实测 kill plane 后 ~3 s 新 pid、`restarts=1`；旧的「必须手动 restart」说法已过时。
   长稳（反复崩溃的退避封顶）仍看 3 天观察。
-
-## 11. 安装与接线常见失败
-
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| client 日志 401 / close 1008；NAS 日志 `xiaoai: rejected ... (bad or missing token)` | client 还带着旧 token，或两边不是同一个值 | 到 `/setup` 的 `connect` 步重新复制当前 ws URL + device token，更新 client 配置并重启；确认 `.env` 的 `RUI_DEVICE_TOKEN` 没被改过。控制台 token 不用于这里 |
-| 重跑 `install.sh` 报容器 `rui` 已存在 | 同一 `RUI_HOME` 重跑是安全的；容器属于另一个 compose project 时脚本拒绝接管 | 按脚本打印的目录去执行 `docker compose down`，或在旧目录停掉旧安装后再重跑。0.1.x 的 `house-ear`：`docker stop house-ear && docker rm house-ear` |
-| `docker pull ghcr.io/...` TLS handshake timeout / 403 | Docker daemon 没有代理/镜像源，或 GHCR 不可达 | 给 daemon 配代理或 registry mirror；或 `docker pull` + `save` 到 NAS `load`。脚本会自动按 `RUI_REF` 从源码构建同一 tag（需 `git`）；`raw` 卡住用 `RUI_RAW` |
-| 灯环不亮 | 0.4.0 新建 LX06 默认 `led.enabled: true`；老配置/手动配置可能仍是关闭 | 到 `params` 的“灯效”打开，或检查 `config.yaml` 的 `devices[].led.enabled`；保存会重启平面 |
-| 控制台 401 / 找不到 console token | `[2/5]` 不再打印 token 值（dot2 #13），安装日志被粘贴也不会泄露 | 先 `cat ~/rui/console-token.txt`（安装时已保存）；文件不在或过期就用 `cd ~/rui && docker compose exec -T rui rui token` 找回。`--rotate` 轮换后重启服务并刷新该文件。它和 `.env` 的 device token 不是同一个 |
-| `install.sh` 最后报 `model fetch failed` / `ASR/VAD/KWS models missing` | `fetch-models` 在网络重试后仍失败；服务已启动但本地 ASR/VAD/唤醒词不可用 | 按 [3.3](#33-模型fetch-models-一次装齐) 的命令重跑 `fetch-models` 再 `docker compose up -d`；确认 `rui doctor` 的 `models` 行 PASS。纯云端安装可重跑 `install.sh` 并加 `RUI_SKIP_MODELS=1` |
-| `install.sh` 最后报 120 s 不健康 | 容器起了但 `/health` 未通过；常见是 token/端口/模型或配置问题 | 按脚本提示跑 `docker compose exec -T rui rui-healthcheck` 和 `docker compose logs --tail=100 rui`；修好后重跑脚本（同目录安全） |
-| 升级后容器反复重启 / 日志 `Permission denied` / healthcheck `cannot read config` | 非 root 镜像（uid 1000）读不了 root 所有的 bind mount | 备份后 `sudo chown -R 1000:1000 config data`，再 `docker compose up -d --force-recreate`；见 [security.md](security.md) |
