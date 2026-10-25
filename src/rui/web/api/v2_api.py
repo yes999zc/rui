@@ -74,7 +74,28 @@ from ...providers import keycheck
 from .device_rules import (
     effective_listen_port,
     effective_token_env,
-    port_conflict,
+)
+from .device_write import (
+    DeviceWriteError,
+    checked_device_config,
+)
+from .device_write import (
+    audio_blocks as _audio_blocks,
+)
+from .device_write import (
+    config_fields as _config_fields,
+)
+from .device_write import (
+    explicit_audio_mapping as _explicit_audio_mapping,
+)
+from .device_write import (
+    field as _field,
+)
+from .device_write import (
+    loc_path as _loc_path,
+)
+from .device_write import (
+    validation_document as _validation_document,
 )
 
 __all__ = ["V2Error", "install_v2_routes"]
@@ -92,11 +113,6 @@ code{background:#f4f4f5;padding:2px 6px;border-radius:4px}</style></head>
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
-
-#: C-002 §7.11 calls this "422 port_conflict" while §9 folded it into
-#: `invalid_values`. Lead ruling 2026-10-25: keep the existing device_rules.py
-#: semantics (`code: "port_conflict"`), with the unified `details.fields[]` shape.
-PORT_CONFLICT_CODE = "port_conflict"
 
 #: C-001 capabilities, in the enum's definition order (contract §5.1 / §7.9).
 #: The catalog is owned by the core, not by a plug: a plug only declares ids.
@@ -309,7 +325,17 @@ _ACTION_ARGS = {
     for capability in CAPABILITIES
     for action in capability["actions"]
 }
-_LIVE_ACTION = frozenset({"volume.read", "volume.set", "audio.say", "audio.play", "audio.stop"})
+#: C-002 §5.4 step 4: actions that need the device's live link. `led.set` belongs here
+#: too, so an unconnected device answers `409 device_not_connected` before args are
+#: validated instead of leaking a `422 invalid_values`.
+_LIVE_ACTION = frozenset(
+    {"volume.read", "volume.set", "led.set", "audio.say", "audio.play", "audio.stop"}
+)
+#: Both `device_not_connected` refusals on the action path give the same advice.
+_NO_LIVE_LINK_HINT = (
+    "The device has no live link to the audio plane; "
+    "start the device-side client and retry."
+)
 _ALLOWED_ACTIONS = tuple(sorted(_ACTION_CAPABILITY))
 
 _PLAN_STEPS = setup_store.STEPS
@@ -443,22 +469,6 @@ async def _json_body(request: Request) -> dict[str, Any]:
     return payload
 
 
-def _field(path: str, code: str, message: str) -> dict[str, str]:
-    return {"path": path, "code": code, "message": message}
-
-
-def _loc_path(loc: tuple[Any, ...]) -> str:
-    """A Pydantic error loc as a C-002 path: `devices[0].room`, not `devices.0.room`."""
-    path = ""
-    for part in loc:
-        if isinstance(part, int):
-            path += f"[{part}]"
-        else:
-            text = str(part)
-            path = f"{path}.{text}" if path else text
-    return path
-
-
 def _pydantic_fields(exc: ValidationError, prefix: str = "") -> list[dict[str, str]]:
     fields: list[dict[str, str]] = []
     for error in exc.errors(include_url=False):
@@ -480,75 +490,6 @@ def _pydantic_fields(exc: ValidationError, prefix: str = "") -> list[dict[str, s
             if message.startswith(noise):
                 message = message[len(noise):]
         fields.append(_field(path, code, message))
-    return fields or [_field(prefix, "invalid", "invalid values")]
-
-
-_CONFIG_PATHS: tuple[tuple[str, str], ...] = (
-    ("multi_device.default_output", "multi_device.default_output"),
-    ("multi_device.arbitration.room_priority", "multi_device.arbitration.room_priority"),
-    ("multi_device.enabled", "multi_device.enabled"),
-    ("duplicate device id", "devices[0].id"),
-    ("duplicate mcp server name", "tools.mcp_servers.name"),
-    ("config version", "version"),
-)
-
-
-def _config_error_path(message: str, merged: dict[str, Any], path: str) -> str:
-    """Give a model-level validation error the dotted leaf the browser can highlight.
-
-    Pydantic reports a `@model_validator` failure at the model's root (`""`,
-    `"audio.capture"`, ...) because the value is only wrong in combination. C-002 §4.4
-    still requires `details.fields[].path`, so the known cross-field rules map to the
-    field an operator has to change.
-    """
-    devices = merged.get("devices")
-    devices = devices if isinstance(devices, list) else []
-
-    def device_index(device_id: str) -> int:
-        for index, item in enumerate(devices):
-            if isinstance(item, dict) and str(item.get("id")) == device_id:
-                return index
-        return 0
-
-    if "must equal channels(" in message:
-        return f"{path}.channels" if path else "audio.capture.channels"
-    missing_room = message.split("requires devices[].room", 1)
-    if len(missing_room) == 2:
-        missing = missing_room[1].split("missing:", 1)[-1]
-        first = next((part.strip() for part in missing.split(",") if part.strip()), "")
-        return f"devices[{device_index(first)}].room"
-    merged_audio = message.split("].audio does not merge", 1)
-    if len(merged_audio) == 2 and message.startswith("devices["):
-        device_id = message[len("devices["):].split("]", 1)[0]
-        return f"devices[{device_index(device_id)}].audio"
-    if message.startswith("duplicate device id:"):
-        device_id = message.split(":", 1)[1].strip()
-        for index, item in enumerate(devices):
-            if isinstance(item, dict) and str(item.get("id")) == device_id:
-                return f"devices[{index}].id"
-        return "devices[0].id"
-    if path:
-        return path
-    for needle, leaf in _CONFIG_PATHS:
-        if needle in message:
-            return leaf
-    return path
-
-
-def _config_fields(exc: ValidationError, merged: dict[str, Any],
-                   prefix: str = "") -> list[dict[str, str]]:
-    """`details.fields[]` for a Config/audio-block validation error (C-002 §4.4)."""
-    fields: list[dict[str, str]] = []
-    for error in exc.errors(include_url=False):
-        loc = _loc_path(tuple(error.get("loc", ())))
-        path = ".".join([part for part in (prefix, loc) if part])
-        message = str(error.get("msg", "invalid value"))
-        for noise in ("Value error, ", "Assertion failed, "):
-            if message.startswith(noise):
-                message = message[len(noise):]
-        path = _config_error_path(message, merged, path)
-        kind = str(error.get("type", "invalid"))
-        fields.append(_field(path, "invalid" if kind == "value_error" else kind, message))
     return fields or [_field(prefix, "invalid", "invalid values")]
 
 
@@ -774,46 +715,6 @@ def _audio_restart_fields(cfg: Config) -> list[str]:
                 continue
             paths.append(path)
     return paths
-
-
-def _validation_document(config: Config) -> dict[str, Any]:
-    """`config.model_dump()` with the audio block reduced to its explicit layer.
-
-    `Config.model_validate` resolves every per-device override over the global block.
-    A full dump marks every audio field as chosen, which would shadow the plug manifest
-    while validating (and could reject a layout that a reload accepts). The saved file
-    only holds the explicit layer, so that is the document a write must validate.
-    """
-    document = config.model_dump(mode="json")
-    document["audio"] = _explicit_audio_mapping(config.audio)
-    if not document["audio"]:
-        document.pop("audio")
-    return document
-
-
-def _audio_blocks(audio: AudioConfig) -> dict[str, tuple[Any, Any]]:
-    return {
-        "capture": (CaptureConfig, audio.capture),
-        "voice": (VoiceConfig, audio.voice),
-        "playback": (PlaybackConfig, audio.playback),
-        "aec": (AecConfig, audio.aec),
-    }
-
-
-def _explicit_audio_mapping(audio: AudioConfig) -> dict[str, dict[str, Any]]:
-    """The `audio` mapping a PATCH must merge onto: only the fields actually chosen.
-
-    `Config.model_dump()` would restate every field at its core default; merging a patch
-    onto that would then let a save freeze the neutral layout over the plug manifest.
-    """
-    out: dict[str, dict[str, Any]] = {}
-    for name, (block_cls, block) in _audio_blocks(audio).items():
-        core = block_cls()
-        part = {field: getattr(block, field) for field in block_cls.model_fields
-                if _explicit(block, field, core)}
-        if part:
-            out[name] = part
-    return out
 
 
 def _explicit_audio_paths(cfg: Config) -> list[str]:
@@ -1776,58 +1677,18 @@ def install_v2_routes(
                 update={"audio": layers_from.audio, "ack": layers_from.ack})
         return updated
 
-    def _repair_device_writes(config: Config) -> Config:
-        """The device-list write about to be persisted, made loadable first (§4.5).
-
-        A delete or a disable can remove the last enabled speaker. The schema rejects
-        `multi_device.enabled=true` without one, so persisting that state would leave a
-        file `load_config` cannot boot. References to the removed device are dropped and
-        multi-device turns itself off; the caller still answers 200 with a stopped plane.
-        """
-        multi = config.multi_device
-        ids = {device.id for device in config.devices}
-        enabled = {device.id for device in config.devices if device.enabled}
-        changes: dict[str, Any] = {}
-        if multi.default_output is not None and multi.default_output not in enabled:
-            changes["default_output"] = None
-        if multi.enabled and not enabled:
-            changes["enabled"] = False
-        priority = [item for item in multi.arbitration.room_priority if item in ids]
-        if priority != list(multi.arbitration.room_priority):
-            changes["arbitration"] = multi.arbitration.model_copy(
-                update={"room_priority": priority})
-        if not changes:
-            return config
-        log.info("device write repaired multi_device references: %s", sorted(changes))
-        return config.model_copy(update={"multi_device": multi.model_copy(update=changes)})
-
     def _checked_device_config(config: Config, devices: list[DeviceConfig]) -> Config:
-        """Validate a device-list write before anything reaches the disk."""
-        candidate = _repair_device_writes(config.model_copy(update={"devices": devices}))
-        updated = _validate_config(_validation_document(candidate),
-                                   layers_from=candidate)
-        conflict = port_conflict(updated.devices, updated.system.data_dir)
-        if conflict is not None:
-            raise _conflict_error(conflict)
-        return updated
+        """Validate a device-list write before anything reaches the disk.
 
-    def _conflict_error(conflict: dict[str, Any]) -> V2Error:
-        port = conflict.get("port")
-        ids = conflict.get("device_ids") or []
-        error = _invalid(
-            [_field("host", "port_conflict",
-                    f"enabled devices share inbound port {port}: {', '.join(map(str, ids))}")],
-            "port conflict",
-            hint="Give one device a different listen_port or disable it.",
-            details={"port": port,
-                     "device_ids": ids,
-                     "fields": [_field(
-                         "host", "port_conflict",
-                         f"enabled devices share inbound port {port}: "
-                         f"{', '.join(map(str, ids))}")]},
-        )
-        error.code = PORT_CONFLICT_CODE
-        return error
+        The invariant itself lives in `device_write.py` so v1 and the wizard cannot
+        drift from it; this wrapper only maps its console-neutral rejection onto the
+        C-002 error object.
+        """
+        try:
+            return checked_device_config(config, devices)
+        except DeviceWriteError as exc:
+            raise V2Error(exc.status_code, exc.code, exc.message,
+                          hint=exc.hint, details=exc.details) from exc
 
     def _enabled_ids(config: Config) -> list[str]:
         return [device.id for device in config.devices if device.enabled]
@@ -2383,6 +2244,12 @@ def install_v2_routes(
         config = require_config()
         device = device_or_404_req(request, device_id, config)
         updated_device, ignored_params = _build_device(config, payload, base=device)
+        # The shared write invariant drops a `default_output` that would point at a
+        # disabled device. That repair is silent in the file, so the response says it
+        # out loud (additive warning, C-002 §7.12) and names the fallback.
+        cleared_default_output = bool(
+            device.enabled and not updated_device.enabled
+            and config.multi_device.default_output == device.id)
         updated = _config_with_device(config, updated_device)
         started = time.perf_counter()
         error = await _write_devices_checked(updated)
@@ -2390,6 +2257,15 @@ def install_v2_routes(
         fresh = cfg_now()
         row = await device_view(updated_device, fresh, house_warnings(fresh), detail=True)
         _merge_ignored_warning(row, ignored_params)
+        if cleared_default_output and fresh.multi_device.default_output is None:
+            row["warnings"] = [*(row.get("warnings") or []), {
+                "code": "default_output_cleared",
+                "message": (f"device {device.id!r} was the default output; disabling it "
+                            "cleared multi_device.default_output"),
+                "hint": ("Notifications without a source room now go to the most "
+                         "recently active room. Pick a new default output in the house "
+                         "settings to pin one."),
+            }]
         return {"device": row, "restart": _restart_payload(fresh, error, duration)}
 
     @app.delete("/api/v2/devices/{device_id}", dependencies=[Depends(v2_auth)])
@@ -2646,7 +2522,13 @@ def install_v2_routes(
         """
         declared, effective, connected = await _live_action_state(device, config)
         capability = _ACTION_CAPABILITY[action]
-        if capability not in effective:
+        # A disabled device has no adapter and therefore no probe, so `effective` is
+        # empty for every probe-bound capability. Judging the action against that empty
+        # set answered `capability_unsupported` ("does not declare playback") while
+        # `details.declared` listed playback - a contradiction. Gate a disabled device
+        # on what its manifest declares; the next check then states the real reason.
+        gate = effective if device.enabled else declared
+        if capability not in gate:
             raise V2Error(
                 409, "capability_unsupported",
                 f"device {device.id!r} does not declare {capability!r}",
@@ -2661,7 +2543,7 @@ def install_v2_routes(
             raise V2Error(
                 409, "device_not_connected",
                 f"device {device.id!r} has no live link",
-                hint="Start the device-side client and retry.",
+                hint=_NO_LIVE_LINK_HINT,
                 details={"id": device.id},
             )
         return declared, effective, connected
@@ -2690,6 +2572,7 @@ def install_v2_routes(
             raise V2Error(
                 409, "device_not_connected",
                 f"device {device.id!r} has no audio plane client",
+                hint=_NO_LIVE_LINK_HINT,
                 details={"id": device.id},
             )
         try:

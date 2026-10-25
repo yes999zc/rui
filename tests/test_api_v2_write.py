@@ -864,3 +864,90 @@ def test_null_removes_a_declared_param_only(console):
     assert removed.status_code == 200, removed.text
     assert "oww_model" not in removed.json()["device"]["params"]
     assert "oww_model" not in load_config(path).devices[0].params
+
+
+def test_disabling_the_default_output_clears_it_and_says_so(console):
+    """MINOR-2: the repair is visible, but only on the device that caused it."""
+    client, _, path = console(config=_multi_config())
+    other = client.patch("/api/v2/devices/study", headers=AUTH, json={"enabled": False})
+    assert other.status_code == 200, other.text
+    assert not [item for item in other.json()["device"]["warnings"]
+                if item["code"] == "default_output_cleared"]
+
+    response = client.patch("/api/v2/devices/living", headers=AUTH,
+                            json={"enabled": False})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["device"]["enabled"] is False
+    warning = next(item for item in body["device"]["warnings"]
+                   if item["code"] == "default_output_cleared")
+    assert warning["message"] and warning["hint"]
+    assert "most recently active room" in warning["hint"]
+    assert set(warning) == {"code", "message", "hint"}
+
+    fresh = load_config(path)
+    assert fresh.multi_device.default_output is None
+    assert fresh.multi_device.enabled is False
+
+
+def test_a_disabled_device_is_gated_on_its_declared_capabilities(console):
+    """MINOR-3: the gate must not say 'undeclared' while listing it as declared."""
+    config = Config(web={"auth_token": TOKEN},
+                    devices=[_manifest_device(enabled=False)])
+    client, _, _ = console(config=config)
+    _dot2_manifest_plug(Path(config.system.data_dir), capabilities=("playback",))
+    response = client.post("/api/v2/devices/dot2/actions", headers=AUTH,
+                           json={"action": "audio.say", "args": {"text": "你好"}})
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["error"]["code"] == "device_disabled"
+    assert body["error"]["hint"]
+    assert body["error"]["details"] == {"id": "dot2"}
+
+
+def test_a_disabled_device_without_the_capability_says_so_consistently(console):
+    config = Config(web={"auth_token": TOKEN},
+                    devices=[_manifest_device(enabled=False)])
+    client, _, _ = console(config=config)
+    _dot2_manifest_plug(Path(config.system.data_dir), capabilities=("led",))
+    refusal = client.post("/api/v2/devices/dot2/actions", headers=AUTH,
+                          json={"action": "audio.say", "args": {"text": "你好"}})
+    assert refusal.status_code == 409, refusal.text
+    assert refusal.json()["error"]["code"] == "capability_unsupported"
+    assert refusal.json()["error"]["details"]["declared"] == ["led"]
+
+
+def test_led_set_is_gated_on_the_live_link_before_args(console):
+    """C-002 §5.4 step 4: `led.set` is a live-link action.
+
+    Without an audio plane the refusal must be 409 `device_not_connected` with an
+    actionable hint - for malformed args too, which otherwise answered 422 first.
+    """
+    client, _, _ = console()
+    for args in ({"effect": "nope"}, {"effect": "off"}):
+        response = client.post("/api/v2/devices/living/actions", headers=AUTH,
+                               json={"action": "led.set", "args": args})
+        assert response.status_code == 409, (args, response.text)
+        body = response.json()
+        assert body["error"]["code"] == "device_not_connected"
+        assert body["error"]["hint"]
+
+
+def test_every_contract_live_action_is_gated_without_a_plane(console):
+    """The §5.4 live-link list: audio.say/play/stop, volume.read/set, led.set."""
+    client, _, _ = console()
+    cases = (
+        ("volume.read", {}),
+        ("volume.set", {"value": 120}),
+        ("led.set", {"effect": "off"}),
+        ("audio.say", {"text": "你好"}),
+        ("audio.play", {"file": "missing.wav"}),
+        ("audio.stop", {}),
+    )
+    for action, args in cases:
+        response = client.post("/api/v2/devices/living/actions", headers=AUTH,
+                               json={"action": action, "args": args})
+        assert response.status_code == 409, (action, response.text)
+        error = response.json()["error"]
+        assert error["code"] == "device_not_connected", action
+        assert error["hint"], action

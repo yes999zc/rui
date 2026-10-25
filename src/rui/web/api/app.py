@@ -120,6 +120,7 @@ from .device_rules import (
     is_inbound,
     port_conflict,
 )
+from .device_write import DeviceWriteError, checked_device_config
 from .security import install_security_headers
 from .setup_api import install_setup_routes
 from .v2_api import install_v2_routes
@@ -5290,15 +5291,33 @@ def create_app(
         if not _write_keywords_preserving(updated) and words:
             log.warning("devices: could not write keywords file for %d wake word(s)", len(words))
 
+    def _checked_devices(updated: Config, *, check_ports: bool = True) -> Config:
+        """Repair + revalidate a device write; 422 before anything reaches disk.
+
+        Thin HTTP adapter over `device_write.checked_device_config`, which the v2 API
+        calls directly: both consoles enforce one invariant, not two.
+        """
+        try:
+            return checked_device_config(updated, updated.devices, check_ports=check_ports)
+        except DeviceWriteError as exc:
+            raise HTTPException(status_code=exc.status_code,
+                                detail=exc.http_detail()) from exc
+
     async def _write_devices(updated: Config) -> str:
         """Persist devices[], regenerate the wake words, restart the plane.
 
         Returns the audio-plane restart error ("" = the plane came back). The caller must
         surface it: a device save that leaves the room deaf must not look like success
         (functional audit round 2, P1-6).
+
+        The loadability check sits here, not only in the routes: `save_config` writes
+        whatever model it is handed, so any writer that reaches this function (v1
+        devices, the wizard's steps, v2 through its callback) gets the same repair and
+        validation instead of persisting a file `load_config` refuses at boot.
         """
         if config_path is None:
             raise HTTPException(status_code=409, detail="there is no config file on disk to write")
+        updated = _checked_devices(updated, check_ports=False)
         if not updated.audio.voice.kws_keywords_file:
             # A config that came from schema defaults has no keywords path; the wizard
             # still has to leave one behind, next to the config it just wrote.
@@ -5654,10 +5673,9 @@ def create_app(
         changed = device.model_copy(update={"enabled": enabled})
         updated = current.model_copy(update={"devices": [
             changed if item.id == device_id else item for item in current.devices]})
-        if enabled:
-            conflict = port_conflict(updated.devices, updated.system.data_dir)
-            if conflict is not None:
-                raise HTTPException(status_code=422, detail=conflict_detail(conflict))
+        # Ports are only a candidate rule when a listener is being added; the loadability
+        # check runs for both directions (a disable can empty multi_device.enabled).
+        updated = _checked_devices(updated, check_ports=enabled)
         plane_error = await _write_devices(updated)
         # Audit without secrets: the device id and the resulting state are enough.
         log.info("audit: device %s %s from the console (plane_error=%r)",
@@ -5987,9 +6005,7 @@ def create_app(
             ]) from exc
         others = [item for item in current.devices if item.id != device_id]
         updated = current.model_copy(update={"devices": [updated_device, *others]})
-        conflict = port_conflict(updated.devices, updated.system.data_dir)
-        if conflict is not None:
-            raise HTTPException(status_code=422, detail=conflict_detail(conflict))
+        updated = _checked_devices(updated)
         plane_error = await _write_devices(updated)
         log.info("device %s updated from the console (plane_error=%r)", device_id, plane_error)
         detail = await _device_detail(device_id)
@@ -6084,6 +6100,9 @@ def create_app(
         _device_or_404(device_id, current)
         updated = current.model_copy(
             update={"devices": [item for item in current.devices if item.id != device_id]})
+        # A delete cannot add a listener, so only the loadability repair applies: dangling
+        # default_output/room_priority references are dropped, never persisted.
+        updated = _checked_devices(updated, check_ports=False)
         plane_error = await _write_devices(updated)
         log.info("device %s removed from the console (plane_error=%r)", device_id, plane_error)
         return {"removed": device_id, "devices": [item.id for item in updated.devices],
