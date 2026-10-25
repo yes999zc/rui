@@ -12,21 +12,22 @@
 | 版本 | **v0.4.2**（控制台 IA Phase 4：单一 nav manifest、11 面板、7 个 legacy panel/旧路由退役、README 瘦身、多设备设计文档），2026-10-25 已部署 NAS |
 | 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.4.2`**（官方，digest `sha256:3791ccfdb…`，amd64+arm64）；`0.4.1` / `0.4.0` 保留回滚；非 root uid 1000，healthy、音箱在线 |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
-| 质量 | **1142 passed / 18 skipped**（含 Phase 4 面板/路由断言）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
+| 质量 | **1173 passed / 18 skipped**（含 Phase 4 面板/路由、config v3、配置原文视图断言）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | 只读 YAML 代码视图 → 多设备/sidecar/播放 gap（按用户要求提前）；0.4.2 发布后 dot2 在 .34 做受控切换真机验证（9哥已同意）；截图与内容一起刷新 |
+| 当前主线 | 多设备 0.5：Phase 1（config v3）与只读 YAML 配置视图已交付 → Phase 1b 控制台多设备状态 → Phase 2 多平面/仲裁；dot2 0.4.2 冷测试进行中；截图与内容一起刷新 |
 
 ### 0.1 新会话交接（2026-10-25 15:35）
 
 - **当前发布**：v0.4.2（Phase 4 收尾）；GitHub Release 已发，生产已切官方镜像，健康。
-- **下一步顺序**：多设备 Phase 1（config v3，仍单 active；`docs/multi-device-design.md` §9 六条关键决策已于 2026-10-25 冻结）+ 只读 YAML 代码视图并行 → multi-plane/仲裁 → sidecar / 播放 gap；README 截图与内容一起刷新。
+- **本会话已完成**：§9 六条关键决策冻结（§11 答复 dot2 #11）；config v3 Phase 1（`devices[].audio` 覆盖 / `multi_device` 块 / `effective_audio()` 继承 / 校验 / v2 保持 v2）；只读 YAML 配置视图（`GET /api/v1/config/raw` + 系统页）。
+- **下一步顺序**：Phase 1b（控制台“未启用多设备”状态与目录字段）→ Phase 2 多平面 + 中央仲裁 → sidecar / 播放 gap；README 截图与内容一起刷新。
 - **生产**：`/vol1/rui`，官方 `ghcr.io/yes999zc/rui:0.4.2`（digest `sha256:3791ccfd…`，amd64+arm64），uid 1000、healthy、音箱在线；备份 `.env.bak.20261025-152606`；回滚 `0.4.1` / `0.4.0`。
 - **访问**：Mac 通过 Tailscale `nas-bakey`（100.113.211.110）或 LAN 192.168.5.168；SSH 用户 `yes999zc`，密码在 `01_Code/device-inventory.md` 第 18–32 行（不要写进仓库/聊天）；SSH 必须密码认证、失败后等 40 s；docker 需 sudo（`echo "$PW" | sudo -S …`）。
 - **控制台 token**：`/vol1/rui/console-token.txt`（0600，不打印值）；找回用 `docker compose exec -T rui rui token`。
 - **dot2**：PR #1 已合入；0.4.1 上 `plug-test` 15 PASS / 0 FAIL / 2 WARN / 5 SKIP；9 哥已同意 0.4.2 后在 .34 做受控切换真机验证（停 0.3.4 → 起 0.4.2 → 真机回合 → 回滚），并已安排对方开始 0.4.2 冷测试；0.4.2 的 tag/digest 已在 rui #7 公布。
 - **dot2 #11**（多设备仲裁契约提案，2026-10-25）：已答复，结论以 `docs/multi-device-design.md` §11 为准；0.5 走单实例多 plane，多实例只是过渡部署手法。
 - **媒体测试环境**：NAS 上的 Jellyfin/Emby 测试容器已停；数据在 `/vol1/rui-media-test/`；fnOS 原生 Jellyfin/Emby 和 rsshub/homepage/mihomo 均未动。
-- **未完成**：README 截图刷新；多设备 Phase 1（config v3）进行中；issue #4 已答复并关闭。
+- **未完成**：README 截图刷新；Phase 1b 控制台多设备状态；Phase 2（每设备一平面 + WakeArbiter）；dot2 0.4.2 冷测试结果待回；issue #4 已答复并关闭。
 
 ## 1. 项目与架构契约
 

@@ -4,14 +4,14 @@
 > 每条都要有可复现判据；过程数字在 `HANDOFF` 与验收工作区，详细历史在
 > `docs/archive/HANDOFF-history-to-2026-10-24.md`。
 
-## 现状快照（2026-10-25，0.4.0）
+## 现状快照（2026-10-25，0.4.2 + 0.5 Phase 1）
 
 - 版本/发布：0.4.2（Phase 4）已发布并部署；控制台导航收敛为单一 PanelSpec nav manifest（11 面板，7 个 legacy panel/旧路由退役），README 瘦身并新增多设备设计文档；生产 `/vol1/rui` 跑官方 `0.4.2`（回滚 `0.4.1` / `0.4.0`），healthy、音箱在线、非 root uid 1000。
-- 质量：全量 **1142 passed / 18 skipped**；ruff clean；secret-scan 绿；web typecheck/build 绿；CI 原生 runner（PR #10）已合入，publish 不再被 QEMU arm64 卡 40min。
-- 已交付：v1 四门槛；0.1–0.4 发布；Socket/Plug v1；控制台 IA Phase 1–4（两分组、合并页、单一 nav manifest、legacy 退役）；P3.5 安全；CHANGELOG/发布说明工具；Jellyfin/Emby 音源；首次登录 token 文件；dot2 修复；README/first-run 重写；多设备/卫星/唤醒仲裁设计文档 `docs/multi-device-design.md`（设计稿）。
+- 质量：全量 **1173 passed / 18 skipped**；ruff clean；secret-scan 绿；web typecheck/build 绿；CI 原生 runner（PR #10）已合入，publish 不再被 QEMU arm64 卡 40min。
+- 已交付：v1 四门槛；0.1–0.4 发布；Socket/Plug v1；控制台 IA Phase 1–4（两分组、合并页、单一 nav manifest、legacy 退役）；P3.5 安全；CHANGELOG/发布说明工具；Jellyfin/Emby 音源；首次登录 token 文件；dot2 修复；README/first-run 重写；多设备/卫星/唤醒仲裁设计文档 `docs/multi-device-design.md`（§9 决策已冻结）；0.5 config v3 Phase 1（每设备音频覆盖 + `multi_device` 块，仍单 active）；只读 YAML 配置视图（系统页 `GET /api/v1/config/raw`）。
 - 关键文档：`HANDOFF.md`、`docs/socket-plug-v1.md`、`docs/console-ia-audit.md`、`docs/install-flow-audit.md`、`docs/provider-presets.md`、`docs/music-sources.md`、`docs/integrations-mcp.md`、`docs/security.md`、验收工作区 `04_Docs/20261024-house-ear-acceptance/`。
-- 已知问题/欠账：只读 YAML 代码视图（进行中）；多设备 Phase 1（config v3，§9 决策已冻结）；dot2 设备内层 token 轮换契约；socket sidecar/播放 gap；README 截图待刷新。
-- 下一步：多设备 Phase 1（config v3，先保持 single-active；§9 决策已冻结）与只读 YAML 代码视图并行 → multi-plane/仲裁 → sidecar/播放 gap；dot2 已按 9 哥 安排开始 0.4.2 冷测试（.34 受控切换）；生产升级固定 `.env` 的 `RUI_IMAGE` + `docker compose pull && up -d`，先备份、失败回上一个 tag。
+- 已知问题/欠账：Phase 1b 控制台多设备状态；Phase 2 多平面/仲裁（真机未验）；dot2 设备内层 token 轮换契约；socket sidecar/播放 gap；README 截图待刷新。
+- 下一步：Phase 1b（控制台多设备状态/目录字段）→ Phase 2（每设备一音频面 + WakeArbiter/WakeCandidate + OutputOwner）→ sidecar/播放 gap；dot2 已按 9 哥 安排开始 0.4.2 冷测试（.34 受控切换）；生产仍 0.4.2，多平面未经真机验证前 `multi_device.enabled=false`。
 
 ## 0. 先明确两个词
 
@@ -96,6 +96,17 @@
 
 ### P4 · 使用后统一打磨（等 9 哥 用几天再排）
 音乐真实凭据/收藏/续歌、控制台手机化（390 px/44 px/CJK/Logo）、微信 QR 取消、咖啡链接、其它体验债。
+
+### P5 · 0.5.0 多设备（按 `docs/multi-device-design.md` §8 分阶段）
+
+| # | 任务 | 状态/判据 |
+|---|---|---|
+| P5.1 ✅ | Phase 1：config v3（`devices[].audio` 覆盖、`multi_device` 块、`effective_audio()` 继承、引用/房间校验、v2 文件保持 v2） | `tests/test_config_v3.py` 21 用例；全量 1173/18；LX06 行为零差异 |
+| P5.2 | Phase 1b：控制台“未启用多设备”状态 + `multi_device.*` / `devices[].audio.*` 目录字段 | 面板/目录契约测试；不改单 active 语义 |
+| P5.3 | Phase 2：每设备一音频面 + WakeArbiter/WakeCandidate + OutputOwner 第一版 + 全局重复抑制 + 每设备健康/指标 | §7.2 共存/各自唤醒/同时听到/播放中打断/故障隔离通过；LX06+Dot2 真机 |
+| P5.4 | Phase 3：房间策略与输出体验（room_priority/last_active、房间视图、全局 stop 语义） | 多房间一周误唤醒/抢占统计 |
+
+0.5.0 发布前需 9 哥 点头；生产仍 0.4.2，多平面未经真机验证前 `multi_device.enabled=false`。
 
 **运行形态待定（P2.1 里定）**：音箱端 client/固件跑在音箱上（不在 NAS）；
 RUI 侧 adapter 有两种形态——in-process（可信内置插头，简单）与 sidecar 容器（第三方插头隔离，NAS 上会多一个镜像）。

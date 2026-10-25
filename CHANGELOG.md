@@ -38,6 +38,13 @@ canonical per-version record.
 - **v2 configs stay v2.** A v2 file loads with identical behaviour and is only written
   as `version: 3` once a v3-only field is actually used, so rolling back to a 0.4.x
   image keeps working without editing the file.
+- **Read-only config view on the System page.** `GET /api/v1/config/raw` returns the
+  effective config (schema defaults + `config.yaml`) as YAML with credential values
+  replaced server-side by `<redacted>` and named in `redacted_keys`; the System panel
+  shows it in a read-only monospace block with copy, path + mtime and a redaction note.
+  The endpoint is GET-only — there is no write path — and the payload is capped at
+  200,000 characters with a valid YAML notice instead of a truncated document.
+  `tests/test_config_raw.py`.
 
 <!-- Add changes here as they land; move them under the next version at release time. -->
 
