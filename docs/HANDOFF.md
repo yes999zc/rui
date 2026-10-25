@@ -5,14 +5,14 @@ phase-close: task-16
 ## 会话身份
 - 模式：A（双仓库：rui 上游 + rui-dot2-bridge 下游），单会话单任务板
 - 仓库：`$HOME/AI_Workspace/01_Code/projects/house-ear`（rui）、`$HOME/AI_Workspace/01_Code/projects/rui-dot2-bridge`（dot2）
-- 分支/commit：rui `main` @ `825b9e7`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
+- 分支/commit：rui `main` @ `642d40b`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
 
 ## 版本与契约
 | 项 | 值 | 证据 |
 |---|---|---|
 | 上游 rui 发布 | tag `v0.6.0` @ `adc4c2b`；镜像 `ghcr.io/yes999zc/rui@sha256:abef1f276c3c21e9155d97c98913ee6c2e98fdfe842e43b90f64a5db6c12b241`（tags `0.6.0`/`0.6`/`sha-adc4c2b`/`latest`，amd64+arm64）；Release <https://github.com/yes999zc/rui/releases/tag/v0.6.0> | `docker-publish` run 40209595988 success；`gh release view v0.6.0` |
 | 下游 pin | dot2 的 `deploy/downstream/Dockerfile` 与 compose 默认值 pin 上述 digest；`docs/canary-0.6.0-official-image.md` 记录 arm64 + x86_64 金丝雀；`docs/contract-report-0.6.0.json` 增 `upstream_pin` 块 | commit `9c696cd` |
-| 生产（NAS 168） | **v2 预览（M1–M5）** `rui-dot2:0.7.0-pre3-825b9e7`（底座 `ghcr.io/yes999zc/rui@sha256:764dfb5f…df01`，main @ 825b9e7）；`/health` 0.6.0 / cv3 / devices 2 / errors 0 / 双 plane connected / `registered:["dot2"]`；`/` 与 `/v2`、`/v2/rooms` 都 200；回滚：`pre2-9e094e7`（M1–M4）、`pre1-4ebf104`、`0.6.0-adc4c2b`（官方 0.6.0 底座）；备份 `/vol1/rui/backup/20261026-0413-v2m5/` | 构建需 `DOCKER_BUILDKIT=0` |
+| 生产（NAS 168） | **v2 预览（M1–M6）** `rui-dot2:0.7.0-pre4-642d40b`（底座 `ghcr.io/yes999zc/rui@sha256:299e561b…ccca`，main @ 642d40b）；`/`、`/v2`、`/v2/devices/add`、`/v2/setup` 均 200；`/health` 0.6.0 / cv3 / devices 2 / errors 0 / 双 plane connected；回滚：`pre3-825b9e7`、`pre2-9e094e7`、`pre1-4ebf104`、`0.6.0-adc4c2b`；备份 `/vol1/rui/backup/20261026-<hhmm>-v2m6/` | 构建需 `DOCKER_BUILDKIT=0` |
 | 契约 C-001 | `rui-device/v1`（manifest `audio_defaults` + `ack_echo_ignore_ms`） | `docs/socket-plug-v1.md` §3.2；`src/rui/config/schema.py` |
 | 契约 C-002 | 控制台 v2 `/api/v2/*` 24 端点，1193 行，**冻结 PASS** | `docs/contracts/C-002-console-v2-api.md`；task-6 记录 |
 | 兼容边界 | rui `>=0.6.0, <0.7.0`；0.6.x v1 仅 `/turns` 加 additive `device_id` | 契约 §10.1 |
@@ -28,14 +28,14 @@ phase-close: task-16
 - **控制台 v2 M3**（`d73b0a1`）：设备配置 tab（房间/主机/启用/音量/唤醒词/端口）+ 字段级 diff（未改字段不发、`listen_port` 留空表示继承、清空发 null）+ 保存前确认「重建全屋音频面」+ 新增设备（409 device_exists / 422 port_conflict）+ 删除需手输 id。E2E 抓包验证 PATCH body 恰好 `{"room":...}` / `{"volume_target":...}` / `{"listen_port":null}`。
 - **控制台 v2 M4**（`9e094e7`）：音频 tab，37 个 leaf 的 effective + 来源 + 四层原始值；16 个可覆盖 leaf 字段级 PATCH；「恢复继承」发 null 后重读校验来源（失败保持红色、重试重跑校验，不再静默吞错）；unresolved 插头给中性提示；全局影子提示。E2E 用注入 500 验证红/绿状态切换。
 - **控制台 v2 M5**（`825b9e7`）：`/v2/rooms` 房间与全屋视图；多设备策略（enabled/max_planes/default_output/room_priority）字段级 PATCH + 明确「house 写入是 service 范围、不自动重启」并给音频面重启按钮；全局音频编辑（37 leaf、explicit 标记、null 清除、覆盖计数 N 台、插头 manifest 覆盖警告）；422 dotted path 行内标红、409/429 可读；脏稿离开确认 + `beforeunload`。E2E 抓包验证 `{"multi_device":{"max_planes":5}}`、`{"audio":{"capture":{"rate":48000}}}`、`null` 清除、422 标红、`POST /house/audio/restart` 恰好一次。
-- **控制台 v2 M6**（checkpoint `6cc2fab` + 收尾修复）：八步向导（keys/models/prepare/params/wake/connect/test/verify），步骤/动作/完成度全部服务端驱动；create 前后续步骤禁用且不发请求；create 只用返回 id；draft 冲突可改 id 继续（真实 E2E 抓出的阻塞缺陷已修）；verify.say 出声前二次确认；逻辑失败不再显示绿色完成。`/v2/setup` 首装入口 + 设备列表空态链过去。
+- **控制台 v2 M6**（`642d40b`）：八步向导（keys/models/prepare/params/wake/connect/test/verify），步骤/动作/完成度全部服务端驱动；create 前后续步骤禁用且不发请求；create 只用返回 id；draft 冲突可改 id 继续（真实 E2E 抓出的阻塞缺陷已修）；verify.say 出声前二次确认；逻辑失败不再显示绿色完成。`/v2/setup` 首装入口 + 设备列表空态链过去。
 - **生产 v2 预览（M3+M4）**：`rui-dot2:0.7.0-pre2-9e094e7`，healthy、双 plane connected、无 Traceback。
 - **生产 v2 预览**：为让 9 哥 早上能评测新后台，生产临时切到 main 构建 `rui-dot2:0.7.0-pre1-4ebf104`（`/v2` 可用，旧 `/` 不变；`/health` 逐字段一致、无 Traceback、设备 25s 回连）。**这是可控的预览切换，不是正式发布版本**；回滚一行见 §下一步。
 
 ## 未完成任务
 | 项 | 状态 | 卡点 / 下一步 |
 |---|---|---|
-| 控制台 v2 M6–M10 | pending | 设备增删改 + 配置 tab（M3）、音频覆盖编辑（M4）、房间/全屋 + 全局音频（M5）、八步向导 add/edit（M6）、运行类页面（M7–M8）、配置页组（M9a/M9b）、0.7 切默认（M10）。设计文档 §7 有每步验收 |
+| 控制台 v2 M7–M10 | pending | 设备增删改 + 配置 tab（M3）、音频覆盖编辑（M4）、房间/全屋 + 全局音频（M5）、八步向导 add/edit（M6）、运行类页面（M7–M8）、配置页组（M9a/M9b）、0.7 切默认（M10）。设计文档 §7 有每步验收 |
 | verifier 记录的偏差（非阻断） | pending | ① `led.set` 已修；② disabled 设备的错误码不自洽（`device_not_connected` / `capability_unsupported` / `device_disabled` 并存）需产品裁决；③ C-002 §7.1 启动门禁在浏览器端未成立（`meta.ts:11` 初值 + `App.vue:225` 提前渲染导致资源重复请求） |
 | v2 DELETE 的端口检查口径 | pending | v2 DELETE 仍 `check_ports=True`，与 v1 不一致；建议传 `check_ports=False` |
 | **ack 时长余量变薄** | pending | 最近两次重建后 `ack.wav` 由 520 ms 变 570 ms（`ack.max_ms=600`，余量 30 ms）；改 ack 文案或 TTS 变长会静默降级成提示音。建议调大 `ack.max_ms` 或缩小文案 |
