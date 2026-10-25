@@ -1,8 +1,17 @@
 # ROADMAP — rui / 小瑞
 
-> 目标载体：**NAS**。一句话现状：**v0.1.0 已发布并部署，四道 v1 门槛通过**；下一步按 P1 → P2 → P3。
+> 目标载体：**NAS**。当前：**0.4.0 已发布并部署（非 root）**，控制台 IA 重构 Phase 1–3 完成；下一步 Phase 4 + P4。
 > 每条都要有可复现判据；过程数字在 `HANDOFF` 与验收工作区，详细历史在
 > `docs/archive/HANDOFF-history-to-2026-10-24.md`。
+
+## 现状快照（2026-10-25，0.4.0）
+
+- 版本/发布：`v0.4.0` tag（含两次 force 修正）；生产 `/vol1/rui` 跑 `ghcr.io/yes999zc/rui:0.4.0-local`（本机构建，因 CI 镜像慢/网络回退），healthy、音箱在线、非 root uid 1000。
+- 质量：全量 **1099 passed / 17 skipped**；ruff clean；web typecheck/build 绿；CI 原生 runner（PR #10）已合入，publish 不再被 QEMU arm64 卡 40min。
+- 已交付：v1 四门槛；0.1–0.4 发布；Socket/Plug v1（device_wake/契约工具/参考插头）；控制台 IA Phase 1–3（两分组、合并页、provider/音乐预设、凭据类型化、系统页、MCP headers/HA 卡片）；P3.5 安全（SSRF/non-root/CVE CI）。
+- 关键文档：`HANDOFF.md`、`docs/socket-plug-v1.md`、`docs/console-ia-audit.md`、`docs/install-flow-audit.md`、`docs/provider-presets.md`、`docs/music-sources.md`、`docs/integrations-mcp.md`、`docs/security.md`、验收工作区 `04_Docs/20261024-house-ear-acceptance/`。
+- 已知问题/欠账：控制台 Phase 4 清理（旧路由/文档/截图/单一 nav manifest）；P4 代码视图（只读 YAML 先行）、首次登录 token（issue #4）、飞书技术文档；音乐 Jellyfin/Emby；socket sidecar/多设备仲裁/每设备 AEC/EQ；P2.6 生产微信待 9 哥 手机。
+- 下一步：见 §3 P4/Phase 4；生产升级走 `.env` 换镜像 + `docker compose up -d`（非 root 需保持 config/data chown 1000）。
 
 ## 0. 先明确两个词
 
@@ -26,7 +35,7 @@
 | 3. 打断 ≤300 ms | ✅ 24.2 / 64.5 / 205.2 ms（服务端停推，max ≤300）；设备缓冲听感干脆 |
 | 4. 公开仓可用 | ✅ repo/GHCR public、README 双语+截图、MIT、无 secret |
 
-## 1. 当前状态（2026-10-24，v0.1.0）
+## 1. 历史状态（v0.1.0，保留作基线）
 
 - 版本/发布：tag `v0.1.0`（release commit `1966db6`）；Release 已发；GHCR `0.1.0`/`0.1`/`latest`/`sha-1966db6`。
 - 生产：NAS 跑 `ghcr.io/yes999zc/rui@sha256:694fc924…`，healthy；音箱在线；Telegram on、微信 off。

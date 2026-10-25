@@ -9,12 +9,12 @@
 | 项 | 当前值 |
 |---|---|
 | 项目 | 自托管语音终端：LX06 音箱 + FastAPI 控制面 + 独立音频面 + Vue 控制台；MIT；公开仓 `yes999zc/rui` |
-| 版本 | **v0.1.0**（tag `v0.1.0`，release commit `1966db6`），2026-10-24 已部署 NAS |
-| 生产镜像 | `ghcr.io/yes999zc/rui@sha256:694fc924…`（tag `0.1.0`；回滚 tag `acceptance-f2abcef`） |
-| Release | https://github.com/yes999zc/rui/releases/tag/v0.1.0 |
-| 质量 | 749 passed / 17 skipped（无模型环境）、765/1（设 `RUI_TEST_MODELS`）；ruff clean；web typecheck/build 绿 |
-| v1 四门槛 | 冷装 423 s；唤醒 **19/20**；barge 24.2/64.5/205.2 ms；公开仓 ✅ |
-| 附加验收 | Telegram 4/4、微信接口保留、配置恢复 smoke、备份/恢复 smoke ✅ |
+| 版本 | **v0.4.0**（控制台 IA 重构 Phase 1–3、Socket/Plug v1、安全 P3.5），2026-10-25 已部署 NAS |
+| 生产镜像 | `/vol1/rui` 跑 `ghcr.io/yes999zc/rui:0.4.0-local`（本机构建兜底；官方 0.4.0 tag 已推 GHCR）；非 root uid 1000 |
+| 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
+| 质量 | **1099 passed / 17 skipped**；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
+| v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
+| 当前主线 | 控制台 IA Phase 4 清理、P4 代码视图/首次登录 token、飞书技术文档；socket sidecar/多设备仲裁/AEC/EQ 后续 |
 
 ## 1. 项目与架构契约
 
@@ -34,6 +34,8 @@
 - 渠道：`src/rui/channels/` 独立进程（Telegram / 微信 iLink），复用 `POST /api/v1/chat`，不依赖音频面。
 
 ## 2. 环境与部署
+
+> 0.4.0 起为**非 root**：容器 uid/gid 1000；`config/`、`data/`、`data/state` 必须可写（升级前一次性 `chown -R 1000:1000 config data`）；compose 含 `read_only`/`cap_drop`/`no-new-privileges`。旧非 root 迁移步骤见 `docs/deploy.md`/`docs/runbook.md`。
 
 | 项 | 值 |
 |---|---|
