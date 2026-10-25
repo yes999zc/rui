@@ -217,7 +217,10 @@ def test_a_cloud_only_config_does_not_warn_about_local_models() -> None:
     assert "no local models configured" in check.value
 
 
-def test_the_doctor_report_carries_the_models_row(tmp_path) -> None:
+def test_the_doctor_report_carries_the_models_row(tmp_path, monkeypatch) -> None:
+    # The CI image has no `kws` extra; stub the sherpa import so this test is about the
+    # models row and the verdict rule, not about which optional extras are installed.
+    _replace_import(monkeypatch, module=_fake_sherpa())
     report = run_doctor(_models_config(tmp_path, create=False))
     check = next(c for c in report.checks if c.name == "models")
     assert check.status == "warn"
