@@ -1,6 +1,6 @@
 """System prompt assembly, in one place.
 
-The prompt is read from the old deployment, not imported from it: `xiaoai-voice-entry`'s
+The prompt is read from the retired reference deployment, not imported from it: its
 `server/prompts.py` had already settled what a spoken assistant needs, and its wording is
 the difference between a two-sentence answer and a useful one (HANDOFF: "改数字没用，必须
 同时改措辞"). Copied from it: the persona sentence, the information-first length policy,

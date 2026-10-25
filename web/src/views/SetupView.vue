@@ -292,6 +292,9 @@ const plugs = ref<SetupPlugSummary[]>([])
 const plugDetail = ref<SetupPlugDetail | null>(null)
 const plugDetailError = ref('')
 const selectedPlug = ref('')
+/** First step when the backend says a plug must be chosen (409 plug_required). */
+const plugChooser = ref(false)
+const chooserError = ref('')
 const loading = ref(true)
 const loadError = ref('')
 const notice = ref('')
@@ -377,6 +380,7 @@ const deviceId = computed<string | null>(() => {
 
 const selectedPlugSummary = computed<SetupPlugSummary | null>(() => state.value?.plug ?? null)
 const plugOptions = computed(() => plugs.value.filter((plug) => plug.id !== null))
+const availablePlugs = computed(() => plugOptions.value.filter((plug) => plug.available))
 const failedPlugs = computed(() => plugs.value.filter((plug) => plug.id === null))
 const blockReason = computed(() => state.value?.blocked ?? null)
 
@@ -1780,15 +1784,40 @@ async function loadProviderCatalog(): Promise<void> {
 async function loadInitial(): Promise<void> {
   loading.value = true
   loadError.value = ''
+  plugChooser.value = false
+  chooserError.value = ''
   try {
     const [list] = await Promise.all([api.plugs(), loadProviderCatalog()])
     plugs.value = Array.isArray(list.plugs) ? list.plugs : []
     const next = await api.setupStepState()
     await applyState(next, { force: true, prefill: true, forceConnect: true })
   } catch (exc) {
+    // No device yet and several installed plugs: the backend refuses to pick one for
+    // the user (0.6 M3). Show the installed plugs as step 1 instead of defaulting to
+    // whichever model used to be built in.
+    const obj = apiErrorObject(exc)
+    if (obj?.code === 'plug_required') {
+      state.value = null
+      plugChooser.value = true
+      return
+    }
     loadError.value = describeError(exc).message
   } finally {
     loading.value = false
+  }
+}
+
+/** Step 1: pick one of the installed plugs, then let the server compute the steps. */
+async function choosePlug(plug: SetupPlugSummary): Promise<void> {
+  if (!plug.id || !plug.available || busyGlobal.value) return
+  chooserError.value = ''
+  selectedPlug.value = plug.id
+  const ok = await refreshState({ force: true, prefill: true, forceConnect: true })
+  plugChooser.value = !ok
+  if (!ok) {
+    chooserError.value = loadError.value || t('setup.v2.choose.error', {
+      message: loadError.value || t('common.na'),
+    })
   }
 }
 
@@ -2349,7 +2378,53 @@ onBeforeUnmount(stopWait)
     </div>
   </header>
 
-  <div class="setup-plugbar">
+  <!-- Step 1 when several plugs are installed: choosing the device is the first
+       thing the wizard asks, instead of silently installing a built-in model. -->
+  <section v-if="plugChooser" class="setup-section setup-chooser-section">
+    <div class="setup-index">01</div>
+    <div class="setup-body">
+      <div class="setup-step-head">
+        <div class="setup-step-title">
+          <div class="kicker">{{ t('setup.v2.choose.kicker') }}</div>
+          <h2>{{ t('setup.v2.choose.title') }}</h2>
+        </div>
+      </div>
+      <div class="setup-step-content">
+        <p class="setup-step-lede">{{ t('setup.v2.choose.lede') }}</p>
+        <p v-if="chooserError" class="note fail" role="alert">{{ chooserError }}</p>
+        <div v-if="availablePlugs.length" class="setup-chooser">
+          <article v-for="plug in availablePlugs" :key="plug.id || ''" class="setup-chooser-card">
+            <div class="setup-chooser-head">
+              <strong>{{ plugOptionLabel(plug) }}</strong>
+              <span v-if="plug.version" class="badge badge-muted mono">{{ plug.version }}</span>
+              <span v-if="plug.class" class="badge badge-accent">{{ classLabel(plug.class) }}</span>
+            </div>
+            <p class="field-hint mono">{{ plug.adapter }} · {{ plug.transport }}</p>
+            <p class="field-hint">
+              {{ t('setup.v2.choose.devices') }}
+              <span class="mono">{{ (plug.devices || []).join(', ') || '—' }}</span>
+            </p>
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="busyGlobal !== ''"
+              @click="choosePlug(plug)"
+            >
+              {{ t('setup.v2.choose.use') }}
+            </button>
+          </article>
+        </div>
+        <p v-else class="field-hint">{{ t('setup.v2.noPlugs') }}</p>
+        <div class="setup-plugbar-actions">
+          <button type="button" class="btn btn-sm" :disabled="busyGlobal !== ''" @click="loadInitial">
+            {{ t('common.retry') }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div v-if="!plugChooser" class="setup-plugbar">
     <label class="field-label" for="setup-plug">{{ t('setup.v2.plug') }}</label>
     <select
       id="setup-plug"
@@ -3374,6 +3449,35 @@ onBeforeUnmount(stopWait)
   gap: var(--s2);
   margin-left: auto;
   flex-wrap: wrap;
+}
+
+.setup-chooser {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--s3);
+  margin: var(--s3) 0;
+}
+
+.setup-chooser-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.setup-chooser-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.setup-chooser-card .field-hint {
+  margin: 0;
 }
 
 .setup-plugmeta {

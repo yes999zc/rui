@@ -17,6 +17,7 @@ import stat
 from pathlib import Path
 
 import pytest
+from xiaoai_plug.adapter import XiaoaiAdapter
 
 from rui import secrets
 from rui.config.schema import (
@@ -28,7 +29,6 @@ from rui.config.schema import (
     VoiceConfig,
 )
 from rui.config.store import load_config, save_config
-from rui.device.xiaoai.adapter import XiaoaiAdapter
 from rui.log_setup import LOG_FILE_NAME, setup_logging
 from rui.music.model import Track
 from rui.music.sources.navidrome import NavidromeSource, _cache_stem

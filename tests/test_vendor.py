@@ -10,10 +10,10 @@ import asyncio
 import json
 
 import pytest
+from xiaoai_plug import protocol
+from xiaoai_plug.adapter import XiaoaiAdapter
 
 from rui.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
-from rui.device.xiaoai import protocol
-from rui.device.xiaoai.adapter import XiaoaiAdapter
 from rui.session.vendor import VendorWindow
 
 

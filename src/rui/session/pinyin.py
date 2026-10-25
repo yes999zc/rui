@@ -1,6 +1,7 @@
 """Pinyin comparison for ASR slips - the old build's answer to homophones.
 
-Ported from `assistant_v3.py:1969-2085` (xiaoai-voice-entry), where it solved two
+Ported from the retired reference project's `assistant_v3.py:1969-2085`
+(docs/recon-old-build.md), where it solved two
 measured problems and failed at nothing else:
 
 * **Our own voice coming back.** The array hears our playback through the echo

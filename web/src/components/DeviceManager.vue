@@ -47,8 +47,6 @@ import { localizeIssue, t } from '../i18n'
 
 const RESERVED_PARAMS = new Set(['host', 'room', 'wake_words'])
 const KNOWN_PARAM_TYPES = new Set(['string', 'int', 'bool', 'list', 'secret', 'choice'])
-/** The built-in A-class plug ships in code; a fresh install always has it. */
-const DEFAULT_PLUG_ID = 'xiaoai-lx06'
 
 // ————————————————————————————————————————————————— state —————
 const devices = ref<Device[]>([])
@@ -180,6 +178,36 @@ const detailCapabilities = computed(() => capabilitiesFor(detailShape.value))
 const detailParamRows = computed(() => paramRows(detailShape.value))
 const detailEnabled = computed(
   () => detail.value?.device.enabled ?? selectedDevice.value?.enabled ?? true,
+)
+/** What this room actually runs with (manifest defaults < global config < device). */
+const detailAudioRows = computed(() => {
+  const audio = detail.value?.audio ?? selectedDevice.value?.audio
+  if (!audio) return []
+  return [
+    {
+      key: 'capture',
+      label: t('dm.audio.capture'),
+      value: `${audio.capture.rate} Hz · ${audio.capture.channels} ch (${audio.capture.mic_channels} mic + ${audio.capture.ref_channels} ref) · ${audio.capture.bits} bit`,
+    },
+    {
+      key: 'playback',
+      label: t('dm.audio.playback'),
+      value: `${audio.playback.rate} Hz · ${audio.playback.channels} ch`,
+    },
+    {
+      key: 'aec',
+      label: t('dm.audio.aec'),
+      value: `${audio.aec.enabled ? t('dm.audio.on') : t('dm.audio.off')} · ${audio.aec.who}`,
+    },
+    {
+      key: 'ack',
+      label: t('dm.audio.ack'),
+      value: `${audio.ack_echo_ignore_ms} ms`,
+    },
+  ]
+})
+const detailAudioOverrides = computed(
+  () => detail.value?.audio?.overrides ?? selectedDevice.value?.audio?.overrides ?? [],
 )
 const multiWarning = computed<DeviceWarning | null>(() => {
   const rows = devices.value.flatMap((device) => device.warnings ?? [])
@@ -801,8 +829,8 @@ function applyPlugSelection(
   if (options.resetWake) form.wakeWords = defaultWakeWords(manifest)
 }
 
+/** The installed-plug catalog order decides; no vendor/model is preferred (0.6 M3). */
 function defaultPlugId(): string {
-  if (availablePlugs.value.some((plug) => plug.id === DEFAULT_PLUG_ID)) return DEFAULT_PLUG_ID
   return availablePlugs.value[0]?.id ?? ''
 }
 
@@ -1509,6 +1537,24 @@ onMounted(() => {
           <span class="dm-label">{{ t('dm.field.listenPort') }}</span>
           <span class="mono">{{ detail.listen_port ?? detail.device.listen_port ?? 4412 }}</span>
         </div>
+      </div>
+
+      <!-- per-device audio: the merged values the plane will use, plus what this
+           device states itself (the console's "设备与音频" per-room view). -->
+      <div v-if="detailAudioRows.length" class="dm-subsection dm-audio">
+        <h3 class="dm-subhead">{{ t('dm.audio.title') }}</h3>
+        <div class="dm-facts">
+          <div v-for="row in detailAudioRows" :key="row.key" class="dm-fact">
+            <span class="dm-label">{{ row.label }}</span>
+            <span class="mono">{{ row.value }}</span>
+          </div>
+        </div>
+        <div class="dm-chips">
+          <span class="dm-label">{{ t('dm.audio.overrides') }}</span>
+          <span v-for="path in detailAudioOverrides" :key="path" class="dm-chip accent mono">{{ path }}</span>
+          <span v-if="!detailAudioOverrides.length" class="field-hint">{{ t('dm.audio.inherited') }}</span>
+        </div>
+        <p class="field-hint">{{ t('dm.audio.note') }}</p>
       </div>
 
       <div class="dm-subsection">

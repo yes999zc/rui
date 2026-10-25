@@ -99,10 +99,10 @@ def free_port() -> int:
 
 def test_wake_event_reaches_the_control_plane(tmp_path, monkeypatch) -> None:
     from websockets.asyncio.client import connect
+    from xiaoai_plug import protocol
 
     from rui.audio.client import AudioPlaneSupervisor
     from rui.config import load_config
-    from rui.device.xiaoai import protocol
 
     monkeypatch.setenv("RUI_KWS_TOKEN", "kws-token")
     monkeypatch.setenv("RUI_AUDIO_SOCK", str(tmp_path / "audio.sock"))

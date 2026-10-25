@@ -9,9 +9,9 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from xiaoai_plug.services import XiaoaiServices
 
 from rui.device.mock import MockAdapter
-from rui.device.xiaoai.services import XiaoaiServices
 
 
 class Shell:

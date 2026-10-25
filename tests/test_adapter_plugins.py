@@ -420,13 +420,13 @@ def test_zero_arg_build_is_still_a_factory(tmp_path, monkeypatch) -> None:
     assert registry.build_adapters(_cfg("zero")).adapters["d1"]["device"] == "d1"
 
 
-def test_the_reference_plugin_registers_through_the_env_hook(tmp_path, monkeypatch) -> None:
+def test_the_image_plug_registers_through_the_env_hook(tmp_path, monkeypatch) -> None:
+    """A downstream image can also name the shipped plug explicitly (RUI_ADAPTER_PLUGINS)."""
     repo = Path(__file__).resolve().parents[1]
-    monkeypatch.syspath_prepend(str(repo / "plugins" / "rui-plugin-xiaoai"))
+    monkeypatch.syspath_prepend(str(repo / "plugs" / "xiaoai"))
     monkeypatch.setenv(
-        "RUI_ADAPTER_PLUGINS", "lxref=rui_plugin_xiaoai.adapter:build"
+        "RUI_ADAPTER_PLUGINS", "lxref=xiaoai_plug.adapter:build"
     )
-    sys.modules.pop("rui_plugin_xiaoai.adapter", None)
 
     report = loader.load_adapter_plugins()
 

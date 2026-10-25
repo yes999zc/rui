@@ -12,7 +12,14 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from rui.audio.protocol import Wake, WakeCandidate, WakeIdle
+from rui.audio.protocol import (
+    PauseMusic,
+    PlayFile,
+    StopAudio,
+    Wake,
+    WakeCandidate,
+    WakeIdle,
+)
 from rui.config import load_config
 from rui.web.api import app as app_module
 from rui.web.api.app import _PlaneLink, create_app
@@ -77,11 +84,21 @@ class FakeHandle:
     async def set_led(self, effect: str, repaint: bool = False) -> None:
         self.led.append(effect)
 
+    async def request_metrics(self, timeout_s: float = 0.5) -> dict:
+        """`/api/v1/audio` asks each live client for a fresh snapshot."""
+        return {}
+
 
 class FakeSupervisor:
-    def __init__(self, device_id: str, running: bool = True) -> None:
+    def __init__(self, device_id: str, running: bool = True,
+                 client: FakeHandle | None = None) -> None:
         self.device_id = device_id
-        self.client = None
+        # The routing helpers resolve a room through `supervisor(id).client`, so the
+        # fake exposes the same handle the callbacks were wired to (a real supervisor
+        # does too: client and handle are two views of one plane).
+        self.client = client if client is not None else FakeHandle(device_id)
+        self.client.metrics = SimpleNamespace(
+            speaker_connected=running, output_owner="", gate_speaking=False)
         self.running = running
 
     def status(self) -> dict:
@@ -118,8 +135,9 @@ class FakeFleet:
         self.started_with = list(device_ids)
         for device_id in device_ids:
             self._ids.append(device_id)
-            self._handles[device_id] = FakeHandle(device_id)
-            self._supervisors[device_id] = FakeSupervisor(device_id)
+            handle = FakeHandle(device_id)
+            self._handles[device_id] = handle
+            self._supervisors[device_id] = FakeSupervisor(device_id, client=handle)
         return self
 
     async def stop(self) -> None:
@@ -351,6 +369,141 @@ def test_session_client_follows_the_turn_device(monkeypatch) -> None:
     _App.state.turn_device = ""
     monkeypatch.setattr(app_module, "_primary_client", lambda app: "client:primary")
     assert app_module._session_client(_App()) == "client:primary"
+
+
+
+
+# ---------------------------------------------------------------- room routing (M3)
+# A two-room mock fleet is the integration harness for 0.6 M3: every output must be
+# routed by turn_device / default_output / output owner, never by "the first plane".
+
+
+def test_goodbye_uses_the_room_that_spoke(tmp_path, monkeypatch) -> None:
+    """The session goodbye is spoken by the room the person spoke to (D1)."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = app.state.audio_fleet
+        client.portal.call(
+            fleet.handle("study").on_wake, Wake(ts_ms=1.0, keyword="\u4f60\u597d\u5c0f\u745e"))
+        assert app.state.turn_device == "study"
+        assert app.state.last_active_room == "study"
+        assert app_module._session_client(app) is fleet.supervisor("study").client
+        # A later wake in the other room moves the goodbye there too - there is no
+        # fixed primary speaker that keeps answering for everyone.
+        client.portal.call(
+            fleet.handle("living").on_wake, Wake(ts_ms=2.0, keyword="\u4f60\u597d\u5c0f\u745e"))
+        assert app_module._session_client(app) is fleet.supervisor("living").client
+
+
+def test_reminder_room_is_default_output_then_last_active(tmp_path, monkeypatch) -> None:
+    """A reminder has no source room: default_output, else the last active room."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)          # default_output: living
+    with TestClient(app) as client:
+        fleet = app.state.audio_fleet
+        client.portal.call(
+            fleet.handle("study").on_wake, Wake(ts_ms=1.0, keyword="\u4f60\u597d\u5c0f\u745e"))
+        assert app_module._reminder_client(app) is fleet.supervisor("living").client
+        # K1/K4: an empty default_output falls back to the most recently active room.
+        app.state.cfg.multi_device.default_output = None
+        assert app_module._reminder_client(app) is fleet.supervisor("study").client
+        # A room that is no longer configured must not win the fallback.
+        app.state.last_active_room = "gone"
+        assert app_module._reminder_client(app) is not None
+
+
+def test_music_starts_in_the_turn_room_and_transport_follows_the_owner(
+    tmp_path, monkeypatch
+) -> None:
+    """Music: new queue -> turn_device; pause/stop -> the room that has the song."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = app.state.audio_fleet
+        study = fleet.handle("study")
+        living = fleet.handle("living")
+        sender = app_module._music_sender(app)
+
+        app.state.turn_device = "study"
+        app.state.last_active_room = "study"
+        client.portal.call(sender, PlayFile(path="/tmp/song.mp3"))
+        assert any(isinstance(msg, PlayFile) for msg in study.sent)
+        assert not any(isinstance(msg, PlayFile) for msg in living.sent)
+        app.state.output_owner = "study"
+
+        # A transport command asked from another room still has to reach the song's
+        # room (section 4.4): stopping the wrong plane leaves the song sounding.
+        app.state.turn_device = "living"
+        client.portal.call(sender, PauseMusic())
+        assert isinstance(study.sent[-1], PauseMusic)
+        assert not any(isinstance(msg, PauseMusic) for msg in living.sent)
+
+        # Starting a new queue in living moves playback: the old owner is stopped and
+        # the house's single owner is released before the new room sounds.
+        client.portal.call(sender, PlayFile(path="/tmp/other.mp3"))
+        assert any(isinstance(msg, StopAudio) for msg in study.sent)
+        assert any(isinstance(msg, PlayFile) for msg in living.sent)
+        assert app.state.output_owner == ""
+
+
+def test_barge_only_the_output_owner_room_can_interrupt(tmp_path, monkeypatch) -> None:
+    """Playing room ownership decides which barge is admitted (section 12.3.2)."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = app.state.audio_fleet
+        living = fleet.handle("living")
+        study = fleet.handle("study")
+        # The living room is sounding; the arbiter gets the same owner the plane said.
+        fleet.supervisor("living").client.metrics.output_owner = "dialogue"
+        app.state.output_owner = "living"
+        app.state.wake_coordinator.set_owner("living")
+
+        client.portal.call(living.on_wake_candidate, WakeCandidate(
+            wake_id="w-living", ts_ms=1.0, source="rui", keyword="\u4f60\u597d\u5c0f\u745e",
+            barge=True, playing=True))
+        time.sleep(0.05)
+        assert living.sent and living.sent[-1].type == "wake_admit"
+
+        client.portal.call(study.on_wake_candidate, WakeCandidate(
+            wake_id="w-study", ts_ms=2.0, source="rui", keyword="\u4f60\u597d\u5c0f\u745e",
+            barge=True, playing=True))
+        time.sleep(0.05)
+        assert study.sent[-1].type == "wake_reject"
+        assert study.sent[-1].reason == "lost_playing"
+        assert not any(msg.type == "wake_admit" for msg in study.sent)
+
+
+def test_device_rows_carry_each_rooms_effective_audio(tmp_path, monkeypatch) -> None:
+    """The console's per-device view: merged capture/playback/AEC/ack, not globals."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        rows = {row["id"]: row for row in client.get("/api/v1/devices").json()}
+        assert set(rows) == {"living", "study"}
+        for row in rows.values():
+            audio = row["audio"]
+            assert audio["capture"]["rate"] == 16000
+            assert audio["capture"]["mic_channels"] + audio["capture"]["ref_channels"] == \
+                audio["capture"]["channels"]
+            assert audio["playback"]["rate"] == 16000
+            assert isinstance(audio["ack_echo_ignore_ms"], int)
+            assert audio["overrides"] == []          # both rooms inherit everything
+        detail = client.get("/api/v1/devices/study").json()
+        assert detail["audio"]["capture"]["channels"] == 1
+        assert detail["audio"]["aec"]["who"] in {"controller", "device", "none", "both"}
+
+        # A devices[].audio override is merged into the effective value and named.
+        from rui.config.schema import DeviceAudioOverride
+
+        app.state.cfg.devices[1].audio = DeviceAudioOverride.model_validate(
+            {"playback": {"rate": 24000}})
+        row = {r["id"]: r for r in client.get("/api/v1/devices").json()}["study"]
+        assert row["audio"]["playback"]["rate"] == 24000
+        assert row["audio"]["overrides"] == ["playback.rate"]
+        untouched = {r["id"]: r for r in client.get("/api/v1/devices").json()}["living"]
+        assert untouched["audio"]["playback"]["rate"] == 16000
 
 
 def test_wake_in_flight_detects_pending_candidates() -> None:

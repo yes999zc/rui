@@ -230,6 +230,56 @@ def test_bare_stop_silences_a_stale_music_owner_without_the_service(monkeypatch)
     assert runner.dismissed == 1
 
 
+class _StopCoordinator:
+    def __init__(self) -> None:
+        self.owners: list[object] = []
+
+    def set_owner(self, value: object) -> None:
+        self.owners.append(value)
+
+
+def test_media_stop_in_another_room_does_not_cut_the_song(monkeypatch) -> None:
+    """Section 4.4: a stop word in a non-owner room ends that room's session only."""
+    import asyncio
+
+    from rui.audio.protocol import StopAudio
+    from rui.trace import TurnTrace
+
+    app_module, app, service, runner, client, traces = _stop_env(monkeypatch, "playing")
+    coordinator = _StopCoordinator()
+    app.state.output_owner = "study"
+    app.state.wake_coordinator = coordinator
+    handled = asyncio.run(app_module._stop_command(
+        app, "停止播放", runner, client, TurnTrace(device_id="living"), traces))
+
+    assert handled is True
+    assert service is not None and service.stops == 0, "the song belongs to study"
+    assert runner.dismissed == 1, "this room's session still closes"
+    assert any(isinstance(msg, StopAudio) for msg in client.sent)
+    assert app.state.last_turn["session_action"] == "stop_elsewhere"
+    assert app.state.output_owner == "study"
+    assert coordinator.owners == [], "another room's stop must not release the owner"
+
+
+def test_stop_in_the_owner_room_releases_the_output(monkeypatch) -> None:
+    """The room that owns the speaker stops it and the house's owner is released."""
+    import asyncio
+
+    from rui.trace import TurnTrace
+
+    app_module, app, service, runner, client, traces = _stop_env(monkeypatch, "playing")
+    coordinator = _StopCoordinator()
+    app.state.output_owner = "living"
+    app.state.wake_coordinator = coordinator
+    handled = asyncio.run(app_module._stop_command(
+        app, "停止播放", runner, client, TurnTrace(device_id="living"), traces))
+
+    assert handled is True
+    assert service is not None and service.stops == 1
+    assert app.state.output_owner == ""
+    assert coordinator.owners[-1] is None
+
+
 def test_a_non_stop_request_is_left_to_the_turn(monkeypatch) -> None:
     import asyncio
 

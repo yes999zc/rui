@@ -1,7 +1,8 @@
 """The MCP client: one background connection per server, callers never see transport.
 
-The connection pattern is the old build's (`xiaoai-voice-entry/server/ha.py`),
-which ran this exact shape against Home Assistant for weeks: a single long-lived
+The connection pattern is the old build's (`server/ha.py` in the retired reference
+project; docs/recon-old-build.md), which ran this exact shape against Home Assistant
+for weeks: a single long-lived
 session inside its own task, every caller queues a request and awaits a future,
 and any transport death surfaces as one typed error (`MCPUnavailable`) that the
 tool layer turns into a degrade phrase - never a stack trace, never a hang.

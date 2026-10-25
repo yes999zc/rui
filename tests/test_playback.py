@@ -9,11 +9,11 @@ import wave
 import numpy as np
 import pytest
 from websockets.asyncio.client import connect
+from xiaoai_plug import protocol
 
 from rui.audio.client import AudioPlaneSupervisor
 from rui.audio.protocol import PlayFile, StopAudio
 from rui.config import load_config
-from rui.device.xiaoai import protocol
 
 TOKEN_ENV = "RUI_PLAY_TOKEN"
 TOKEN = "play-token"

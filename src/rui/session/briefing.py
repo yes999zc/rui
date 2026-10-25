@@ -1,6 +1,7 @@
 """The daily briefing as data, not as a model answer.
 
-Old-build provenance (all line numbers refer to `xiaoai-voice-entry/server/`):
+Old-build provenance (all line numbers refer to the retired reference project's
+server/ tree; see docs/recon-old-build.md):
 
 * ``tools/news.py:126-136`` ``_briefing(count)`` built the spoken script as
   ``{date, count, source, text}``: a dated head, ``第一，…。第二，…。`` body and an

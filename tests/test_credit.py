@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import asyncio
 
+from xiaoai_plug.adapter import XiaoaiAdapter
+
 from rui.audio.process import Credit
 from rui.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
-from rui.device.xiaoai.adapter import XiaoaiAdapter
 
 
 class FakeDevice:

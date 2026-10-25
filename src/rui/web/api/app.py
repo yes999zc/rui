@@ -36,7 +36,7 @@ from ...audio.coordinator import WakeCoordinator
 from ...audio.fleet import PlaneFleet
 from ...audio.kws import KwsUnavailable, keyword_meta, model_files, write_keywords_file
 from ...audio.probe import safe_probe
-from ...audio.protocol import PlayFile, StopAudio
+from ...audio.protocol import PauseMusic, PlayFile, ResumeMusic, StopAudio
 from ...channels.supervisor import ChannelSupervisor
 from ...channels.weixin import WeixinAdapter
 from ...config.catalog import (
@@ -67,6 +67,9 @@ from ...config.schema import (
     McpServerConfig,
     ProviderConfig,
     StageConfig,
+    device_audio_defaults,
+    effective_device_ack_echo_ignore_ms,
+    effective_device_audio,
 )
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.loader import load_adapter_plugins
@@ -142,10 +145,11 @@ def _light(app: FastAPI, effect: str, repaint: bool = False,
 
     The shell request shares the websocket with the audio stream; the old build measured
     a 3 s resume delay from awaiting one animation, so this is always a task. `live`
-    targets one room's plane; by default it is the preferred plane, so a single-plane
-    caller keeps the old behaviour.
+    targets one room's plane; without it the ring is painted in the room of the open
+    turn (falling back to the default output room), never in an unrelated primary
+    room. On the single-plane path both resolve to the same client.
     """
-    target = live if live is not None else _primary_client(app)
+    target = live if live is not None else _session_client(app)
     if target is None:
         return
     log.info("led: %s%s", effect, " (repaint)" if repaint else "")
@@ -291,18 +295,30 @@ def _ha_context(ha: HaBridge):
 
 
 def _music_sender(app: FastAPI):
-    """The music service's way out: always the *current* plane client.
+    """The music service's way out: the room the current turn belongs to.
 
     The plane restarts and reconnects; a sender that captured the first client
-    would send music into a dead socket forever.
+    would send music into a dead socket forever. Routing is per message because music
+    is one global queue whose sound still has a room: a new song/queue starts in the
+    room that asked for it (`turn_device`), while pause/resume/stop/next act on the
+    room that currently holds the output owner, so a command never lands in the wrong
+    room and leaves the song playing in another (K1/K4, section 4.4).
     """
 
     async def send(msg: object) -> None:
-        # Music is a single-room global owner (D2): route it to whichever room owns
-        # the output now, not to the first plane that happened to connect.
-        client = _owner_client(app)
+        client, room = _music_target(app, msg)
         if client is None:
             raise RuntimeError("no audio plane connected")
+        if isinstance(msg, PlayFile):
+            # One owner for the house (D2): moving playback to another room has to
+            # release the old owner first, or two rooms sound at once.
+            owner = str(getattr(app.state, "output_owner", "") or "")
+            if owner and owner != room:
+                previous = _client_for(app, owner)
+                if previous is not None:
+                    with contextlib.suppress(Exception):
+                        await previous.send(StopAudio())
+                _release_owner(app)
         await client.send(msg)  # type: ignore[arg-type]
 
     return send
@@ -502,7 +518,11 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "blocks": [
                 {"type": "list", "tab": "status", "title": "在线设备", "items": "$",
                  "item_title": "$.room · $.id",
-                 "item_sub": "$.host · $.adapter · $.model · $.status"},
+                 # Per room: identity/link plus the merged audio numbers it will use.
+                 "item_sub": "$.host · $.adapter · $.status · 采集 "
+                             "$.audio.capture.rate Hz/$.audio.capture.channels ch · 播放 "
+                             "$.audio.playback.rate Hz · 回声窗 "
+                             "$.audio.ack_echo_ignore_ms ms"},
                 {"type": "volume", "tab": "status", "title": "设备音量",
                  "href": "/api/v1/device/volume",
                  "label": "mysoftvol（设备原生刻度 0–255）", "min": 1, "max": 255,
@@ -798,7 +818,7 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
         runner.idle.touch()
         spoken = await runner.say(line, _speaking(app, client), trace) if line else 0
         _light_after_audio(app, spoken, _voice_rate(client),
-                           "music" if tracks else "off")
+                           "music" if tracks else "off", live=client)
         with contextlib.suppress(Exception):
             await client.reply_finished(hold_music_s=MUSIC_COMMAND_WINDOW_S)
         app.state.last_turn = {
@@ -842,7 +862,8 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
     spoken = await runner.say(line, _speaking(app, client), trace) if line else 0
     # The ring must answer 「暂停」 with amber and stay there: the reply's own
     # speaking/listening states were overriding the park's LED within 300 ms.
-    _light_after_audio(app, spoken, _voice_rate(client), _music_light(action, service))
+    _light_after_audio(app, spoken, _voice_rate(client), _music_light(action, service),
+                       live=client)
     # A command window: keep the song down just long enough to chain the next
     # command without the wake word (over playing music the gate must stay shut,
     # or lyrics become commands). 2 s, then the song returns.
@@ -892,9 +913,32 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
         return False
     service = getattr(app.state, "music", None)
     music_active = service is not None and service.state in ("playing", "paused")
+    # One output owner for the house (section 4.4): only the room that holds the
+    # speaker may stop it. A stop word in another room ends that room's session and
+    # leaves the song alone; with no owner recorded (single plane, or a turn that has
+    # not sounded yet) the initiating room is treated as the owner.
+    room = str(getattr(trace, "device_id", "") or "")
+    owner = str(getattr(app.state, "output_owner", "") or "")
+    owns_output = not owner or not room or owner == room
+    if (rules.stop_scope(clean, music_active, cfg.session.end_words) == rules.MEDIA_STOP
+            and not owns_output):
+        # Don't cut the song coming out of the other room; silence only this room and
+        # close its session (a follow-up window after a refusal would be a lie).
+        with contextlib.suppress(Exception):
+            await client.send(StopAudio())
+        spoken = await runner.dismiss(_speaking(app, client), trace)
+        _light_after_audio(app, spoken, cfg.audio.voice.rate, "off", live=client)
+        _record_turn(app, {
+            "transcript": clean, "reply": "", "session_action": "stop_elsewhere",
+            "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
+        })
+        traces.add(trace)
+        log.info("stop intent: %r -> output is owned by %s; this room closed",
+                 clean, owner)
+        return True
     if rules.stop_scope(clean, music_active, cfg.session.end_words) == rules.MEDIA_STOP:
         try:
-            await service.stop()
+            await service.stop()  # type: ignore[union-attr]
         except Exception as exc:  # noqa: BLE001 - never crash the app
             log.info("stop music failed: %s", exc)
         line = phrases.book.render("music.stopped")
@@ -902,7 +946,9 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
         spoken = await runner.say(line, _speaking(app, client), trace)
         with contextlib.suppress(Exception):
             await client.reply_finished()   # the session stays open
-        _light_after_audio(app, spoken, cfg.audio.voice.rate, "off")
+        # The stop released the house's speaker: the next song may start anywhere.
+        _release_owner(app)
+        _light_after_audio(app, spoken, cfg.audio.voice.rate, "off", live=client)
         _record_turn(app, {
             "transcript": clean, "reply": line, "session_action": "media_stop",
             "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
@@ -910,10 +956,11 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
         traces.add(trace)
         log.info("stop intent: %r -> media stopped, session open", clean)
         return True
-    # bare_stop (散场): silence any song first, then dismiss.
-    if music_active:
+    # bare_stop (散场): silence any song first, then dismiss. Only the owner's room
+    # stops the house's music; another room's dismissal just closes its own session.
+    if music_active and owns_output:
         try:
-            await service.stop()
+            await service.stop()  # type: ignore[union-attr]
         except Exception as exc:  # noqa: BLE001 - never crash the app
             log.info("stop music failed: %s", exc)
     elif client.metrics is not None and client.metrics.output_owner == "music":
@@ -924,11 +971,15 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
     spoken = await runner.dismiss(_speaking(app, client), trace)
     # No reply_finished here: the session is closing, so the plane must not open a
     # follow-up window after the goodbye.
-    _light_after_audio(app, spoken, cfg.audio.voice.rate, "off")
+    _light_after_audio(app, spoken, cfg.audio.voice.rate, "off", live=client)
     _record_turn(app, {
         "transcript": clean, "reply": "", "session_action": "bare_stop",
         "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
     })
+    if owns_output:
+        # The session (and, when it was this room's song, the music) ended: release the
+        # house's output so the next wake in any room may speak immediately.
+        _release_owner(app)
     traces.add(trace)
     log.info("stop intent: %r -> session closed", clean)
     return True
@@ -1055,6 +1106,44 @@ def _audio_fleet(app: FastAPI) -> object | None:
     return getattr(app.state, "audio_fleet", None)
 
 
+def _device_audio_summary(cfg_now: Config, device: DeviceConfig) -> dict:
+    """One room's three-layer audio merge, as the device page shows it.
+
+    The console must show what each speaker will actually use (plug `audio_defaults`
+    < global config < `devices[].audio`), plus which fields this device states
+    explicitly. That distinction cannot be inferred from a value (an explicit
+    override may equal the global one on purpose), so it is reported as dotted paths.
+    """
+    effective = effective_device_audio(cfg_now, device)
+    defaults = device_audio_defaults(device, cfg_now.system.data_dir)
+    raw_override = (device.audio.model_dump(mode="json", exclude_none=True)
+                    if device.audio is not None else {})
+    overrides: list[str] = []
+    for block, values in raw_override.items():
+        if isinstance(values, dict):
+            overrides.extend(f"{block}.{key}" for key in values if values[key] is not None)
+        else:
+            overrides.append(str(block))
+    return {
+        "capture": {
+            "rate": effective.capture.rate,
+            "channels": effective.capture.channels,
+            "mic_channels": effective.capture.mic_channels,
+            "ref_channels": effective.capture.ref_channels,
+            "bits": effective.capture.bits,
+        },
+        "playback": {
+            "rate": effective.playback.rate,
+            "channels": effective.playback.channels,
+        },
+        "aec": {"enabled": effective.aec.enabled, "who": str(effective.aec.who)},
+        "ack_echo_ignore_ms": effective_device_ack_echo_ignore_ms(cfg_now, device),
+        "manifest_defaults": (defaults.model_dump(mode="json", exclude_none=True)
+                              if defaults is not None else {}),
+        "overrides": sorted(overrides),
+    }
+
+
 def _primary_device_id(app: FastAPI, config: Config | None = None) -> str:
     """The room an endpoint with no source device should talk to.
 
@@ -1102,7 +1191,13 @@ def _client_for(app: FastAPI, device_id: str = "") -> object | None:
 
 
 def _primary_client(app: FastAPI) -> object | None:
-    """The preferred room's live client (single-plane: the only one)."""
+    """The no-source-room client: `default_output` (K1/K4), else a running room.
+
+    This is NOT a "master speaker". Every multi-device path that knows its room must
+    use `turn_device` / `output_owner` / `_default_room`; this helper is only for the
+    single-plane path and for endpoints that genuinely have no source device (a
+    console control with no `device` field, a wizard step before a device exists).
+    """
     return _client_for(app)
 
 
@@ -1121,6 +1216,7 @@ def _session_client(app: FastAPI) -> object | None:
     """
     device_id = str(getattr(app.state, "turn_device", "") or "")
     client = _client_for(app, device_id) if device_id else None
+    # No open turn: there is no source room, so default_output answers.
     return client if client is not None else _primary_client(app)
 
 
@@ -1141,13 +1237,113 @@ def _handle_for(app: FastAPI, device_id: str = "") -> object | None:
 
 
 def _owner_client(app: FastAPI) -> object | None:
-    """The current output owner's live client, else the preferred room."""
+    """The current output owner's live client, else the preferred room.
+
+    The owner is the one room allowed to hold the speaker; "preferred" here is the
+    no-source fallback (`default_output`, then a running room), not a master speaker.
+    """
     owner = str(getattr(app.state, "output_owner", "") or "")
     if owner:
         client = _client_for(app, owner)
         if client is not None:
             return client
+    # Nothing owns the speaker: this is the no-source case, not a master room.
     return _primary_client(app)
+
+
+def _release_owner(app: FastAPI) -> None:
+    """Drop the house's single output owner (a stop, or playback moving rooms)."""
+    coordinator = getattr(app.state, "wake_coordinator", None)
+    if coordinator is not None:
+        with contextlib.suppress(Exception):
+            coordinator.set_owner(None)  # type: ignore[attr-defined]
+    app.state.output_owner = ""
+
+
+def _last_active_room(app: FastAPI) -> str:
+    """The room that most recently woke, spoke or owned the output.
+
+    Reminders need a concrete room when `multi_device.default_output` is empty (K1/K4);
+    this is the same recency signal the arbiter uses as its last tie-break. A room that
+    is no longer part of the fleet is ignored.
+    """
+    fleet = _audio_fleet(app)
+    known = set(fleet.device_ids()) if fleet is not None else None
+    room = str(getattr(app.state, "last_active_room", "") or "")
+    if room and (known is None or room in known):
+        return room
+    coordinator = getattr(app.state, "wake_coordinator", None)
+    arbiter = getattr(coordinator, "arbiter", None) if coordinator is not None else None
+    last = getattr(getattr(arbiter, "state", None), "last_active_ms", None)
+    if isinstance(last, dict) and last:
+        candidates = [device_id for device_id in (known or last) if device_id in last]
+        if candidates:
+            return max(candidates, key=lambda device_id: float(last[device_id]))
+    return ""
+
+
+def _default_room(app: FastAPI) -> str:
+    """Where an output with no source room belongs (K1/K4).
+
+    `multi_device.default_output` when its plane is live, otherwise the most recently
+    active room, and only then the first running plane. `_primary_device_id` already
+    prefers `default_output`; this wrapper adds the recency step the reminder rule needs
+    and keeps the choice in one place for music and debug callers.
+    """
+    cfg_now = getattr(app.state, "cfg", None)
+    default = str(getattr(getattr(cfg_now, "multi_device", None), "default_output", "") or "")
+    if default and _client_for(app, default) is not None:
+        return default
+    room = _last_active_room(app)
+    if room and _client_for(app, room) is not None:
+        return room
+    return _primary_device_id(app)
+
+
+def _default_output_client(app: FastAPI) -> object | None:
+    """The live client for `_default_room`, or the preferred room's client."""
+    room = _default_room(app)
+    client = _client_for(app, room) if room else None
+    # No room resolved at all (no device / no running plane): last-resort fallback.
+    return client if client is not None else _primary_client(app)
+
+
+def _reminder_client(app: FastAPI) -> object | None:
+    """Where a due reminder speaks: `default_output`, else the last active room.
+
+    Deliberately not `_owner_client`: the owner decides *when* the reminder may speak
+    (the caller waits for a free speaker), never *where*. Following the owner would put
+    a 09:00 reminder in whichever room happened to play music last.
+    """
+    return _default_output_client(app)
+
+
+def _music_target(app: FastAPI, msg: object) -> tuple[object | None, str]:
+    """The room one music message belongs to: ``(client, room)``.
+
+    Music is one global queue but its sound still has a room (section 4.4). A queue that
+    starts (PlayFile) belongs to the turn that asked for it; a transport message
+    (pause/resume/stop) must reach the room that currently has the song, which is the
+    output owner. LED repaints follow the pinned music room. With no turn and no owner
+    (a console play, a queued resume) the no-source room rule applies.
+    """
+    turn = str(getattr(app.state, "turn_device", "") or "")
+    owner = str(getattr(app.state, "output_owner", "") or "")
+    pinned = str(getattr(app.state, "music_room", "") or "")
+    if isinstance(msg, PlayFile):
+        room = turn or owner or pinned
+    elif isinstance(msg, (PauseMusic, ResumeMusic, StopAudio)):
+        # Stop/pause must reach the sound actually playing, not the turn's room.
+        room = owner or pinned or turn
+    else:
+        room = pinned or owner or turn
+    if isinstance(msg, PlayFile) and room:
+        app.state.music_room = room
+    if not room:
+        room = _default_room(app)
+    client = _client_for(app, room) if room else None
+    # No turn/owner/pinned room (a cold console play): no-source room rule.
+    return (client if client is not None else _primary_client(app)), room
 
 
 def _turn_handle(app: FastAPI) -> object | None:
@@ -1263,16 +1459,22 @@ def _reconcile_owner(app: FastAPI) -> None:
         if owner:
             log.info("output owner released: %s", owner)
         app.state.output_owner = ""
+        # Nothing is sounding: a pinned music room would only misroute the next
+        # console play or queued resume back into a room that is no longer playing.
+        service = getattr(app.state, "music", None)
+        if service is None or getattr(service, "state", "idle") == "idle":
+            app.state.music_room = ""
     elif owner not in playing:
         if owner and not fleet.running(owner):
             app.state.output_owner_lost = int(getattr(app.state, "output_owner_lost", 0)) + 1
             log.warning("output owner lost: %s; the playing room takes the output", owner)
         app.state.output_owner = playing[0]
+        app.state.last_active_room = playing[0]
     coordinator.set_owner(app.state.output_owner or None)
 
 
 def _adapter_health(adapter: object) -> dict:
-    """An adapter's link report, if it has one (xiaoai does; mock has no link)."""
+    """An adapter's link report, if it has one (a plug adapter does; mock has none)."""
     fn = getattr(adapter, "health", None)
     if not callable(fn):
         return {}
@@ -1767,7 +1969,7 @@ async def _volume_command(app: FastAPI, clean: str, runner, client, trace,
     line = phrases.book.render(spec_key, **getattr(result, "payload", {}))
     runner.idle.touch()
     spoken = await runner.say(line, _speaking(app, client), trace)
-    _light_after_audio(app, spoken, _voice_rate(client), "listening")
+    _light_after_audio(app, spoken, _voice_rate(client), "listening", live=client)
     # Volume is the one command whose answer is the music itself: the plane brings
     # it back the moment this reply drains (hold 0), not after the 6 s window
     # (measured 09:12: 「音量调到60%了」 then several seconds of silence).
@@ -1856,8 +2058,8 @@ def sweep_audition_files(directory: Path, *, ttl_s: float = AUDITION_TTL_S,
     return removed
 
 
-# The inbound WS port an LX06 client dials when devices[].listen_port is unset. Kept
-# vendor-neutral here with a test pinning it to device/xiaoai/adapter.py's constant.
+# The inbound WS port a client dials when devices[].listen_port is unset. Kept
+# vendor-neutral here with a test pinning it to the plug contract's constant.
 DEVICE_DEFAULT_LISTEN_PORT = DEFAULT_LISTEN_PORT
 # Token rotation changes the credential a speaker dials in with, so a stuck button (or
 # a script) must not be able to lock the room out in a loop. One rotation per device
@@ -2161,6 +2363,7 @@ def create_app(
                 # The room that is speaking now; the volume tool and the music sender
                 # read it so a command lands in the room that asked for it.
                 app.state.turn_device = device_id
+                app.state.last_active_room = device_id
                 if coordinator is not None:
                     # A follow-up utterance arrives with no new Wake event, so the turn
                     # has to be (re)stated here as well as in on_wake.
@@ -2368,6 +2571,7 @@ def create_app(
             def on_wake(msg: object) -> None:
                 vendor.ours_spoke()
                 app.state.turn_device = device_id
+                app.state.last_active_room = device_id
                 if coordinator is not None:
                     # Sent by the winning plane right after wake_admit: from here the
                     # house is in a turn, so other candidates get turn_open (K2), and
@@ -2606,6 +2810,10 @@ def create_app(
             app.state.wake_tasks = set()
             app.state.turn_device = ""
             app.state.output_owner = ""
+            # Routing state: the last room a person used (reminder fallback when
+            # multi_device.default_output is empty) and the room music is pinned to.
+            app.state.last_active_room = ""
+            app.state.music_room = ""
             app.state.fleet_error = ""
             app.state.fleet_refused = []
             app.state.fleet_start_errors = {}
@@ -2738,9 +2946,12 @@ def create_app(
                 waited = 0.0
                 spoken = False
                 while waited < 120.0:
-                    # K4: no source room, so default_output answers; the owner is only
-                    # relevant while it blocks (a reminder never talks over a turn).
-                    client = _owner_client(app)
+                    # K4: a reminder has no source room. It speaks in
+                    # multi_device.default_output, or the most recently active room when
+                    # that field is empty - never in whichever room currently owns the
+                    # output. The owner is only relevant while it blocks (a reminder
+                    # never talks over a turn or a song).
+                    client = _reminder_client(app)
                     if (client is not None and not runner.busy
                             and not _any_output_owner(app)):
                         await runner.say(
@@ -3336,14 +3547,16 @@ def create_app(
         }
 
     @app.get("/api/v1/device/volume", dependencies=[Depends(auth)])
-    async def device_volume() -> dict:
+    async def device_volume(device: str | None = None) -> dict:
         """The speaker's own mixer value (mysoftvol, 0-255).
 
         Not a duplicate of the config: `devices[].volume = 0` means the vendor owns it,
         and the vendor rewrites it (old deployment: 160 -> 255 -> 160 within minutes). The
         only way to know what the room is actually doing is to ask the device.
+        `?device=` selects a room; without it the no-source room rule applies
+        (`default_output`), never a fixed primary speaker.
         """
-        client = _primary_client(app)
+        client = _client_for(app, device) if device else _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         try:
@@ -3360,7 +3573,10 @@ def create_app(
         value = patch.get("value")
         if not isinstance(value, int) or not 0 < value <= 255:
             raise HTTPException(status_code=422, detail="value must be an int in 1..255")
-        client = _primary_client(app)
+        # The device page sends the room it is showing; the default is the
+        # no-source room (default_output), not a master speaker.
+        room = str(patch.get("device") or patch.get("device_id") or "").strip()
+        client = _client_for(app, room) if room else _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         try:
@@ -3375,9 +3591,11 @@ def create_app(
         """Play a wav through the running plane (music for AEC/barge tests).
 
         `rui debug-play` spawns its own plane and cannot be used while a server is
-        up, which is exactly when these tests run.
+        up, which is exactly when these tests run. `device` selects the room; the
+        default is `default_output` (the no-source room), not a master speaker.
         """
-        client = _primary_client(app)
+        room = str(patch.get("device") or patch.get("device_id") or "").strip()
+        client = _client_for(app, room) if room else _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         if patch.get("stop"):
@@ -3399,16 +3617,27 @@ def create_app(
                                    gain=float(patch.get("gain", 1.0))))
         return {"playing": path}
 
-    async def _run_debug_say(text: str) -> dict:
-        """One fresh text turn. Shared by ``/debug/say`` and the wizard's try step."""
-        client = _primary_client(app)
+    async def _run_debug_say(text: str, device_id: str = "") -> dict:
+        """One fresh text turn. Shared by ``/debug/say`` and the wizard's try step.
+
+        ``device_id`` selects the room the try belongs to; without it the no-source
+        room rule applies (`multi_device.default_output`). A try from the wizard or the
+        device page is a real turn in that room: it speaks and plays music there, not
+        in whichever room happens to be the default.
+        """
+        client = _client_for(app, device_id) if device_id else _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         runner = app.state.runner
         if runner.busy:
             raise HTTPException(status_code=409, detail="a turn is already running")
-        trace = TurnTrace(device_id="debug")
-        _light(app, "thinking")
+        if device_id:
+            # Same fields the wake/utterance callbacks set: tools and the music sender
+            # read them, so a console try obeys the same room routing as a spoken turn.
+            app.state.turn_device = device_id
+            app.state.last_active_room = device_id
+        trace = TurnTrace(device_id=device_id or "debug")
+        _light(app, "thinking", live=client)
         # The console's 试一试 is one fresh utterance, as on the speaker: a wake
         # clears history, so a typed try must not inherit the previous try either
         # (measured 10:45:21: a weather answer added "周杰伦的歌没放上").
@@ -3420,13 +3649,13 @@ def create_app(
             spoken = await runner.say(line, _speaking(app, client), trace)
             _record_turn(app, {"transcript": text, "reply": line, "audio_bytes": spoken,
                                "error": "", "tools": ["clarify.verb"], "stages": {}})
-            _light_after_audio(app, spoken, cfg.audio.voice.rate)
+            _light_after_audio(app, spoken, cfg.audio.voice.rate, live=client)
             return {"reply": line, "error": "", "tools": ["clarify.verb"],
                     "stages": {}, "audio_bytes": spoken}
         for fast in (_music_transport, _volume_command, _context_command):
             if await fast(app, text, runner, client, trace, traces) is not None:
                 _light_after_audio(app, app.state.last_turn["audio_bytes"] or 0,
-                                   cfg.audio.voice.rate)
+                                   cfg.audio.voice.rate, live=client)
                 return {
                     "reply": app.state.last_turn["reply"], "error": "", "tools":
                         app.state.last_turn["tools"], "stages": {}, "audio_bytes":
@@ -3435,7 +3664,7 @@ def create_app(
         result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
         await client.reply_finished(hold_music_s=_turn_hold(result))
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
-                           _turn_light(result))
+                           _turn_light(result), live=client)
         _record_turn(app, result.to_dict())
         trace.note_playback_metrics(getattr(client, "metrics", None))
         traces.add(trace)
@@ -3459,7 +3688,10 @@ def create_app(
         text = str(patch.get("text") or "").strip()
         if not text:
             raise HTTPException(status_code=422, detail="text is required")
-        return await _run_debug_say(text)
+        # `device` (or `device_id`) names the room the try belongs to; the console's
+        # device page sends it, the generic 试一试 block omits it and gets default_output.
+        device_id = str(patch.get("device") or patch.get("device_id") or "").strip()
+        return await _run_debug_say(text, device_id)
 
     def _channels_path() -> Path:
         cfg_now = getattr(app.state, "cfg", cfg)
@@ -3716,7 +3948,9 @@ def create_app(
         effect = str(patch.get("effect") or "")
         if effect not in LED_STATES:
             raise HTTPException(status_code=422, detail=f"effect must be one of {list(LED_STATES)}")
-        client = _primary_client(app)
+        # A ring belongs to a room: `device` names it, otherwise default_output.
+        room = str(patch.get("device") or patch.get("device_id") or "").strip()
+        client = _client_for(app, room) if room else _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         await client.set_led(effect)
@@ -4490,7 +4724,13 @@ def create_app(
         return {"tts": tts, "asr": {}}
 
     def _speaker_client_or_503() -> object:
-        """The live plane client, or the sentence that tells the console to fall back."""
+        """The live plane client, or the sentence that tells the console to fall back.
+
+        An audition has no source room (the person is at the console, not at a
+        speaker), so it follows the no-source room rule: `default_output` when its
+        plane is running, else the first running room. The rule is centralized in
+        `_primary_client`; a later per-room audition can pass a device explicitly.
+        """
         client = _primary_client(app)
         if not _plane_running(app) or client is None:
             raise HTTPException(
@@ -4794,6 +5034,9 @@ def create_app(
                 "active": bool(dev.enabled and (dev.id == active_id
                                                 if fleet is None
                                                 else dev.id in fleet_ids)),
+                # The merged capture/playback/AEC/ack numbers this room will use and
+                # the fields it states itself: the console's per-device audio card.
+                "audio": _device_audio_summary(cfg_now, dev),
                 "warnings": warnings,
             })
             out.append(row)
@@ -5126,10 +5369,21 @@ def create_app(
         # Merge onto the device that is already there: a wizard edit must not silently
         # drop fields it does not show (listen_port, LED colours, volume target).
         base = existing.model_dump(mode="json") if existing is not None else {}
+        adapter = str(payload.get("adapter") or base.get("adapter") or "").strip()
+        if not adapter:
+            # No vendor/model hard-coded default (0.6 M3): take the first device the
+            # installed plugs declare, in catalog order. The wizard selects a plug
+            # explicitly; this legacy endpoint only needs a sane fallback.
+            for entry in PlugCatalog(current.system.data_dir).entries.values():
+                if entry.plugin.devices:
+                    adapter = entry.plugin.devices[0].id
+                    break
+        if not adapter:
+            raise HTTPException(status_code=409,
+                                detail="no installed plug provides a device adapter")
         base.update({
             "id": device_id,
-            "adapter": str(payload.get("adapter") or base.get("adapter") or "xiaoai").strip()
-            or "xiaoai",
+            "adapter": adapter,
             "host": host,
             "room": room,
             "wake_words": words or ["你好小瑞"],
@@ -5245,6 +5499,7 @@ def create_app(
                 "token_configured": _token_configured(device, resolved),
                 "token_env": _token_env(device, resolved),
                 "listen_port": effective_listen_port(device, resolved),
+                "audio": _device_audio_summary(cfg_now, device),
                 "warnings": warnings,
                 # The last restart outcome belongs to the page: editing a device and
                 # leaving the plane dead must be visible, not inferred from logs.
@@ -5662,8 +5917,8 @@ def create_app(
     async def device_test(device_id: str) -> dict:
         """Connection test for one device: evidence only, no config write, no playback.
 
-        The gate follows the transport. An outbound speaker (open-xiaoai / LX06) is
-        reachable on its host, so TCP + SSH banner is the physical check. An inbound
+        The gate follows the transport. An outbound speaker is reachable on its host,
+        so TCP + SSH banner is the physical check. An inbound
         speaker dials us: probing :22 would fail a working Dot 2, which runs no SSH at
         all, so its gate is the plane's live link and the listening port. A device that
         was just added or just restarted gets a short bounded wait before the verdict.

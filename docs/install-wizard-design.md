@@ -3,6 +3,12 @@
 > Implementation note (0.2.2): 实际端点是 `GET/POST /api/v1/setup/step`、`GET /api/v1/setup/providers`；
 > 文档里的 `/setup/try`、`/setup/test-connection` 未按独立端点实现，prepare/verify 确认持久化在 `data/setup.json`，
 > verify 跳过目前仅前端语义。
+>
+> 0.6 M3 更新：设备从**已安装 plugs**里选（内置镜像插头 + `data/plugs`），不再默认任何型号；
+> 没有设备且只有一个可用插头时自动选它，多个可用时 `GET /api/v1/setup/step` 返回 409
+> `plug_required`（`details.available` 列出全部），向导把它渲染成第 1 步「选择设备」。
+> 新建设备写插头 manifest 的 device id 作为 `adapter`（当前 LX06 为 `lx06`）；旧配置的
+> `adapter: xiaoai` 通过 `src/rui/adapter_aliases.py` 一个 minor 的兼容别名继续解析。
 
 
 > 状态：**设计稿，待评审（2026-10-24）**。在现有 `SetupView` 上增量实现；不建 DB、不做设备端自动化、不加载第三方可执行代码。
@@ -31,7 +37,8 @@
 
 ## 2. 八步模型
 
-8 个编号步骤；**插头选择在页头，不编号**，因为它会改变 `prepare` 之后的步骤。
+8 个编号步骤；**插头选择是向导第 1 步**（多个可用插头时），因为它决定 `prepare` 之后的步骤。
+单一可用插头的构建里服务端自动选中它，页头仍可切换；设备存在后下拉锁定，换机型走设备管理。当前 `steps[]` 仍是 8 个，设备选择发生在 `keys` 之前的 UI 段。
 
 | # | step id | 类型 | 一句话 | 位置理由 |
 |---|---|---|---|---|
@@ -46,7 +53,9 @@
 
 > 与 socket-plug §6 的 0–8 骨架对应（行号为 socket-plug 表）：0 预检并入 `models`/页头；3 选插头变页头；5 参数拆成 `params` + `wake`；6 接线 = `connect`；7 验证拆成 `test` + `verify`；8 保存是写入副作用。顺序与调研稿的 `test → wake` 不同，理由见上表。
 
-插头选择：`GET /setup` 不带 `plug` 时，有设备取 `devices[0].adapter` 反查 manifest，无设备默认 `xiaoai`；只列 `available=true`；`devices.length > 0` 时下拉禁用，换机型走设备管理。
+插头选择：`GET /setup/step` 不带 `plug` 时，有设备用同一套 alias-aware 解析把 `devices[0]` 反查回 manifest；
+无设备时只列 `available=true` 的已安装插头——仅一个就选它，多个则返回 409 `plug_required`，
+由向导第一步让用户选（**没有内置默认型号**）。设备存在后下拉禁用，换机型走设备管理。
 
 ## 3. 服务端状态模型
 

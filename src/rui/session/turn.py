@@ -43,7 +43,7 @@ from .text import clean_reply, sanitize_spoken, strip_wake
 SpeakFn = Callable[..., Awaitable[None]]
 
 # After every spoken sentence the old build wrote 350 ms of true silence
-# (xiaoai-voice-entry assistant_v3.speak_stream): the junction becomes silence to
+# (its assistant_v3.speak_stream; docs/recon-old-build.md): the junction becomes silence to
 # silence instead of waveform to waveform, and the device's reference channel gets a
 # clean window - which is also what a wake word needs to pass AEC mid-answer. The gap
 # rides after the last sentence too; the first one starts straight away.

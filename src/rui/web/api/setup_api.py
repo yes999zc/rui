@@ -21,12 +21,13 @@ from ...config.schema import STAGES, Config, DeviceConfig
 from ...config.store import ConfigError, load_config
 from ...plugins import (
     DeviceManifest,
+    PlugCatalog,
     Plugin,
     RuntimeMode,
     TrustLevel,
-    builtin_plugins,
     discover_plugins,
 )
+from ...plugins.resolve import resolve_device_plug
 from ...providers import keycheck
 from .device_rules import conflict_detail, effective_token_env, port_conflict
 
@@ -75,7 +76,7 @@ def install_setup_routes(
     write_devices: Callable[[Config], Awaitable[str]],
     write_config: Callable[[Config], Awaitable[str]],
     probe_host: Callable[[str], Awaitable[dict]],
-    run_debug_say: Callable[[str], Awaitable[dict]],
+    run_debug_say: Callable[..., Awaitable[dict]],
     host_value: Callable[[object], str],
     room_value: Callable[[object], str],
     wake_words_value: Callable[[dict], list[str]],
@@ -123,17 +124,25 @@ def install_setup_routes(
         return ""
 
     def _plugin_catalog() -> tuple[dict[str, tuple[Plugin, str, str]], list[dict]]:
-        entries: dict[str, tuple[Plugin, str, str]] = {}
+        # One catalog for the whole wizard: PlugCatalog already merges the image plugs
+        # (source "builtin") with user plugs under data_dir, with the same precedence
+        # and adapter-alias handling the audio plane uses. discover_plugins runs again
+        # only so a broken/duplicate user manifest stays visible as data instead of
+        # being silently dropped (the wizard lists it under failed plugs).
+        catalog = PlugCatalog(_current().system.data_dir)
+        entries: dict[str, tuple[Plugin, str, str]] = {
+            plugin_id: (entry.plugin, entry.source, _plug_error(entry.plugin))
+            for plugin_id, entry in catalog.entries.items()
+        }
         failed: list[dict] = []
-        for plugin in builtin_plugins():
-            entries[plugin.id] = (plugin, "builtin", _plug_error(plugin))
         scan = discover_plugins(_current().system.data_dir)
         for plugin in scan.plugins:
-            if plugin.id in entries:
+            entry = catalog.entries.get(plugin.id)
+            if entry is not None and entry.source == "builtin":
                 failed.append(_failed_plug(
-                    None, f"{plugin.source_dir}: duplicate plugin id {plugin.id!r}; skipped"))
-                continue
-            entries[plugin.id] = (plugin, "user", _plug_error(plugin))
+                    None,
+                    f"{plugin.source_dir}: duplicate plugin id {plugin.id!r}; "
+                    "the image plug wins"))
         for message in scan.errors:
             failed.append(_failed_plug(None, message))
         return entries, failed
@@ -239,14 +248,31 @@ def install_setup_routes(
             plug_id = str(device.params.get("plug_id") or "")
             if plug_id and plug_id in entries:
                 return entries[plug_id]
+            # adapter -> manifest, through the one-minor compatibility alias that
+            # maps the pre-0.6 adapter spelling. Same resolver the audio plane and
+            # the device endpoints use, so the wizard cannot disagree with them.
+            resolved = resolve_device_plug(device, current.system.data_dir)
+            if resolved is not None and resolved.plugin.id in entries:
+                return entries[resolved.plugin.id]
             for plugin, source, error in entries.values():
                 if any(item.id == device.adapter for item in plugin.devices):
                     return plugin, source, error
-        for source in ("builtin", "user"):
-            for plugin, entry_source, error in entries.values():
-                if entry_source == source:
-                    return plugin, source, error
-        raise _setup_error(409, "plug_unavailable", "no plug is available in this build")
+        # No device yet: choosing one of the installed plugs IS the wizard's first
+        # step (0.6 M3). Auto-picking the first built-in is how every fresh install
+        # silently became an LX06; only a build with a single usable plug may skip the
+        # question. Nothing here names a model or a vendor.
+        available = [(plugin, source, error)
+                     for plugin, source, error in entries.values() if not error]
+        if not available:
+            raise _setup_error(409, "plug_unavailable",
+                               "no plug is available in this build")
+        if len(available) == 1:
+            return available[0]
+        raise _setup_error(
+            409, "plug_required",
+            "choose one of the installed plugs before continuing the wizard",
+            {"available": [plugin.id for plugin, _source, _error in available]},
+        )
 
     def _device_manifest(plugin: Plugin, device: DeviceConfig | None) -> DeviceManifest:
         if device is not None:
@@ -429,9 +455,15 @@ def install_setup_routes(
                         missing_params.append(key)
                 elif value in (None, "", []):
                     missing_params.append(key)
+        # The device belongs to this plug when the same resolver (alias-aware) says
+        # so; comparing adapter strings directly used to break every config written
+        # with the pre-0.6 adapter spelling.
+        device_resolved = (resolve_device_plug(device, current.system.data_dir)
+                           if device is not None else None)
         params_ready = (
             device is not None and bool(device.enabled) and bool(device.host)
-            and any(adaptor.id == device.adapter for adaptor in plugin.devices)
+            and device_resolved is not None
+            and device_resolved.plugin.id == plugin.id
             and not missing_params
         )
         params_status = "done" if params_ready else "pending"
@@ -1080,8 +1112,13 @@ def install_setup_routes(
                 text = str(values.get("text") or "").strip()
                 if not text:
                     raise _setup_error(422, "invalid_values", "text is required")
+                # The try belongs to the device this wizard is configuring: a
+                # multi-device house must not answer it in the default room.
+                plugin, _source, _error = _select_plugin(current, requested_plug)
+                try_device = _target_device(current, plugin)
                 try:
-                    result = await run_debug_say(text)
+                    result = await run_debug_say(
+                        text, try_device.id if try_device is not None else "")
                 except HTTPException as exc:
                     message = str(exc.detail)
                     code = ("turn_in_progress" if "already running" in message

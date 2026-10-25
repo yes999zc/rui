@@ -8,14 +8,14 @@ import socket
 import pytest
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
-
-from rui.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
-from rui.device.xiaoai import protocol
-from rui.device.xiaoai.adapter import (
+from xiaoai_plug import protocol
+from xiaoai_plug.adapter import (
     MAX_TEXT_CHARS,
     MAX_WS_MESSAGE_BYTES,
     XiaoaiAdapter,
 )
+
+from rui.config.schema import CaptureConfig, DeviceConfig, VoiceConfig
 
 TOKEN_ENV = "RUI_TEST_DEVICE_TOKEN"
 TOKEN = "test-token"

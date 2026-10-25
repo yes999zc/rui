@@ -473,7 +473,7 @@ def test_connect_info_unknown_device_is_404(connect) -> None:
 
 
 def test_the_connect_info_default_port_matches_the_adapter() -> None:
-    from rui.device.xiaoai import DEFAULT_LISTEN_PORT
+    from xiaoai_plug import DEFAULT_LISTEN_PORT
 
     assert app_module.DEVICE_DEFAULT_LISTEN_PORT == DEFAULT_LISTEN_PORT == 4412
 

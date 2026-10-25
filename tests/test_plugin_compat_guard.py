@@ -17,14 +17,13 @@ from ruamel.yaml import YAML
 import rui
 from rui.plugins import (
     PluginError,
-    builtin_plugin,
     load_plugin,
     parse_range,
     parse_version,
 )
 
 REPO = Path(__file__).resolve().parents[1]
-XIAOAI = REPO / "plugins" / "rui-plugin-xiaoai"
+XIAOAI = REPO / "plugs" / "xiaoai"
 EXAMPLE = REPO / "examples" / "plugin-example"
 _YAML = YAML(typ="safe")
 
@@ -60,19 +59,13 @@ def test_fixture_compat_range_accepts_the_running_build() -> None:
 @pytest.mark.parametrize(
     ("label", "manifest"),
     [
-        ("in-code builtin xiaoai-lx06 (src/rui/plugins/builtin.py)", None),
-        ("plugins/rui-plugin-xiaoai/plugin.yaml", XIAOAI),
+        ("plugs/xiaoai/plugin.yaml (image LX06 plug)", XIAOAI),
         ("examples/plugin-example/plugin.yaml", EXAMPLE),
     ],
 )
 def test_shipped_manifest_accepts_the_running_build(
     label: str, manifest: Path | None
 ) -> None:
-    if manifest is None:
-        plugin = builtin_plugin("xiaoai-lx06")
-        assert plugin is not None, "the in-code builtin xiaoai-lx06 is missing"
-        _assert_accepts(label, plugin.rui_compat)
-        return
     try:
         plugin = load_plugin(manifest)
     except PluginError as exc:

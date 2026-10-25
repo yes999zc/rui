@@ -109,6 +109,24 @@ export interface DeviceWarning {
   details?: Record<string, unknown>
 }
 
+/** The three-layer audio merge one device will actually run with (0.6 M1+M3). */
+export interface DeviceAudioSummary {
+  capture: {
+    rate: number
+    channels: number
+    mic_channels: number
+    ref_channels: number
+    bits: number
+  }
+  playback: { rate: number; channels: number }
+  aec: { enabled: boolean; who: string }
+  ack_echo_ignore_ms: number
+  /** The plug manifest's declared defaults (empty for a pre-0.6 plug). */
+  manifest_defaults: Record<string, unknown>
+  /** Dotted `devices[].audio.*` paths this device states explicitly. */
+  overrides: string[]
+}
+
 export interface Device {
   id: string
   adapter: string
@@ -138,6 +156,8 @@ export interface Device {
   capabilities: string[]
   missing_for_barge_in: string[]
   has_device_token?: boolean
+  /** Effective capture/playback/AEC/ack for this room (0.6). */
+  audio?: DeviceAudioSummary
 }
 
 export interface Provider {
@@ -681,6 +701,8 @@ export interface DeviceDetail {
   token_env?: string
   listen_port?: number
   warnings?: DeviceWarning[]
+  /** Effective per-device audio (the same merge the audio plane uses). */
+  audio?: DeviceAudioSummary
   /** Last audio-plane restart outcome; empty when it came back. */
   plane_error?: string
   /** Set by `POST /enabled`: false means the requested state was already in place. */

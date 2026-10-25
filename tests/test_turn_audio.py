@@ -111,10 +111,10 @@ def free_port() -> int:
 @needs_kws
 def test_wake_then_speech_becomes_an_utterance_and_a_reply_is_played(tmp_path, monkeypatch) -> None:
     from websockets.asyncio.client import connect
+    from xiaoai_plug import protocol
 
     from rui.audio.client import AudioPlaneSupervisor
     from rui.config import load_config
-    from rui.device.xiaoai import protocol
 
     monkeypatch.setenv("RUI_TURN_TOKEN", "turn-token")
     monkeypatch.setenv("RUI_AUDIO_SOCK", str(tmp_path / "audio.sock"))
