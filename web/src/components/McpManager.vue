@@ -118,7 +118,9 @@ async function load(silent = false): Promise<void> {
   try {
     const next = await api.mcp()
     state.value = next
-    baseUrl.value = next.ha.base_url
+    // Only the first load seeds the form. A silent status refresh must keep whatever
+    // the operator has typed until they Save (which is the only write path).
+    if (!silent) baseUrl.value = next.ha.base_url
     gate.value = Boolean(next.stdio_enabled ?? next.generic?.stdio_enabled ?? false)
     for (const key of Object.keys(rowProbes)) delete rowProbes[key]
   } catch (exc) {
@@ -141,8 +143,10 @@ async function testHa(): Promise<void> {
     // A token typed into the form is probed as-is (never saved): the operator can
     // validate a new token before replacing the stored one.
     if (token.value.trim()) payload.token = token.value.trim()
+    // A probe stores nothing, so there is nothing to reload. Reloading here used to
+    // reset the form (silent load copied the saved - still empty - address back into
+    // the input), which broke the natural "fill in -> test -> save" flow.
     probe.value = await api.testMcp(payload)
-    await load(true)
   } catch (exc) {
     error.value = exc instanceof ApiError ? exc.message : String(exc)
   } finally {
@@ -158,6 +162,7 @@ async function saveHa(): Promise<void> {
     const ha: { base_url: string; token?: string } = { base_url: baseUrl.value.trim() }
     if (token.value.trim()) ha.token = token.value.trim()
     state.value = await api.saveMcp({ ha })
+    baseUrl.value = state.value.ha.base_url
     token.value = ''
     notice.value = t('mcp.saved')
   } catch (exc) {
