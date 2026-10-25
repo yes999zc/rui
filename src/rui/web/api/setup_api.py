@@ -28,7 +28,7 @@ from ...plugins import (
     discover_plugins,
 )
 from ...providers import keycheck
-from .device_rules import conflict_detail, port_conflict
+from .device_rules import conflict_detail, effective_token_env, port_conflict
 
 __all__ = ["install_setup_routes"]
 
@@ -191,7 +191,7 @@ def install_setup_routes(
             else (manifest.runtime.listen_port if manifest.runtime else None)
         )
         token_env = (
-            device.token_env if device is not None
+            effective_token_env(device, manifest) if device is not None
             else (manifest.runtime.token_env if manifest.runtime else "")
         )
         token_configured = bool(secrets.resolve(token_env)) if token_env else False

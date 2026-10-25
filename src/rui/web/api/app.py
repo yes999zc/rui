@@ -105,8 +105,10 @@ from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
 from .device_rules import (
     DEFAULT_LISTEN_PORT,
+    DEFAULT_TOKEN_ENV,
     conflict_detail,
     effective_listen_port,
+    effective_token_env,
     is_inbound,
     port_conflict,
 )
@@ -1122,15 +1124,16 @@ def _device_plug_id(device: object | None, resolved: object | None) -> str | Non
     return stored or None
 
 
-def _token_env(device: object) -> str:
+def _token_env(device: object, resolved: object | None = None) -> str:
     """The secret name a device's token lives under (never the value)."""
-    name = str(getattr(device, "token_env", "") or "").strip()
-    return name or "RUI_DEVICE_TOKEN"
+    if device is None:
+        return DEFAULT_TOKEN_ENV
+    return effective_token_env(device, resolved)
 
 
-def _token_configured(device: object) -> bool:
+def _token_configured(device: object, resolved: object | None = None) -> bool:
     """Whether a client can authenticate: a stored token, or the deliberate no-token mode."""
-    return bool(secrets.resolve(_token_env(device))) or bool(
+    return bool(secrets.resolve(_token_env(device, resolved))) or bool(
         getattr(device, "allow_no_token", False))
 
 
@@ -1197,9 +1200,9 @@ async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
     resolved = catalog.resolve(
         plug_id=_device_plug_id(device, None), adapter=device.adapter)
     plane = _plane_snapshot(app)
-    token_env = _token_env(device)
-    token_ok = _token_configured(device)
-    listen_port = effective_listen_port(device)
+    token_env = _token_env(device, resolved)
+    token_ok = _token_configured(device, resolved)
+    listen_port = effective_listen_port(device, resolved)
     capabilities = {str(capability) for capability in (resolved.capabilities
                                                        if resolved is not None else [])}
     errors: list[str] = []
@@ -3356,6 +3359,7 @@ def create_app(
                 user=str(data.get("user") or ""),
                 password=str(data.get("password") or ""),
                 token=str(data.get("token") or ""),
+                api_key=str(data.get("api_key") or ""),
             )
             await asyncio.wait_for(source.ping(), timeout=8.0)
             error = ""
@@ -4059,7 +4063,7 @@ def create_app(
         for dev in cfg_now.devices:
             resolved = catalog.resolve(
                 plug_id=_device_plug_id(dev, None), adapter=dev.adapter)
-            token_ok = _token_configured(dev)
+            token_ok = _token_configured(dev, resolved)
             capabilities = {str(capability) for capability in (resolved.capabilities
                                                                if resolved is not None else [])}
             adapter = adapters.adapters.get(dev.id)
@@ -4119,8 +4123,8 @@ def create_app(
             row.update({
                 "enabled": bool(dev.enabled),
                 "token_configured": token_ok,
-                "token_env": _token_env(dev),
-                "listen_port": effective_listen_port(dev),
+                "token_env": _token_env(dev, resolved),
+                "listen_port": effective_listen_port(dev, resolved),
                 "params": _device_public_params(dev, resolved),
                 "plug_id": _device_plug_id(dev, resolved),
                 "capabilities": sorted(capabilities),
@@ -4559,9 +4563,9 @@ def create_app(
                 "plug_id": _device_plug_id(device, resolved),
                 "params": params,
                 "enabled": bool(device.enabled),
-                "token_configured": _token_configured(device),
-                "token_env": _token_env(device),
-                "listen_port": effective_listen_port(device),
+                "token_configured": _token_configured(device, resolved),
+                "token_env": _token_env(device, resolved),
+                "listen_port": effective_listen_port(device, resolved),
                 "warnings": warnings,
                 # The last restart outcome belongs to the page: editing a device and
                 # leaving the plane dead must be visible, not inferred from logs.
@@ -4594,7 +4598,11 @@ def create_app(
         ``?token=``. The token is quoted: a generated one is hex, but a hand-set one may
         contain characters that would otherwise split the query string.
         """
-        port = effective_listen_port(device)
+        cfg_now = getattr(app.state, "cfg", None)
+        resolved = (PlugCatalog(cfg_now.system.data_dir).resolve(
+            plug_id=_device_plug_id(device, None), adapter=device.adapter)
+            if cfg_now is not None else None)
+        port = effective_listen_port(device, resolved)
         host, host_source, loopback = resolve_connect_host(request)
         scheme = request_ws_scheme(request)
         url = f"{scheme}://{host}:{port}/?token={quote(token, safe='')}"
@@ -4646,7 +4654,9 @@ def create_app(
     async def device_token_rotate(device_id: str, request: Request) -> dict:
         """Replace the device token and return the new value exactly once.
 
-        The new secret goes to ``device.token_env`` through ``secrets.put`` (0600
+        The new secret goes to the effective token env (the plug manifest runtime
+        ``token_env`` when the config leaves the default, e.g.
+        DOT2_EM_TOKEN) through ``secrets.put`` (0600
         secrets.yaml). The response is the only place the new value appears; the log
         line names the env var, never the token. If the token currently comes from the
         process environment, rotation would be a lie (env still wins over the file), so
@@ -4655,7 +4665,10 @@ def create_app(
         """
         cfg_now = getattr(app.state, "cfg", cfg)
         device = _device_or_404(device_id, cfg_now)
-        token_env = _token_env(device)
+        catalog = PlugCatalog(cfg_now.system.data_dir)
+        resolved = catalog.resolve(
+            plug_id=_device_plug_id(device, None), adapter=device.adapter)
+        token_env = _token_env(device, resolved)
         resolution = secrets.resolve(token_env)
         if resolution is not None and resolution.source == "environment":
             raise HTTPException(status_code=409, detail={
@@ -4718,11 +4731,13 @@ def create_app(
         """
         cfg_now = getattr(app.state, "cfg", cfg)
         device = _device_or_404(device_id, cfg_now)
-        token = secrets.get(device.token_env) if device.token_env else ""
+        resolved = PlugCatalog(cfg_now.system.data_dir).resolve(
+            plug_id=_device_plug_id(device, None), adapter=device.adapter)
+        token_env = _token_env(device, resolved)
+        token = secrets.get(token_env) if token_env else ""
         ws_url, host, host_source, loopback = _device_ws_url(device, request, token)
         allow_no_token = bool(device.allow_no_token)
         configured = bool(token) or allow_no_token
-        token_env = device.token_env or "RUI_DEVICE_TOKEN"
         if token:
             hint = (
                 "在音箱客户端里把服务器地址填成这个 ws_url（token 已包含）。"
@@ -4765,7 +4780,7 @@ def create_app(
             "host": device.host,
             "ws_url": ws_url,
             "token": token,
-            "token_env": device.token_env,
+            "token_env": token_env,
             "configured": configured,
             "allow_no_token": allow_no_token,
             "host_source": host_source,
@@ -4980,7 +4995,8 @@ def create_app(
         probe = await _probe_host(device.host)
         plane = _plane_snapshot(app)
         plane_ok = bool(plane["speaker_connected"]) and plane["speaker_device"] in ("", device.id)
-        token_ok = bool(device.token_env and secrets.get(device.token_env)) or bool(
+        token_env = _token_env(device, resolved)
+        token_ok = bool(token_env and secrets.get(token_env)) or bool(
             device.allow_no_token)
         outbound = bool(resolved is not None and str(resolved.device.transport) == "outbound")
         capabilities = resolved.capabilities if resolved is not None else []
@@ -5010,7 +5026,7 @@ def create_app(
                         "error": plane["error"]}},
             {"name": "token", "ok": token_ok,
              "status": "ok" if token_ok else "fail",
-             "detail": {"configured": token_ok, "token_env": device.token_env,
+             "detail": {"configured": token_ok, "token_env": token_env,
                         "allow_no_token": bool(device.allow_no_token)}},
             {"name": "capabilities", "ok": resolved is not None,
              "status": "ok" if resolved is not None else "fail",

@@ -268,6 +268,13 @@ class VoiceConfig(BaseModel):
     # streaming KWS reports a hit ~0.5 s late, so without this the first words of a
     # request spoken straight after the wake word never reach the transcriber.
     wake_preroll_ms: int = Field(default=500, ge=0, le=1500)
+    # Follow-up gate: how long after the pacer drains before the microphone reopens
+    # for the next sentence. 1000 ms is the LX06's measured echo tail; a device-AEC
+    # plug (no reference, RUI AEC off) keeps residual echo on the mic for seconds.
+    followup_delay_ms: int = Field(default=1000, ge=0, le=10000)
+    # Replay the audio caught between playback end and the gate opening into the
+    # transcriber. Turn off for a device-AEC plug whose residual outlasts the delay.
+    followup_replay: bool = True
 
     @property
     def frame_samples(self) -> int:

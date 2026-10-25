@@ -567,3 +567,20 @@ def test_coerce_reports_the_field_not_the_schema_location() -> None:
     assert coerce(spec, True) is True
     with pytest.raises(ValueError, match="true or false"):
         coerce(spec, "yes")
+
+
+def test_followup_window_controls_match_the_schema() -> None:
+    body = document(Config())
+    fields = {field["path"]: field for field in body["fields"]}
+    delay = fields["audio.voice.followup_delay_ms"]
+    assert delay["kind"] == "number"
+    assert delay["min"] == 0
+    assert delay["max"] == 10000
+    assert delay["unit"] == {"zh": "ms", "en": "ms"}
+    assert delay["effect"] == "restart"
+    replay = fields["audio.voice.followup_replay"]
+    assert replay["kind"] == "bool"
+    assert replay["effect"] == "restart"
+    # The baseline keeps the LX06's measured 1 s tail and the replay on.
+    assert body["values"]["audio.voice.followup_delay_ms"] == 1000
+    assert body["values"]["audio.voice.followup_replay"] is True

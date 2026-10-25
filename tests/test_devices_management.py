@@ -299,3 +299,196 @@ def test_new_device_endpoints_require_the_console_token(console) -> None:
                       headers=headers).status_code == 200
     assert client.post("/api/v1/devices/living/enabled", json={"enabled": False},
                        headers=headers).status_code == 200
+
+
+# ------------------------------------------------- manifest runtime defaults (dot2)
+
+def _yaml_text(*lines: str) -> str:
+    return chr(10).join(lines) + chr(10)
+
+
+def _dot2_plug(tmp_path) -> None:
+    """An inbound plug carrying its own runtime port/token defaults (dot2 shape)."""
+    root = tmp_path / "data" / "plugs" / "dot2-echomuse"
+    (root / "devices").mkdir(parents=True, exist_ok=True)
+    (root / "plugin.yaml").write_text(
+        _yaml_text(
+            "schema: rui-plugin/v0",
+            "id: dot2-echomuse",
+            "name: Dot2 test plug",
+            "version: 1.0.0",
+            "rui_compat: \">=0.0.1 <999.0.0\"",
+            "license: MIT",
+            "maintainer: Test <test@example.invalid>",
+            "trust: trusted",
+            "devices:",
+            "  - devices/dot2.yaml",
+        ),
+        encoding="utf-8",
+    )
+    (root / "devices" / "dot2.yaml").write_text(
+        _yaml_text(
+            "schema: rui-device/v1",
+            "id: dot2",
+            "name: Echo Dot 2 (test)",
+            "vendor: Test",
+            "class: B",
+            "transport: inbound",
+            "protocol: {kind: wss, version: \"1\"}",
+            "capabilities: [playback, volume, led]",
+            "device_side:",
+            "  artifact: firmware",
+            "  name: Test device image",
+            "  source: https://example.invalid/device",
+            "  rollback: Restore the stock firmware.",
+            "runtime: {mode: in-process, entrypoint: \"dot2_test.adapter:build\", "
+            "listen_port: 8870, token_env: DOT2_EM_TOKEN}",
+            "params:",
+            "  - {key: host, label: Address, type: string, required: true}",
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_dot2_style_plug_reports_effective_port_and_token_env(
+    console, tmp_path, monkeypatch
+) -> None:
+    _dot2_plug(tmp_path)
+    token = "dot2-token-never-echoed"
+    monkeypatch.setenv("DOT2_EM_TOKEN", token)
+    client, _path = console([
+        DeviceConfig(id="dot2", adapter="dot2", host="dot2.local", room="客厅"),
+        DeviceConfig(id="lx06", adapter="xiaoai", host="lx06.local", room="卧室"),
+    ])
+    client.app.state.audio = _Plane(connected=True)
+
+    status = client.get("/api/v1/devices/dot2/status")
+    assert status.status_code == 200, status.text
+    body = status.json()
+    assert body["listen_port"] == 8870
+    assert body["token_env"] == "DOT2_EM_TOKEN"
+    assert body["token_configured"] is True
+    assert "token_missing" not in body["errors"]
+    assert token not in status.text
+
+    # The LX06 keeps the old defaults: nothing changes for the built-in plug.
+    lx = client.get("/api/v1/devices/lx06/status").json()
+    assert lx["listen_port"] == 4412
+    assert lx["token_env"] == "RUI_DEVICE_TOKEN"
+
+    rows = {row["id"]: row for row in client.get("/api/v1/devices").json()}
+    assert rows["dot2"]["listen_port"] == 8870
+    assert rows["dot2"]["token_env"] == "DOT2_EM_TOKEN"
+    assert rows["lx06"]["listen_port"] == 4412
+
+    detail = client.get("/api/v1/devices/dot2")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["listen_port"] == 8870
+    assert detail.json()["token_env"] == "DOT2_EM_TOKEN"
+    assert token not in detail.text
+
+    # /connect is the one endpoint that returns the token; it must use the same env.
+    connect = client.get("/api/v1/devices/dot2/connect")
+    assert connect.status_code == 200, connect.text
+    info = connect.json()
+    assert info["token_env"] == "DOT2_EM_TOKEN"
+    assert info["configured"] is True
+    assert info["token"] == token
+    assert ":8870/" in info["ws_url"]
+    assert "token=" + token in info["ws_url"]
+
+
+def test_dot2_and_lx06_do_not_false_conflict_on_the_default_port(
+    console, tmp_path
+) -> None:
+    from rui.plugins import PlugCatalog
+    from rui.web.api.device_rules import (
+        effective_listen_port,
+        effective_token_env,
+        port_conflict,
+    )
+
+    _dot2_plug(tmp_path)
+    data_dir = tmp_path / "data"
+    dot2 = DeviceConfig(id="dot2", adapter="dot2", host="dot2.local")
+    lx06 = DeviceConfig(id="lx06", adapter="xiaoai", host="lx06.local")
+    catalog = PlugCatalog(data_dir)
+    resolved_dot2 = catalog.resolve(adapter="dot2")
+
+    assert effective_listen_port(dot2, resolved_dot2) == 8870
+    assert effective_token_env(dot2, resolved_dot2) == "DOT2_EM_TOKEN"
+    assert effective_listen_port(lx06, None) == 4412
+    assert effective_token_env(lx06, None) == "RUI_DEVICE_TOKEN"
+    # The LX06's 4412 is not a collision with the dot2 plug's 8870.
+    assert port_conflict([dot2, lx06], data_dir) is None
+    # Two devices on the same dot2 manifest do collide -- on the manifest port.
+    dot2_b = DeviceConfig(id="dot2-b", adapter="dot2", host="dot2-b.local")
+    conflict = port_conflict([dot2, dot2_b], data_dir)
+    assert conflict is not None
+    assert conflict["port"] == 8870
+    assert set(conflict["device_ids"]) == {"dot2", "dot2-b"}
+
+    # And the HTTP enable path accepts dot2 + LX06 together (warning, not 422).
+    client, _path = console([
+        DeviceConfig(id="dot2", adapter="dot2", host="dot2.local"),
+        DeviceConfig(id="lx06", adapter="xiaoai", host="lx06.local", enabled=False),
+    ])
+    client.app.state.audio = _Plane(connected=True)
+    enabled = client.post("/api/v1/devices/lx06/enabled", json={"enabled": True})
+    assert enabled.status_code == 200, enabled.text
+    rows = client.get("/api/v1/devices").json()
+    warning = next(
+        warning
+        for row in rows
+        for warning in row["warnings"]
+        if warning["code"] == "multiple_enabled_inbound"
+    )
+    assert warning["details"]["active_device"] in {"dot2", "lx06"}
+
+
+def test_loader_cached_runtime_defaults_fill_in_when_the_catalog_cannot_resolve(
+    monkeypatch,
+) -> None:
+    from rui.device.registry import RUNTIME_DEFAULTS
+    from rui.web.api.device_rules import effective_listen_port, effective_token_env
+
+    monkeypatch.setitem(
+        RUNTIME_DEFAULTS, "dot2",
+        {"listen_port": 8870, "token_env": "DOT2_EM_TOKEN"},
+    )
+    dot2 = DeviceConfig(id="dot2", adapter="dot2", host="dot2.local")
+    # No resolved manifest in scope: the loader's cached defaults must still win over
+    # the LX06 literals, exactly like build_adapters applies them.
+    assert effective_listen_port(dot2, None) == 8870
+    assert effective_token_env(dot2, None) == "DOT2_EM_TOKEN"
+
+
+def test_dot2_style_plug_rotates_the_effective_token_env(
+    console, tmp_path, monkeypatch
+) -> None:
+    _dot2_plug(tmp_path)
+    monkeypatch.delenv("DOT2_EM_TOKEN", raising=False)
+    monkeypatch.delenv("RUI_DEVICE_TOKEN", raising=False)
+    client, _path = console([
+        DeviceConfig(id="dot2", adapter="dot2", host="dot2.local"),
+    ])
+    client.app.state.audio = _Plane(connected=True)
+
+    response = client.post("/api/v1/devices/dot2/token/rotate")
+    assert response.status_code == 200, response.text
+    token = response.json()["token"]
+    # Rotation must store under the manifest runtime name, not the config default.
+    assert secrets.get("DOT2_EM_TOKEN") == token
+    assert secrets.resolve("RUI_DEVICE_TOKEN") is None
+    ws_url = response.json()["ws_url"]
+    assert ":8870/" in ws_url
+    assert "token=" + token in ws_url
+
+    status = client.get("/api/v1/devices/dot2/status").json()
+    assert status["token_env"] == "DOT2_EM_TOKEN"
+    assert status["token_configured"] is True
+    assert token not in client.get("/api/v1/devices/dot2/status").text
+
+    # The same env is what the next rotation cooldown report and the detail name.
+    detail = client.get("/api/v1/devices/dot2").json()
+    assert detail["token_env"] == "DOT2_EM_TOKEN"

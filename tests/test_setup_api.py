@@ -1105,3 +1105,68 @@ def test_prepare_detail_carries_the_manifest_install_steps(wizard) -> None:
     device_side = manifest["devices"][0]["device_side"]
     assert device_side["install_steps"] == steps
     assert device_side["rollback"] == detail["rollback"]
+
+
+# ------------------------------------------------- manifest runtime defaults (dot2)
+
+def _yaml_text(*lines: str) -> str:
+    return chr(10).join(lines) + chr(10)
+
+
+def _dot2_plug(tmp_path) -> None:
+    """An inbound plug carrying its own runtime port/token defaults (dot2 shape)."""
+    root = tmp_path / "data" / "plugs" / "dot2-echomuse"
+    (root / "devices").mkdir(parents=True, exist_ok=True)
+    (root / "plugin.yaml").write_text(_yaml_text(
+        "schema: rui-plugin/v0",
+        "id: dot2-echomuse",
+        "name: Dot2 test plug",
+        "version: 1.0.0",
+        'rui_compat: ">=0.0.1 <999.0.0"',
+        "license: MIT",
+        "maintainer: Test <test@example.invalid>",
+        "trust: trusted",
+        "devices:",
+        "  - devices/dot2.yaml",
+    ), encoding="utf-8")
+    (root / "devices" / "dot2.yaml").write_text(_yaml_text(
+        "schema: rui-device/v1",
+        "id: dot2",
+        "name: Echo Dot 2 (test)",
+        "vendor: Test",
+        "class: B",
+        "transport: inbound",
+        'protocol: {kind: wss, version: "1"}',
+        "capabilities: [playback, volume, led]",
+        "device_side:",
+        "  artifact: firmware",
+        "  name: Test device image",
+        "  source: https://example.invalid/device",
+        "  rollback: Restore the stock firmware.",
+        'runtime: {mode: in-process, entrypoint: "dot2_test.adapter:build", '
+        "listen_port: 8870, token_env: DOT2_EM_TOKEN}",
+        "params:",
+        "  - {key: host, label: Address, type: string, required: true}",
+    ), encoding="utf-8")
+
+
+def test_connect_evidence_reports_the_manifest_token_env(tmp_path, monkeypatch) -> None:
+    for name in (*KEYS, "RUI_DEVICE_TOKEN", "DOT2_EM_TOKEN", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("DOT2_EM_TOKEN", "dot2-token")
+    _dot2_plug(tmp_path)
+    cfg = Config(devices=[
+        DeviceConfig(id="dot2", adapter="dot2", host="dot2.local"),
+    ])
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.audio.voice.kws_keywords_file = str(tmp_path / "keywords.txt")
+    path = tmp_path / "config.yaml"
+    save_config(path, cfg)
+    client = TestClient(create_app(cfg, config_path=path))
+
+    state = client.get("/api/v1/setup/step?plug=dot2-echomuse").json()
+    evidence = _step(state, "connect")["evidence"]
+    assert evidence["listen_port"] == 8870
+    assert evidence["token_env"] == "DOT2_EM_TOKEN"
+    assert evidence["token_configured"] is True
+    assert "dot2-token" not in client.get("/api/v1/setup/step?plug=dot2-echomuse").text

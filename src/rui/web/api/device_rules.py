@@ -8,7 +8,9 @@ audio plane.
 
 A null ``listen_port`` means "adapter default" (4412 for the LX06), so null and an
 explicit 4412 are the same port for conflict purposes. Outbound devices do not bind a
-listener and are ignored.
+listener and are ignored. Both defaults resolve the way the adapter builder does:
+the plug manifest runtime block first, then the adapter loader's cached default, then
+the LX06 literals.
 """
 from __future__ import annotations
 
@@ -19,8 +21,10 @@ from ...plugins import PlugCatalog
 
 __all__ = [
     "DEFAULT_LISTEN_PORT",
+    "DEFAULT_TOKEN_ENV",
     "conflict_detail",
     "effective_listen_port",
+    "effective_token_env",
     "is_inbound",
     "port_conflict",
 ]
@@ -28,11 +32,63 @@ __all__ = [
 # The inbound WS port an LX06 client dials when devices[].listen_port is unset.
 # Pinned by tests/test_setup.py to the adapter's own constant.
 DEFAULT_LISTEN_PORT = 4412
+# The transport-token secret name used when neither the config nor the plug names one.
+DEFAULT_TOKEN_ENV = "RUI_DEVICE_TOKEN"
 
 
-def effective_listen_port(device: DeviceConfig) -> int:
-    """The port this device actually asks the plane to bind."""
-    return int(device.listen_port or DEFAULT_LISTEN_PORT)
+def _runtime_default(adapter: str, key: str) -> object | None:
+    """Manifest runtime defaults cached by the adapter loader at startup.
+
+    device/loader.py records these when it gates a co-located/user manifest and
+    build_adapters applies them when the config leaves a value unset. Reading the same
+    cache keeps the management API truthful even when the plug catalog cannot see a
+    co-located manifest (no duplicate copy under data_dir/plugs).
+    """
+    try:
+        from ...device.registry import RUNTIME_DEFAULTS
+    except Exception:  # pragma: no cover - import cycle guard
+        return None
+    return RUNTIME_DEFAULTS.get(str(adapter or ""), {}).get(key)
+
+
+def effective_listen_port(device: DeviceConfig,
+                          resolved: object | None = None) -> int:
+    """The port this device actually asks the plane to bind.
+
+    devices[].listen_port wins; otherwise the resolved plug manifest's
+    runtime.listen_port is the default the adapter builder applies (dot2: 8870,
+    the config keeps None on purpose), and only then the LX06's 4412.
+    """
+    if device.listen_port:
+        return int(device.listen_port)
+    runtime = getattr(getattr(resolved, "device", None), "runtime", None)
+    port = getattr(runtime, "listen_port", None) if runtime is not None else None
+    if port:
+        return int(port)
+    cached = _runtime_default(device.adapter, "listen_port")
+    return int(cached) if cached else DEFAULT_LISTEN_PORT
+
+
+def effective_token_env(device: DeviceConfig,
+                        resolved: object | None = None) -> str:
+    """The secret name the device's transport token actually lives under.
+
+    Mirrors device/registry.py:_apply_manifest_runtime: an unset/default
+    devices[].token_env is replaced by the plug manifest's runtime.token_env
+    (dot2: DOT2_EM_TOKEN); an explicit operator value wins. Display/diagnostic only:
+    the token value is still never echoed.
+    """
+    name = str(getattr(device, "token_env", "") or "").strip()
+    runtime = getattr(getattr(resolved, "device", None), "runtime", None)
+    if runtime is None:
+        # Callers that already hold a DeviceManifest (the setup wizard) pass it directly.
+        runtime = getattr(resolved, "runtime", None)
+    manifest = str(getattr(runtime, "token_env", "") or "").strip()
+    if not manifest:
+        manifest = str(_runtime_default(device.adapter, "token_env") or "").strip()
+    if (not name or name == DEFAULT_TOKEN_ENV) and manifest:
+        return manifest
+    return name or DEFAULT_TOKEN_ENV
 
 
 def is_inbound(device: DeviceConfig, catalog: PlugCatalog | None = None) -> bool:
@@ -67,7 +123,11 @@ def port_conflict(
     for device in devices:
         if not device.enabled or not is_inbound(device, catalog):
             continue
-        port = effective_listen_port(device)
+        params = device.params if isinstance(device.params, dict) else {}
+        resolved = catalog.resolve(
+            plug_id=str(params.get("plug_id") or "").strip() or None,
+            adapter=device.adapter)
+        port = effective_listen_port(device, resolved)
         first = seen.get(port)
         if first is None:
             seen[port] = device

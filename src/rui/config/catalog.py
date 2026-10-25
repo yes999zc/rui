@@ -625,6 +625,19 @@ def _audio_fields() -> list[dict]:
          "500 ms 是实测值。",
          "Audio kept from before the KWS hit and replayed into the gate; 500 ms measured. "
          "Without it the words after the wake word are lost.", _t("ms", "ms"), True),
+        ("followup_delay_ms", "跟进窗口延迟", "Follow-up delay", "number", 0, 10000,
+         "回答结束后等多久重新开麦听下一句（毫秒）。1000 是 LX06 的实测回声尾；设备"
+         "自己做 AEC 的插头（rui 不跑 AEC）残余更久，调到 2500 可减少把自己的回答"
+         "听成一句。改完重启音频面。",
+         "How long after playback drains before the mic reopens (ms). 1000 is the "
+         "LX06's measured echo tail; a device-AEC plug (RUI AEC off) may need 2500. "
+         "Restart the audio plane.", _t("ms", "ms"), True),
+        ("followup_replay", "回放跟进尾巴", "Replay follow-up tail", "bool", None, None,
+         "是否把「播放结束到重新开麦」之间的麦克风音频回灌给识别器。设备侧 AEC 的"
+         "插头会在这里把自己的残响转成一句；关掉 = 不回灌（可能丢紧接回答的开头）。",
+         "Replay the mic audio caught between playback end and the gate opening. Off "
+         "stops a device-AEC speaker's residual echo becoming a turn, at the cost of "
+         "possibly clipping the first syllable.", None, True),
         ("barge_in", "允许打断", "Barge-in", "bool", None, None,
          "说话中再次唤醒是否打断当前回答。关掉 = 不能打断（问答排队），调大音量时更稳。",
          "Whether a second wake interrupts the current answer. Off = no interrupts "

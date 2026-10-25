@@ -135,6 +135,13 @@ DEVICE_WAKE_MAX_INVALID = 10
 # log line (or a validation attempt) every 20 ms.
 DEVICE_WAKE_ERROR_LOG_S = 30.0
 DEVICE_WAKE_MAX_CONSECUTIVE_ERRORS = 5
+# Cold start: the first probe runs before an inbound device has dialled in, so a plug
+# whose probe() only reports device_wake once the link is up (dot2 waits for the device)
+# would keep RUI on its own KWS for the whole process lifetime. While the manifest says
+# device_wake is wanted, re-probe a bounded number of times in the background; the first
+# probe that verifies it arms the v1 path, a spent budget leaves KWS untouched.
+DEVICE_WAKE_REPROBE_S = 5.0
+DEVICE_WAKE_REPROBE_MAX = 12
 # P2-1: a broken adapter can return a list of 100 k events (or an endless iterator) from
 # one drain_wakes()/drain_signals() call. Only this many are acted on per frame tick; the
 # overflow is counted and logged (once per interval), and the frame loop stays on time.
@@ -395,6 +402,12 @@ class AudioPlane:
         self.device_wake_no_vad = 0
         self.device_wake_fallbacks = 0
         self.device_wake_degraded = False
+        # Cold-start re-evaluation: the manifest wants device_wake but the first probe
+        # ran before the device connected. Bounded background re-probes (see below).
+        self.device_wake_reeval_wanted = False
+        self.device_wake_reprobes = 0
+        self._device_wake_reeval_at = 0.0
+        self._device_wake_reeval_task: asyncio.Task[None] | None = None
         # P2-1: events dropped because one drain exceeded MAX_DRAIN_EVENTS.
         self.device_wake_dropped = 0
         # P1-7: a device wake whose replay anchor was older than the retained history.
@@ -748,6 +761,9 @@ class AudioPlane:
             if self._stop.is_set():
                 return
             self._note_capture_frame()
+            if (self.device_wake_reeval_wanted and not self.device_wake_active
+                    and not self.device_wake_degraded):
+                self._maybe_schedule_device_wake_reeval()
             t0 = time.perf_counter()
             self.frames_in += 1
             self.audio_s += frame.duration_ms / 1000.0
@@ -969,7 +985,7 @@ class AudioPlane:
 
 
     # ------------------------------------------------- device_wake (v1 §5)
-    def _configure_device_wake(self, info: object) -> None:
+    def _configure_device_wake(self, info: object, *, reeval: bool = False) -> None:
         """Decide once, from manifest ∩ probe + the adapter's methods, whether v1 is usable.
 
         Three independent gates, all required (P1-5/P1-6/P2-4):
@@ -987,6 +1003,24 @@ class AudioPlane:
         self.device_wake_configured = True
         probe_caps = set(getattr(info, "capabilities", frozenset()) or ())
         policy = self._wake_policy()
+
+        def fallback(message: str, *args: object) -> None:
+            """Count+log a runtime downgrade; a re-probe repeats it silently."""
+            if reeval:
+                return
+            self.device_wake_fallbacks += 1
+            log.warning(message, *args)
+
+        # Cold start: the manifest wants device_wake and the adapter has the method, but
+        # the device may not have dialled in when probe() ran. Keep a bounded re-probe
+        # budget alive instead of caching "off" for the whole process lifetime.
+        self.device_wake_reeval_wanted = bool(
+            policy.present
+            and policy.trusted
+            and policy.source == "device"
+            and Capability.DEVICE_WAKE in set(policy.capabilities or ())
+            and callable(getattr(self.adapter, "drain_wakes", None))
+        )
         effective = effective_capabilities(
             policy.capabilities if policy.present else None, probe_caps
         )
@@ -996,8 +1030,7 @@ class AudioPlane:
             # still a signal the operator asked for a sidecar; do not run its wake path
             # in-process merely because an env adapter advertises the capability.
             if Capability.DEVICE_WAKE in probe_caps:
-                self.device_wake_fallbacks += 1
-                log.warning(
+                fallback(
                     "device_wake: third-party plug requests wake.source=device, but "
                     "v1 only supports that for trusted/in-process adapters (Q8); "
                     "falling back to RUI KWS (%s)",
@@ -1009,8 +1042,7 @@ class AudioPlane:
                 # The manifest is the upper bound (§2). This covers both a v0/builtin
                 # manifest without the capability and a manifest whose intersection
                 # removed it; the probe alone is not enough (P2-3).
-                self.device_wake_fallbacks += 1
-                log.warning(
+                fallback(
                     "device_wake: probe advertises it but the plug manifest does not "
                     "(effective capabilities are manifest ∩ probe); falling back to "
                     "RUI KWS"
@@ -1018,15 +1050,13 @@ class AudioPlane:
             elif policy.source == "device":
                 # The manifest declared it but probe() did not verify it: runtime
                 # downgrade, one warning, KWS unchanged (§4.3).
-                self.device_wake_fallbacks += 1
-                log.warning(
+                fallback(
                     "device_wake: manifest declares wake.source=device, but probe() "
                     "does not advertise it; falling back to RUI KWS"
                 )
             return
         if policy.source == "rui":
-            self.device_wake_fallbacks += 1
-            log.warning(
+            fallback(
                 "device_wake: probe advertises it but the device's plug manifest does "
                 "not; falling back to RUI KWS"
             )
@@ -1035,22 +1065,21 @@ class AudioPlane:
             # Frozen Q8: v1 only supports device_wake for in-process/trusted adapters.
             # A sidecar has no standardised wake RPC yet, so it degrades to KWS rather
             # than pretending an unverified proxy channel is authoritative.
-            self.device_wake_fallbacks += 1
-            log.warning(
+            fallback(
                 "device_wake: sidecar adapters are not supported in v1 (Q8); "
                 "falling back to RUI KWS"
             )
             return
         drain = getattr(self.adapter, "drain_wakes", None)
         if not callable(drain):
-            self.device_wake_fallbacks += 1
-            log.warning(
+            fallback(
                 "device_wake: adapter %r declares the capability but has no "
                 "drain_wakes(); RUI KWS continues unchanged",
                 getattr(info, "adapter", "?"),
             )
             return
         self.device_wake_active = True
+        self.device_wake_reeval_wanted = False
         barge = Capability.BARGE_VIA_DEVICE in effective
         if barge and policy.present and not policy.barge_enabled:
             # P1-5: capability = can, wake block = enables. A plug that explicitly left
@@ -1092,6 +1121,64 @@ class AudioPlane:
             "device_wake on (probe: device_wake=true, barge_via_device=%s)",
             barge,
         )
+
+    # ------------------------------------------ device_wake cold-start re-evaluation
+    def _maybe_schedule_device_wake_reeval(self) -> None:
+        """Background re-probe while the v1 path is wanted but not yet verified.
+
+        Called once per frame tick (a few attribute checks); at most one probe task runs
+        at a time, DEVICE_WAKE_REPROBE_S apart, for a bounded number of attempts. The
+        frame loop never awaits the probe, so a slow probe cannot eat capture frames.
+        """
+        if not self.device_wake_reeval_wanted or self.device_wake_active:
+            return
+        task = self._device_wake_reeval_task
+        if task is not None and not task.done():
+            return
+        now = time.monotonic()
+        if self._device_wake_reeval_at == 0.0:
+            self._device_wake_reeval_at = now + DEVICE_WAKE_REPROBE_S
+            return
+        if now < self._device_wake_reeval_at:
+            return
+        if self.device_wake_reprobes >= DEVICE_WAKE_REPROBE_MAX:
+            log.info(
+                "device_wake: re-probe budget spent (%d attempts); RUI KWS stays in "
+                "charge", self.device_wake_reprobes,
+            )
+            self.device_wake_reeval_wanted = False
+            self._device_wake_reeval_at = 0.0
+            return
+        self.device_wake_reprobes += 1
+        self._device_wake_reeval_at = now + DEVICE_WAKE_REPROBE_S
+        self._device_wake_reeval_task = asyncio.create_task(
+            self._reevaluate_device_wake(), name="device-wake-reprobe"
+        )
+
+    async def _reevaluate_device_wake(self) -> None:
+        """Probe again and arm the v1 path if the device now proves device_wake."""
+        probe = getattr(self.adapter, "probe", None)
+        if not callable(probe):
+            self.device_wake_reeval_wanted = False
+            return
+        try:
+            info = await probe()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - adapter input is untrusted
+            log.info(
+                "device_wake: re-probe failed (%s: %s); retrying in %.0f s",
+                type(exc).__name__, exc, DEVICE_WAKE_REPROBE_S,
+            )
+            return
+        if self._stop.is_set():
+            return
+        self._configure_device_wake(info, reeval=True)
+        if self.device_wake_active:
+            log.info(
+                "device_wake on after re-probe (attempt %d of %d)",
+                self.device_wake_reprobes, DEVICE_WAKE_REPROBE_MAX,
+            )
 
     def _wake_policy(self) -> _WakePolicy:
         """Resolve the configured device's plug into the wake upper bound (P1-5/P1-6).
@@ -2074,9 +2161,11 @@ class AudioPlane:
                         # pacer to drain, then the old build's 1 s echo tail.
                         # With a song waiting the block below arms it with the music
                         # window instead (shorter max_wait, and the song stays down).
-                        delay = max(0.0, pacer.due - time.monotonic()) + 1.0
-                        self._start_followup_capture(
-                            max(0.0, pacer.due - time.monotonic()), delay)
+                        delay = (max(0.0, pacer.due - time.monotonic())
+                                 + self.cfg.audio.voice.followup_delay_ms / 1000.0)
+                        if self.cfg.audio.voice.followup_replay:
+                            self._start_followup_capture(
+                                max(0.0, pacer.due - time.monotonic()), delay)
                         asyncio.create_task(
                             self._arm_followup_later(delay), name="followup-gate"
                         )
@@ -2095,7 +2184,8 @@ class AudioPlane:
                         # The turn ended with a song waiting: hold it for the follow-up
                         # window instead of resuming between turns. A turn may shorten
                         # or cancel its own window (volume confirmations: 0).
-                        delay = max(0.0, pacer.due - time.monotonic()) + 1.0
+                        delay = (max(0.0, pacer.due - time.monotonic())
+                                 + self.cfg.audio.voice.followup_delay_ms / 1000.0)
                         hold_ms = (int(self.cfg.music.resume_hold_ms)
                                    if reply_hold is None
                                    else max(0, int(reply_hold * 1000)))
@@ -2265,8 +2355,10 @@ class AudioPlane:
         if now > self._followup_end + 0.25:
             self._followup_capture = False
             return
-        # At most 2 s; the delay is 1 s, so this only bounds a delayed task.
-        limit = self.cfg.audio.voice.rate * 2
+        # Bound by the configured window plus a margin for a late task, not the old
+        # hard-coded 2 s: a device-AEC plug may use a several-second followup_delay_ms.
+        window_s = max(1.0, self._followup_end - self._followup_start) + 0.25
+        limit = int(self.cfg.audio.voice.rate * window_s)
         if self._followup_samples + len(pcm) // 2 > limit:
             while self._followup_tail and self._followup_samples + len(pcm) // 2 > limit:
                 _ts, old = self._followup_tail.popleft()
@@ -2275,6 +2367,11 @@ class AudioPlane:
         self._followup_samples += len(pcm) // 2
 
     async def _replay_followup_tail(self) -> None:
+        if not self.cfg.audio.voice.followup_replay:
+            self._followup_tail.clear()
+            self._followup_samples = 0
+            self._followup_capture = False
+            return
         tail = list(self._followup_tail)
         self._followup_tail.clear()
         self._followup_samples = 0
