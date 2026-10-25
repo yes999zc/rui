@@ -22,7 +22,7 @@
 - **本会话已完成**：§9 六条关键决策冻结（§11 答复 dot2 #11）；config v3 Phase 1（`devices[].audio` 覆盖 / `multi_device` 块 / `effective_audio()` 继承 / 校验 / v2 保持 v2）；只读 YAML 配置视图（`GET /api/v1/config/raw` + 系统页）。
 - **下一步顺序**：Phase 1b（控制台“未启用多设备”状态与目录字段）→ Phase 2 多平面 + 中央仲裁 → sidecar / 播放 gap；README 截图与内容一起刷新。
 - **生产**：`/vol1/rui`，官方 `ghcr.io/yes999zc/rui:0.4.2`（digest `sha256:3791ccfd…`，amd64+arm64），uid 1000、healthy、音箱在线；备份 `.env.bak.20261025-152606`；回滚 `0.4.1` / `0.4.0`。
-- **访问**：Mac 通过 Tailscale `nas-bakey`（100.113.211.110）或 LAN 192.168.5.168；SSH 用户 `yes999zc`，密码在 `01_Code/device-inventory.md` 第 18–32 行（不要写进仓库/聊天）；SSH 必须密码认证、失败后等 40 s；docker 需 sudo（`echo "$PW" | sudo -S …`）。
+- **访问**：Mac 通过 Tailscale 主机名 `nas-bakey`（或 LAN 地址；具体 IP 与本机密码见本机凭证文件，0600，不入仓库/聊天）；SSH 用户 `yes999zc`，必须密码认证、失败后等 40 s；docker 需 sudo（`echo "$PW" | sudo -S …`）。
 - **控制台 token**：`/vol1/rui/console-token.txt`（0600，不打印值）；找回用 `docker compose exec -T rui rui token`。
 - **dot2**：PR #1 已合入；0.4.1 上 `plug-test` 15 PASS / 0 FAIL / 2 WARN / 5 SKIP；9 哥已同意 0.4.2 后在 .34 做受控切换真机验证（停 0.3.4 → 起 0.4.2 → 真机回合 → 回滚），并已安排对方开始 0.4.2 冷测试；0.4.2 的 tag/digest 已在 rui #7 公布。
 - **dot2 #11**（多设备仲裁契约提案，2026-10-25）：已答复，结论以 `docs/multi-device-design.md` §11 为准；0.5 走单实例多 plane，多实例只是过渡部署手法。
