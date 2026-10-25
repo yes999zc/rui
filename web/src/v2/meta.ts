@@ -8,7 +8,13 @@ import { api, type MetaInfo } from './api'
  */
 export const meta = shallowRef<MetaInfo | null>(null)
 export const metaError = shallowRef<unknown>(null)
-export const metaLoading = ref(false)
+/**
+ * The gate starts closed: until the first `/meta` response (success **or**
+ * failure) the shell must not render `RouterView`, otherwise the page mounts,
+ * fires its own `/api/v2` requests and is unmounted again when the gate closes.
+ */
+export const metaLoading = ref(true)
+export const metaSettled = ref(false)
 
 let inflight: Promise<void> | null = null
 
@@ -24,6 +30,7 @@ export function loadMeta(): Promise<void> {
       metaError.value = err
     } finally {
       metaLoading.value = false
+      metaSettled.value = true
       inflight = null
     }
   })()

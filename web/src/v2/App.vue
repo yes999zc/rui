@@ -13,7 +13,15 @@ import TokenDialog from './components/TokenDialog.vue'
 import { token } from './api'
 import { loadCapabilities } from './capabilities'
 import { describeError } from './errors'
-import { contractCompatible, loadMeta, meta, metaError, metaFeature, metaLoading } from './meta'
+import {
+  contractCompatible,
+  loadMeta,
+  meta,
+  metaError,
+  metaFeature,
+  metaLoading,
+  metaSettled,
+} from './meta'
 import { locale, setLocale, t, themeLabel, type MsgKey } from './i18n'
 import { setThemePref, themePref } from '../theme'
 
@@ -71,9 +79,21 @@ function onUnauthorized(): void {
   tokenOpen.value = true
 }
 
+/**
+ * Exactly one boot per app instance. `onMounted` is the only caller today, but
+ * the guard keeps the startup gate idempotent (retry, future watchers) so the
+ * meta probe and the capability catalog are never requested twice concurrently.
+ */
+let booting = false
 async function boot(): Promise<void> {
-  await loadMeta()
-  if (meta.value && compatible.value && metaFeature('devices')) void loadCapabilities()
+  if (booting) return
+  booting = true
+  try {
+    await loadMeta()
+    if (meta.value && compatible.value && metaFeature('devices')) void loadCapabilities()
+  } finally {
+    booting = false
+  }
 }
 
 watch(
@@ -222,7 +242,12 @@ onUnmounted(() => {
         :detail="t('v2.meta.incompatibleHint', { contract: meta?.contract ?? '—' })"
         :hint="t('v2.meta.failedHint')"
       />
-      <RouterView v-else />
+      <!--
+        Pages mount only after `/meta` has settled **and** approved this shell:
+        a missing/failed contract gate or a 401 shows the states above, so no
+        page component is created and no page request is issued.
+      -->
+      <RouterView v-else-if="metaSettled && meta && compatible" />
     </main>
 
     <footer v-if="meta && compatible" class="v2-footer">
