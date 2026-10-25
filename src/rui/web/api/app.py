@@ -2360,10 +2360,11 @@ def create_app(
             """
             link = _PlaneLink(app, device_id, handle, coordinator)
             async def on_utterance(pcm: bytes) -> None:
-                # The room that is speaking now; the volume tool and the music sender
-                # read it so a command lands in the room that asked for it.
-                app.state.turn_device = device_id
-                app.state.last_active_room = device_id
+                # NOTE: turn_device is set *after* the no-answer filters below. An echo
+                # or a cough on this plane is not "the room that is speaking": setting it
+                # here made the idle goodbye follow the last plane that made a noise
+                # instead of the room the real turn belongs to (measured 15:05:46: a
+                # living turn's goodbye came out of the Dot 2).
                 if coordinator is not None:
                     # A follow-up utterance arrives with no new Wake event, so the turn
                     # has to be (re)stated here as well as in on_wake.
@@ -2417,6 +2418,10 @@ def create_app(
                     # used to become a whole turn ("嗯，你说。").
                     _no_turn("noise, no turn: %r", clean)
                     return
+                # A real request: from here this room owns the turn (volume/music/stop
+                # target it, and the idle goodbye follows it).
+                app.state.turn_device = device_id
+                app.state.last_active_room = device_id
                 # Transport words before the dismiss list: 「暂停」 and 「停一下」
                 # are both, and with a song playing they mean the player, not
                 # the session (old build: VENDOR_PAUSE_WORDS checked first).
