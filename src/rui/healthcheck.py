@@ -50,6 +50,36 @@ def _config() -> tuple[int | None, int, str]:
     return int(cfg.web.port), enabled, ""
 
 
+def _rooms(body: dict) -> list[dict]:
+    rows = body.get("audio_devices") or []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _room_detail(body: dict, *, connected_ok: bool = False) -> str:
+    """Name the rooms whose plane is not running / whose speaker is not connected.
+
+    A healthcheck that only says "restart" is useless for the downstream case this was
+    written for (dot2 #12 C3/C4): an incompatible adapter makes the plane fail the same
+    way on every restart. The /health audio_devices rows carry the room and the child's
+    own error, so the probe can say which one and why.
+    """
+    parts: list[str] = []
+    for row in _rooms(body):
+        if connected_ok:
+            bad = not row.get("speaker_connected")
+        else:
+            bad = not row.get("running") or not row.get("speaker_connected")
+        if not bad:
+            continue
+        name = str(row.get("id") or "?")
+        room = str(row.get("room") or "")
+        label = f"{name} ({room})" if room else name
+        state = "no speaker" if row.get("running") else "no plane"
+        error = str(row.get("error") or "")
+        parts.append(f"{label}: {state}" + (f" - {error}" if error else ""))
+    return "; ".join(parts)
+
+
 def evaluate(body: dict, configured_enabled: int = 0) -> tuple[bool, str]:
     """The verdict for one `/health` body. Pure so the rules are testable offline.
 
@@ -60,16 +90,34 @@ def evaluate(body: dict, configured_enabled: int = 0) -> tuple[bool, str]:
     if body.get("status") != "ok":
         return False, f"status={body.get('status')!r}"
     enabled = int(body.get("enabled_devices", configured_enabled) or 0)
+    device_errors = int(body.get("device_errors") or 0)
     if enabled and not body.get("audio_plane"):
+        if device_errors:
+            return False, (
+                f"{device_errors} configured device(s) cannot be driven "
+                f"(device_errors={device_errors}); an adapter is missing or the manifest "
+                "is incompatible with this build - restarting will not fix it. Check "
+                "/api/v1/devices and the boot log"
+            )
+        multi = body.get("multi_device") or {}
+        if multi.get("error"):
+            return False, (
+                f"audio plane not running ({enabled} enabled device(s)); the fleet failed "
+                f"to start: {multi['error']} - fix the config/device first, a restart "
+                "alone repeats the same error"
+            )
+        detail = _room_detail(body)
         return False, (
-            f"audio plane not running ({enabled} enabled device(s)); "
-            "`docker compose restart rui` brings it back"
+            f"audio plane not running ({enabled} enabled device(s))"
+            + (f": {detail}" if detail else "")
+            + "; docker compose restart rui brings it back"
         )
     if enabled and not body.get("speaker_connected"):
+        detail = _room_detail(body, connected_ok=True)
         return False, (
-            f"speaker not connected ({enabled} enabled device(s)); the audio plane is "
-            "up but no client is dialled in - check the speaker is powered and its "
-            "client points at this server"
+            f"no speaker connected ({enabled} enabled device(s))"
+            + (f": {detail}" if detail else "")
+            + "; check the speaker is powered and its client points at this server"
         )
     return True, ""
 
@@ -98,11 +146,17 @@ def main() -> int:
         ok, reason = evaluate(body, configured)
         if not ok:
             return _fail(reason)
+        rows = _rooms(body)
+        planes = ""
+        if rows:
+            up = sum(1 for row in rows if row.get("running"))
+            live = sum(1 for row in rows if row.get("speaker_connected"))
+            planes = f" planes={up}/{len(rows)} connected={live}"
         print(
             f"ok: uptime={body.get('uptime_s')}s devices={body.get('devices')} "
             f"enabled={body.get('enabled_devices', configured)} "
             f"audio_plane={body.get('audio_plane')} "
-            f"speaker_connected={body.get('speaker_connected')}"
+            f"speaker_connected={body.get('speaker_connected')}{planes}"
         )
         return 0
     return _fail(last or "no /health response")

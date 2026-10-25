@@ -108,7 +108,7 @@
 | P5.1 ✅ | Phase 1：config v3（`devices[].audio` 覆盖、`multi_device` 块、`effective_audio()` 继承、引用/房间校验、v2 文件保持 v2） | `tests/test_config_v3.py` 21 用例；全量 1173/18；LX06 行为零差异 |
 | P5.2 ✅ | Phase 2 全部落地（`1b71584` 音频面、`a34cba5` fleet、`c0c2fc9` arbiter、`bd7c737` coordinator、`fce8d8c` 抽取接线、`e84fac4` fleet+仲裁接线、`ec8cf44` 逐设备健康）：候选/准入 + `post_playback_mute_ms`、每设备平面与看门狗、中央仲裁、fleet 启动/逐设备回调/`audio_devices` 健康/告警替换/设备写 fleet 重建 | app 级 fake `PlaneFleet` 测试 7 例；全量 **1266 passed / 18 skipped**；2×mock 真进程 smoke（2 plane、干净退出、无残留）；真机 §7.2 由 9哥 保留 |
 | P5.3 ✅ | Phase 1b：控制台“未启用多设备”状态（体检页多设备卡片）+ `multi_device.*` / `devices[].audio.*` 目录字段（catalog + `设备与音频` 组的 `multi_device` 面板） | 目录契约测试（字段/effect/nullable 空值往返）；面板组断言；`web` typecheck+build 绿；全量 **1269 passed / 18 skipped** |
-| P5.4 | 打磨批：HA 控制台表单/状态、install.sh 升级提示、healthcheck 根因提示、release note 占位注释、adapter 音量换算文档 | 随 v0.5.0 一起发，不单独发版 |
+| P5.4 ✅ | 打磨批（dot2 #12）：HA 控制台表单/状态（0.4.2 已交付）、install.sh 升级提示（current `RUI_IMAGE` + 显式升级 + prune）、healthcheck 根因（device_errors / fleet / 逐房间）、`doctor` 的 `container_healthcheck` 一致性行、0.4.2 release note 占位注释已清、adapter 音量换算指向 `device/contract.py` helper、`docs/deploy.md` §7.1 下游升级 + `rui_compat` 兼容矩阵 | 随 v0.5.0 一起发，不单独发版；K3（vanilla `DOT2_*` 空转）已在 §7.1 说明；dot2 docs PR 当前 0 open，发布前再查 |
 | P5.5 | Phase 3（v0.5.x）：房间策略与输出体验（room_priority/last_active、房间视图、全局 stop 语义） | 多房间一周误唤醒/抢占统计 |
 
 **v0.5.0 发布判据（全部满足才 tag）**

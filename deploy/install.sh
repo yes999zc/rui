@@ -186,6 +186,12 @@ ENV
   echo "      wrote .env with a generated device token (${#DEVICE_TOKEN} hex chars)"
 else
   echo "      keeping existing .env"
+  # Upgrade hint (dot2 #12 C2): say which image is actually running and that an
+  # upgrade is an explicit edit, never a silent rewrite of the pinned tag.
+  CURRENT_IMAGE="$(sed -n 's/^RUI_IMAGE=//p' "$DIR/.env" | tail -n 1)"
+  echo "      current RUI_IMAGE=${CURRENT_IMAGE:-<unset>}"
+  echo "      upgrade: this installer never rewrites an existing image tag. Edit RUI_IMAGE"
+  echo "               in $DIR/.env explicitly, then: docker compose pull && docker compose up -d"
   # Existing installs upgrading to the non-root image need the compose mapping persisted,
   # otherwise a later bare `docker compose up -d` falls back to 1000:1000 while the host
   # directories may be owned by another pair. Upsert only these two keys; every other
@@ -410,4 +416,5 @@ echo "  speaker: open the console -> Setup -> Connect to copy the ws URL + devic
 echo "           (step-by-step: docs/open-xiaoai-client.md)"
 echo "  pin:     image is pinned in $DIR/.env ($IMAGE); edit that line to change version"
 echo "  rollback: set the previous tag in $DIR/.env and run docker compose up -d"
+echo "  prune:   old images are kept on purpose for rollback; once done: docker image prune -f"
 echo "  re-run:  this script is safe to run again; it reconciles this directory's container"

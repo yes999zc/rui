@@ -652,6 +652,37 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
     -t rui:dev .
   ```
 
+### 7.1 升级带下游 adapter / 插头的安装（dot2 #12 C1/C5）
+
+安装里有 out-of-tree adapter（`RUI_ADAPTER_PLUGINS` / entry point）或第三方插头时，升级不只是
+换个 tag：
+
+- **先备份**：`config/`、`data/` 与 `.env`（含 `RUI_IMAGE`、`RUI_DEVICE_TOKEN` 和下游自己的
+  `DOT2_*` 等变量）。重跑 `install.sh` **不会**改现有 `RUI_IMAGE`；升级是显式改 `.env` 那一行。
+- **`rui_compat` 必须对齐**：loader 用 range 匹配 **rui 包版本**（`rui.__version__`），语义没变。
+  0.5.0 会让 `>=0.3.0 <0.5.0` 直接失效；内置 LX06 / `examples/plugin-example` 已抬到 `<0.6.0`，
+  下游插头（含 dot2）应在 0.5.0 发布前把 `plugin.yaml` 上界改成 `<0.6.0`，并在新版本上先跑
+  `rui plug-test`。
+- **healthcheck 失败要区分根因**：`/health` 的 `device_errors>0` → 「设备不可驱动（adapter 缺失
+  或 manifest 不兼容），restart 不会修复」；`multi_device.error` → 平面启动失败并带真因；
+  `audio_devices[]` 会点名哪台/哪个房间的平面没起来、子进程报了什么错。先看
+  `docker compose logs --tail=100 rui` 与 `/api/v1/devices`，不要盲目重启。
+- **compose 被自定义过**：下游通常改过 `docker-compose.yml`（挂 adapter、加环境变量）。升级前
+  用 `docker compose config` 留档；`up -d` 之后确认自定义挂载/变量仍在。
+- **vanilla ↔ downstream 镜像切换**：`RUI_IMAGE` 指官方镜像时不会加载下游 adapter，`.env` 里
+  残留的 `DOT2_*` 变量不会被读取（留着无害，切回 downstream 镜像才生效）；反过来切回官方镜像前，
+  先确认 `devices[]` 不依赖只在下游镜像里存在的 adapter。
+- **音量换算**：config/UI 是 0–100，`DeviceServices.set_volume/read_volume` 是设备混音器 0–255；
+  唯一允许的换算是 `device/contract.py` 的 `percent_to_device_volume()` /
+  `device_volume_to_percent()`，adapter 不要复制 magic number（详见 `socket-plug-v1.md` §4.1）。
+
+`rui_compat` 兼容矩阵（range 语义不变，只随发布抬上界）：
+
+| rui 版本 | 可接受的插头 `rui_compat` | 说明 |
+|---|---|---|
+| 0.3.x / 0.4.x | 覆盖该版本的 range（当时为 `<0.5.0`） | 0.4.2 仍是单平面；内置插头已同步 `<0.6.0`，两个版本都能加载 |
+| 0.5.x | 上界必须 > 0.5.0（建议 `>=0.3.0 <0.6.0`） | 多平面/仲裁随 0.5.0 落地，但全部在 rui 内部；adapter/manifest 契约、`drain_wakes()` 时序、`DeviceWake` 六字段、enrich 责任均不变 |
+| 0.6+ | 上界再按当次 release note 抬 | 每次 Major/Minor 发布会在 CHANGELOG 写清需要的上界 |
 ## 8. 卷与备份
 
 | 宿主机 | 容器内 | 内容 | 丢了会怎样 |

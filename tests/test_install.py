@@ -465,3 +465,47 @@ def test_install_sh_warns_but_succeeds_when_the_token_cannot_be_read(tmp_path: P
     assert result.returncode == 0, result.stderr
     assert "could not read the console token" in result.stdout
     assert not (tmp_path / "home" / "console-token.txt").exists()
+
+# ------------------------------------- upgrade hints (dot2 #12 C2 / K2)
+
+def _run_install_upgrade_hint(tmp_path: Path, env_text: str) -> subprocess.CompletedProcess[str]:
+    """Run the shipped C2 block against an existing .env (extracted by its marker)."""
+    script = (
+        Path(__file__).resolve().parents[1] / "deploy" / "install.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index("# Upgrade hint (dot2 #12 C2)")
+    end = script.index("# Existing installs upgrading", start)
+    block = script[start:end]
+    (tmp_path / ".env").write_text(env_text, encoding="utf-8")
+    harness = tmp_path / "hint.sh"
+    harness.write_text('set -eu\nDIR="$1"\n' + block, encoding="utf-8")
+    return subprocess.run(["sh", str(harness), str(tmp_path)],
+                          capture_output=True, text=True)
+
+
+def test_install_sh_prints_the_pinned_image_on_an_existing_install(tmp_path: Path) -> None:
+    """A rerun must say which image is pinned and that upgrading is an explicit edit."""
+    result = _run_install_upgrade_hint(
+        tmp_path, "RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2\nRUI_UID=1000\n")
+    assert result.returncode == 0, result.stderr
+    assert "current RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2" in result.stdout
+    assert "never rewrites an existing image tag" in result.stdout
+    assert "docker compose pull && docker compose up -d" in result.stdout
+
+
+def test_install_sh_still_works_when_the_pin_is_missing(tmp_path: Path) -> None:
+    result = _run_install_upgrade_hint(tmp_path, "RUI_UID=1000\n")
+    assert result.returncode == 0, result.stderr
+    assert "current RUI_IMAGE=<unset>" in result.stdout
+
+
+def test_install_sh_mentions_image_pruning_after_rollback() -> None:
+    script = (
+        Path(__file__).resolve().parents[1] / "deploy" / "install.sh"
+    ).read_text(encoding="utf-8")
+    assert "docker image prune -f" in script
+    # K1: the release note placeholder comment is gone.
+    note = (
+        Path(__file__).resolve().parents[1] / "docs" / "releases" / "v0.4.2.md"
+    ).read_text(encoding="utf-8")
+    assert "Verification filled from the 0.4.2 CI run" not in note

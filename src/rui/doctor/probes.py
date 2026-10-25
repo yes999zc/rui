@@ -275,7 +275,9 @@ def run_doctor(cfg: Config | None = None) -> Report:
 
     docker = shutil.which("docker") or shutil.which("podman")
     checks.append(Check("container_runtime", "ok" if docker else "warn", docker or "none",
-                        "" if docker else "install Docker for the one-command deploy"))
+                        "" if docker else (
+                            "none is expected inside the rui image (it ships no docker CLI);"
+                            " install Docker on the host only for the one-command deploy")))
 
     if not cfg.web.auth_token and cfg.web.host not in {"127.0.0.1", "localhost", "::1"}:
         checks.append(Check("web_auth", "warn", f"{cfg.web.host}:{cfg.web.port} without a token",

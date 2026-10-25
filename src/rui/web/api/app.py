@@ -71,8 +71,9 @@ from ...config.schema import (
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.loader import load_adapter_plugins
 from ...device.registry import build_adapters
-from ...doctor import run_doctor
+from ...doctor import Check, run_doctor
 from ...env import get as env_get
+from ...healthcheck import evaluate as evaluate_healthcheck
 from ...log_setup import LOG_FILE_NAME, tail_lines
 from ...music import MusicService, PlayHistory, build_source, get_preset
 from ...music.names import AliasStore, NameResolver
@@ -2831,7 +2832,19 @@ def create_app(
 
     @app.get("/api/v1/doctor", dependencies=[Depends(auth)])
     async def doctor() -> dict:
-        return run_doctor(cfg).to_dict()
+        report = run_doctor(cfg)
+        # dot2 #12 C4: the doctor, /health and the container healthcheck must agree.
+        # Evaluate the same body the probe reads, so a disagreement becomes a visible row
+        # instead of two tools telling the operator different things.
+        healthcheck_ok, healthcheck_reason = evaluate_healthcheck(
+            await health(), sum(1 for device in cfg.devices if device.enabled))
+        report.checks.append(Check(
+            "container_healthcheck",
+            "ok" if healthcheck_ok else "warn",
+            "healthy" if healthcheck_ok else "unhealthy",
+            "" if healthcheck_ok else healthcheck_reason,
+        ))
+        return report.to_dict()
 
     @app.get("/api/v1/config/recovery", dependencies=[Depends(auth)])
     async def config_recovery() -> dict:

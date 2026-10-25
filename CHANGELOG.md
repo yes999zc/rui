@@ -98,6 +98,27 @@ canonical per-version record.
   `on_no_speech` are deliberately not exposed: the arbiter freezes them
   (score/true/end) and a switch that changes nothing is a fake knob. An empty override
   means "inherit", and writing one into a device with no audio block now creates it.
+- **Healthcheck names the root cause instead of suggesting a restart.** A downstream
+  adapter that cannot be built (`device_errors > 0`), a fleet that failed to start
+  (`multi_device.error`) and a specific room whose plane is down (`audio_devices[]` with
+  the child's error) each produce their own sentence; only a plain dead plane still
+  suggests `docker compose restart rui`. The success line also reports
+  `planes=up/total connected=n`. `GET /api/v1/doctor` gained a
+  `container_healthcheck` row that re-evaluates the same `/health` body, so the doctor
+  and the container probe cannot disagree (dot2 #12 C3/C4).
+- **Upgrade hints that cannot silently move the pin.** Re-running `deploy/install.sh`
+  over an existing `.env` now prints the pinned `RUI_IMAGE` and says that upgrading is
+  an explicit edit (`docker compose pull && docker compose up -d`); the final summary
+  points at `docker image prune -f` for old rollback images (dot2 #12 C2/K2).
+- **Doctor annotates `container_runtime: none`** as expected inside the image (it ships
+  no docker CLI) instead of telling the operator to install Docker in the container
+  (dot2 #12 K5). The 0.4.2 release note's leftover verification placeholder comment is
+  gone (K1).
+- **Downstream upgrade guide.** `docs/deploy.md` §7.1 covers upgrading an install with
+  an out-of-tree adapter/plug: healthcheck failure semantics, `rui_compat` alignment
+  with a compatibility table, customised compose files, vanilla ↔ downstream image
+  switching (idle `DOT2_*` variables are harmless on the vanilla image), and the one
+  allowed volume conversion helper (dot2 #12 C1/C5).
 
 ### Changed
 
