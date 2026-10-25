@@ -97,16 +97,33 @@
 ### P4 · 使用后统一打磨（等 9 哥 用几天再排）
 音乐真实凭据/收藏/续歌、控制台手机化（390 px/44 px/CJK/Logo）、微信 QR 取消、咖啡链接、其它体验债。
 
-### P5 · 0.5.0 多设备（按 `docs/multi-device-design.md` §8 分阶段）
+### P5 · 多设备（**发布版本已定：v0.5.0**，2026-10-25）
+
+> 0.4.2 之后的下一个发布就是 **v0.5.0**：Phase 1（config v3）+ Phase 2（多平面/中央仲裁）+ 打磨批合并为一次发布。
+> **不切 0.4.3，不公开 alpha/beta tag**：真机验证用 CI 推出的 `sha-<commit>` 镜像，最后一次只打 `v0.5.0`。
+> 版本号在发布时升（`pyproject.toml` / `src/rui/__init__.py`），`CONFIG_VERSION` 保持 3。
 
 | # | 任务 | 状态/判据 |
 |---|---|---|
 | P5.1 ✅ | Phase 1：config v3（`devices[].audio` 覆盖、`multi_device` 块、`effective_audio()` 继承、引用/房间校验、v2 文件保持 v2） | `tests/test_config_v3.py` 21 用例；全量 1173/18；LX06 行为零差异 |
-| P5.2 | Phase 1b：控制台“未启用多设备”状态 + `multi_device.*` / `devices[].audio.*` 目录字段 | 面板/目录契约测试；不改单 active 语义 |
-| P5.3 | Phase 2：每设备一音频面 + WakeArbiter/WakeCandidate + OutputOwner 第一版 + 全局重复抑制 + 每设备健康/指标（契约草案 v0.1 见 `multi-device-design.md` §12） | §7.2 共存/各自唤醒/同时听到/播放中打断/故障隔离通过；LX06+Dot2 真机 |
-| P5.4 | Phase 3：房间策略与输出体验（room_priority/last_active、房间视图、全局 stop 语义） | 多房间一周误唤醒/抢占统计 |
+| P5.2 | Phase 2：每设备一音频面 + WakeArbiter/WakeCandidate + OutputOwner 第一版 + 全局重复抑制 + 每设备健康/指标 + 每设备 `post_playback_mute_ms`（契约草案 v0.1 见 `multi-device-design.md` §12） | §7.2 共存/各自唤醒/同时听到/播放中打断/故障隔离通过；LX06+2×Dot2 真机 |
+| P5.3 | Phase 1b：控制台“未启用多设备”状态 + `multi_device.*` / `devices[].audio.*` 目录字段 | 面板/目录契约测试；不改单 active 语义 |
+| P5.4 | 打磨批：HA 控制台表单/状态、install.sh 升级提示、healthcheck 根因提示、release note 占位注释、adapter 音量换算文档 | 随 v0.5.0 一起发，不单独发版 |
+| P5.5 | Phase 3（v0.5.x）：房间策略与输出体验（room_priority/last_active、房间视图、全局 stop 语义） | 多房间一周误唤醒/抢占统计 |
 
-0.5.0 发布前需 9 哥 点头；生产仍 0.4.2，多平面未经真机验证前 `multi_device.enabled=false`。
+**v0.5.0 发布判据（全部满足才 tag）**
+
+| 类别 | 判据 |
+|---|---|
+| 测试 | 全量 pytest 绿（含 Phase 2 表驱动仲裁、IPC admit/reject、N 平面 supervisor、崩溃隔离）；ruff clean；web typecheck+build 绿 |
+| 真机 | LX06 + 2×Dot2：共存 `devices=2` 且双 `speaker_connected`；各自房间唤醒；同词双命中只产生 1 个 turn；播放中 barge 只归播放设备；杀一个平面其余可用；`multi_device.enabled=false` 回滚后 = 0.4.x 语义；记录 2/4 平面 RSS/CPU 与唤醒→首字延迟 |
+| 迁移 | v2 config 原样加载、行为零差异；启用多设备缺 room 报 422；config 备份 + 回滚 0.4.2 路径演练 |
+| 兼容 | dot2 `plug-test` 不回归；HA/音乐/渠道/控制台现有功能回归清单通过 |
+| 文档 | `multi-device-design.md` §9/§12 冻结、console.md、deploy.md 下游升级章节、CHANGELOG、`docs/releases/v0.5.0.md` |
+| 产物 | tag `v0.5.0`；GHCR `0.5.0` = `0.5` = `latest` 同一 manifest（amd64+arm64）；GitHub Release 含 digest 与升级/回滚说明 |
+| 生产 | 部署/重启需 9 哥 明确指令；部署后 `/health` devices=2、设备在线、真实回合通过；失败回滚 0.4.2 |
+
+生产仍 0.4.2；多平面未经真机验证前 `multi_device.enabled=false`。
 
 **运行形态待定（P2.1 里定）**：音箱端 client/固件跑在音箱上（不在 NAS）；
 RUI 侧 adapter 有两种形态——in-process（可信内置插头，简单）与 sidecar 容器（第三方插头隔离，NAS 上会多一个镜像）。

@@ -20,7 +20,7 @@
 
 - **当前发布**：v0.4.2（Phase 4 收尾）；GitHub Release 已发，生产已切官方镜像，健康。
 - **本会话已完成**：§9 六条关键决策冻结（§11 答复 dot2 #11）；config v3 Phase 1（`devices[].audio` 覆盖 / `multi_device` 块 / `effective_audio()` 继承 / 校验 / v2 保持 v2）；只读 YAML 配置视图（`GET /api/v1/config/raw` + 系统页）。
-- **下一步顺序**：Phase 2 契约草案 v0.1 已写（`docs/multi-device-design.md` §12，9 哥 确认、dot2 已在 #11 收到）→ Phase 2 多平面 + 中央仲裁（含每设备 `post_playback_mute_ms`）→ Phase 1b 控制台状态；README 截图与内容一起刷新。
+- **下一个发布：v0.5.0**（已定，2026-10-25）：Phase 1（config v3）+ Phase 2（多平面/仲裁 + `post_playback_mute_ms`）+ 打磨批一次发布；不切 0.4.3、不公开 alpha/beta tag（真机用 CI `sha-<commit>` 镜像），发布判据见 `docs/ROADMAP.md` P5。Phase 2 契约草案 v0.1 见 `docs/multi-device-design.md` §12（dot2 已在 #11 收到）。
 - **生产**：`/vol1/rui`，官方 `ghcr.io/yes999zc/rui:0.4.2`（digest `sha256:3791ccfd…`，amd64+arm64），uid 1000、healthy、音箱在线；备份 `.env.bak.20261025-152606`；回滚 `0.4.1` / `0.4.0`。
 - **访问**：Mac 通过 Tailscale 主机名 `nas-bakey`（或 LAN 地址；具体 IP 与本机密码见本机凭证文件，0600，不入仓库/聊天）；SSH 用户 `yes999zc`，必须密码认证、失败后等 40 s；docker 需 sudo（`echo "$PW" | sudo -S …`）。
 - **控制台 token**：`/vol1/rui/console-token.txt`（0600，不打印值）；找回用 `docker compose exec -T rui rui token`。

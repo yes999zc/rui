@@ -370,7 +370,7 @@ multi_device:
 - 记录单设备基线（唤醒率、latency、CPU/RSS），作为多设备的对照。
 - 产出：本文件 + 9 哥对 §9 的决策。
 
-### Phase 1（0.5.0-alpha）：config v3 + 每设备覆盖（仍单 active）
+### Phase 1（随 v0.5.0 发布）：config v3 + 每设备覆盖（仍单 active）
 
 - **状态（2026-10-25）：解析/继承/校验/迁移已落地**（`src/rui/config/schema.py`、`store.py`、
   `tests/test_config_v3.py`）：`devices[].audio`（aec/voice.followup/capture/playback.prebuffer_ms）、
@@ -380,14 +380,14 @@ multi_device:
 - 判据：v2→v3 round-trip（`test_v2_config_becomes_v3_once_a_device_override_is_used`）；旧配置行为零差异；
   per-device AEC 解析有测试；LX06 不回归。
 
-### Phase 2（0.5.0-beta）：多平面 + 中央仲裁（目标：LX06 + Dot2）
+### Phase 2（随 v0.5.0 发布）：多平面 + 中央仲裁（目标：LX06 + Dot2）
 
 - Supervisor N 平面、每设备 socket/端口；WakeArbiter + WakeCandidate 协议；OutputOwner 第一版（回答去起源房间，提醒/音乐去 default_output）。**具体 IPC/字段见 §12 草案 v0.1（2026-10-25，9 哥 已确认方向）。**
 - 全局重复抑制；每设备健康/指标；控制台 devices 数组；去掉 max_active=1 警告。
 - 判据：§7.2 中“共存/各自唤醒/同时听到/播放中打断/故障隔离”通过；两台 fake adapter 的自动化测试全绿。
 - Dot2 真机：在 0.4.2 冷启动窗口做一次受控切换验证（8870 单监听，需 9 哥同意）；此时若两台各占 4412/8870，可首次同时在线。
 
-### Phase 3（0.5.x）：房间策略与输出体验
+### Phase 3（v0.5.x）：房间策略与输出体验
 
 - room_priority / last_active 策略上线；console 房间视图；每设备 EQ/音量/AEC 展示与编辑；提醒/音乐路由策略定稿；全局 stop 语义。
 - 判据：多房间真实使用一周的误唤醒/抢占统计；用户不需要“主音箱”。
