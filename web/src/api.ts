@@ -700,6 +700,10 @@ export interface DeviceStatusInfo {
     speaker_connected: boolean
     last_seen: number | null
     audio_plane: boolean
+    restarts?: number
+    error?: string
+    wake_candidates?: number
+    wake_admitted?: number
   }
   capabilities: string[]
   setup_state: {
@@ -1268,16 +1272,47 @@ export interface MusicTestResult {
   error: string
 }
 
+/** One row of /health audio_devices (Phase 2; 0.4.x servers omit the array). */
+export interface AudioDeviceHealth {
+  id: string
+  room: string
+  enabled?: boolean
+  running: boolean
+  speaker_connected: boolean
+  speaker_rejected?: number
+  restarts: number
+  error: string
+  wake_candidates: number
+  wake_admitted: number
+  wake_admit_timeouts?: number
+  utterances?: number
+}
+
+/** The /health multi_device block: what the fleet is and what it refused. */
+export interface MultiDeviceHealth {
+  enabled: boolean
+  max_planes: number
+  default_output: string
+  refused: string[]
+  error: string
+}
+
+/** GET /health - aggregate fields plus the per-plane detail. */
+export interface HealthInfo {
+  status: string
+  version: string
+  config_version: number
+  uptime_s: number
+  devices: number
+  device_errors: number
+  audio_plane?: boolean
+  speaker_connected?: boolean
+  audio_devices?: AudioDeviceHealth[]
+  multi_device?: MultiDeviceHealth
+}
+
 export const api = {
-  health: () =>
-    request<{
-      status: string
-      version: string
-      config_version: number
-      uptime_s: number
-      devices: number
-      device_errors: number
-    }>('/health'),
+  health: () => request<HealthInfo>('/health'),
   /** Any GET by path - panel blocks know their sources, the client need not. */
   json: <T = unknown>(path: string) => request<T>(path),
   /** A panel button press: the spec carries the method, href and body. */

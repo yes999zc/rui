@@ -86,6 +86,18 @@ canonical per-version record.
   `speaker_connected` means *any* room is connected, so one dead room does not mark the
   container unhealthy. Device rows, status and the connection test read that device's
   own plane instead of the aggregate.
+- **Console visibility for multi-device, and the knobs behind it.** The Health page now
+  has a Multi-device card: "off" with the 0.4.x single-plane explanation when
+  `multi_device.enabled` is false, and otherwise one row per plane (running/connected,
+  restarts, wake candidates/admitted), the devices refused over `max_planes`, and any
+  fleet start error. The config directory gained the `multi_device` group (`enabled`,
+  `max_planes`, `default_output`, source priority, both arbitration windows, room
+  priority, last-active window) and per-device `audio.*` overrides (AEC ownership and
+  switch, post-playback mute, follow-up window/replay, playback prebuffer, capture
+  layout) - all restart-effect. `arbitration.mode`, `prefer_playing_room` and
+  `on_no_speech` are deliberately not exposed: the arbiter freezes them
+  (score/true/end) and a switch that changes nothing is a fake knob. An empty override
+  means "inherit", and writing one into a device with no audio block now creates it.
 
 ### Changed
 

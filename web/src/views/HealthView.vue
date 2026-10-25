@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
-import { api, type AudioStatus, type BillingQuota, type DoctorReport } from '../api'
+import { api, type AudioStatus, type BillingQuota, type DoctorReport, type HealthInfo } from '../api'
 import { formatCount, healthCheckLabel, t, type MsgKey } from '../i18n'
 
 const report = ref<DoctorReport | null>(null)
 const audio = ref<AudioStatus | null>(null)
+const health = ref<HealthInfo | null>(null)
 const quota = ref<BillingQuota | null>(null)
 const busy = ref(false)
 const error = ref('')
@@ -56,7 +57,20 @@ async function run() {
   }
 }
 
-onMounted(run)
+async function loadHealth() {
+  // The multi-device card is a different question from the audio diagnostics: a 0.4.x
+  // server without these fields must not make the whole page fail.
+  try {
+    health.value = await api.health()
+  } catch {
+    health.value = null
+  }
+}
+
+onMounted(() => {
+  void loadHealth()
+  void run()
+})
 </script>
 
 <template>
@@ -98,6 +112,38 @@ onMounted(run)
     <div class="health-cell">
       <span class="health-k">{{ t('health.measuredAt') }}</span>
       <span class="health-v mono measured">{{ report.measured_at }}</span>
+    </div>
+  </section>
+
+  <section v-if="health?.multi_device" class="block">
+    <div class="block-head">
+      <h2>{{ t('health.multiDevice.title') }}</h2>
+      <span class="badge" :class="{ ok: health.multi_device?.enabled }">
+        {{ health.multi_device?.enabled ? t('health.multiDevice.on') : t('health.multiDevice.off') }}
+      </span>
+    </div>
+    <div v-if="health.multi_device" class="row">
+      <span class="k">{{ t('health.multiDevice.planes') }}</span>
+      <span class="v mono">{{ (health.audio_devices || []).length }} / {{ health.multi_device.max_planes }}</span>
+    </div>
+    <p v-if="health.multi_device && !health.multi_device.enabled" class="note">
+      {{ t('health.multiDevice.offHint') }}
+    </p>
+    <p v-if="health.multi_device?.error" class="note fail">
+      {{ t('health.multiDevice.error', { error: health.multi_device.error }) }}
+    </p>
+    <p v-if="(health.multi_device?.refused || []).length" class="note fail">
+      {{ t('health.multiDevice.refused', { ids: (health.multi_device?.refused || []).join(', ') }) }}
+    </p>
+    <div v-for="row in health.audio_devices || []" :key="row.id" class="row">
+      <span class="k">{{ row.id }} · {{ row.room || '—' }}</span>
+      <span class="v mono">
+        {{ row.running ? t('health.multiDevice.up') : t('health.multiDevice.down') }} ·
+        {{ row.speaker_connected ? t('health.multiDevice.connectedYes') : t('health.multiDevice.connectedNo') }} ·
+        {{ t('health.multiDevice.restarts') }} {{ row.restarts }} ·
+        {{ t('health.multiDevice.wakes') }} {{ row.wake_candidates }} / {{ row.wake_admitted }}
+        <template v-if="row.error"> · {{ row.error }}</template>
+      </span>
     </div>
   </section>
 

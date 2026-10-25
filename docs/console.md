@@ -205,6 +205,9 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
   dev 配置与 `config.example.yaml`、`config/template.yaml` 的 TTS 默认链已移除它，
   定义仍保留在配置里，页面收进底部「未使用的定义」折叠区（标注「不再提供」，只读）。
   ASR 可选 `volc-asr` / `local-asr`（`sf-asr` 仍保留为可选兜底）；TTS 可选 `volc-tts` / `xfyun-tts`。
+- 体检页「多设备」卡片（Phase 2）：未启用时明确写「未启用多设备」并说明当前是单音频面模式；
+  启用后逐平面显示 running/音箱连接/重启次数/唤醒候选与准入，另列超过 `max_planes` 被拒的设备与
+  平面启动失败原因（数据源 `GET /health` 的 `audio_devices[]` 与 `multi_device`）。
 - 体检页「火山用量与额度」行式卡片：可用余额、今日/近 7 天 TTS 字符、**今日/近 7 天 ASR 秒数**、
   资源包、更新时间；数据来自 `GET /api/v1/billing/quota`（火山账单/用量 API，缓存 5 分钟，缺 AK/SK 时给提示）。
 - 截图：`docs/console-shots/providers-v2.png`（整页，1440）、`voice-audition.png`、`quota-card.png`。
@@ -214,11 +217,14 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 
 ### 12.2 配置中心（四类参数 + 效果标注）
 
-`GET /api/v1/config/catalog` 返回 4 类（tier）21 组、按配置动态生成字段（dev 157 个）：
+`GET /api/v1/config/catalog` 返回 4 类（tier）22 组、按配置动态生成字段（dev 157 个；Phase 2 每台设备再加 13 个 audio 覆盖字段）：
 ① 底子（system/web：data_dir、log_level、timezone、host/port、allow_anonymous）——
    弱化 + 「改错会影响整条语音链路」警示；
-② 音箱相关（devices 每台 26 字段含 LED/唤醒词/音量/端口；audio.capture/voice/playback/aec；ack）——
-   「跟随音箱硬件变化，换音箱要重新量」；
+② 音箱相关（devices 每台 26 字段含 LED/唤醒词/音量/端口，Phase 2 再加 13 个 `devices[].audio.*` 覆盖：
+   AEC 归属/开关、播放后静音、续听、预缓冲、采集布局；`multi_device` 组：启用、`max_planes`、
+   `default_output`、来源优先级、两个窗口、房间优先级、最近活跃窗口；audio.capture/voice/playback/aec；ack）——
+   「跟随音箱硬件变化，换音箱要重新量」；`arbitration.mode`/`prefer_playing_room`/`on_no_speech` 已冻结，
+   刻意不做旋钮；
 ③ 外部资源（三条 chain：llm/asr/tts；每 provider 的 kind/base_url/model/api_key_env/timeout/retries/…）——
    「改完重启服务让整条链重新加载」；**这项已由 §12.2b 的专用 Providers v2 页承载**，不再走配置中心平铺；
 ④ 工具（weather/news/search/ha/mcp_servers/music）——「多数保存即生效；音源本身改完要重启」。

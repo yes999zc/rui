@@ -280,8 +280,8 @@ def test_the_merged_pages_render_from_the_catalog() -> None:
         "assistant", "session"}
     # Speaker hardware parameters live on the devices audio tab.
     assert _config_groups(_tab_blocks(found["devices"], "audio")) == {
-        "devices", "audio.capture", "audio.voice", "audio.playback", "audio.aec",
-        "ack"}
+        "multi_device", "devices", "audio.capture", "audio.voice", "audio.playback",
+        "audio.aec", "ack"}
     # Process/console/SSRF fields live in the system component; log_level keeps its
     # catalog home but is rendered only by the logs page.
     system = found["system"]
@@ -347,7 +347,7 @@ def test_combined_pages_compose_existing_components() -> None:
     assert {"list", "volume"} <= {b["type"] for b in _tab_blocks(devices, "status")}
     assert _component_ids(_tab_blocks(devices, "manage")) == {"device-manager"}
     audio_groups = _config_groups(_tab_blocks(devices, "audio"))
-    assert audio_groups == {"devices", "audio.capture", "audio.voice",
+    assert audio_groups == {"multi_device", "devices", "audio.capture", "audio.voice",
                             "audio.playback", "audio.aec", "ack"}
 
     # 工具与集成: ConfigCenter no longer renders the HA/MCP writers; McpManager is

@@ -35,7 +35,7 @@ RESTART_COMMAND = "docker compose restart"
 # rule is per-field (`writable` in the directory below).
 WRITABLE_ROOT = [
     "assistant", "session", "audio", "ack", "system", "web", "security",
-    "devices", "providers", "tools", "music",
+    "devices", "multi_device", "providers", "tools", "music",
 ]
 
 # The four tiers, in 9哥's words: ① 底子（不轻易动）② 跟随音箱变化
@@ -95,6 +95,15 @@ _GROUPS: dict[str, tuple[dict, int, int, str, dict]] = {
         "保存后音频面自动重启。这里只读展示。",
         "Registered speakers. Add/remove, wake words, volume target and listen port "
         "live on the Device manager page; saving restarts the audio plane. Read-only here.")),
+    "multi_device": (_t("多设备", "Multi-device"), 2, 20, "restart", _t(
+        "多房间共存：每台启用音箱一个音频面，控制面统一仲裁唤醒（全屋同时刻一个回合、"
+        "一个输出 owner）。关闭 = 0.4.x 单平面行为。arbitration.mode / "
+        "prefer_playing_room / on_no_speech 已冻结为 score/true/end，没有对应旋钮。"
+        "改完重启服务。",
+        "Several rooms at once: one audio plane per enabled speaker and one arbiter in "
+        "the control plane (one turn, one output owner for the house). Off = the 0.4.x "
+        "single-plane behaviour. arbitration.mode / prefer_playing_room / on_no_speech "
+        "are frozen to score/true/end and have no input. Restart the service.")),
     "audio.capture": (_t("采集", "Capture"), 2, 100, "restart", _t(
         "从音箱收到的原始格式。这些是照 LX06 实测写的（48000 Hz / 8 通道 / 32 bit，"
         "麦移位 12、参考移位 16），换音箱必须重新量；改错会变调、削顶或没声音。",
@@ -256,7 +265,9 @@ def set_path(data: Any, path: str, value: Any) -> None:
         if isinstance(node, list):
             node = node[int(part)]
         elif isinstance(node, dict):
-            if part not in node:
+            # A nullable override block is dumped as None (devices[0].audio); writing a
+            # field inside it has to create the container instead of failing on None.
+            if part not in node or node[part] is None:
                 node[part] = [] if following.isdigit() else {}
             node = node[part]
         else:
@@ -281,6 +292,9 @@ def coerce(spec: dict, value: Any) -> Any:
     """
     kind = spec["kind"]
     path = spec["path"]
+    # A nullable field's empty browser value means "inherit / no override", not "".
+    if spec.get("nullable") and (value is None or value == ""):
+        return None
     if kind == "bool":
         if not isinstance(value, bool):
             raise ValueError("must be true or false")
@@ -301,8 +315,11 @@ def coerce(spec: dict, value: Any) -> Any:
         return value
     if kind == "select":
         options = spec["options"] or []
-        if value not in options:
-            raise ValueError(f"must be one of {options}")
+        # Options may carry localized labels ({"value", "label"}); compare the values.
+        allowed = [option["value"] if isinstance(option, dict) else option
+                   for option in options]
+        if value not in allowed:
+            raise ValueError(f"must be one of {allowed}")
         return value
     if kind == "list":
         if not isinstance(value, list):
@@ -1382,6 +1399,116 @@ def _device_fields(cfg: Config) -> list[dict]:
                    effect="restart", minimum=0, maximum=600, advanced=True,
                    unit=_t("ms", "ms")),
         ])
+        fields.extend([
+            _field(f"{prefix}.audio.aec.who", "devices", "select",
+                   {"zh": f"{name} · AEC 归属", "en": f"{name} · AEC ownership"},
+                   _t("这台设备的回声消除由谁做：device = 音箱自己做（RUI 不跑 AEC），"
+                      "controller = RUI 做（默认），both = 两边都做（会级联削音），"
+                      "none = 都不做（放歌时唤醒会听见自己）。留空 = 继承全局 audio.aec.who。"
+                      "改完重启音频面。",
+                      "Which side cancels echo for this speaker: device = the speaker does "
+                      "(RUI AEC off), controller = RUI does (default), both = cascaded "
+                      "(audible damage), none = neither (it hears itself over music). Empty "
+                      "= inherit the global audio.aec.who. Restart the audio plane."),
+                   effect="restart",
+                   options=["", "device", "controller", "both", "none"], nullable=True,
+                   advanced=True),
+            _field(f"{prefix}.audio.aec.enabled", "devices", "bool",
+                   {"zh": f"{name} · RUI 回声消除", "en": f"{name} · RUI AEC"},
+                   _t("是否在这台设备的音频面里跑 RUI 的 AEC。AEC 在设备侧（who=device）时应关掉，"
+                      "否则两级消音会吃掉人声。这是显式覆盖；要恢复继承全局请改回配置文件。"
+                      "改完重启音频面。",
+                      "Whether RUI's AEC runs in this speaker's plane. With device-side AEC "
+                      "(who=device) turn it off or two cancellers eat the voice. This is an "
+                      "explicit override; edit the YAML to inherit again. Restart the plane."),
+                   effect="restart", advanced=True),
+            _field(f"{prefix}.audio.voice.post_playback_mute_ms", "devices", "number",
+                   {"zh": f"{name} · 播放后静音窗口", "en": f"{name} · post-playback mute"},
+                   _t("播放排空后再丢弃麦克风多少毫秒（0 = 不丢；设备侧 AEC 建议 2500）。"
+                      "播放中的 barge 不受影响；窗口大于等于 followup_delay_ms 时跳过续听门。"
+                      "留空 = 继承全局。改完重启音频面。",
+                      "Microphone discarded for this many ms after the speaker drains "
+                      "(0 = off; device-side AEC wants about 2500). Playback-time barge still "
+                      "works; a window >= followup_delay_ms skips the follow-up gate. Empty "
+                      "= inherit the global value. Restart the plane."),
+                   effect="restart", minimum=0, maximum=10000, nullable=True,
+                   unit=_t("ms", "ms")),
+            _field(f"{prefix}.audio.voice.followup_delay_ms", "devices", "number",
+                   {"zh": f"{name} · 续听窗口", "en": f"{name} · follow-up window"},
+                   _t("回答结束后仍可无唤醒词续听的毫秒数（留空 = 继承全局）。回声拖尾长的设备"
+                      "要等更久；改完重启音频面。",
+                      "How long the room keeps listening after an answer without the wake word "
+                      "(empty = inherit the global value). A speaker with a long echo tail "
+                      "needs longer. Restart the plane."),
+                   effect="restart", minimum=0, maximum=10000, nullable=True,
+                   unit=_t("ms", "ms"), advanced=True),
+            _field(f"{prefix}.audio.voice.followup_replay", "devices", "bool",
+                   {"zh": f"{name} · 续听回放", "en": f"{name} · follow-up replay"},
+                   _t("续听时是否把这句开头之前捕获的音频补进语音段（显式覆盖；关掉会吞掉"
+                      "开口的第一个字）。改完重启音频面。",
+                      "Replay the audio captured just before the follow-up speech into the "
+                      "segment (explicit override; off eats the first syllable). Restart the "
+                      "audio plane."),
+                   effect="restart", advanced=True),
+            _field(f"{prefix}.audio.playback.prebuffer_ms", "devices", "number",
+                   {"zh": f"{name} · 播放预缓冲", "en": f"{name} · playback prebuffer"},
+                   _t("给这台设备的首包预缓冲毫秒数（留空 = 继承全局；转发/批处理型 adapter "
+                      "需要更大的值）。改完重启音频面。",
+                      "Prebuffer before the first block for this speaker (empty = inherit the "
+                      "global value; a batching adapter needs more). Restart the plane."),
+                   effect="restart", minimum=0, maximum=1000, nullable=True,
+                   unit=_t("ms", "ms"), advanced=True),
+            _field(f"{prefix}.audio.capture.rate", "devices", "number",
+                   {"zh": f"{name} · 采集采样率", "en": f"{name} · capture rate"},
+                   _t("这台设备送来的采样率（留空 = 继承全局 audio.capture.rate）。换机型才需要"
+                      "改，填错会变调或没声音。改完重启音频面。",
+                      "Capture sample rate this speaker sends (empty = inherit). Only a "
+                      "different model needs this; a wrong value pitch-shifts or silences "
+                      "the input. Restart the plane."),
+                   effect="restart", minimum=8000, maximum=96000, nullable=True,
+                   unit=_t("Hz", "Hz"), advanced=True),
+            _field(f"{prefix}.audio.capture.channels", "devices", "number",
+                   {"zh": f"{name} · 采集通道数", "en": f"{name} · capture channels"},
+                   _t("采集总通道数（留空 = 继承全局）。必须等于 mic_channels + ref_channels，"
+                      "否则合并后的配置校验会拒绝。改完重启音频面。",
+                      "Total capture channels (empty = inherit). It must equal mic_channels "
+                      "+ ref_channels or the merged config is rejected. Restart the plane."),
+                   effect="restart", minimum=1, maximum=16, nullable=True, advanced=True),
+            _field(f"{prefix}.audio.capture.mic_channels", "devices", "number",
+                   {"zh": f"{name} · 麦克风通道", "en": f"{name} · mic channels"},
+                   _t("前几个通道是麦克风（留空 = 继承全局；LX06 是 6）。改完重启音频面。",
+                      "Leading channels that are microphones (empty = inherit; LX06 is 6). "
+                      "Restart the plane."),
+                   effect="restart", minimum=1, maximum=16, nullable=True, advanced=True),
+            _field(f"{prefix}.audio.capture.ref_channels", "devices", "number",
+                   {"zh": f"{name} · 参考通道", "en": f"{name} · reference channels"},
+                   _t("末尾几个通道是播放参考（留空 = 继承全局；0 = 设备侧 AEC，没有参考）。"
+                      "改错会让 AEC 消掉人声。改完重启音频面。",
+                      "Trailing channels that are the playback reference (empty = inherit; "
+                      "0 = device-side AEC, no reference). A wrong value makes AEC cancel the "
+                      "voice. Restart the plane."),
+                   effect="restart", minimum=0, maximum=16, nullable=True, advanced=True),
+            _field(f"{prefix}.audio.capture.bits", "devices", "select",
+                   {"zh": f"{name} · 采样位深", "en": f"{name} · capture bits"},
+                   _t("采集样本的位深（16 或 32；留空 = 继承全局；LX06 是 32）。改完重启音频面。",
+                      "Capture sample width (16 or 32; empty = inherit; LX06 is 32). Restart "
+                      "the plane."),
+                   effect="restart", options=[16, 32], nullable=True, advanced=True),
+            _field(f"{prefix}.audio.capture.mic_shift", "devices", "number",
+                   {"zh": f"{name} · 麦移位", "en": f"{name} · mic shift"},
+                   _t("把麦克风样本左移多少位到 32 bit（留空 = 继承全局；LX06 是 12）。"
+                      "填错会削顶或声音很小。改完重启音频面。",
+                      "Left shift applied to mic samples into 32-bit (empty = inherit; LX06 "
+                      "is 12). A wrong value clips or goes quiet. Restart the plane."),
+                   effect="restart", minimum=0, maximum=31, nullable=True, advanced=True),
+            _field(f"{prefix}.audio.capture.ref_shift", "devices", "number",
+                   {"zh": f"{name} · 参考移位", "en": f"{name} · reference shift"},
+                   _t("把参考样本左移多少位到 32 bit（留空 = 继承全局；LX06 是 16）。"
+                      "填错会让 AEC 的参考比例不对。改完重启音频面。",
+                      "Left shift applied to reference samples into 32-bit (empty = inherit; "
+                      "LX06 is 16). A wrong value mis-scales the AEC reference. Restart."),
+                   effect="restart", minimum=0, maximum=31, nullable=True, advanced=True),
+        ])
         for state in LED_STATES:
             fields.append(_field(
                 f"{prefix}.led.colors.{state}", "devices", "text",
@@ -1394,6 +1521,97 @@ def _device_fields(cfg: Config) -> list[dict]:
     return fields
 
 
+def _multi_device_fields(cfg: Config) -> list[dict]:
+    """The multi_device block: one arbiter, one turn, one output owner (K1-K6).
+
+    Only knobs the arbiter actually reads are writable. arbitration.mode,
+    prefer_playing_room and on_no_speech are frozen (score / true / end) and have no
+    console input on purpose: a knob that changes nothing is the "fake knob" failure this
+    repo keeps paying for.
+    """
+    device_ids = [device.id for device in cfg.devices]
+    output_options = [{
+        "value": "",
+        "label": _t("（未设置：回落最近活跃房间）", "(unset: most recently active room)"),
+    }]
+    output_options += [
+        {"value": device.id,
+         "label": {"zh": f"{device.id} · {device.room or '（无房间）'}",
+                   "en": f"{device.id} · {device.room or '(no room)'}"}}
+        for device in cfg.devices
+    ]
+    return [
+        _field("multi_device.enabled", "multi_device", "bool",
+               _t("启用多设备", "Multi-device"),
+               _t("为每台 enabled 的入站音箱各起一个音频面，唤醒由控制面统一仲裁：全屋同时刻"
+                  "只有一个回合、一个输出 owner。关闭 = 0.4.x 单平面行为（回滚路径）。"
+                  "开启时每台设备都必须填房间。改完重启服务。",
+                  "Starts one audio plane per enabled inbound speaker and arbitrates wakes in "
+                  "the control plane: one turn and one output owner for the house. Off = the "
+                  "0.4.x single-plane behaviour (rollback path). Every device needs a room "
+                  "when this is on. Restart the service."),
+               effect="restart"),
+        _field("multi_device.max_planes", "multi_device", "number",
+               _t("音频面上限", "Max audio planes"),
+               _t("最多同时运行几个音频面（1–8，默认 4）。超出的设备不会启动、也不排队，"
+                  "/health 会点名被拒的设备；每多一台就多一份 KWS/VAD/AEC 的 CPU 与内存。"
+                  "改完重启服务。",
+                  "How many planes may run at once (1-8, default 4). Extra devices do not "
+                  "start and are not queued; /health names them. Each plane adds a "
+                  "KWS/VAD/AEC CPU and memory footprint. Restart the service."),
+               effect="restart", minimum=1, maximum=8),
+        _field("multi_device.default_output", "multi_device", "select",
+               _t("默认输出房间", "Default output"),
+               _t("没有来源房间的提示音/提醒/通知走这里（K4）；留空 = 回落最近活跃房间。"
+                  "它只影响无来源输出，不参与唤醒归属。改完重启服务。",
+                  "Where reminders and notifications with no source room go (K4); empty = "
+                  "the most recently active room. It never decides wake ownership. Restart "
+                  "the service."),
+               effect="restart", options=output_options, nullable=True),
+        _field("multi_device.arbitration.source_priority", "multi_device", "list",
+               _t("唤醒来源优先级", "Wake source priority"),
+               _t("不同来源之间只比来源组顺序、不比分数（设备侧唤醒与 RUI KWS 的分数不可比）："
+                  "默认设备侧唤醒优先。列表不能为空、不能重复。改完重启服务。",
+                  "Sources are ordered by group, never by score (a device OWW score and RUI "
+                  "KWS are not comparable): the device-side wake wins by default. The list "
+                  "must be non-empty and duplicate-free. Restart the service."),
+               effect="restart", options=["device_wake", "kws"]),
+        _field("multi_device.arbitration.candidate_merge_window_ms", "multi_device",
+               "number",
+               _t("候选合并窗口", "Candidate merge window"),
+               _t("同一句话被多台设备听到时，控制面等这么久再裁决（100–2000 ms，默认 400）。"
+                  "太小会漏掉稍慢的那台；太大会让唤醒→应答变慢。改完重启服务。",
+                  "How long the control plane collects candidates for the same utterance "
+                  "before deciding (100-2000 ms, default 400). Too small misses a slower "
+                  "speaker; too large delays the answer. Restart the service."),
+               effect="restart", minimum=100, maximum=2000, unit=_t("ms", "ms")),
+        _field("multi_device.arbitration.duplicate_window_ms", "multi_device", "number",
+               _t("同词去重窗口", "Duplicate window"),
+               _t("同一唤醒词在这个窗口内再出现算重复、不再开新回合（50–10000 ms，默认 2000）。"
+                  "与合并窗口是两个不同的东西。改完重启服务。",
+                  "The same wake word inside this window is a duplicate, not a new turn "
+                  "(50-10000 ms, default 2000). This is a different window from the merge "
+                  "window. Restart the service."),
+               effect="restart", minimum=50, maximum=10000, unit=_t("ms", "ms")),
+        _field("multi_device.arbitration.room_priority", "multi_device", "list",
+               _t("房间优先级", "Room priority"),
+               _t("显式优先的房间，按设备 id 排序（排在前面的先赢）。只在有多个候选时用作第一步；"
+                  "不填就按来源/分数/最近活跃/配置顺序。改完重启服务。",
+                  "Explicit room priority as device ids (earlier wins). It is only the first "
+                  "tie-break when several candidates exist; empty falls back to source, score, "
+                  "recent activity and config order. Restart the service."),
+               effect="restart", options=device_ids),
+        _field("multi_device.arbitration.last_active_window_s", "multi_device", "number",
+               _t("最近活跃窗口", "Last-active window"),
+               _t("平票时「最近说过话的房间」有效多久（1–3600 s，默认 120）。超出窗口就不算"
+                  "活跃信号，继续按配置顺序。改完重启服务。",
+                  "How long a room counts as recently active when candidates tie (1-3600 s, "
+                  "default 120). Outside the window it carries no signal and config order "
+                  "decides. Restart the service."),
+               effect="restart", minimum=1, maximum=3600, unit=_t("秒", "s")),
+    ]
+
+
 def field_specs(cfg: Config) -> list[dict]:
     """Every directory entry for this deployment, in panel order."""
     fields = [
@@ -1403,6 +1621,7 @@ def field_specs(cfg: Config) -> list[dict]:
         *_security_fields(),
         *_audio_fields(),
         *_device_fields(cfg),
+        *_multi_device_fields(cfg),
         *_provider_fields(cfg),
         *_tool_fields(cfg),
         *_music_fields(),
@@ -1723,9 +1942,11 @@ def values(cfg: Config) -> dict[str, Any]:
         try:
             out[field["path"]] = get_path(data, field["path"])
         except (KeyError, IndexError):
-            # A directory entry that is not a Config field (virtual), or one the schema
-            # no longer has: filled below / omitted rather than 500ing.
-            continue
+            # An unset nullable override has no key on the dumped config (a device with no
+            # audio block, for example). Show it empty instead of omitting the field, or
+            # the console cannot edit it back from inherit. Virtual fields (keywords) are
+            # filled below and overwrite this placeholder.
+            out[field["path"]] = None
     settings = keyword_settings(cfg)
     out["audio.voice.keywords.threshold"] = settings["threshold"]
     out["audio.voice.keywords.boost"] = settings["boost"]

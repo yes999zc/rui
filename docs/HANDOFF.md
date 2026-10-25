@@ -12,9 +12,9 @@
 | 版本 | **v0.4.2**（控制台 IA Phase 4：单一 nav manifest、11 面板、7 个 legacy panel/旧路由退役、README 瘦身、多设备设计文档），2026-10-25 已部署 NAS |
 | 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.4.2`**（官方，digest `sha256:3791ccfdb…`，amd64+arm64）；`0.4.1` / `0.4.0` 保留回滚；非 root uid 1000，healthy、音箱在线 |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
-| 质量 | **1266 passed / 18 skipped**（Phase 4 + config v3 + Phase 2 fleet/仲裁/逐设备健康；app 级 fake `PlaneFleet` 7 例）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
+| 质量 | **1269 passed / 18 skipped**（Phase 4 + config v3 + Phase 2 fleet/仲裁/逐设备健康 + Phase 1b 控制台/目录；app 级 fake `PlaneFleet` 7 例）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | 多设备 0.5：Phase 1（config v3）+ Phase 2（多平面/中央仲裁/app 接线/逐设备健康）已交付 → **Phase 1b 控制台多设备状态** → 打磨批 → v0.5.0 发布；真机验收 9哥 保留 |
+| 当前主线 | 多设备 0.5：Phase 1 + Phase 2 + Phase 1b（控制台多设备状态/目录字段）已交付 → **打磨批** → v0.5.0 发布；真机验收 9哥 保留 |
 
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 
@@ -28,7 +28,8 @@
   - `rui_compat` 上界抬到 `<0.6.0`（内置 LX06 / example / v1 文档 / 测试；`a4740b1`）——不改会让 0.5.0 拒绝加载内置插头；
   - `PlaneHandle` 重启回调补 `on_wake_idle` 与 Phase 2 的 `on_wake_candidate`（`43a268b`）。
 - **本段（17:25 前）完成 Phase 2 接线**：`fce8d8c` 抽取 `_wire_plane`（零行为变化，`git diff -w` 只移动）、`e84fac4` `PlaneFleet` 启动 + 逐设备回调 + `WakeCoordinator` + turn/owner 生命周期 + 单平面端点主平面化、`ec8cf44` 逐设备健康/告警/状态（`/health.audio_devices`、`/api/v1/audio.planes`、设备写 fleet 重建）；新增 `tests/test_app_fleet.py` 7 例（fake `PlaneFleet`，不 spawn），并用 2×mock 真进程 smoke 验证 2 plane 共存与干净退出。
-- **质量**：全量 **1266 passed / 18 skipped**；ruff clean；前端最后一次 typecheck/build 绿（之后无前端改动）。
+- **Phase 1b（17:35）**：`multi_device` 目录组（启用/max_planes/default_output/来源优先级/两个窗口/房间优先级/最近活跃窗口）+ 每设备 13 个 `devices[].audio.*` 覆盖字段（AEC 归属/开关、播放后静音、续听、预缓冲、采集布局；空值 = 继承）；体检页多设备卡片（未启用说明 / 逐平面状态 / 超 cap / 启动失败）；`web` typecheck+build 绿。
+- **质量**：全量 **1269 passed / 18 skipped**；ruff clean；`web` typecheck/build 绿。
 - **下一步主线**：Phase 1b 控制台多设备状态（P5.3）→ 打磨批（P5.4）→ v0.5.0 发布流程；见 §0.2。真机验收 9哥 要求先保留。
 - **dot2**：0.4.2 受控切换完成（回滚 21 s / 前滚 11 s，`plug-test` 与 0.3.4/0.4.0/0.4.1 逐项一致）；实测「撤 adapter 门控失败」→ 已定走 B 路线（上游 `devices[].audio.voice.post_playback_mute_ms`，默认 0，Dot2 建议 2500）；#11 确认 Phase 2 内部 IPC、adapter 零改动；#12 下游原地升级冷启动反馈已答复（docs PR 欢迎、install/healthcheck/release-note 进打磨批）。**他们会在 0.5.0 发布后做一次全新安装验收并反馈**；卡点单独开 issue。发布时需在 #7 公布 tag `v0.5.0` + GHCR digest + 平台 + 「相对 0.4.2 契约变化 = 无」。
 - **HA（生产待办，需 9 哥 点头）**：生产 `config/config.yaml` 的 `tools.ha.base_url` 为空、`data/secrets.yaml` 无 `RUI_HA_TOKEN`（`.env` 里是空值）。HA 的地址与长期令牌见 9哥 的本机配置（不入库）；`/api/mcp` 已实测 200、86 工具。0.4.2 控制台上正确顺序：填地址+token → **保存并重连** → 再点测试（0.4.2 的测试按钮只用已保存 token；该坑已在本分支修复）。
@@ -38,7 +39,7 @@
 
 Phase 2 接线已完成并验证，**不要再改** `src/rui/audio/{protocol,process,client,fleet,arbiter,coordinator}.py` 的契约；app 侧行为的判据是 `tests/test_app_fleet.py` + 全量测试。
 
-1. **Phase 1b 控制台多设备状态**（P5.3）：在 `src/rui/config/catalog.py` 增加 `multi_device.*` / `devices[].audio.*` 目录字段；控制台显示「未启用多设备」状态与每设备 `running / speaker_connected / restarts / wake_candidates / wake_admitted`（数据源 `/health.audio_devices` 与 `/api/v1/devices/{id}/status.plane`）；不改单 active 语义。
+1. **Phase 1b ✅**（P5.3）：`multi_device.*` / `devices[].audio.*` 已进目录（`multi_device` 组 + 每设备 13 个 audio 覆盖字段），体检页有多设备卡片（未启用/逐平面状态/超 cap/启动失败）；`web` 构建绿。
 2. **打磨批**（P5.4）：HA 控制台表单/状态、`install.sh` 升级提示、healthcheck 根因提示、release note 占位注释、adapter 音量换算文档、合并 dot2 docs PR。
 3. **v0.5.0 发布**：CHANGELOG（Unreleased 已有 Phase 2 条目）+ `docs/releases/v0.5.0.md` + 版本号 + tag → CI → digest → GitHub Release；发布时在 #7 公布 tag/digest/平台/「相对 0.4.2 契约变化=无」；部署与回滚演练需 9哥 明确点头。
 4. **真机验收**（9哥 保留）：LX06 + 2×Dot2 的共存/各自唤醒/同词单 turn/barge 归属/故障隔离/回滚；记录 2/4 平面 RSS/CPU 与唤醒→首字延迟。

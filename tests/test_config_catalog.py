@@ -584,3 +584,86 @@ def test_followup_window_controls_match_the_schema() -> None:
     # The baseline keeps the LX06's measured 1 s tail and the replay on.
     assert body["values"]["audio.voice.followup_delay_ms"] == 1000
     assert body["values"]["audio.voice.followup_replay"] is True
+
+
+# ------------------------------------------------------- multi-device (Phase 1b)
+
+def test_the_directory_exposes_multi_device_and_per_device_audio() -> None:
+    cfg = Config(devices=[DeviceConfig(id="living", adapter="mock", host="127.0.0.1",
+                                       room="客厅")])
+    fields = {field["path"]: field for field in field_specs(cfg)}
+    for path in ("multi_device.enabled", "multi_device.max_planes",
+                 "multi_device.default_output",
+                 "multi_device.arbitration.source_priority",
+                 "multi_device.arbitration.candidate_merge_window_ms",
+                 "multi_device.arbitration.duplicate_window_ms",
+                 "multi_device.arbitration.room_priority",
+                 "multi_device.arbitration.last_active_window_s"):
+        assert path in fields, path
+        assert fields[path]["writable"] is True, path
+        assert fields[path]["effect"] == "restart", path
+        assert fields[path]["group"] in ("multi_device", "devices"), path
+    for path in ("devices.0.audio.aec.who",
+                 "devices.0.audio.aec.enabled",
+                 "devices.0.audio.voice.post_playback_mute_ms",
+                 "devices.0.audio.voice.followup_delay_ms",
+                 "devices.0.audio.playback.prebuffer_ms",
+                 "devices.0.audio.capture.ref_channels"):
+        assert path in fields, path
+        assert fields[path]["writable"] is True, path
+        assert fields[path]["effect"] == "restart", path
+    # An unset override is a null value, not a missing field: the console must be able
+    # to show "inherit" and write a value back.
+    assert document(cfg)["values"]["devices.0.audio.aec.who"] is None
+    # Frozen knobs are deliberately not exposed as dead switches.
+    assert "multi_device.arbitration.mode" not in fields
+    assert "multi_device.arbitration.prefer_playing_room" not in fields
+    assert "multi_device.arbitration.on_no_speech" not in fields
+
+
+def test_multi_device_values_round_trip_and_empty_means_inherit(tmp_path) -> None:
+    cfg, path = _device_config(tmp_path)
+    with _app(cfg, path) as http:
+        response = http.put("/api/v1/config/values", json={"values": {
+            "multi_device.enabled": True,
+            "multi_device.max_planes": 2,
+            "multi_device.default_output": "living",
+            "multi_device.arbitration.room_priority": ["living"],
+            "multi_device.arbitration.candidate_merge_window_ms": 250,
+            "devices.0.audio.aec.who": "device",
+            "devices.0.audio.voice.post_playback_mute_ms": 2500,
+        }})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["restart_required"] is True
+        saved = load_config(path)
+        assert saved.multi_device.enabled is True
+        assert saved.multi_device.max_planes == 2
+        assert saved.multi_device.default_output == "living"
+        assert saved.multi_device.arbitration.room_priority == ["living"]
+        assert saved.multi_device.arbitration.candidate_merge_window_ms == 250
+        assert saved.devices[0].audio is not None
+        assert saved.devices[0].audio.aec.who == "device"
+        assert saved.devices[0].audio.voice.post_playback_mute_ms == 2500
+        # Empty means inherit / no override, not the literal empty string.
+        response = http.put("/api/v1/config/values", json={"values": {
+            "multi_device.default_output": "",
+            "devices.0.audio.aec.who": "",
+            "devices.0.audio.voice.post_playback_mute_ms": None,
+        }})
+        assert response.status_code == 200, response.text
+        cleared = load_config(path)
+        assert cleared.multi_device.default_output is None
+        assert cleared.devices[0].audio.aec.who is None
+        assert cleared.devices[0].audio.voice.post_playback_mute_ms is None
+
+
+def test_enabling_multi_device_without_a_room_is_rejected(tmp_path) -> None:
+    cfg, path = _device_config(tmp_path)
+    cfg.devices[0].room = ""
+    save_config(path, cfg)
+    with _app(cfg, path) as http:
+        response = http.put("/api/v1/config/values", json={"values": {
+            "multi_device.enabled": True}})
+        assert response.status_code == 422
+        assert "room" in response.text

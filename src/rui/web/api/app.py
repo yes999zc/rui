@@ -513,7 +513,7 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                 # DSP/segmentation/playback numbers and the wake acknowledgement. These
                 # are tier 2 in the catalog, so the tab and the directory agree.
                 {"type": "config", "tab": "audio", "tier": 2,
-                 "groups": ["devices", "audio.capture", "audio.voice",
+                 "groups": ["multi_device", "devices", "audio.capture", "audio.voice",
                             "audio.playback", "audio.aec", "ack"],
                  "section_title": {"zh": "跟随音箱硬件的参数", "en": "Speaker hardware"},
                  "warning": {

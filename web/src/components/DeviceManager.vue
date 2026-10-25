@@ -1443,6 +1443,14 @@ onMounted(() => {
               <span class="dm-label">{{ t('dm.status.lastSeen') }}</span>
               <span>{{ formatLastSeen(statusInfo.plane.last_seen) }}</span>
             </div>
+            <div v-if="(statusInfo.plane.restarts ?? 0) > 0" class="dm-fact">
+              <span class="dm-label">{{ t('dm.status.restarts') }}</span>
+              <span class="mono">{{ statusInfo.plane.restarts }}</span>
+            </div>
+            <div v-if="statusInfo.plane.wake_candidates !== undefined" class="dm-fact">
+              <span class="dm-label">{{ t('dm.status.wakes') }}</span>
+              <span class="mono">{{ statusInfo.plane.wake_candidates }} / {{ statusInfo.plane.wake_admitted ?? 0 }}</span>
+            </div>
           </div>
           <div v-if="statusInfo.errors.length" class="dm-chips">
             <span v-for="code in statusInfo.errors" :key="code" class="dm-chip warn">
