@@ -14,7 +14,16 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
-## [Unreleased]
+## [0.5.1] - 2026-10-25
+
+Patch release for the install path, found by dot2's clean 0.5.0 install. There is no
+runtime, config-schema or plug-contract change: the audio/arbitration code is identical
+to 0.5.0. `install.sh` no longer executes backticks from its `.env` template (which could
+start an unrelated compose project from the caller's directory) and never prints the
+console token; `fetch-models` retries transient 429/5xx, the installer fails non-zero
+instead of booting without ASR, and `rui doctor` reports local ASR/VAD/KWS readiness.
+The README also gains a copy-paste agent-install prompt and refreshed 0.5.0 console
+screenshots.
 
 ### Added
 
@@ -682,7 +691,8 @@ First public release, after all four v1 acceptance gates passed.
 
 Quality at release: 749 passed / 17 skipped, ruff clean, web typecheck/build green.
 
-[Unreleased]: https://github.com/yes999zc/rui/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/yes999zc/rui/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/yes999zc/rui/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/yes999zc/rui/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/yes999zc/rui/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/yes999zc/rui/compare/v0.4.0...v0.4.1

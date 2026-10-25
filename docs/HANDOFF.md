@@ -14,7 +14,7 @@
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
 | 质量 | **1293 passed / 18 skipped**（0.5.0 + dot2 冷装回归修复 #13/#14）；ruff clean；`sh -n deploy/install.sh` 干净；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | 0.5.0 已发布并上线 → **v0.5.1 冷装回归修复（dot2 #13/#14）待 9哥 点头发版**；真机验收 9哥 保留 |
+| 当前主线 | 0.5.0 已发布并上线 → **v0.5.1 冷装回归修复（dot2 #13/#14）已准备就绪，待 9哥 点头 tag/push**；真机验收 9哥 保留 |
 
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 

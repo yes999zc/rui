@@ -32,6 +32,8 @@
 
 ### 0.5.0 有什么新东西
 
+> **0.5.1（2026-10-25）是安装路径 patch，无运行时/契约变化。** `install.sh` 不再执行 `.env` 模板注释里的命令、也不再打印 console token；`fetch-models` 对 429/5xx 重试，模型失败时安装器非零退出；`rui doctor` 新增 `models` 就绪行。README 也加了「让 Agent 帮你安装」复制块。
+>
 > **0.5.0（2026-10-25）交付「多设备 0.5」：一台控制面驱动多个房间的音箱，唤醒由中枢统一仲裁。**
 >
 > - **多平面 + 中央仲裁**：每台启用入站音箱一个受监督音频面；候选 → 合并窗口 → `wake_admit`/`wake_reject`，全屋同时刻一个回合、一个输出 owner；barge 只归播放设备、同房间交叉回声抑制、同词去重、超 `max_planes` 明确告警、单平面崩溃隔离。
@@ -77,8 +79,8 @@
 音箱已运行 [open-xiaoai](https://github.com/coderzc/open-xiaoai) client，并与 NAS 同 LAN/L2。
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.5.0/deploy/install.sh \
-  | RUI_REF=v0.5.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.0 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.5.1/deploy/install.sh \
+  | RUI_REF=v0.5.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.1 sh
 ```
 
 首次含镜像拉取和 239 MB 模型通常 **4–8 分钟**；镜像已就绪、只需 ASR 时约 **85 秒**。滚动版本把 tag 换成 `main` 即可。
@@ -152,8 +154,8 @@ flowchart LR
 
 | 范围 | 状态 |
 |---|---|
-| 发布 | **0.5.0**（2026-10-25）；多设备 0.5（Phase 1 + 2 + 1b + 打磨批） |
-| 镜像 / 质量 | `ghcr.io/yes999zc/rui:0.5.0`，amd64+arm64；1,278 passed / 18 skipped；ruff、web build、secret-scan 绿 |
+| 发布 | **0.5.1**（2026-10-25）；0.5.0 多设备 + 安装路径 patch |
+| 镜像 / 质量 | `ghcr.io/yes999zc/rui:0.5.1`，amd64+arm64；1,293 passed / 18 skipped；ruff、web build、secret-scan 绿 |
 | 宿主 | Linux NAS（amd64/arm64），Docker + compose |
 | 音箱 | LX06 + open-xiaoai client（同 LAN/L2，回连 `4412`）；dot2 走外部 `rui-dot2-bridge` |
 | 音源 | Subsonic 家族 + Jellyfin/Emby（MediaBrowser）；Plex 尚未实现 |
@@ -181,7 +183,7 @@ flowchart LR
   [MCP/HA](docs/integrations-mcp.md) · [Socket/Plug v1](docs/socket-plug-v1.md)
 - 项目：[CHANGELOG](CHANGELOG.md) · [releases](docs/releases/) · [ROADMAP](docs/ROADMAP.md) · [remaining work](docs/remaining-work.md)
 - 开发：[deploy](docs/deploy.md) · [runbook](docs/runbook.md)
-- 版本：[v0.5.0](https://github.com/yes999zc/rui/releases/tag/v0.5.0) · [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2) · [v0.4.1](https://github.com/yes999zc/rui/releases/tag/v0.4.1)
+- 版本：[v0.5.1](https://github.com/yes999zc/rui/releases/tag/v0.5.1) · [v0.5.0](https://github.com/yes999zc/rui/releases/tag/v0.5.0) · [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2)
 
 ### 安全与隐私
 
@@ -213,6 +215,8 @@ flowchart LR
 
 ### What's new in 0.5.0
 
+> **0.5.1 (2026-10-25) is an install-path patch with no runtime/contract change.** `install.sh` no longer runs commands from its `.env` template comments and never prints the console token; `fetch-models` retries 429/5xx and a model failure now fails the install; `rui doctor` reports local ASR/VAD/KWS readiness. The README also gained a copy-paste agent-install prompt.
+>
 > **0.5.0 (2026-10-25) ships multi-device 0.5: one control plane drives several rooms and the wake decision is made centrally.**
 >
 > - **Multi-plane + central arbitration:** one supervised audio plane per enabled inbound speaker; candidates collect for a merge window, then `wake_admit`/`wake_reject` - one turn and one output owner for the house. Barge belongs to the playing room, same-room cross-echo is suppressed, the same word is deduplicated, overflow over `max_planes` is named, and one crashed plane stays isolated.
@@ -261,8 +265,8 @@ local ASR stay on your machine. No vendor cloud is required; only the providers 
 `docker compose`; the speaker already runs [open-xiaoai](https://github.com/coderzc/open-xiaoai) on the same LAN/L2.
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.5.0/deploy/install.sh \
-  | RUI_REF=v0.5.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.0 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.5.1/deploy/install.sh \
+  | RUI_REF=v0.5.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.1 sh
 ```
 
 A first run with an image pull and the 239 MB model usually takes **4–8 minutes**; with the image already
@@ -346,8 +350,8 @@ plug contract: [docs/socket-plug-v1.md](docs/socket-plug-v1.md).
 
 | Scope | Status |
 |---|---|
-| Release | **0.5.0** (2026-10-25); multi-device 0.5 (Phase 1 + 2 + 1b + polish) |
-| Images / quality | `ghcr.io/yes999zc/rui:0.5.0`, amd64+arm64; 1,278 passed / 18 skipped; ruff, web build, secret-scan green |
+| Release | **0.5.1** (2026-10-25); 0.5.0 multi-device + install-path patch |
+| Images / quality | `ghcr.io/yes999zc/rui:0.5.1`, amd64+arm64; 1,293 passed / 18 skipped; ruff, web build, secret-scan green |
 | Host | Linux NAS (amd64/arm64), Docker + compose |
 | Speaker | LX06 + open-xiaoai client (same LAN/L2, dials `4412`); dot2 via external `rui-dot2-bridge` |
 | Music | Subsonic family + Jellyfin/Emby (MediaBrowser); Plex not implemented |
@@ -375,7 +379,7 @@ plug contract: [docs/socket-plug-v1.md](docs/socket-plug-v1.md).
   [MCP/HA](docs/integrations-mcp.md) · [Socket/Plug v1](docs/socket-plug-v1.md)
 - Project: [CHANGELOG](CHANGELOG.md) · [releases](docs/releases/) · [ROADMAP](docs/ROADMAP.md) · [remaining work](docs/remaining-work.md)
 - Development: [deploy](docs/deploy.md) · [runbook](docs/runbook.md)
-- Releases: [v0.5.0](https://github.com/yes999zc/rui/releases/tag/v0.5.0) · [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2) · [v0.4.1](https://github.com/yes999zc/rui/releases/tag/v0.4.1)
+- Releases: [v0.5.1](https://github.com/yes999zc/rui/releases/tag/v0.5.1) · [v0.5.0](https://github.com/yes999zc/rui/releases/tag/v0.5.0) · [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2)
 
 ### Security and privacy
 
