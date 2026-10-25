@@ -9,12 +9,12 @@
 | 项 | 当前值 |
 |---|---|
 | 项目 | 自托管语音终端：LX06 音箱 + FastAPI 控制面 + 独立音频面 + Vue 控制台；MIT；公开仓 `yes999zc/rui` |
-| 版本 | **v0.4.0**（控制台 IA 重构 Phase 1–3、Socket/Plug v1、安全 P3.5），2026-10-25 已部署 NAS |
-| 生产镜像 | `/vol1/rui` 跑 `ghcr.io/yes999zc/rui:0.4.0-local`（本机构建兜底）；**官方 0.4.0 已于 2026-10-25 重切发布**：`0.4.0`/`0.4`/`latest` 同一 manifest，digest `sha256:c4cd1a61…`，amd64+arm64；非 root uid 1000，待切换 |
+| 版本 | **v0.4.1**（Jellyfin/Emby 音源、首次登录 token 文件、dot2 生效端口/token_env/冲突修复、follow-up 配置、设备唤醒重探测、README/first-run 重写），2026-10-25 已部署 NAS |
+| 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.4.1`**（官方，digest `sha256:<0.4.1 发布后填>`，amd64+arm64）；`0.4.0` / `0.4.0-local` 保留回滚；非 root uid 1000，healthy、音箱在线 |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
-| 质量 | **1104 passed / 17 skipped**（含 5 个 compat 回归测试）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
+| 质量 | **1141 passed / 18 skipped**（含 compat 回归、dot2 生效端口/token_env、follow-up、wake 重探测、Jellyfin/Emby 测试）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | 0.4.1（首次登录 token A、README/CHANGELOG 发布线、dot2 两项修复）→ Phase 4 清理（0.4.2）→ 代码视图；Jellyfin/Emby 与多设备/sidecar/播放 gap 提前 |
+| 当前主线 | Phase 4 清理（0.4.2：单一 nav manifest、删 legacy、文档/截图）→ 只读代码视图 → 多设备/sidecar/播放 gap（提前）；dot2 仅剩设备内层 token 轮换契约待谈 |
 
 ## 1. 项目与架构契约
 
@@ -45,7 +45,7 @@
 | 冷装证据 | `/vol1/rui-verify/`（269 MB，可删；`install.log` 与冷装 service.log 已拷到验收工作区） |
 | 端口 | 控制台 `8080`、设备入口 `4412`（host network）；`allow_no_token: false` |
 | 开发机 | Mac：仓库 + `.venv`（Python 3.13）+ Node 22；**无 docker CLI**（只有 OrbStack 的 `orb/orbctl`），compose/冷装只能在 NAS 上跑 |
-| GHCR | `0.4.0` / `0.4` / `latest`（同一 manifest，digest `sha256:c4cd1a61…`，amd64+arm64）；历史 tag 保留 |
+| GHCR | `0.4.1` / `0.4` / `latest`（同一 manifest，digest `sha256:<0.4.1 发布后填>`，amd64+arm64）；历史 tag 保留 |
 
 ## 3. 已定决策（改前先问 9 哥）
 
@@ -93,7 +93,7 @@ scripts/restore.sh <archive> --home /tmp/rui-restore-smoke
 docker compose exec -T rui rui config restore --last-good
 ```
 
-- 升级/回滚：改 `.env` 的 `RUI_IMAGE`（当前 `ghcr.io/yes999zc/rui:0.1.0`）→ `docker compose up -d`；
+- 升级/回滚：改 `.env` 的 `RUI_IMAGE`（当前 `ghcr.io/yes999zc/rui:0.4.0`）→ `docker compose up -d`；
   回滚用 `ghcr.io/yes999zc/rui:acceptance-f2abcef`。
 - 验收记录器：`python3 scripts/acceptance-v1.py wake|barge --url http://<NAS-IP>:8080 --out <dir>`（纯 stdlib）。
 - 开发：`.venv/bin/python -m pytest -o addopts="" -q`；`ruff check .`；`cd web && npm run typecheck && npm run build`。
@@ -131,6 +131,8 @@ docker compose exec -T rui rui config restore --last-good
 其它已知：音箱 root 密码受 squashfs 只读限制；Telegram 出网依赖 NAS mihomo 节点运行时状态。
 
 ## 6. 最近时间线（细节在归档）
+
+- 10-25 中午：0.4.0 重切并发布：CI/publish 全绿（pytest 1104/17、ruff、secret-scan、多架构），GHCR `0.4.0`/`0.4`/`latest` 同一 digest `c4cd1a61…`，GitHub Release 已发；生产 11:06 切官方镜像（backup `.env.bak.20261025-110622`），uid 1000、音箱在线，真实 say 回合 `audio_bytes=95,864`（deepseek_llm + volc_tts）。dot2 兼容 PR #1 已开，#3/#7 已回复。
 
 - 10-25 上午：控制台 IA 重构 Phase 1–3 → 0.4.0：两分组/合并页、provider 预设+新建、音乐 Subsonic 家族预设、
   凭据类型化+隐藏、MCP headers+HA 卡片、系统页；部署时发现 builtin rui_compat 仍 <0.4.0 导致启动失败，已修并重发 0.4.0。

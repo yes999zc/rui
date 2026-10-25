@@ -18,6 +18,96 @@ canonical per-version record.
 
 <!-- Add changes here as they land; move them under the next version at release time. -->
 
+## [0.4.1] - 2026-10-25
+
+Compatibility polish for the 0.4.0 console: Jellyfin and Emby join the music-source
+registry, the first-login console token can be recovered without scrolling back through
+the install log, and external plugs such as dot2 report the port and token environment
+they actually use.
+
+### Added
+
+- **Jellyfin and Emby music sources.** A second protocol family
+  (`JellyfinSource`, MediaBrowser HTTP API) behind two presets: `jellyfin` (API key
+  only in the `Authorization: MediaBrowser Token="…"` header) and `emby` (API key in
+  `?api_key=`). Search, random, favourites, star/unstar, library paging, album songs and
+  stream/resolve; the adapter discovers the user id itself and needs only `url` plus a
+  write-only `api_key`. The registry grows to seven presets. Verified against live
+  Jellyfin 12.3.0 and Emby 4.10.2 servers.
+- **Console-token recovery (issue #4).** After the service is healthy,
+  `deploy/install.sh` saves the console token to `~/rui/console-token.txt` (mode 600).
+  A rerun keeps an existing file byte for byte and warns when it no longer matches the
+  running token. The 401 login panel now shows the `rui token` /
+  `cat console-token.txt` recovery commands and links to the deploy docs.
+- **Follow-up window controls.** `audio.voice.followup_delay_ms` (0–10000 ms, default
+  1000) and `audio.voice.followup_replay` (default on) are editable in the config
+  center. Defaults keep the measured LX06 behaviour; a device-AEC plug (no reference
+  channel, RUI AEC off) can use a longer window and skip replaying the gated tail.
+- **Cold-start device_wake re-probe.** When a trusted plug manifest declares
+  `wake.source=device` but the first probe ran before the device dialled in, the audio
+  plane now re-probes in the background (bounded: 12 attempts, 5 s apart) and arms the
+  v1 device-wake path once the adapter proves it.
+- **First-run documentation.** New bilingual `docs/first-run.md` covers the device
+  checklist, install commands, the 8-step wizard, where each parameter comes from,
+  connect troubleshooting, post-install commands and common failures. README rewritten
+  around the current 0.4 state.
+
+### Changed
+
+- **Device management reports effective plug defaults.** `GET /api/v1/devices`,
+  `/{id}`, `/{id}/status`, `/{id}/connect` and the setup wizard's `connect` evidence
+  resolve `listen_port` and `token_env` the same way the adapter builder does:
+  explicit config → plug manifest `runtime` → loader-cached default → LX06 literals
+  (4412 / `RUI_DEVICE_TOKEN`). Dot2 therefore reports `8870` / `DOT2_EM_TOKEN` even
+  when the config leaves both unset.
+- **Token rotation writes to the effective environment name**, so rotating a dot2 device
+  stores the secret under `DOT2_EM_TOKEN` rather than `RUI_DEVICE_TOKEN`.
+- **Port-conflict detection uses the effective manifest port.** Dot2 on 8870 and an LX06
+  on 4412 no longer report a false conflict; two devices resolving to the same manifest
+  port still conflict.
+- **README, deploy, runbook and music docs refreshed** for the current release, the
+  pinned image version, the token file and both music protocol families (auth styles,
+  credential slots, cache isolation, test commands).
+
+### Fixed
+
+- **First-login console token:** the only copy used to be one line in the install log; it
+  is now persisted 0600 and reachable from the 401 dialog.
+- **Dot2 status/connect/rotation** fell back to `RUI_DEVICE_TOKEN` and `4412` when the
+  plug manifest carried its own runtime defaults.
+- **Dot2 cold start** could leave RUI's own KWS in charge for the whole process lifetime
+  when `probe()` only reports device_wake after the device connects.
+- **Follow-up gate** no longer hard-codes a 1 s delay and a 2 s capture cap, so a
+  device-AEC plug's longer window is not truncated.
+- **Jellyfin cache collisions:** the PCM cache key includes the preset id, so Emby's
+  small integer ids cannot collide with Subsonic numeric ids when switching sources.
+
+### Security
+
+- **Jellyfin/Emby API keys are write-only** and sent only where the preset requires
+  (header for Jellyfin, query string for Emby); error text and logs redact `api_key`
+  and query strings, and no GET returns the value.
+- **The console token file is mode 600**, is never overwritten by a rerun, and is
+  explicitly separate from the device token in `.env`.
+
+### Upgrade notes
+
+- **From 0.4.0:** no config migration and no chown. Pull and recreate; the new
+  `followup_*` fields stay absent until set and their defaults preserve the LX06
+  behaviour (1 s gate, replay on).
+- **Existing installs that want the token file:** create it once with
+  `cd ~/rui && docker compose exec -T rui rui token > console-token.txt && chmod 600 console-token.txt`.
+  Re-running `install.sh` will not overwrite an existing file and warns on a mismatch.
+- **Music:** Subsonic credentials keep working. Switching to Jellyfin/Emby changes the
+  credential slots to `url` + `api_key`; the old `user`/`password` fields are
+  ignored for those presets.
+- **Dot2:** update the plug and restart the service so the manifest runtime defaults are
+  picked up. Set `audio.voice.followup_delay_ms` to about 2500 (or turn
+  `followup_replay` off) if device-side AEC leaves residual echo in the follow-up
+  window.
+- **Rollback:** back up `config/config.yaml` first. A 0.4.0 build ignores the new
+  optional fields; `console-token.txt` is not read by 0.4.0.
+
 ## [0.4.0] - 2026-10-25
 
 Console information-architecture refactor Phase 3. The console can now create providers,
@@ -371,7 +461,8 @@ First public release, after all four v1 acceptance gates passed.
 
 Quality at release: 749 passed / 17 skipped, ruff clean, web typecheck/build green.
 
-[Unreleased]: https://github.com/yes999zc/rui/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/yes999zc/rui/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/yes999zc/rui/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/yes999zc/rui/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/yes999zc/rui/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/yes999zc/rui/compare/v0.3.2...v0.3.3
