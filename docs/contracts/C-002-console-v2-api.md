@@ -1,7 +1,7 @@
 # C-002 控制台 v2 API 契约
 
 > **契约编号**：C-002/1  
-> **状态**：定稿草案（2026-10-25），随 rui 0.6.x 以 **additive** 方式发布；不改变 C-001（`rui-device/v1`）。  
+> **状态**：定稿草案（2026-10-25），随 rui 0.6.x 发布：以 **additive** 为主，唯一客户端可见的行为变更见 Addendum A-2（§5.4 门禁顺序）；不改变 C-001（`rui-device/v1`）。  
 > **适用对象**：`web/src/v2/**` 前端实现者、`src/rui/web/api/**` 后端实现者、reviewer/verifier。  
 > **一句话**：v2 控制台只依赖 `/api/v2/*` 与能力（capability）声明；机型差异来自插头 manifest，不来自前端 if/else。
 
@@ -13,8 +13,8 @@
 |---|---|
 | 契约 ID / 版本 | `C-002/1` |
 | API 版本 | `2.0`（路径前缀 `/api/v2`） |
-| rui 版本窗口 | `>=0.6.0, <0.7.0`：只增不改，v1 全部保持可用 |
-| 破坏性变更 | 本契约 **不含**；删除/重命名只能进 `/api/v3` 或 0.7 的 C-002/2 |
+| rui 版本窗口 | `>=0.6.0, <0.7.0`：只增不改（唯一行为变更见 A-2），v1 全部保持可用 |
+| 破坏性变更 | 本契约 **不含字段删除/重命名**；0.6.x 唯一有意行为变更是 §5.4 动作门禁顺序（客户端可见，见 Addendum A-2）；删除/重命名只能进 `/api/v3` 或 0.7 的 C-002/2 |
 | 依赖契约 | C-001 `rui-device/v1`（manifest：`capabilities`、`params`、`audio_defaults`、`runtime`、`device_side`）**不变** |
 | 认证 | 沿用 `X-Auth-Token`；无账号/角色/会话 |
 | 前端入口 | `web/v2.html` + `web/src/v2/**`，路由前缀 `/v2/*`；生产由 FastAPI 托管 `v2.html` |
@@ -305,8 +305,8 @@ Activity（设备维度事件流）
 `POST /api/v2/devices/{id}/actions`：
 
 1. 解析 `action` → 若不认识 → `400 unknown_action`。
-2. 查 action 所属 capability → 若设备 `effective=false` → `409 capability_unsupported`，`details.missing_capability`。
-3. 若设备 disabled → `409 device_disabled`。
+2. 若设备 disabled → `409 device_disabled`，`details={"id": device.id}`（0.6.x 起优先于 capability 门禁，见 A-2）。
+3. 查 action 所属 capability → 若 capability 不在设备的 `effective` 集合中 → `409 capability_unsupported`，`details={"capability": <id>, "declared": [<capability id>...]}`。
 4. 若 action 需要 live link（`audio.say/play/stop`、`volume.read/set`、`led.set`）且 `connected!==true` → `409 device_not_connected`。
 5. 校验 `args`（按 schema）→ `422 invalid_values` + `details.fields[]`。
 6. 执行；返回 `{action, ok, code, result, device_status}`；`result` 形状由 catalog 的 `result_schema` 决定。
@@ -1130,7 +1130,7 @@ Activity（设备维度事件流）
 
 ### 10.1 兼容窗口
 
-- `>=0.6.0 <0.7.0`：`/api/v2` 只增不改；字段不删除、不重命名、不改语义；`meta.features` 用于渐进点亮。
+- `>=0.6.0 <0.7.0`：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序外不改语义（见 Addendum A-2）；`meta.features` 用于渐进点亮。
 - v1 端点与形状保持向后兼容；唯一已知 additive 是 `/api/v1/turns` 每条新增可选 `device_id`（不删不改旧字段，旧消费者可忽略）。v2 不修改 `GET /api/v1/devices`、`PUT /api/v1/devices/{id}`、`/api/v1/setup/step` 的既有字段。
 - C-001 不变：v2 只消费 manifest 的 `capabilities/params/audio_defaults/runtime/device_side`，不新增字段。
 
@@ -1155,7 +1155,7 @@ Activity（设备维度事件流）
 ### 10.4 测试要求（后端）
 
 - 契约测试覆盖：每个端点的 200/4xx 形状、错误码、`request_id`、`X-Auth-Token` 缺失 401。
-- capability：declared/probed/effective 三种组合；led/keys/volume manifest-only；unknown 不崩溃；未声明能力 action 返回 `capability_unsupported`。
+- capability：declared/probed/effective 三种组合；led/keys/volume manifest-only；unknown 不崩溃；enabled 设备上未声明能力的 action 返回 `capability_unsupported`（disabled 设备按 A-2 先返回 `device_disabled`）。
 - provenance：device-override、global-config（显式）、device-manifest、core-default、unresolved；显式设备值等于全局仍报 device；ack 三层；null 清除。
 - 创建：重复 id 409；无 model_id 多机型 422；端口冲突 422；最后一台 disabled/删除 → stopped。
 - setup add：已有 2 台时创建第 3 台，前两台字节级不变；house keys/models 未完成 → blocked；重复 create 409。
@@ -1191,3 +1191,63 @@ Activity（设备维度事件流）
 6. secret 不出现在任何响应/日志/截图。
 7. `/v2` 深链刷新可开；`/api/v2` 404 不落 SPA。
 8. 回滚路径不依赖数据迁移。
+
+---
+
+## Addendum（0.6.x）
+
+本 Addendum 记录 0.6.x 的 additive 字段与一处**有意变更**（§5.4 门禁顺序，客户端可见）；不删除、不重命名既有字段。A-2 明写「本条取代 §5.4 旧顺序」，其余条目对 0.6 的 v2 客户端仍可忽略。
+
+### A-1. DeviceDetail 增加 `listen_port` 来源
+
+`GET /api/v2/devices/{id}`（DeviceDetail）新增两个字段：
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `listen_port_stored` | `int \| null` | `config.devices[].listen_port` 原值；`null` 表示值为 null（未选择端口） |
+| `listen_port_explicit` | `bool` | 配置是否选择了端口（等价于 `listen_port_stored != null`） |
+
+既有 `listen_port` 不变，仍是**生效值**（显式值 > plug manifest `runtime.listen_port` > 4412 兜底）。`save_config` 总会写出 `listen_port:` 键，所以判断依据是值是否为 `null`，不是键是否存在。因此：
+
+- 显式 `listen_port: 8870` → `listen_port=8870, listen_port_stored=8870, listen_port_explicit=true`
+- 继承默认（配置写 `listen_port: null`，以 LX06 manifest 的 4412 为例）→ `listen_port=4412, listen_port_stored=null, listen_port_explicit=false`
+
+这两个字段只出现在 DeviceDetail（`GET /devices/{id}` 以及 create/patch 返回的 `device` 对象）；DeviceSummary（`GET /devices`）不新增。
+
+### A-2. 行为澄清：`device_disabled` 优先级（本条取代 §5.4 旧顺序）
+
+本条取代 §5.4 旧的动作门禁顺序（`capability` 先于 `enabled`）；0.6.x 起统一为 **enabled → capability → live link → args**，客户端可见。
+
+`/test` 与 `/actions` 对 disabled 设备统一返回/记录 `device_disabled`；`verify.say` 在插头可解析后同样按此返回（顺序例外见下）：
+
+- `/test`：HTTP 200，`ok=false`，`checks[]` 至少含 `{"id": "device", "status": "fail", "code": "device_disabled"}`；
+- `/actions` 与 `verify.say`：HTTP 409，`error.code=device_disabled`；
+- 能力门禁（`capability_unsupported`）只对 enabled 设备生效，不再先于 `device_disabled` 报出。
+
+已知顺序例外：setup step 在进入 `verify.say` 前先要求插头可解析；因此 disabled 设备若插头不可解析，`POST /setup/plan/steps/verify` 仍先返回 `409 plug_unavailable`（plan 语义要求先修插头）。`/actions` 不需要解析插头就能判 enabled，因此始终先报 `device_disabled`。
+
+### A-3. 行为澄清：DELETE 不做端口检查
+
+`DELETE /api/v2/devices/{id}` 与 v1 DELETE 对齐：删除**不新增监听者**，因此不校验端口冲突（等价于 `check_ports=false`）。当配置文件已存在两台设备同端口时，删除任意一台（包括冲突无关的第三台）返回 200，使冲突可以通过删除修复；create/patch 仍执行端口检查并返回 `422 port_conflict`。
+
+### A-4. 行为澄清：v2 device 写不再落盘全局音频字段
+
+任何 v2 device 写（`POST/PATCH/DELETE /api/v2/devices`、setup 的 `device.create`）不再把派生的 `audio.voice.kws_keywords_file` 写入 `config.yaml`，因此 `GET /api/v2/house/audio` 的 `explicit` 集合在设备写前后保持不变（除非用户通过 `/house/audio` 真的改过该字段）。已知例外：v1 的 `PUT /api/v1/config/values` 编辑 `devices.*` 时仍可能把该派生键写入 `config.yaml`（预存在行为，另开任务处理）。
+
+关键字文件路径仍有两个仅运行时的派生位置：配置未写 `kws_keywords_file` 时，音频面在 `kws_model_dir` 非空时使用 `audio.voice.kws_model_dir/keywords.txt`；两者都为空时音频面没有 keywords 文件（此时仅 setup 证据与旧控制台使用 `config.yaml` 同目录的 `keywords.txt`）。`rui doctor` 不读 `keywords.txt`（它的 KWS 检查只看模型目录下的 `tokens.txt`）。
+
+### A-5. 行为澄清：`setup/plan` 的 test 步以最近一次测试结果为准
+
+§7.23 的 `test` 步新增一个 additive 证据字段，并明确 `status` 的判定来源（客户端可见，但不删除/重命名字段）：
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `tested` | `bool` | setup store 中是否存在最近一次 `device.test` 记录（`ok/at/checks` 由该探针写入） |
+
+判定规则：
+
+- `tested=true`：`status` 与 `evidence.ok` 都只由记录里的 `ok` 决定。即最近一次测试 `ok:false` 时，即使链路当前 `speaker_connected=true`，test 步仍为 `pending`、`evidence.ok=false`，`evidence.checks` 保留失败的检查项，`next_step` 不会跳过 test。
+- `tested=false`（从未测过）且 transport 为 inbound：保留原有提示语义——链路已连接时 `status=done`、`evidence.ok=true`，由 `tested=false` 区分「未测但链路通」与「测试通过」。
+- `tested=false` 且 transport 为 outbound：仍为 `pending`/`ok=false`（outbound 没有入站链路可作提示）。
+
+`evidence.ok`/`checks`/`at` 字段语义不变；旧客户端忽略 `tested` 即可。该规则只影响 `GET /setup/plan` 与 setup step 响应中的 `plan`，不改 `POST /devices/{id}/test` 的响应。

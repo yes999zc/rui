@@ -1962,6 +1962,55 @@ def _write_keywords_preserving(cfg_now: Config, *, threshold: float | None = Non
     return True
 
 
+def _mirror_keywords(cfg_now: Config, path: Path) -> bool:
+    """Write the derived keywords copy next to a config that names no file.
+
+    When `audio.voice.kws_keywords_file` is empty, the path is derived, never stored:
+    the audio plane reads `kws_model_dir/keywords.txt` only when `kws_model_dir` is
+    set; with both fields empty the audio plane has no keywords file at all (the only
+    copy is this setup-evidence / legacy-console one next to `config.yaml`).
+    `_write_keywords_preserving` already refreshed the first location; this keeps the
+    second in sync without turning the derived path into an explicit global audio
+    field.
+
+    The gate of an existing copy wins: with neither `kws_keywords_file` nor
+    `kws_model_dir` set, `keyword_settings()` can only return the 0.15/2.00 defaults,
+    and using those would silently reset a hand-tuned `:3.00 #0.20` on every wake-word
+    edit (audit #8). Defaults are the fallback only when the file is missing or its
+    suffix does not parse.
+
+    A copy that exists but cannot be read (permissions, I/O error) must not fail the
+    device save either: `_write_devices` has already persisted the config and the
+    plane is restarted by the time this runs, so an uncaught `OSError` would leave a
+    500 on a write that actually happened, and every retry would still 500. Skipping
+    the mirror keeps the unreadable file as it is; rewriting it with the 0.15/2.00
+    defaults would silently reset exactly the hand-tuned gate this function protects.
+    """
+    words = [word for device in cfg_now.devices for word in device.wake_words]
+    if not words:
+        return False
+    settings = keyword_settings(cfg_now)
+    threshold = float(settings["threshold"])
+    boost = float(settings["boost"])
+    if path.is_file():
+        try:
+            meta = keyword_meta(path)
+        except OSError as exc:  # a device save must not fail on it
+            log.warning("keywords: cannot read the derived copy next to the config, "
+                        "skipping the mirror: %s", exc)
+            return False
+        if meta.get("threshold") is not None:
+            threshold = float(meta["threshold"])
+        if meta.get("boost") is not None:
+            boost = float(meta["boost"])
+    try:
+        write_keywords_file(path, words, threshold=threshold, boost=boost)
+    except (OSError, ValueError) as exc:  # noqa: BLE001 - a device save must not fail on it
+        log.warning("keywords: derived copy next to the config failed: %s", exc)
+        return False
+    return True
+
+
 def _turn_hold(result: object) -> float | None:
     """0 when this turn's tools were about the song itself (music/volume)."""
     tools = getattr(result, "tools", None) or []
@@ -4961,13 +5010,21 @@ def create_app(
 
         `audio.voice.kws_threshold` is inert; showing the real file (and what it says)
         is the only way a person can tell whether changing a number did anything.
+
+        A config with neither `kws_keywords_file` nor `kws_model_dir` used to become
+        readable only because a device write materialized the first field. Device
+        writes no longer do (C-002 Addendum A-4), so derive the setup-evidence path
+        next to `config.yaml` instead of probing a cwd-relative `keywords.txt`.
         """
         voice = cfg.audio.voice
-        path = (
-            Path(voice.kws_keywords_file)
-            if voice.kws_keywords_file
-            else Path(voice.kws_model_dir) / "keywords.txt"
-        )
+        if voice.kws_keywords_file:
+            path = Path(voice.kws_keywords_file)
+        elif voice.kws_model_dir:
+            path = Path(voice.kws_model_dir) / "keywords.txt"
+        elif config_path is not None:
+            path = Path(config_path).resolve().parent / "keywords.txt"
+        else:
+            path = Path("keywords.txt")
         return keyword_meta(path)
 
     @app.get("/api/v1/audio", dependencies=[Depends(auth)])
@@ -5287,8 +5344,12 @@ def create_app(
         if runner is not None:
             runner.wake_words = tuple(words)
         # Rewrite the words but keep the threshold/boost already in the file: a device
-        # save must not silently reset a hand-tuned gate (audit #8).
-        if not _write_keywords_preserving(updated) and words:
+        # save must not silently reset a hand-tuned gate (audit #8). A config that names
+        # no path and no model dir has nothing for the plane to load; `_write_devices`
+        # writes the derived copy next to the config instead, so that is not a failure.
+        if not _write_keywords_preserving(updated) and words \
+                and (updated.audio.voice.kws_keywords_file
+                     or updated.audio.voice.kws_model_dir):
             log.warning("devices: could not write keywords file for %d wake word(s)", len(words))
 
     def _checked_devices(updated: Config, *, check_ports: bool = True) -> Config:
@@ -5318,14 +5379,21 @@ def create_app(
         if config_path is None:
             raise HTTPException(status_code=409, detail="there is no config file on disk to write")
         updated = _checked_devices(updated, check_ports=False)
-        if not updated.audio.voice.kws_keywords_file:
-            # A config that came from schema defaults has no keywords path; the wizard
-            # still has to leave one behind, next to the config it just wrote.
-            updated.audio.voice.kws_keywords_file = str(
-                Path(config_path).resolve().parent / "keywords.txt")
+        # `audio.voice.kws_keywords_file` is a global audio field, so a device write
+        # must not materialize it: doing so turned a derived path into an explicit
+        # global choice, shadowing the plug/global layers in `GET /house/audio`.
+        # When the config names no file, `keyword_file()` derives
+        # `kws_model_dir/keywords.txt` for the plane (only when a model dir is set);
+        # `_mirror_keywords` additionally keeps the copy next to the config that the
+        # setup evidence and the v1 threshold endpoint look for.
+        derived_keywords = (
+            Path(config_path).resolve().parent / "keywords.txt"
+            if not updated.audio.voice.kws_keywords_file else None)
         save_config(Path(config_path), updated)
         _apply_config(updated)
         _sync_devices(updated)
+        if derived_keywords is not None:
+            _mirror_keywords(updated, derived_keywords)
         supervisor = getattr(app.state, "audio", None)
         error = ""
         if supervisor is not None and not any(item.enabled for item in updated.devices):

@@ -1,4 +1,4 @@
-# Console v2 (M5 — rooms, house policy & global audio)
+# Console v2 (M6 — eight-step setup wizard)
 
 A second, side-by-side console. The legacy console at `/` keeps working and none
 of its files (`panels.ts`, `PanelHost.vue`, legacy `views/`) are imported here.
@@ -13,13 +13,16 @@ web/src/v2/App.vue             shell: Run / Devices / House / Config, language, 
 web/src/v2/api.ts              hand-written C-002 client (`/api/v2/*` only)
 web/src/v2/audio.ts            override surface + provenance row model for the audio tab
 web/src/v2/houseAudio.ts       global audio leaf directory + field-level diff helpers (M5)
+web/src/v2/setup.ts            setup-plan presentation helpers (status/evidence/field paths) (M6)
 web/src/v2/useCooldown.ts      shared 429 countdown for M5 write buttons
 web/src/v2/i18n.ts             v2-owned zh-Hans + en copy
-web/src/v2/views/              DevicesView, AddDeviceView, DeviceDetailView, RoomsView, RunView,
-                               ConfigView, 404
+web/src/v2/views/              DevicesView, AddDeviceView, SetupView, DeviceDetailView, RoomsView,
+                               RunView, ConfigView, 404
 web/src/v2/components/         StateBlock, StatusBadge, CapabilityChips, ProvenanceTag,
                                TokenDialog, ConfirmDialog
 web/src/v2/components/house/   RoomsPanel, HousePolicyEditor, HouseAudioEditor, HouseAudioField
+web/src/v2/components/setup/   SetupWizard + one component per plan step (keys/models/prepare/
+                               params/wake/connect/test/verify) (M6)
 web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, AudioPanel, Activity,
                                Connection, TestPanel, ActionsPanel, ConfigPanel, DangerPanel,
                                RestartNotice, PlaneCard, SetupCard, ParamsCard, ErrorNotice
@@ -27,11 +30,30 @@ web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, AudioPan
 
 ## Pages
 
-- `/v2/devices` — room-grouped device list, status/capability badges, Add entry.
-- `/v2/devices/add` — minimal M3 create flow: `GET /plugins` → plugin/model →
-  id/room/host/listen_port/wake_words → `POST /devices` (201 → device detail;
-  409 `device_exists` links to the existing device; 422 `port_conflict` names
-  the port and owning device ids).
+- `/v2/devices` — room-grouped device list, status/capability badges. An empty
+  house links to `/v2/setup` (first run); once a device exists the header/action
+  links to `/v2/devices/add`.
+- `/v2/devices/add` — M6 add wizard: choose plugin/model, then render the
+  server's eight-step plan (`GET /setup/plan?plugin_id=&model_id=&device_id=`).
+  Step order, status, evidence, `next_step` and `blocked` are never inferred in
+  the page. `params` is the former quick-add form (id/room/host/port/wake_words
+  plus manifest params) and sends `device.create`; a successful create keeps the
+  returned device id for the remaining steps and leaves existing devices
+  untouched. Before that create, `wake/connect/test/verify` are disabled and
+  cannot POST: the only `device_id` the wizard ever sends is the one the server
+  returned, never the draft id. 409 `device_exists` links to the existing device;
+  422 `devices[0].room` highlights the input; `port_conflict` names the port and
+  links every conflicting device. A 429 starts the server-advertised cooldown and
+  disables the step controls until it expires.
+- `/v2/setup` — M6 first-run wizard. Same plan/engine; the backend derives
+  `first-run` from an empty house. A blocked plan explains
+  `house_setup_incomplete` (house keys/models stay runnable, device steps
+  disabled) / `plug_unavailable` (every step is disabled until another plugin is
+  selected; a step POST would 409 before dispatch). `verify.say` warns that it
+  really speaks and only posts after a second confirmation. A resolved step is
+  only shown as green when its own result says so (`keys.test`/`device.test`
+  `ok:true`, `verify.say` with `plan.verified:true`); logical failures use a
+  neutral "request completed" banner and the step result.
 - `/v2/devices/:id?tab=overview|audio|config|test|activity|connect|danger` — device detail:
   - **overview** — identity, capabilities, audio provenance, plane/setup/params.
   - **audio** — `GET /devices/{id}/audio` grouped by capture/voice/playback/aec/ack.
@@ -181,9 +203,10 @@ data, and every write disables its submit control while in flight.
 
 ## Integration status
 
-M4 is typed and built against C-002/1. The Python `/api/v2` implementation is
+M6 is typed and built against C-002/1. The Python `/api/v2` implementation is
 being finished by a separate workstream, so **live end-to-end integration has
 not been run** from this checkout; rendering and interaction flows were checked
-with a temporary headless Playwright mock outside the repository (field-level
-audio diff, `null` restore + re-read verification, failed fleet restart, global
-shadow hint, `plug_resolved=false`, 500/retry, zh/en copy).
+with a temporary headless Playwright mock outside the repository (M6: server
+step order/status, create isolation, blocked plans, prepare confirmation,
+wake/connect/test rendering, verify second confirmation, 422 field paths,
+`action_not_allowed` lists, and both deep links).

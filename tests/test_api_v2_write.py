@@ -39,6 +39,22 @@ class _LinkedAdapter:
         return {"connected": True, "latency_ms": 12.0}
 
 
+class _Plane:
+    """The supervisor surface `_plane_snapshot` reads: one inbound link."""
+
+    def __init__(self, connected: bool, device_id: str = "living") -> None:
+        self.connected = connected
+        self.device_id = device_id
+
+    def status(self) -> dict:
+        return {
+            "running": True,
+            "device_id": self.device_id,
+            "error": "",
+            "metrics": {"speaker_connected": self.connected},
+        }
+
+
 @pytest.fixture()
 def console(tmp_path, monkeypatch):
     monkeypatch.delenv("RUI_DEVICE_TOKEN", raising=False)
@@ -434,6 +450,136 @@ def test_setup_step_device_test_returns_checks(console):
     ]
     test_step = next(step for step in body["plan"]["steps"] if step["id"] == "test")
     assert test_step["evidence"]["checks"]
+
+
+# ------------------------------------------- setup plan evidence must stay honest
+def _plan(client) -> dict:
+    return client.get(
+        "/api/v2/setup/plan?plugin_id=xiaoai-lx06&device_id=living",
+        headers=AUTH,
+    ).json()
+
+
+def _set_test_step(plan: dict) -> dict:
+    return next(step for step in plan["steps"] if step["id"] == "test")
+
+
+def test_a_failed_device_test_is_not_hidden_by_a_connected_link(console):
+    """A stored `ok:false` wins over the live link (regression).
+
+    The old plan said `test_done = connected` / `evidence.ok = stored_ok or connected`,
+    so a connected speaker whose last `device.test` failed (here: the device is
+    disabled, a real failing check) looked "done" and the wizard skipped the failing
+    checks and jumped to verify.
+    """
+    client, _, _ = console(devices=[_device(enabled=False)])
+    client.app.state.audio = _Plane(connected=True)
+
+    tested = client.post(
+        "/api/v2/setup/plan/steps/test", headers=AUTH,
+        json={"plugin_id": "xiaoai-lx06", "device_id": "living",
+              "action": "device.test", "values": {}},
+    )
+    assert tested.status_code == 200, tested.text
+    body = tested.json()
+    assert body["result"]["ok"] is False
+    assert any(check["code"] == "device_disabled"
+               for check in body["result"]["checks"])
+    step = _set_test_step(body["plan"])
+    assert step["status"] != "done"
+    assert step["evidence"]["ok"] is False
+    assert step["evidence"]["tested"] is True
+
+    # A fresh plan read still reports the stored failure even though the link is up.
+    plan = _plan(client)
+    step = _set_test_step(plan)
+    assert step["status"] == "pending"
+    assert step["evidence"]["ok"] is False
+    assert step["evidence"]["tested"] is True
+    assert step["evidence"]["checks"]
+
+
+def test_a_passing_device_test_completes_the_step(console):
+    client, _, _ = console()
+    # A live link is itself the proof the adapter's token works (token_managed), so the
+    # probe passes without writing a secret.
+    client.app.state.audio = _Plane(connected=True)
+
+    tested = client.post(
+        "/api/v2/setup/plan/steps/test", headers=AUTH,
+        json={"plugin_id": "xiaoai-lx06", "device_id": "living",
+              "action": "device.test", "values": {}},
+    )
+    assert tested.status_code == 200, tested.text
+    assert tested.json()["result"]["ok"] is True
+    step = _set_test_step(tested.json()["plan"])
+    assert step["status"] == "done"
+    assert step["evidence"]["ok"] is True
+    assert step["evidence"]["tested"] is True
+
+
+def test_never_tested_but_connected_keeps_the_link_hint(console):
+    """No record is not a failure: the live link is still the "not tested yet" hint."""
+    client, _, _ = console()
+    client.app.state.audio = _Plane(connected=True)
+    step = _set_test_step(_plan(client))
+    assert step["status"] == "done"
+    assert step["evidence"]["ok"] is True
+    assert step["evidence"]["tested"] is False
+    assert step["evidence"]["checks"] == []
+
+    # Still no record, link down: pending and not ok, with `tested` still false.
+    client.app.state.audio = _Plane(connected=False)
+    step = _set_test_step(_plan(client))
+    assert step["status"] == "pending"
+    assert step["evidence"]["ok"] is False
+    assert step["evidence"]["tested"] is False
+
+
+def test_a_failed_keys_test_never_completes_the_keys_step(console):
+    client, _, _ = console()
+    response = client.post(
+        "/api/v2/setup/plan/steps/keys", headers=AUTH,
+        json={"plugin_id": "xiaoai-lx06", "device_id": "living",
+              "action": "keys.test",
+              # An explicitly malformed key fails the format check without a network
+              # call, so this test stays deterministic and offline.
+              "values": {"stage": "llm", "keys": {"RUI_LLM_KEY": "x"}}},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result"]["ok"] is False
+    keys = next(step for step in body["plan"]["steps"] if step["id"] == "keys")
+    assert keys["status"] == "pending"
+    assert keys["evidence"]["stages"]["llm"] is False
+    assert body["plan"]["next_step"] == "keys"
+
+
+def test_a_failed_verify_say_never_marks_the_plan_verified(console):
+    client, _, _ = console()
+    # The link is up (so the action gate passes) but there is no audio client to drive.
+    client.app.state.audio = _Plane(connected=True)
+    failed = client.post(
+        "/api/v2/setup/plan/steps/verify", headers=AUTH,
+        json={"plugin_id": "xiaoai-lx06", "device_id": "living",
+              "action": "verify.say", "values": {"text": "你好"}},
+    )
+    assert failed.status_code == 409, failed.text
+    plan = _plan(client)
+    assert plan["verified"] is False
+    verify = next(step for step in plan["steps"] if step["id"] == "verify")
+    assert verify["status"] == "pending"
+    assert verify["evidence"]["text_tested"] is False
+
+    # Real evidence is what flips the flag: a turn that actually produced audio.
+    last = getattr(client.app.state, "last_turn", None)
+    assert last is None or int(last.get("audio_bytes") or 0) == 0
+    client.app.state.last_turn = {"audio_bytes": 640, "reply": "你好"}
+    plan = _plan(client)
+    assert plan["verified"] is True
+    verify = next(step for step in plan["steps"] if step["id"] == "verify")
+    assert verify["status"] == "done"
+    assert verify["evidence"]["text_tested"] is True
 
 
 def test_house_audio_read_has_explicit_and_effects(console):
@@ -890,12 +1036,19 @@ def test_disabling_the_default_output_clears_it_and_says_so(console):
     assert fresh.multi_device.enabled is False
 
 
-def test_a_disabled_device_is_gated_on_its_declared_capabilities(console):
-    """MINOR-3: the gate must not say 'undeclared' while listing it as declared."""
+@pytest.mark.parametrize("declared", [("playback",), ("led",)])
+def test_a_disabled_device_reports_device_disabled_before_the_capability_gate(
+        console, declared):
+    """`device_disabled` wins the capability gate for any declared set.
+
+    The enabled check runs before the capability check, so an operator looking at a
+    disabled speaker always gets the one fix that applies instead of
+    `capability_unsupported` (which can be an artifact of the missing adapter probe).
+    """
     config = Config(web={"auth_token": TOKEN},
                     devices=[_manifest_device(enabled=False)])
     client, _, _ = console(config=config)
-    _dot2_manifest_plug(Path(config.system.data_dir), capabilities=("playback",))
+    _dot2_manifest_plug(Path(config.system.data_dir), capabilities=declared)
     response = client.post("/api/v2/devices/dot2/actions", headers=AUTH,
                            json={"action": "audio.say", "args": {"text": "你好"}})
     assert response.status_code == 409, response.text
@@ -905,16 +1058,18 @@ def test_a_disabled_device_is_gated_on_its_declared_capabilities(console):
     assert body["error"]["details"] == {"id": "dot2"}
 
 
-def test_a_disabled_device_without_the_capability_says_so_consistently(console):
+def test_an_enabled_device_without_the_capability_says_capability_unsupported(console):
+    """Once enabled, the capability gate still runs (C-002 §5.4 step 3)."""
     config = Config(web={"auth_token": TOKEN},
-                    devices=[_manifest_device(enabled=False)])
+                    devices=[_manifest_device(enabled=True)])
     client, _, _ = console(config=config)
     _dot2_manifest_plug(Path(config.system.data_dir), capabilities=("led",))
     refusal = client.post("/api/v2/devices/dot2/actions", headers=AUTH,
                           json={"action": "audio.say", "args": {"text": "你好"}})
     assert refusal.status_code == 409, refusal.text
-    assert refusal.json()["error"]["code"] == "capability_unsupported"
-    assert refusal.json()["error"]["details"]["declared"] == ["led"]
+    body = refusal.json()
+    assert body["error"]["code"] == "capability_unsupported"
+    assert body["error"]["details"] == {"capability": "playback", "declared": ["led"]}
 
 
 def test_led_set_is_gated_on_the_live_link_before_args(console):

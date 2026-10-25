@@ -30,6 +30,7 @@ const { data: houseData, error: houseError } = houseResource
 
 const featureEnabled = metaFeature('devices')
 const createEnabled = metaFeature('device_create')
+const setupEnabled = metaFeature('setup_plan')
 
 const deviceErrorCopy = computed(() => (deviceError.value ? describeError(deviceError.value) : null))
 const houseErrorCopy = computed(() => (houseError.value ? describeError(houseError.value) : null))
@@ -105,6 +106,22 @@ const counts = computed(() => {
 
 const roomCount = computed(() => groups.value.length)
 
+/**
+ * An empty house gets the first-run wizard (`/setup`); once a device exists the
+ * list keeps linking to the add wizard. The server also derives `first-run`, but
+ * the entry point should not make the operator pick the add flow first.
+ */
+const devicesLoaded = computed(() => deviceData.value !== null)
+const hasDevices = computed(() => (deviceData.value?.items.length ?? 0) > 0)
+const firstRunEntry = computed(
+  () => devicesLoaded.value && !hasDevices.value && setupEnabled,
+)
+const createPath = computed(() => (firstRunEntry.value ? '/setup' : '/devices/add'))
+const emptyHint = computed(() => {
+  if (firstRunEntry.value) return t('v2.devices.emptySetupHint')
+  return createEnabled ? t('v2.devices.emptyHint') : t('v2.devices.emptyLegacyHint')
+})
+
 function lastSeen(device: DeviceSummary): string {
   if (!device.last_seen) return t('v2.devices.neverSeen')
   return t('v2.devices.lastSeen', { time: relativeTime(device.last_seen) })
@@ -150,13 +167,13 @@ onMounted(() => {
       <div class="v2-page-actions">
         <span v-if="meta" class="badge badge-muted mono">{{ meta.contract }}</span>
         <RouterLink
-          v-if="createEnabled"
+          v-if="createEnabled || firstRunEntry"
           class="btn btn-primary btn-sm"
-          to="/devices/add"
+          :to="createPath"
           data-testid="devices-add"
         >
           <AppIcon name="plus" :size="14" />
-          {{ t('v2.devices.add') }}
+          {{ firstRunEntry ? t('v2.devices.firstRun') : t('v2.devices.add') }}
         </RouterLink>
         <button type="button" class="btn btn-sm" :disabled="devicesLoading" @click="refresh">
           <AppIcon name="refresh" :size="14" />
@@ -204,12 +221,25 @@ onMounted(() => {
       v-else-if="!deviceData || deviceData.items.length === 0"
       kind="empty"
       :title="t('v2.devices.empty')"
-      :hint="createEnabled ? t('v2.devices.emptyHint') : t('v2.devices.emptyLegacyHint')"
+      :hint="emptyHint"
     >
-      <RouterLink v-if="createEnabled" class="btn btn-primary" to="/devices/add">
-        {{ t('v2.devices.emptyAction') }}
+      <RouterLink
+        v-if="setupEnabled"
+        class="btn btn-primary"
+        to="/setup"
+        data-testid="devices-first-run"
+      >
+        {{ t('v2.devices.emptySetupAction') }}
       </RouterLink>
-      <a v-else class="btn btn-primary" href="/">{{ t('v2.devices.emptyAction') }}</a>
+      <RouterLink
+        v-if="createEnabled"
+        class="btn"
+        to="/devices/add"
+        data-testid="devices-empty-add"
+      >
+        {{ setupEnabled ? t('v2.devices.emptyAddAction') : t('v2.devices.emptyAction') }}
+      </RouterLink>
+      <a v-else-if="!setupEnabled" class="btn btn-primary" href="/">{{ t('v2.devices.emptyAction') }}</a>
     </StateBlock>
 
     <template v-else>

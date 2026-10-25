@@ -35,7 +35,7 @@ const navItems: Array<{ key: string; to: string; labelKey: MsgKey }> = [
 ]
 
 const section = computed(() => {
-  if (route.path.startsWith('/devices')) return 'devices'
+  if (route.path.startsWith('/devices') || route.path.startsWith('/setup')) return 'devices'
   if (route.path.startsWith('/rooms')) return 'rooms'
   if (route.path.startsWith('/run')) return 'run'
   if (route.path.startsWith('/config')) return 'config'

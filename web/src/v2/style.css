@@ -2003,3 +2003,281 @@
     flex: 1 1 auto;
   }
 }
+
+/* — M6: setup wizard ————————————————————————————————————— */
+
+.v2-setup-summary-badges {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.v2-setup-kv {
+  margin-top: var(--s3);
+}
+
+.v2-setup-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.v2-setup-steps > .v2-card {
+  margin-top: 0;
+}
+
+.v2-setup-step {
+  padding: 0;
+  overflow: hidden;
+  border-left: 3px solid var(--line-strong);
+}
+
+.v2-setup-step.is-next {
+  border-left-color: var(--accent);
+}
+
+.v2-setup-step.is-done {
+  border-left-color: var(--ok);
+}
+
+.v2-setup-step.is-error {
+  border-left-color: var(--fail);
+}
+
+.v2-setup-step.is-skipped {
+  border-left-color: var(--muted);
+}
+
+.v2-setup-step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  padding: var(--s4);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.v2-setup-step-head:hover {
+  background: var(--surface-2);
+}
+
+.v2-setup-step-index {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.v2-setup-step-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.v2-setup-step-title .note {
+  margin: 0;
+}
+
+.v2-setup-chevron {
+  flex: none;
+  transition: transform 160ms ease;
+}
+
+.v2-setup-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.v2-setup-step-content {
+  padding: 0 var(--s4) var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+.v2-setup-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding-top: var(--s3);
+}
+
+/* Native `disabled` on the fieldset blocks every child control during a 429
+   cooldown without threading a cooldown prop through all eight step cards. */
+.v2-setup-fieldset {
+  display: block;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.v2-setup-step.is-disabled .v2-setup-step-head {
+  cursor: default;
+}
+
+.v2-setup-step.is-disabled .v2-setup-step-head:hover {
+  background: transparent;
+}
+
+.v2-setup-subcard {
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 8px);
+  background: var(--surface-2);
+}
+
+.v2-setup-subtitle {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.v2-setup-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--s2);
+}
+
+.v2-setup-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--s2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 8px);
+  background: var(--surface);
+}
+
+.v2-setup-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.v2-setup-list,
+.v2-setup-steps-list {
+  margin: 0;
+  padding-left: 1.2em;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+
+.v2-setup-check-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.v2-setup-check-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.v2-setup-rollback {
+  padding: var(--s2) var(--s3);
+  border-left: 3px solid var(--warn, #c98a1b);
+  background: color-mix(in srgb, var(--warn, #c98a1b) 8%, var(--surface));
+  border-radius: 0 var(--r-sm, 8px) var(--r-sm, 8px) 0;
+}
+
+.v2-setup-warn-text {
+  color: var(--warn, #9a6410);
+}
+
+.v2-setup-done {
+  margin: 0;
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.v2-setup-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.v2-setup-check input {
+  margin-top: 3px;
+}
+
+.v2-setup-result {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 8px);
+  padding: var(--s2);
+  background: var(--surface);
+}
+
+.v2-setup-result-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.v2-setup-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.v2-setup-req {
+  color: var(--fail);
+}
+
+.v2-setup-checks {
+  margin-top: var(--s2);
+}
+
+.v2-setup-error-meta {
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 8px);
+  background: var(--surface-2);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.v2-setup-error-meta p {
+  margin: 0;
+}
+
+.v2-setup-blocked-step {
+  padding: var(--s2) 0;
+}
+
+@media (max-width: 720px) {
+  .v2-setup-stage-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-setup-step-head {
+    flex-wrap: wrap;
+  }
+
+  .v2-setup-step-title {
+    flex-basis: calc(100% - 40px);
+  }
+}

@@ -490,6 +490,83 @@ export interface PluginList {
   total: number
 }
 
+// — setup plan (M6) ——————————————————————————————————————————
+// Contract §7.23/§7.24. The wizard renders `steps` in the server's order and
+// only ever runs an action the plan advertises for that step.
+
+export type SetupStepStatus = 'pending' | 'done' | 'skipped' | 'error'
+
+export interface SetupParamSchema {
+  key: string
+  label: string
+  type: string
+  required: boolean
+  default?: unknown
+  placeholder?: string
+  help?: string
+  max?: number
+  options?: string[]
+}
+
+export interface SetupStepDetail {
+  /** `prepare`: device-side guide link(s) from the manifest. */
+  links?: Array<{ label: string; url: string }>
+  /** `prepare`: manifest-declared device-side install steps. */
+  install_steps?: string[]
+  /** `prepare`: device-side artifact/client name. */
+  name?: string
+  /** `prepare`: class-B rollback path. */
+  rollback?: string
+  /** `params`: manifest-declared public params and non-secret defaults. */
+  params_schema?: SetupParamSchema[]
+  defaults?: Record<string, unknown>
+}
+
+export interface SetupStep {
+  id: string
+  scope: 'house' | 'device' | string
+  required: boolean
+  status: SetupStepStatus | string
+  evidence: Record<string, unknown>
+  detail?: SetupStepDetail
+  actions: string[]
+}
+
+export interface SetupBlocked {
+  code: 'plug_unavailable' | 'house_setup_incomplete' | string
+  message: string
+  missing_steps?: string[]
+  plugin_id?: string
+  device_id?: string
+}
+
+export interface SetupPlan {
+  mode: 'first-run' | 'add' | 'edit' | string
+  device_id: string | null
+  plugin: { id: string; version: string; name: string }
+  steps: SetupStep[]
+  next_step: string | null
+  complete: boolean
+  verified: boolean
+  blocked: SetupBlocked | null
+}
+
+export interface SetupStepRequest {
+  plugin_id?: string
+  device_id?: string
+  model_id?: string
+  action: string
+  values?: Record<string, unknown>
+}
+
+/** `POST /setup/plan/steps/{step}` — the plan is always recomputed server-side. */
+export interface SetupStepResponse {
+  plan: SetupPlan
+  device: DeviceDetail | null
+  restart: Restart | null
+  result?: Record<string, unknown>
+}
+
 export interface ErrorField {
   path: string
   code?: string
@@ -773,4 +850,29 @@ export const api = {
     }),
   rotateToken: (id: string): Promise<RotatedToken> =>
     request<RotatedToken>(`/api/v2/devices/${encodeId(id)}/token/rotate`, { method: 'POST' }),
+  /**
+   * `GET /setup/plan` — eight-step plan for first-run/add/edit (contract §7.23).
+   *
+   * `device_id` is the draft id for add/first-run; `plugin_id` is required
+   * whenever the id is not an existing device. `plug_unavailable` is a 200 body
+   * with `blocked`, not an error.
+   */
+  setupPlan: (query: {
+    plugin_id?: string
+    device_id?: string
+    model_id?: string
+  } = {}): Promise<SetupPlan> => {
+    const params = new URLSearchParams()
+    if (query.plugin_id) params.set('plugin_id', query.plugin_id)
+    if (query.device_id) params.set('device_id', query.device_id)
+    if (query.model_id) params.set('model_id', query.model_id)
+    const suffix = params.toString()
+    return request<SetupPlan>(`/api/v2/setup/plan${suffix ? `?${suffix}` : ''}`)
+  },
+  /** `POST /setup/plan/steps/{step}` — one advertised action at a time. */
+  setupStep: (step: string, body: SetupStepRequest): Promise<SetupStepResponse> =>
+    request<SetupStepResponse>(
+      `/api/v2/setup/plan/steps/${encodeURIComponent(step)}`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
 }

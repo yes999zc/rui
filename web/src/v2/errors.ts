@@ -79,6 +79,23 @@ const CODE_KEYS: Record<string, { title: MsgKey; hint: MsgKey }> = {
   },
   port_conflict: { title: 'v2.error.portConflict', hint: 'v2.error.portConflictHint' },
   no_config: { title: 'v2.error.noConfig', hint: 'v2.error.noConfigHint' },
+  house_setup_incomplete: {
+    title: 'v2.error.houseSetupIncomplete',
+    hint: 'v2.error.houseSetupIncompleteHint',
+  },
+  action_not_allowed: {
+    title: 'v2.error.actionNotAllowed',
+    hint: 'v2.error.actionNotAllowedHint',
+  },
+  unknown_step: { title: 'v2.error.unknownStep', hint: 'v2.error.unknownStepHint' },
+  step_in_progress: {
+    title: 'v2.error.stepInProgress',
+    hint: 'v2.error.stepInProgressHint',
+  },
+  missing_prerequisite: {
+    title: 'v2.error.missingPrerequisite',
+    hint: 'v2.error.missingPrerequisiteHint',
+  },
 }
 
 const STATUS_KEYS: Record<number, { title: MsgKey; hint: MsgKey }> = {

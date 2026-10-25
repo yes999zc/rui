@@ -1161,6 +1161,12 @@ def install_v2_routes(
 
         payload.update({
             "host": device.host,
+            # Additive 0.6.x (C-002 Addendum): `listen_port` above is what the plane
+            # binds; these two say whether the config chose it or inherited it from
+            # the plug manifest, which is what the device form has to render.
+            "listen_port_stored": (int(device.listen_port)
+                                   if device.listen_port is not None else None),
+            "listen_port_explicit": device.listen_port is not None,
             "wake_words": list(device.wake_words),
             "volume_target": int(device.volume),
             "params": public_params(device, resolved),
@@ -1677,15 +1683,18 @@ def install_v2_routes(
                 update={"audio": layers_from.audio, "ack": layers_from.ack})
         return updated
 
-    def _checked_device_config(config: Config, devices: list[DeviceConfig]) -> Config:
+    def _checked_device_config(config: Config, devices: list[DeviceConfig], *,
+                               check_ports: bool = True) -> Config:
         """Validate a device-list write before anything reaches the disk.
 
         The invariant itself lives in `device_write.py` so v1 and the wizard cannot
         drift from it; this wrapper only maps its console-neutral rejection onto the
-        C-002 error object.
+        C-002 error object. ``check_ports=False`` mirrors v1's DELETE: removing a
+        device cannot add a listener, and a config that already has a conflict must
+        stay repairable by deleting one of the colliding devices.
         """
         try:
-            return checked_device_config(config, devices)
+            return checked_device_config(config, devices, check_ports=check_ports)
         except DeviceWriteError as exc:
             raise V2Error(exc.status_code, exc.code, exc.message,
                           hint=exc.hint, details=exc.details) from exc
@@ -2284,7 +2293,8 @@ def install_v2_routes(
                 ]},
             )
         updated = _checked_device_config(
-            config, [item for item in config.devices if item.id != device_id])
+            config, [item for item in config.devices if item.id != device_id],
+            check_ports=False)
         await _write_devices_checked(updated)
         return {"removed": True, "device_id": device.id}
 
@@ -2405,6 +2415,16 @@ def install_v2_routes(
         _rows, effective, _unknown = _capability_rows(declared, probed,
                                                       resolved is not None)
         checks: list[dict[str, Any]] = []
+        if not device.enabled:
+            # The same code the detail gets from `status_reason` and the actions get
+            # from their guard: one disabled speaker, one primary reason everywhere.
+            checks.append({
+                "id": "device",
+                "status": "fail",
+                "code": "device_disabled",
+                "detail": {"enabled": False},
+                "hint": "Enable it on the device page.",
+            })
         checks.append({
             "id": "plugin",
             "status": "ok" if resolved is not None else "fail",
@@ -2515,30 +2535,30 @@ def install_v2_routes(
 
     async def _guard_action(device: DeviceConfig, config: Config,
                             action: str) -> tuple[list[str], list[str], bool]:
-        """C-002 §5.4 gates 2-4: capability, then enabled, then the live link.
+        """C-002 §5.4 gates: enabled, then capability, then the live link.
 
         Shared by `POST /devices/{id}/actions` and the setup `verify.say` step so the
         wizard cannot bypass a gate the action endpoint enforces.
         """
-        declared, effective, connected = await _live_action_state(device, config)
         capability = _ACTION_CAPABILITY[action]
-        # A disabled device has no adapter and therefore no probe, so `effective` is
-        # empty for every probe-bound capability. Judging the action against that empty
-        # set answered `capability_unsupported` ("does not declare playback") while
-        # `details.declared` listed playback - a contradiction. Gate a disabled device
-        # on what its manifest declares; the next check then states the real reason.
-        gate = effective if device.enabled else declared
-        if capability not in gate:
+        # `device_disabled` is the primary reason and must win every other gate: an
+        # operator looking at a disabled speaker has one fix, and a probe-bound
+        # capability can be missing only because a disabled device has no adapter to
+        # probe. The capability and live-link gates therefore run only once the device
+        # is enabled, so the same device answers the same code on /test, detail and
+        # every action endpoint.
+        if not device.enabled:
+            raise V2Error(409, "device_disabled", f"device {device.id!r} is disabled",
+                          hint="Enable the device first.",
+                          details={"id": device.id})
+        declared, effective, connected = await _live_action_state(device, config)
+        if capability not in effective:
             raise V2Error(
                 409, "capability_unsupported",
                 f"device {device.id!r} does not declare {capability!r}",
                 hint="The action is hidden by the UI when the capability is missing.",
                 details={"capability": capability, "declared": declared},
             )
-        if not device.enabled:
-            raise V2Error(409, "device_disabled", f"device {device.id!r} is disabled",
-                          hint="Enable the device first.",
-                          details={"id": device.id})
         if action in _LIVE_ACTION and not connected:
             raise V2Error(
                 409, "device_not_connected",
@@ -3004,14 +3024,28 @@ def install_v2_routes(
         stored_test = saved.get("test", {}).get("device", {}).get("test", {})
         if not isinstance(stored_test, dict):
             stored_test = {}
+        # `device.test` always writes this record (ok/at/checks), so a non-empty dict
+        # means a probe ran. `ok=false` is a result, not a missing one: the live link
+        # must never overwrite a failed test, otherwise a connected speaker with a bad
+        # token/capability would look "done" and the wizard would skip the failing
+        # checks. The link is only a hint for the never-tested case (inbound only).
+        tested = bool(stored_test)
         stored_ok = bool(stored_test.get("ok"))
-        test_done = stored_ok if outbound else connected
+        if tested:
+            test_done = stored_ok
+            test_ok = stored_ok
+        else:
+            test_done = bool(connected and not outbound)
+            test_ok = test_done
         test_step = {
             "id": "test",
             "scope": "device",
             "required": True,
             "status": "done" if test_done else "pending",
-            "evidence": {"ok": bool(stored_ok or (connected and not outbound)),
+            # Additive (C-002 Addendum A-5): `ok` alone could not tell "passed" from
+            # "never tested but the link is up"; `tested` makes the evidence explicit.
+            "evidence": {"ok": test_ok,
+                         "tested": tested,
                          "checks": list(stored_test.get("checks") or []),
                          "at": str(stored_test.get("at") or "")},
             "actions": ["device.test"],
