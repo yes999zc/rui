@@ -10,11 +10,11 @@
 |---|---|
 | 项目 | 自托管语音终端：LX06 音箱 + FastAPI 控制面 + 独立音频面 + Vue 控制台；MIT；公开仓 `yes999zc/rui` |
 | 版本 | **v0.4.0**（控制台 IA 重构 Phase 1–3、Socket/Plug v1、安全 P3.5），2026-10-25 已部署 NAS |
-| 生产镜像 | `/vol1/rui` 跑 `ghcr.io/yes999zc/rui:0.4.0-local`（本机构建兜底；官方 0.4.0 tag 已推 GHCR）；非 root uid 1000 |
+| 生产镜像 | `/vol1/rui` 跑 `ghcr.io/yes999zc/rui:0.4.0-local`（本机构建兜底）；**官方 0.4.0 已于 2026-10-25 重切发布**：`0.4.0`/`0.4`/`latest` 同一 manifest，digest `sha256:c4cd1a61…`，amd64+arm64；非 root uid 1000，待切换 |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
-| 质量 | **1099 passed / 17 skipped**；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
+| 质量 | **1104 passed / 17 skipped**（含 5 个 compat 回归测试）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | 控制台 IA Phase 4 清理、P4 代码视图/首次登录 token、飞书技术文档；socket sidecar/多设备仲裁/AEC/EQ 后续 |
+| 当前主线 | 0.4.1（首次登录 token A、README/CHANGELOG 发布线、dot2 两项修复）→ Phase 4 清理（0.4.2）→ 代码视图；Jellyfin/Emby 与多设备/sidecar/播放 gap 提前 |
 
 ## 1. 项目与架构契约
 
@@ -45,7 +45,7 @@
 | 冷装证据 | `/vol1/rui-verify/`（269 MB，可删；`install.log` 与冷装 service.log 已拷到验收工作区） |
 | 端口 | 控制台 `8080`、设备入口 `4412`（host network）；`allow_no_token: false` |
 | 开发机 | Mac：仓库 + `.venv`（Python 3.13）+ Node 22；**无 docker CLI**（只有 OrbStack 的 `orb/orbctl`），compose/冷装只能在 NAS 上跑 |
-| GHCR | `0.1.0` / `0.1` / `latest` / `sha-1966db6`（多架构 amd64+arm64） |
+| GHCR | `0.4.0` / `0.4` / `latest`（同一 manifest，digest `sha256:c4cd1a61…`，amd64+arm64）；历史 tag 保留 |
 
 ## 3. 已定决策（改前先问 9 哥）
 
