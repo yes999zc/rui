@@ -14,6 +14,37 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [0.6.0] - 2026-10-26
+
+The device-agnostic core: rui names no speaker any more. The LX06 adapter became an image
+plug with the same manifest loader as the Dot 2, the core audio defaults are neutral, and a
+device's manifest, the global config and the per-device override merge into one effective
+audio block that every consumer (plane, AEC, doctor) reads.
+
+### Added
+
+- rui-device/v1 `audio_defaults` (capture, playback, ack_echo_ignore_ms): the bottom layer of
+  a three-layer merge (device default < global config < devices[].audio).
+- Image plugs under /opt/rui-plugins are imported from their runtime.entrypoint and listed
+  beside each other; RUI_PLUGINS_DIR adds roots without replacing the image directory.
+- The setup wizard asks which device to configure when more than one plug is installed
+  (409 plug_required carries the list); a single plug auto-selects.
+- /api/v1/devices[+id] expose the merged per-device audio and the explicit override paths.
+
+### Changed
+
+- Core capture defaults are neutral (16000/1ch/0ref); the LX06 manifest declares
+  48000/8ch/6mic/2ref. Existing configs keep their effective values (golden tests).
+- Every output is routed by room: session/LED follow the turn, reminders go to
+  multi_device.default_output, music starts where it was asked and transport follows the
+  owner; stop only releases the owner from its own room.
+- save_config no longer materializes neutral audio defaults over the plug layer.
+
+### Removed
+
+- src/rui/device/xiaoai and the v0 reference plugin package. `adapter: xiaoai` still resolves
+  to the same plug through adapter_aliases.py (one minor, gone no earlier than 0.7.0).
+
 ## [0.5.3] - 2026-10-25
 
 Stabilization release for the first multi-device production install (LX06 + Echo Dot 2).
