@@ -1,5 +1,6 @@
 # ROADMAP — rui / 小瑞
 
+> 计划：见 [plan-to-0.6.md](plan-to-0.6.md)（0.5.3 稳定化 → 0.6.0 设备无关内核）。
 > 目标载体：**NAS**。当前：**0.5.2 已发布**（安装路径 #15 + 卫星就绪/连接测试 #7），生产跑 0.5.0 且健康；多设备 0.5（config v3 + Phase 2 多平面/仲裁）已就绪，`multi_device.enabled=false` 待 LX06+2×Dot2 真机验收。
 > 每条都要有可复现判据；过程数字在 `HANDOFF` 与验收工作区，详细历史在
 > `docs/archive/HANDOFF-history-to-2026-10-24.md`。
