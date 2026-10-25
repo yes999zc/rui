@@ -14,7 +14,14 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
-## [Unreleased]
+## [0.5.0] - 2026-10-25
+
+Multi-device 0.5: one control plane, one audio plane per room, one arbiter for the
+house. Config v3 adds per-device audio overrides and the `multi_device` block (off by
+default), Phase 2 wires the fleet and the wake candidate -> admit/reject chain, and the
+console gains per-plane health plus the restart-effect knobs behind it. Adapter and
+manifest contracts, `drain_wakes()` timing and the `DeviceWake` six fields are
+unchanged; downstream plugs only need their `rui_compat` ceiling raised to `<0.6.0`.
 
 ### Added
 
@@ -649,7 +656,8 @@ First public release, after all four v1 acceptance gates passed.
 
 Quality at release: 749 passed / 17 skipped, ruff clean, web typecheck/build green.
 
-[Unreleased]: https://github.com/yes999zc/rui/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/yes999zc/rui/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/yes999zc/rui/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/yes999zc/rui/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/yes999zc/rui/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/yes999zc/rui/compare/v0.3.4...v0.4.0

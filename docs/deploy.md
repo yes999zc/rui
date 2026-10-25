@@ -62,8 +62,8 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 固定发布版本（生产推荐；脚本、compose 文件和镜像都锁在同一个 tag）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.2/deploy/install.sh \
-  | RUI_REF=v0.4.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.5.0/deploy/install.sh \
+  | RUI_REF=v0.5.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.0 sh
 ```
 
 装到 `/vol1/rui`（目录需可写）：
@@ -83,7 +83,7 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.2/deploy/insta
 RUI_HOME=~/rui          # 安装目录
 RUI_REPO=yes999zc/rui   # fork
 RUI_REF=main            # 分支/tag
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2   # 生产建议固定 tag 或 digest
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.0   # 生产建议固定 tag 或 digest
 RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
                         # 可选：raw 不通时换成镜像前缀，例如
                         # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main

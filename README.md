@@ -30,19 +30,20 @@
 
 ## 中文
 
-### 0.4.2 有什么新东西
+### 0.5.0 有什么新东西
 
-> **0.4.2（2026-10-25）完成控制台 IA Phase 4 收尾：导航只有一个事实来源，旧路由正式退场。**
+> **0.5.0（2026-10-25）交付「多设备 0.5」：一台控制面驱动多个房间的音箱，唤醒由中枢统一仲裁。**
 >
-> - **单一 nav manifest**：后端 PanelSpec 直接声明 section/order/hidden/icon，前端只消费；删掉重复的导航映射与标题覆盖。
-> - **11 个面板、7 个 legacy panel 退役**：旧 `/panel/assistant-session`、`/panel/speaker` 等旧书签不再兼容；`/api/v1/*` 不变。
-> - **首页瘦身**：README 从 512 行压到 366 行，安装/向导/排障细节移入 [`docs/first-run.md`](docs/first-run.md)；截图稍后与内容一起刷新。
-> - **多设备设计文档**：[`docs/multi-device-design.md`](docs/multi-device-design.md) 回答主/卫星、房间与双唤醒仲裁（设计稿，未改运行时）。
+> - **多平面 + 中央仲裁**：每台启用入站音箱一个受监督音频面；候选 → 合并窗口 → `wake_admit`/`wake_reject`，全屋同时刻一个回合、一个输出 owner；barge 只归播放设备、同房间交叉回声抑制、同词去重、超 `max_planes` 明确告警、单平面崩溃隔离。
+> - **每设备音频覆盖（config v3）**：`devices[].audio.*` 覆盖 AEC 归属/开关、播放后静音 `post_playback_mute_ms`、续听、播放预缓冲与采集布局；`multi_device` 块默认关闭，v2 文件保持 v2。
+> - **逐设备健康与控制台**：`/health` 保留旧字段并新增 `audio_devices[]` 与 `multi_device`；体检页有「未启用多设备 / 逐平面状态」卡片，配置中心新增 `multi_device` 组与每设备 audio 覆盖字段。
+> - **下游升级**：`rui_compat` 上界抬到 `<0.6.0`（0.5.0 会让旧上界失效）；`docs/deploy.md` §7.1 给带 out-of-tree adapter 的安装写了升级/回滚/兼容矩阵；healthcheck 直接说根因（adapter 不兼容、fleet 启动失败、哪个房间的平面没起来），不再只让你 restart。
+> - **设备/插件契约变化 = 无**：adapter/manifest 接口、`drain_wakes()` 时序、`DeviceWake` 六字段不变；真机 LX06 + 2×Dot2 验收由 9哥 保留。
 >
-> 0.4.1 / 0.4.0 的更新见 [v0.4.1](https://github.com/yes999zc/rui/releases/tag/v0.4.1) / [v0.4.0](https://github.com/yes999zc/rui/releases/tag/v0.4.0)。
+> 0.4.2 的更新见 [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2)。
 >
-> [v0.4.2 Release](https://github.com/yes999zc/rui/releases/tag/v0.4.2) · [CHANGELOG](CHANGELOG.md) ·
-> [对比 v0.4.1...v0.4.2](https://github.com/yes999zc/rui/compare/v0.4.1...v0.4.2)
+> [v0.5.0 Release](https://github.com/yes999zc/rui/releases/tag/v0.5.0) · [CHANGELOG](CHANGELOG.md) ·
+> [对比 v0.4.2...v0.5.0](https://github.com/yes999zc/rui/compare/v0.4.2...v0.5.0)
 
 ### 这是什么
 
@@ -76,8 +77,8 @@
 音箱已运行 [open-xiaoai](https://github.com/coderzc/open-xiaoai) client，并与 NAS 同 LAN/L2。
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.2/deploy/install.sh \
-  | RUI_REF=v0.4.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.5.0/deploy/install.sh \
+  | RUI_REF=v0.5.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.0 sh
 ```
 
 首次含镜像拉取和 239 MB 模型通常 **4–8 分钟**；镜像已就绪、只需 ASR 时约 **85 秒**。滚动版本把 tag 换成 `main` 即可。
@@ -135,8 +136,8 @@ flowchart LR
 
 | 范围 | 状态 |
 |---|---|
-| 发布 | **0.4.2**（2026-10-25）；Phase 4 已完成 |
-| 镜像 / 质量 | `ghcr.io/yes999zc/rui:0.4.2`，amd64+arm64；1,142 passed / 18 skipped；ruff、web build、secret-scan 绿 |
+| 发布 | **0.5.0**（2026-10-25）；多设备 0.5（Phase 1 + 2 + 1b + 打磨批） |
+| 镜像 / 质量 | `ghcr.io/yes999zc/rui:0.5.0`，amd64+arm64；1,278 passed / 18 skipped；ruff、web build、secret-scan 绿 |
 | 宿主 | Linux NAS（amd64/arm64），Docker + compose |
 | 音箱 | LX06 + open-xiaoai client（同 LAN/L2，回连 `4412`）；dot2 走外部 `rui-dot2-bridge` |
 | 音源 | Subsonic 家族 + Jellyfin/Emby（MediaBrowser）；Plex 尚未实现 |
@@ -146,7 +147,7 @@ flowchart LR
 
 ### 已知限制
 
-- **单设备**：0.4.x 一个 `:4412` 入口只接一个音箱 client；多设备仲裁/每设备配置 v3 在路线图上。
+- **多设备默认关闭**：0.5.0 支持单实例多平面 + 中央仲裁，但 `multi_device.enabled` 默认 false（保持 0.4.x 语义）；启用前读 [docs/multi-device-design.md](docs/multi-device-design.md)，真机 LX06 + 2×Dot2 验收由 9哥 保留。
 - **只支持 LX06**：需要 open-xiaoai client、同 LAN/L2；刷机/装 client 属于上游，Rui 不代刷。
 - **第三方插头隔离**：sidecar、签名/allowlist、多设备 owner 仲裁尚未交付；in-process 需可信 manifest。
 - **音乐协议**：Plex 尚未实现；新增协议需要适配器。
@@ -164,7 +165,7 @@ flowchart LR
   [MCP/HA](docs/integrations-mcp.md) · [Socket/Plug v1](docs/socket-plug-v1.md)
 - 项目：[CHANGELOG](CHANGELOG.md) · [releases](docs/releases/) · [ROADMAP](docs/ROADMAP.md) · [remaining work](docs/remaining-work.md)
 - 开发：[deploy](docs/deploy.md) · [runbook](docs/runbook.md)
-- 版本：[v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2) · [v0.4.1](https://github.com/yes999zc/rui/releases/tag/v0.4.1) · [v0.4.0](https://github.com/yes999zc/rui/releases/tag/v0.4.0)
+- 版本：[v0.5.0](https://github.com/yes999zc/rui/releases/tag/v0.5.0) · [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2) · [v0.4.1](https://github.com/yes999zc/rui/releases/tag/v0.4.1)
 
 ### 安全与隐私
 
@@ -194,19 +195,20 @@ flowchart LR
 
 ## English
 
-### What's new in 0.4.2
+### What's new in 0.5.0
 
-> **0.4.2 (2026-10-25) finishes the console IA Phase 4: one navigation source, legacy routes retired.**
+> **0.5.0 (2026-10-25) ships multi-device 0.5: one control plane drives several rooms and the wake decision is made centrally.**
 >
-> - **Single nav manifest:** PanelSpec now carries section/order/hidden/icon; the frontend only consumes it, with the duplicate maps and title overrides deleted.
-> - **11 panels, 7 legacy panels retired:** old bookmarks such as `/panel/assistant-session` or `/panel/speaker` no longer resolve; `/api/v1/*` is unchanged.
-> - **Slimmer homepage:** README drops from 512 to 366 lines; install/wizard/troubleshooting detail moved to [`docs/first-run.md`](docs/first-run.md). Screenshots will be refreshed with the next content pass.
-> - **Multi-device design doc:** [`docs/multi-device-design.md`](docs/multi-device-design.md) answers primary/satellite, rooms and double-wake arbitration (design only, runtime unchanged).
+> - **Multi-plane + central arbitration:** one supervised audio plane per enabled inbound speaker; candidates collect for a merge window, then `wake_admit`/`wake_reject` - one turn and one output owner for the house. Barge belongs to the playing room, same-room cross-echo is suppressed, the same word is deduplicated, overflow over `max_planes` is named, and one crashed plane stays isolated.
+> - **Per-device audio overrides (config v3):** `devices[].audio.*` overrides AEC ownership/switch, post-playback mute `post_playback_mute_ms`, follow-up, playback prebuffer and capture layout; the `multi_device` block is off by default and v2 files stay v2.
+> - **Per-plane health and console:** `/health` keeps its old fields and adds `audio_devices[]` plus `multi_device`; the Health page shows an off/on multi-device card with per-plane state, and the config center gained the `multi_device` group and the per-device audio overrides.
+> - **Downstream upgrades:** the `rui_compat` ceiling moves to `<0.6.0` (old ceilings stop matching in 0.5.0); `docs/deploy.md` section 7.1 covers upgrading an install with an out-of-tree adapter, rollback and the compatibility table; the healthcheck now names the root cause (incompatible adapter, fleet start failure, which room is down) instead of only suggesting a restart.
+> - **No device/plug contract change:** adapter/manifest interfaces, `drain_wakes()` timing and the `DeviceWake` six fields are unchanged; real-device LX06 + 2xDot2 acceptance is reserved for 9哥.
 >
-> 0.4.1 / 0.4.0 notes: [v0.4.1](https://github.com/yes999zc/rui/releases/tag/v0.4.1) / [v0.4.0](https://github.com/yes999zc/rui/releases/tag/v0.4.0).
+> 0.4.2 notes: [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2).
 >
-> [v0.4.2 Release](https://github.com/yes999zc/rui/releases/tag/v0.4.2) · [CHANGELOG](CHANGELOG.md) ·
-> [Compare v0.4.1...v0.4.2](https://github.com/yes999zc/rui/compare/v0.4.1...v0.4.2)
+> [v0.5.0 Release](https://github.com/yes999zc/rui/releases/tag/v0.5.0) · [CHANGELOG](CHANGELOG.md) ·
+> [Compare v0.4.2...v0.5.0](https://github.com/yes999zc/rui/compare/v0.4.2...v0.5.0)
 
 ### What it is
 
@@ -243,8 +245,8 @@ local ASR stay on your machine. No vendor cloud is required; only the providers 
 `docker compose`; the speaker already runs [open-xiaoai](https://github.com/coderzc/open-xiaoai) on the same LAN/L2.
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.2/deploy/install.sh \
-  | RUI_REF=v0.4.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.5.0/deploy/install.sh \
+  | RUI_REF=v0.5.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.0 sh
 ```
 
 A first run with an image pull and the 239 MB model usually takes **4–8 minutes**; with the image already
@@ -306,8 +308,8 @@ plug contract: [docs/socket-plug-v1.md](docs/socket-plug-v1.md).
 
 | Scope | Status |
 |---|---|
-| Release | **0.4.2** (2026-10-25); Phase 4 complete |
-| Images / quality | `ghcr.io/yes999zc/rui:0.4.2`, amd64+arm64; 1,142 passed / 18 skipped; ruff, web build, secret-scan green |
+| Release | **0.5.0** (2026-10-25); multi-device 0.5 (Phase 1 + 2 + 1b + polish) |
+| Images / quality | `ghcr.io/yes999zc/rui:0.5.0`, amd64+arm64; 1,278 passed / 18 skipped; ruff, web build, secret-scan green |
 | Host | Linux NAS (amd64/arm64), Docker + compose |
 | Speaker | LX06 + open-xiaoai client (same LAN/L2, dials `4412`); dot2 via external `rui-dot2-bridge` |
 | Music | Subsonic family + Jellyfin/Emby (MediaBrowser); Plex not implemented |
@@ -317,7 +319,7 @@ plug contract: [docs/socket-plug-v1.md](docs/socket-plug-v1.md).
 
 ### Known limitations
 
-- **Single device:** one `:4412` entry accepts one speaker client in 0.4.x; multi-device arbitration/per-device config v3 remain on the roadmap.
+- **Multi-device is off by default:** 0.5.0 supports one instance with several planes and central arbitration, but `multi_device.enabled` defaults to false (0.4.x semantics); read [docs/multi-device-design.md](docs/multi-device-design.md) before enabling. Real-device LX06 + 2xDot2 acceptance is reserved for 9哥.
 - **LX06 only:** needs the open-xiaoai client and same LAN/L2; flashing/client install are upstream, not done by Rui.
 - **Third-party plugs:** sidecar isolation, signing/allowlists and multi-device owner arbitration are not shipped; in-process needs a trusted manifest.
 - **Music protocols:** Plex is not implemented; a new protocol needs an adapter.
@@ -335,7 +337,7 @@ plug contract: [docs/socket-plug-v1.md](docs/socket-plug-v1.md).
   [MCP/HA](docs/integrations-mcp.md) · [Socket/Plug v1](docs/socket-plug-v1.md)
 - Project: [CHANGELOG](CHANGELOG.md) · [releases](docs/releases/) · [ROADMAP](docs/ROADMAP.md) · [remaining work](docs/remaining-work.md)
 - Development: [deploy](docs/deploy.md) · [runbook](docs/runbook.md)
-- Releases: [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2) · [v0.4.1](https://github.com/yes999zc/rui/releases/tag/v0.4.1) · [v0.4.0](https://github.com/yes999zc/rui/releases/tag/v0.4.0)
+- Releases: [v0.5.0](https://github.com/yes999zc/rui/releases/tag/v0.5.0) · [v0.4.2](https://github.com/yes999zc/rui/releases/tag/v0.4.2) · [v0.4.1](https://github.com/yes999zc/rui/releases/tag/v0.4.1)
 
 ### Security and privacy
 

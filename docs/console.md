@@ -3,7 +3,7 @@
 2026-10-22 9哥 定：后台界面结合新项目特点重构，**重点是通用型**；派子 agent 调研了老项目
 控制台全文报告（本文件为蒸馏，老项目引用均指 xiaoai-voice-entry，只读）。
 
-## 0. 当前 IA（0.4.2 Phase 4）
+## 0. 当前 IA（0.5.0：Phase 4 + 多设备状态）
 
 > **0.4.2 Phase 4（2026-10-25）的控制台 IA 收尾。** 导航唯一事实来源是后端
 > `GET /api/v1/panels` 里每条 PanelSpec 的 `nav {section, order, hidden, icon}`；
