@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 def test_defaults_are_sane() -> None:
     cfg = Config()
-    assert cfg.version == 2
+    assert cfg.version == 3
     assert cfg.audio.capture.mic_shift == 12
     assert cfg.audio.capture.ref_shift == 16
     assert cfg.audio.capture.rate == 48000

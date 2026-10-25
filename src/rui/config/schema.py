@@ -6,6 +6,10 @@ Version history:
       and plays 48 kHz / 2 ch, while the voice pipeline runs at 16 kHz.
   2 - rates and channel counts are explicit per direction (`capture`, `voice`,
       `playback`); providers are a catalog plus an ordered fallback chain per stage.
+  3 - optional `devices[].audio` overrides and the `multi_device` block. Nothing is
+      mandatory: a v2 file loads with the same behaviour as before, and an on-disk
+      file is only upgraded to `version: 3` when a v3-only field is actually used,
+      so a rollback to a 0.4.x image keeps working without editing the file.
 """
 from __future__ import annotations
 
@@ -14,9 +18,9 @@ import re
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 
 ExposeMode = Literal["domain", "whitelist", "all"]
 STAGES = ("asr", "tts", "llm")
@@ -167,6 +171,63 @@ class LedConfig(BaseModel):
         return value
 
 
+AecWho = Literal["device", "controller", "both", "none"]
+
+
+class DeviceAecOverride(BaseModel):
+    """AEC ownership for one device (config v3, docs/multi-device-design.md K5)."""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool | None = None
+    who: AecWho | None = None
+
+
+class DeviceVoiceOverride(BaseModel):
+    """The follow-up window, per device: a device-AEC plug keeps echo for seconds."""
+
+    model_config = ConfigDict(extra="forbid")
+    followup_delay_ms: int | None = Field(default=None, ge=0, le=10000)
+    followup_replay: bool | None = None
+
+
+class DeviceCaptureOverride(BaseModel):
+    """Hardware capture layout; every field falls back to `audio.capture`."""
+
+    model_config = ConfigDict(extra="forbid")
+    rate: int | None = Field(default=None, ge=8000, le=96000)
+    channels: int | None = Field(default=None, ge=1, le=16)
+    mic_channels: int | None = Field(default=None, ge=1, le=16)
+    ref_channels: int | None = Field(default=None, ge=0, le=16)
+    bits: Literal[16, 32] | None = None
+    mic_shift: int | None = Field(default=None, ge=0, le=31)
+    ref_shift: int | None = Field(default=None, ge=0, le=31)
+
+
+class DevicePlaybackOverride(BaseModel):
+    """Playback transport quirks (a batching adapter needs a prebuffer)."""
+
+    model_config = ConfigDict(extra="forbid")
+    rate: int | None = Field(default=None, ge=8000, le=96000)
+    channels: int | None = Field(default=None, ge=1, le=8)
+    prebuffer_ms: int | None = Field(default=None, ge=0, le=1000)
+
+
+class DeviceAudioOverride(BaseModel):
+    """Per-device overrides of the global `audio` block (config v3).
+
+    The global block is the default; a device names only what its hardware changes.
+    `extra="forbid"` is deliberate: `devices[0].audio.eq` looks plausible and would
+    otherwise be silently ignored, which is the "fake knob" failure this repo keeps
+    paying for. EQ/limiter/trim stay in plug `params`, not in the core schema (K5).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    aec: DeviceAecOverride | None = None
+    voice: DeviceVoiceOverride | None = None
+    capture: DeviceCaptureOverride | None = None
+    playback: DevicePlaybackOverride | None = None
+
+
 class DeviceConfig(BaseModel):
     id: str = Field(min_length=1, max_length=32)
     # A name, not an enum: the registry decides what exists. Keeping the two shipped
@@ -192,6 +253,9 @@ class DeviceConfig(BaseModel):
     # The reserved key ``plug_id`` identifies which manifest owns the device when two
     # models share one adapter. Old configs without this key load as ``{}``.
     params: dict[str, Any] = Field(default_factory=dict)
+
+    # v3: overrides of the global `audio` block; absent means "inherit everything".
+    audio: DeviceAudioOverride | None = None
 
     @field_validator("id")
     @classmethod
@@ -321,6 +385,11 @@ class AecConfig(BaseModel):
     # mysoftvol 170); "per_channel" = six cancellers, better diagnostics, worse ERLE and
     # 6x the CPU. Measured on this speaker 2026-10-22.
     cancel: Literal["mix", "per_channel"] = "mix"
+    # v3: who runs the canceller. "controller" is the LX06 topology we measured
+    # (RUI cancels on the array mix); "device" means the plug already cancelled and
+    # RUI must not run a second one. "none" is ASR-only (no barge), "both" is an
+    # experiment. `effective_audio()` below resolves a per-device override.
+    who: AecWho = "controller"
 
 
 class AckConfig(BaseModel):
@@ -367,6 +436,38 @@ class AudioConfig(BaseModel):
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     playback: PlaybackConfig = Field(default_factory=PlaybackConfig)
     aec: AecConfig = Field(default_factory=AecConfig)
+
+
+class EffectiveAudio(BaseModel):
+    """The global `audio` block with one device's overrides resolved."""
+
+    capture: CaptureConfig
+    voice: VoiceConfig
+    playback: PlaybackConfig
+    aec: AecConfig
+
+
+def effective_audio(audio: AudioConfig, override: DeviceAudioOverride | None) -> EffectiveAudio:
+    """Merge `devices[].audio` over the global block; absent fields inherit.
+
+    The merged dict is validated again on purpose: an override that changes
+    `capture.channels` without the matching `mic_channels`/`ref_channels` must fail
+    here with a schema error, not later in the audio plane as a frame-length crash.
+    """
+    resolved: dict[str, Any] = {}
+    blocks = {
+        "capture": audio.capture,
+        "voice": audio.voice,
+        "playback": audio.playback,
+        "aec": audio.aec,
+    }
+    for name, block in blocks.items():
+        merged = block.model_dump()
+        part = getattr(override, name) if override is not None else None
+        if part is not None:
+            merged.update(part.model_dump(exclude_none=True))
+        resolved[name] = type(block).model_validate(merged)
+    return EffectiveAudio(**resolved)
 
 
 class ProviderConfig(BaseModel):
@@ -729,6 +830,48 @@ class SessionConfig(BaseModel):
         return self
 
 
+class ArbitrationConfig(BaseModel):
+    """WakeArbiter knobs (frozen in docs/multi-device-design.md §9.1 K3/§11)."""
+
+    model_config = ConfigDict(extra="forbid")
+    # First version only implements "score" (room_priority and last_active are the
+    # tie-break steps inside it, not separate modes).
+    mode: Literal["score", "room_priority", "last_active"] = "score"
+    # Group order between wake sources. Scores from a device OWW model and from RUI
+    # KWS are not comparable, so they are compared inside a group only (K3).
+    source_priority: list[Literal["device_wake", "kws"]] = Field(
+        default_factory=lambda: ["device_wake", "kws"]
+    )
+    # One utterance heard by several devices is one candidate set, not several wakes.
+    candidate_merge_window_ms: int = Field(default=400, ge=100, le=2000)
+    # Same wake word repeated inside this window is a duplicate, not a new turn.
+    duplicate_window_ms: int = Field(default=2000, ge=50, le=10000)
+    room_priority: list[str] = Field(default_factory=list)
+    prefer_playing_room: bool = True
+    last_active_window_s: int = Field(default=120, ge=1, le=3600)
+    on_no_speech: Literal["end", "retry_next"] = "end"
+
+    @field_validator("source_priority")
+    @classmethod
+    def _known_sources(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("arbitration.source_priority must not be empty")
+        if len(set(value)) != len(value):
+            raise ValueError("arbitration.source_priority must not contain duplicates")
+        return value
+
+
+class MultiDeviceConfig(BaseModel):
+    """The `multi_device` block (config v3). Disabled keeps 0.4.x behaviour."""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    max_planes: int = Field(default=4, ge=1, le=8)
+    # Fallback output for reminders/notifications that have no source room (K1/K4).
+    default_output: str | None = None
+    arbitration: ArbitrationConfig = Field(default_factory=ArbitrationConfig)
+
+
 class Config(BaseModel):
     version: int = CONFIG_VERSION
     system: SystemConfig = Field(default_factory=SystemConfig)
@@ -742,6 +885,7 @@ class Config(BaseModel):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     music: MusicConfig = Field(default_factory=MusicConfig)
+    multi_device: MultiDeviceConfig = Field(default_factory=MultiDeviceConfig)
 
     @field_validator("version")
     @classmethod
@@ -763,3 +907,95 @@ class Config(BaseModel):
                 raise ValueError(f"duplicate mcp server name: {s.name}")
             names.add(s.name)
         return self
+
+    @model_validator(mode="after")
+    def _multi_device_references(self) -> Config:
+        """Validate the v3 block against the device list, and merge every override.
+
+        A profile that references a device that does not exist is a typo, not a
+        fallback: it would silently route reminders to "the most active room" while
+        the config claims a fixed speaker (§9.2 D7).
+        """
+        md = self.multi_device
+        by_id = {d.id: d for d in self.devices}
+        if md.default_output is not None:
+            default = by_id.get(md.default_output)
+            if default is None:
+                raise ValueError(
+                    f"multi_device.default_output references unknown device {md.default_output!r}"
+                )
+            if not default.enabled:
+                raise ValueError(
+                    f"multi_device.default_output must be an enabled device, "
+                    f"{default.id!r} is disabled"
+                )
+        priorities = md.arbitration.room_priority
+        if len(set(priorities)) != len(priorities):
+            raise ValueError("multi_device.arbitration.room_priority must not contain duplicates")
+        unknown = [ref for ref in priorities if ref not in by_id]
+        if unknown:
+            raise ValueError(
+                "multi_device.arbitration.room_priority references unknown device(s): "
+                + ", ".join(unknown)
+            )
+        if md.enabled:
+            enabled = [d for d in self.devices if d.enabled]
+            if not enabled:
+                raise ValueError("multi_device.enabled=true requires at least one enabled device")
+            missing_room = [d.id for d in enabled if not d.room.strip()]
+            if missing_room:
+                raise ValueError(
+                    "multi_device.enabled=true requires devices[].room for every enabled "
+                    "device (room drives same-room echo suppression); missing: "
+                    + ", ".join(missing_room)
+                )
+        for dev in self.devices:
+            if dev.audio is None:
+                continue
+            try:
+                effective_audio(self.audio, dev.audio)
+            except ValidationError as exc:
+                raise ValueError(
+                    f"devices[{dev.id}].audio does not merge into a valid audio block: {exc}"
+                ) from exc
+        return self
+
+
+def config_warnings(cfg: Config) -> list[str]:
+    """Legal configurations that still misbehave; surfaced in the log, not as errors.
+
+    Pydantic protects the schema, not the physics: two AEC cancellers in series, or
+    more enabled devices than `max_planes`, parse fine and then disappoint. These are
+    the messages a person needs before blaming the speaker.
+    """
+    warnings: list[str] = []
+    md = cfg.multi_device
+    enabled = [d for d in cfg.devices if d.enabled]
+    for dev in cfg.devices:
+        if dev.audio is None or dev.audio.aec is None or dev.audio.aec.who != "device":
+            continue
+        try:
+            eff = effective_audio(cfg.audio, dev.audio)
+        except ValidationError:
+            continue  # already rejected by Config._multi_device_references
+        if eff.aec.enabled:
+            warnings.append(
+                f"device {dev.id!r}: aec.who=device but RUI AEC is still enabled; "
+                "disable RUI AEC for this device or the two cancellers cascade"
+            )
+    if md.enabled and len(enabled) > md.max_planes:
+        warnings.append(
+            f"multi_device.max_planes={md.max_planes} but {len(enabled)} devices are "
+            "enabled; the extra planes will not start (there is no queueing)"
+        )
+    if md.enabled:
+        warnings.append(
+            "multi_device.enabled=true: this build still runs a single active audio "
+            "plane (Phase 1 is config v3 only); multi-plane scheduling lands in Phase 2"
+        )
+    if md.enabled and md.default_output is None:
+        warnings.append(
+            "multi_device.default_output is empty; reminders with no source room will "
+            "fall back to the most recently active room"
+        )
+    return warnings

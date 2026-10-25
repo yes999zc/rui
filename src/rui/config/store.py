@@ -11,7 +11,13 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from ..env import get as env_get
-from .schema import CONFIG_VERSION, Config, ConfigError
+from .schema import (
+    CONFIG_VERSION,
+    Config,
+    ConfigError,
+    MultiDeviceConfig,
+    config_warnings,
+)
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +42,10 @@ def migrate(raw: dict) -> dict:
     """
     version = int(raw.get("version") or 1)
     if version >= CONFIG_VERSION:
+        return raw
+    if version == 2:
+        # v3 only adds optional fields. A v2 file is read as-is, never rewritten: a
+        # rollback to a 0.4.x image must keep working until a v3-only field is used.
         return raw
     if version != 1:
         raise ConfigError(f"no migration path from config version {version}")
@@ -126,9 +136,25 @@ def load_config(path: str | Path) -> Config:
             "restore the last-good config or schema defaults"
         )
     try:
-        return Config.model_validate(migrate(dict(raw)))
+        cfg = Config.model_validate(migrate(dict(raw)))
     except ValidationError as exc:
         raise ConfigError(str(exc)) from exc
+    for warning in config_warnings(cfg):
+        log.warning("config: %s", warning)
+    return cfg
+
+
+def _uses_v3(cfg: Config) -> bool:
+    """True when the config relies on a v3-only field (K5, multi_device, overrides).
+
+    `audio.aec.who=controller` is the v2 behaviour, so the default value alone does
+    not force an upgrade. Everything else that cannot be expressed in v2 does.
+    """
+    if cfg.audio.aec.who != "controller":
+        return True
+    if cfg.multi_device != MultiDeviceConfig():
+        return True
+    return any(dev.audio is not None for dev in cfg.devices)
 
 
 def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
@@ -150,8 +176,13 @@ def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.chmod(tmp, 0o600)          # chmod before the first byte, umask-proof
+        data = cfg.model_dump(mode="json")
+        # An older file only becomes v3 once a v3-only field is written, so a config
+        # that still parses as v2 stays readable by a 0.4.x image after a rollback.
+        if data.get("version", 0) < CONFIG_VERSION and _uses_v3(cfg):
+            data["version"] = CONFIG_VERSION
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            _yaml.dump(cfg.model_dump(mode="json"), fh)
+            _yaml.dump(data, fh)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

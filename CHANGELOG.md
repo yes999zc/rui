@@ -16,6 +16,29 @@ canonical per-version record.
 
 ## [Unreleased]
 
+### Added
+
+- **Config v3, Phase 1 — per-device audio overrides, still one active plane.**
+  `devices[].audio` can now override the global `audio` block for one device: `aec`
+  (including the new `aec.who: device｜controller｜both｜none`), `voice.followup_delay_ms`
+  / `voice.followup_replay`, `capture` and `playback.prebuffer_ms`. Unknown keys are
+  rejected (`extra="forbid"`; EQ/limiter stay in plug `params`, not in the core).
+  `effective_audio()` merges an override over the global defaults and re-validates the
+  merged block, so a partial capture override that no longer adds up fails at load time
+  instead of crashing the plane. Frozen decisions: `docs/multi-device-design.md` §9.
+- **`multi_device` config block (parsing and validation only).** `enabled` (default
+  `false`), `max_planes` (default 4), `default_output`, and `arbitration`
+  (`source_priority` default `[device_wake, kws]`, `candidate_merge_window_ms` default
+  400, `duplicate_window_ms` default 2000, `room_priority`, `prefer_playing_room`,
+  `last_active_window_s`, `on_no_speech`). Unknown ids in `default_output` /
+  `room_priority`, duplicate priorities and `room`-less devices with
+  `multi_device.enabled=true` are rejected; `config_warnings()` reports legal-but-wrong
+  combinations (double AEC cancellation, more enabled devices than `max_planes`, and
+  the fact that multi-plane scheduling is still Phase 2).
+- **v2 configs stay v2.** A v2 file loads with identical behaviour and is only written
+  as `version: 3` once a v3-only field is actually used, so rolling back to a 0.4.x
+  image keeps working without editing the file.
+
 <!-- Add changes here as they land; move them under the next version at release time. -->
 
 ## [0.4.2] - 2026-10-25

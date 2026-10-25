@@ -372,9 +372,13 @@ multi_device:
 
 ### Phase 1（0.5.0-alpha）：config v3 + 每设备覆盖（仍单 active）
 
-- 加 devices[].audio（至少 aec/followup/capture 的解析与继承）+ multi_device 块 + 迁移/校验。
-- 仍只跑一台 active；行为不变；控制台先展示“未启用多设备”的状态与将启用的设备。
-- 判据：v2→v3 round-trip；旧配置行为零差异；per-device AEC 解析有测试；LX06 不回归。
+- **状态（2026-10-25）：解析/继承/校验/迁移已落地**（`src/rui/config/schema.py`、`store.py`、
+  `tests/test_config_v3.py`）：`devices[].audio`（aec/voice.followup/capture/playback.prebuffer_ms）、
+  `multi_device` 块、`effective_audio()` 合并与再校验、引用/房间校验、`config_warnings()`；
+  v2 文件保持 v2，只在用到 v3 字段时写 `version: 3`。控制台"未启用多设备"状态展示属 Phase 1b。
+- 仍只跑一台 active；行为不变（`multi_device.enabled=true` 合法但只记录 warning，多平面在 Phase 2）。
+- 判据：v2→v3 round-trip（`test_v2_config_becomes_v3_once_a_device_override_is_used`）；旧配置行为零差异；
+  per-device AEC 解析有测试；LX06 不回归。
 
 ### Phase 2（0.5.0-beta）：多平面 + 中央仲裁（目标：LX06 + Dot2）
 

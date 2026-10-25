@@ -13,7 +13,7 @@ def client(cfg: Config | None = None) -> TestClient:
 def test_health() -> None:
     body = client().get("/health").json()
     assert body["status"] == "ok"
-    assert body["config_version"] == 2
+    assert body["config_version"] == 3
     assert body["device_errors"] == 0
 
 
