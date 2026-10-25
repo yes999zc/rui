@@ -30,7 +30,10 @@ from ... import __version__, billing, secrets
 from ... import setup_state as setup_store
 from ...audio.ack import ack_wav_path
 from ...audio.ack_render import render_ack_wav, render_filler_pcm
+from ...audio.arbiter import ArbiterDevice, WakeArbiter
 from ...audio.client import AudioPlaneSupervisor
+from ...audio.coordinator import WakeCoordinator
+from ...audio.fleet import PlaneFleet
 from ...audio.kws import KwsUnavailable, keyword_meta, model_files, write_keywords_file
 from ...audio.probe import safe_probe
 from ...audio.protocol import PlayFile, StopAudio
@@ -132,25 +135,28 @@ code{background:#f4f4f5;padding:2px 6px;border-radius:4px}</style></head>
 <p>API: <code>/health</code>, <code>/api/v1/doctor</code>, <code>/api/v1/config</code></p></body></html>"""
 
 
-def _light(app: FastAPI, effect: str, repaint: bool = False) -> None:
+def _light(app: FastAPI, effect: str, repaint: bool = False,
+           live: object | None = None) -> None:
     """Paint the ring without blocking the caller.
 
     The shell request shares the websocket with the audio stream; the old build measured
-    a 3 s resume delay from awaiting one animation, so this is always a task.
+    a 3 s resume delay from awaiting one animation, so this is always a task. `live`
+    targets one room's plane; by default it is the preferred plane, so a single-plane
+    caller keeps the old behaviour.
     """
-    supervisor = getattr(app.state, "audio", None)
-    live = supervisor.client if supervisor is not None else None
-    if live is None:
+    target = live if live is not None else _primary_client(app)
+    if target is None:
         return
     log.info("led: %s%s", effect, " (repaint)" if repaint else "")
-    task = asyncio.create_task(live.set_led(effect, repaint=repaint), name="led")
+    task = asyncio.create_task(target.set_led(effect, repaint=repaint), name="led")
     tasks = getattr(app.state, "led_tasks", None)
     if tasks is not None:
         tasks.add(task)
         task.add_done_callback(tasks.discard)
 
 
-def _light_after_audio(app: FastAPI, audio_bytes: int, rate: int, effect: str = "listening") -> None:
+def _light_after_audio(app: FastAPI, audio_bytes: int, rate: int, effect: str = "listening",
+                      live: object | None = None) -> None:
     """Paint `effect` when the audio just queued has finished playing.
 
     run() returns when the last chunk is queued, not played; output_owner is released
@@ -162,24 +168,30 @@ def _light_after_audio(app: FastAPI, audio_bytes: int, rate: int, effect: str = 
 
     async def run() -> None:
         await asyncio.sleep(seconds + 0.6)
-        _light(app, effect)
+        _light(app, effect, live=live)
         if effect != "listening":
             return
         for _ in range(3):
             await asyncio.sleep(1.2)
-            _light(app, effect, repaint=True)
+            _light(app, effect, repaint=True, live=live)
 
     asyncio.create_task(run(), name="led-after-audio")
 
 
-def _speaking(app: FastAPI, live: object):
-    """A speak callable that turns the ring cyan on the first block of a turn."""
+def _speaking(app: FastAPI, live: object, on_first: object | None = None):
+    """A speak callable that turns the ring cyan on the first block of a turn.
+
+    `on_first` is the Phase 2 ownership hook: a room claims the output owner when it
+    starts sounding, which is what lets only that room barge while it plays.
+    """
     turned = {"on": False}
 
     async def say(pcm: bytes, **kwargs: object) -> None:
         if not turned["on"]:
             turned["on"] = True
-            _light(app, "speaking")
+            _light(app, "speaking", live=live)
+            if on_first is not None:
+                on_first()  # type: ignore[operator]
         await live.speak(pcm, **kwargs)  # type: ignore[attr-defined]
 
     return say
@@ -285,8 +297,9 @@ def _music_sender(app: FastAPI):
     """
 
     async def send(msg: object) -> None:
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
+        # Music is a single-room global owner (D2): route it to whichever room owns
+        # the output now, not to the first plane that happened to connect.
+        client = _owner_client(app)
         if client is None:
             raise RuntimeError("no audio plane connected")
         await client.send(msg)  # type: ignore[arg-type]
@@ -976,8 +989,14 @@ def _plane_snapshot(app: FastAPI) -> dict:
     """What the audio plane says right now: the only source of "the room is connected".
 
     The control plane builds its own adapter objects for `probe()`, but the inbound
-    socket lives in the audio-plane process; its metrics are the honest answer.
+    socket lives in the audio-plane process; its metrics are the honest answer. In
+    multi-device mode this aggregates the fleet (any room up/connected) so the old
+    callers keep one question with one answer; per-device detail lives in
+    /health.audio_devices and the device status endpoint.
     """
+    fleet = _audio_fleet(app)
+    if fleet is not None:
+        return _fleet_snapshot(app, fleet)
     supervisor = getattr(app.state, "audio", None)
     status: dict = {}
     if supervisor is not None:
@@ -996,6 +1015,241 @@ def _plane_snapshot(app: FastAPI) -> dict:
         "last_seen": getattr(app.state, "speaker_last_seen", 0.0) or None,
         "error": str(status.get("error") or ""),
     }
+
+
+def _fleet_snapshot(app: FastAPI, fleet: object) -> dict:
+    """One aggregate plane view for old callers (/health, healthcheck, setup).
+
+    running/speaker_connected are true when any room is up/connected: one dead room
+    must not turn the whole container unhealthy (D4 failure isolation), and the
+    per-device rows carry which room is down. speaker_device is default_output or the
+    first connected room, matching the old single-device field.
+    """
+    statuses: dict = {}
+    with contextlib.suppress(Exception):
+        statuses = fleet.status()
+    metrics = {device_id: (row.get("metrics") or {}) for device_id, row in statuses.items()}
+    connected = [device_id for device_id, metric in metrics.items()
+                 if bool(metric.get("speaker_connected"))]
+    if connected:
+        app.state.speaker_last_seen = time.time()
+    running = any(bool(row.get("running")) for row in statuses.values())
+    preferred = _primary_device_id(app)
+    device = preferred if preferred in connected else (connected[0] if connected else preferred)
+    rejected = sum(int(metric.get("speaker_rejected") or 0) for metric in metrics.values())
+    errors = [f"{device_id}: {row.get('error')}" for device_id, row in statuses.items()
+              if row.get("error")]
+    return {
+        "running": running,
+        "speaker_connected": bool(connected),
+        "speaker_rejected": rejected,
+        "speaker_device": device or "",
+        "last_seen": getattr(app.state, "speaker_last_seen", 0.0) or None,
+        "error": "; ".join(errors),
+    }
+
+
+def _audio_fleet(app: FastAPI) -> object | None:
+    """The Phase 2 multi-plane fleet, or None on the single-supervisor path."""
+    return getattr(app.state, "audio_fleet", None)
+
+
+def _primary_device_id(app: FastAPI, config: Config | None = None) -> str:
+    """The room an endpoint with no source device should talk to.
+
+    multi_device.default_output wins when it is configured and running (K1/K4);
+    otherwise the first running plane, then the first configured one. On the
+    single-plane path this is the supervisor's own pick, so nothing changes there.
+    """
+    fleet = _audio_fleet(app)
+    if fleet is None:
+        supervisor = getattr(app.state, "audio", None)
+        pick = getattr(supervisor, "_pick_device", None)
+        if callable(pick):
+            try:
+                return str(pick() or "")
+            except Exception:  # noqa: BLE001 - a status helper must never raise
+                return ""
+        return ""
+    ids = list(fleet.device_ids())
+    if not ids:
+        return ""
+    cfg_now = config if config is not None else getattr(app.state, "cfg", None)
+    default = str(getattr(getattr(cfg_now, "multi_device", None), "default_output", "") or "")
+    if default in ids and fleet.running(default):
+        return default
+    for device_id in ids:
+        if fleet.running(device_id):
+            return device_id
+    return default if default in ids else ids[0]
+
+
+def _client_for(app: FastAPI, device_id: str = "") -> object | None:
+    """A live AudioPlaneClient for one room, or for the preferred one."""
+    fleet = _audio_fleet(app)
+    if fleet is None:
+        supervisor = getattr(app.state, "audio", None)
+        return getattr(supervisor, "client", None)
+    if not device_id:
+        device_id = _primary_device_id(app)
+    if not device_id:
+        return None
+    try:
+        return fleet.supervisor(device_id).client
+    except KeyError:
+        return None
+
+
+def _primary_client(app: FastAPI) -> object | None:
+    """The preferred room's live client (single-plane: the only one)."""
+    return _client_for(app)
+
+
+def _handle_for(app: FastAPI, device_id: str = "") -> object | None:
+    """The stable per-room handle: callbacks and sends belong here."""
+    fleet = _audio_fleet(app)
+    if fleet is None:
+        supervisor = getattr(app.state, "audio", None)
+        return getattr(supervisor, "handle", None)
+    if not device_id:
+        device_id = _primary_device_id(app)
+    if not device_id:
+        return None
+    try:
+        return fleet.handle(device_id)
+    except KeyError:
+        return None
+
+
+def _owner_client(app: FastAPI) -> object | None:
+    """The current output owner's live client, else the preferred room."""
+    owner = str(getattr(app.state, "output_owner", "") or "")
+    if owner:
+        client = _client_for(app, owner)
+        if client is not None:
+            return client
+    return _primary_client(app)
+
+
+def _turn_handle(app: FastAPI) -> object | None:
+    """The handle of the room whose turn is running (volume/music tools)."""
+    return _handle_for(app, str(getattr(app.state, "turn_device", "") or ""))
+
+
+def _live_clients(app: FastAPI) -> list[object]:
+    """Every connected plane client (one on the single-plane path)."""
+    fleet = _audio_fleet(app)
+    if fleet is None:
+        supervisor = getattr(app.state, "audio", None)
+        client = getattr(supervisor, "client", None)
+        return [client] if client is not None else []
+    clients: list[object] = []
+    for device_id in fleet.device_ids():
+        client = _client_for(app, device_id)
+        if client is not None:
+            clients.append(client)
+    return clients
+
+
+def _any_output_owner(app: FastAPI) -> bool:
+    """True while any plane reports that it owns the speaker."""
+    for client in _live_clients(app):
+        metrics = getattr(client, "metrics", None)
+        if metrics is not None and bool(getattr(metrics, "output_owner", "")):
+            return True
+    return False
+
+
+def _plane_running(app: FastAPI) -> bool:
+    """True when the plane (any plane) is up and connected."""
+    fleet = _audio_fleet(app)
+    if fleet is not None:
+        return bool(fleet.running_count())
+    supervisor = getattr(app.state, "audio", None)
+    return bool(getattr(supervisor, "running", False))
+
+
+class _PlaneLink:
+    """One room's PlaneHandle with the Phase 2 bookkeeping attached.
+
+    Reads and writes go straight through to the handle, so the existing turn code and
+    the module-level command helpers work unchanged. Only speak and reply_finished add
+    side effects: the first block claims the output owner (the only room allowed to
+    barge while it plays, section 12.3), and a finished reply closes the turn so later
+    wakes are not rejected turn_open forever. The owner itself is released by
+    _reconcile_owner, because music may still be playing after the answer drained.
+    """
+
+    def __init__(self, app: FastAPI, device_id: str, handle: object,
+                 coordinator: object | None = None) -> None:
+        object.__setattr__(self, "_app", app)
+        object.__setattr__(self, "_device_id", device_id)
+        object.__setattr__(self, "_handle", handle)
+        object.__setattr__(self, "_coordinator", coordinator)
+        object.__setattr__(self, "_claimed", False)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._handle, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        # link.last_wake = None and link.on_utterance = ... must land on the handle,
+        # not shadow it on this wrapper.
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._handle, name, value)
+
+    def _claim_owner(self) -> None:
+        if self._coordinator is None or self._claimed:
+            return
+        object.__setattr__(self, "_claimed", True)
+        self._coordinator.set_owner(self._device_id)  # type: ignore[attr-defined]
+        self._app.state.output_owner = self._device_id
+
+    async def speak(self, pcm: bytes, **kwargs: object) -> None:
+        self._claim_owner()
+        await self._handle.speak(pcm, **kwargs)  # type: ignore[attr-defined]
+
+    async def reply_finished(self, *args: object, **kwargs: object) -> None:
+        try:
+            await self._handle.reply_finished(*args, **kwargs)  # type: ignore[attr-defined]
+        finally:
+            object.__setattr__(self, "_claimed", False)
+            if self._coordinator is not None:
+                self._coordinator.set_turn_open(False)  # type: ignore[attr-defined]
+                self._coordinator.touch(self._device_id)  # type: ignore[attr-defined]
+
+
+def _reconcile_owner(app: FastAPI) -> None:
+    """Keep the arbiter's owner/playing view equal to what the planes report.
+
+    An answer ends before its audio drains and music keeps sounding after the reply, so
+    ownership is released only when no plane reports an output owner. A dead owner
+    releases the claim too (section 12.4 output_owner_lost); a playing room takes over.
+    """
+    fleet = _audio_fleet(app)
+    coordinator = getattr(app.state, "wake_coordinator", None)
+    if fleet is None or coordinator is None:
+        return
+    owner = str(getattr(app.state, "output_owner", "") or "")
+    playing: list[str] = []
+    for device_id in fleet.device_ids():
+        client = _client_for(app, device_id)
+        metrics = getattr(client, "metrics", None)
+        if metrics is not None and bool(getattr(metrics, "output_owner", "")):
+            playing.append(device_id)
+    if not playing:
+        if coordinator.arbiter.state.turn_open:
+            return
+        if owner:
+            log.info("output owner released: %s", owner)
+        app.state.output_owner = ""
+    elif owner not in playing:
+        if owner and not fleet.running(owner):
+            app.state.output_owner_lost = int(getattr(app.state, "output_owner_lost", 0)) + 1
+            log.warning("output owner lost: %s; the playing room takes the output", owner)
+        app.state.output_owner = playing[0]
+    coordinator.set_owner(app.state.output_owner or None)
 
 
 def _adapter_health(adapter: object) -> dict:
@@ -1078,8 +1332,11 @@ def _active_device_id(app: FastAPI, config: Config) -> str:
 
     The supervisor picks the first drivable enabled adapter; asking it keeps the
     warning truthful instead of assuming config order. Without a supervisor (tests,
-    setup-only boot) the first enabled device is the honest fallback.
+    setup-only boot) the first enabled device is the honest fallback. In fleet mode
+    there is no single active device; the preferred room answers the old callers.
     """
+    if _audio_fleet(app) is not None:
+        return _primary_device_id(app, config)
     supervisor = getattr(app.state, "audio", None)
     pick = getattr(supervisor, "_pick_device", None)
     if callable(pick):
@@ -1093,6 +1350,29 @@ def _active_device_id(app: FastAPI, config: Config) -> str:
         if device.enabled:
             return device.id
     return ""
+
+
+def _enabled_inbound(config: Config) -> list[DeviceConfig]:
+    """Enabled devices that expect an inbound speaker connection (one plane each)."""
+    catalog = PlugCatalog(config.system.data_dir)
+    return [device for device in config.devices
+            if device.enabled and is_inbound(device, catalog)]
+
+
+def _plane_handles(app: FastAPI) -> list[object]:
+    """Every configured plane's stable handle (one on the single-plane path)."""
+    fleet = _audio_fleet(app)
+    if fleet is None:
+        supervisor = getattr(app.state, "audio", None)
+        handle = getattr(supervisor, "handle", None)
+        return [handle] if handle is not None else []
+    handles: list[object] = []
+    for device_id in fleet.device_ids():
+        try:
+            handles.append(fleet.handle(device_id))
+        except KeyError:
+            continue
+    return handles
 
 
 def _device_warnings(config: Config, active_id: str) -> list[dict]:
@@ -1667,27 +1947,37 @@ def create_app(
         app.state.ack_note = ""
         app.state.led_tasks = set()
 
-        def _wire_plane(device_id: str, client: object) -> None:
+        def _wire_plane(device_id: str, handle: object,
+                        coordinator: WakeCoordinator | None = None) -> None:
             """Attach every turn callback for one audio plane.
 
-            ``client`` is that room's stable PlaneHandle: the supervisor re-binds
+            ``handle`` is that room's stable PlaneHandle: the supervisor re-binds
             the callbacks after a restart, so this runs once per plane, not per launch.
             ``device_id`` names the room the turn and its answer belong to.
             """
+            link = _PlaneLink(app, device_id, handle, coordinator)
             async def on_utterance(pcm: bytes) -> None:
+                # The room that is speaking now; the volume tool and the music sender
+                # read it so a command lands in the room that asked for it.
+                app.state.turn_device = device_id
+                if coordinator is not None:
+                    # A follow-up utterance arrives with no new Wake event, so the turn
+                    # has to be (re)stated here as well as in on_wake.
+                    coordinator.set_turn_open(True)
+                    coordinator.touch(device_id)
                 if vendor.muted():
                     # The speaker's own assistant is answering; answering too would
                     # double-reply to one sentence.
                     log.info("vendor dialog, dropping our turn (%.1fs left)",
                              vendor.remaining())
                     return
-                trace = TurnTrace(device_id=client.ready.device_id if client.ready else "")
-                if client.last_wake is not None:
-                    trace.mark("wake", at_ms=client.last_wake.ts_ms)
-                    trace.note_wake(client.last_wake)
+                trace = TurnTrace(device_id=link.ready.device_id if link.ready else "")
+                if link.last_wake is not None:
+                    trace.mark("wake", at_ms=link.last_wake.ts_ms)
+                    trace.note_wake(link.last_wake)
                     # Consume it: a follow-up utterance has no new wake event, and
                     # reusing this timestamp made first_response_ms 20-35 s.
-                    client.last_wake = None
+                    link.last_wake = None
                 text, asr_report = await runner.transcribe(pcm, trace)
                 clean = strip_wake(text, runner.wake_words)
                 if "小爱同学" in clean or clean.strip() in {"小爱", "小爱小爱"}:
@@ -1714,49 +2004,49 @@ def create_app(
                 # Transport words before the dismiss list: 「暂停」 and 「停一下」
                 # are both, and with a song playing they mean the player, not
                 # the session (old build: VENDOR_PAUSE_WORDS checked first).
-                if await _music_transport(app, clean, runner, client, trace,
+                if await _music_transport(app, clean, runner, link, trace,
                                           traces) is not None:
                     return
-                if await _volume_command(app, clean, runner, client, trace,
+                if await _volume_command(app, clean, runner, link, trace,
                                          traces) is not None:
                     return
-                if await _context_command(app, clean, runner, client, trace,
+                if await _context_command(app, clean, runner, link, trace,
                                           traces) is not None:
                     return
-                if await _stop_command(app, clean, runner, client, trace, traces):
+                if await _stop_command(app, clean, runner, link, trace, traces):
                     return
                 # A bare device name is a question, not a command (old build,
                 # measured 5/5 guessing the direction): ask which way.
                 if rules.verbless_device_name(clean):
                     line = phrases.book.render("device.ask_verb")
                     runner.idle.touch()
-                    spoken = await runner.say(line, _speaking(app, client), trace)
+                    spoken = await runner.say(line, _speaking(app, link), trace)
                     _record_turn(app, {
                         "transcript": clean, "reply": line, "audio_bytes": spoken,
                         "error": "", "tools": ["clarify.verb"],
                         "stages": {},
                     })
-                    _light_after_audio(app, spoken, cfg.audio.voice.rate)
+                    _light_after_audio(app, spoken, cfg.audio.voice.rate, live=link)
                     log.info("clarify: bare device name %r -> asking the verb", clean)
                     return
-                _light(app, "thinking")
+                _light(app, "thinking", live=link)
                 # An utterance that asks to be remembered leaves a candidate
                 # for the console; it is not injected until confirmed.
                 with contextlib.suppress(Exception):
                     memory.extract(clean)
                 try:
-                    result = await runner.run(pcm, _speaking(app, client), trace, transcript=clean)
+                    result = await runner.run(pcm, _speaking(app, link), trace, transcript=clean)
                 except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
                     log.warning("turn failed: %s", exc)
                     # Turn-level degrade (V1): silence after a wake reads as
                     # "it ignored me"; one system-layer line, best effort.
                     with contextlib.suppress(Exception):
                         await runner.say(phrases.book.render("turn.failed"),
-                                         _speaking(app, client), trace)
+                                         _speaking(app, link), trace)
                     # The plane's drain needs the flag or it falls back to the
                     # no-reply grace; a failed turn is still a finished turn.
                     with contextlib.suppress(Exception):
-                        await client.reply_finished()
+                        await link.reply_finished()
                     return
                 claimed_device = rules.claims_device_success(clean, result.reply)
                 claimed_music = rules.claims_music_success(clean, result.reply)
@@ -1768,32 +2058,32 @@ def create_app(
                             "如果是点歌就调用 music_play；做不到就如实说没做成，"
                             "不要谎称已经放/已经执行。")
                     try:
-                        result = await runner.run(pcm, _speaking(app, client), trace,
+                        result = await runner.run(pcm, _speaking(app, link), trace,
                                                   transcript=clean, hint=hint)
                     except Exception as exc:  # noqa: BLE001
                         log.warning("retry after a false claim failed: %s", exc)
                     if not result.tools:
                         key = "music.ask_play" if claimed_music else "device.not_done"
                         line = phrases.book.render(key)
-                        spoken = await runner.say(line, _speaking(app, client), trace)
+                        spoken = await runner.say(line, _speaking(app, link), trace)
                         result.reply = line
                         result.audio_bytes = spoken
                 if asr_report is not None:
                     result.stages.setdefault("asr", asr_report)
                 _record_turn(app, result.to_dict())
-                trace.note_playback_metrics(getattr(client, "metrics", None))
+                trace.note_playback_metrics(getattr(link, "metrics", None))
                 traces.add(trace)
                 # A music/volume turn wants the song back the moment the reply
                 # drains, not after the follow-up window (measured 09:21: ~10 s).
-                await client.reply_finished(hold_music_s=_turn_hold(result))
+                await link.reply_finished(hold_music_s=_turn_hold(result))
                 _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
                                    _turn_light(result))
                 log.info("turn: %s", result.to_dict())
 
-            client.on_utterance = on_utterance
+            link.on_utterance = on_utterance
             async def stop_ours() -> None:
                 try:
-                    await client.send(StopAudio())
+                    await link.send(StopAudio())
                 except Exception as exc:  # noqa: BLE001 - never crash the app
                     log.info("vendor yield: stop failed: %s", exc)
 
@@ -1871,12 +2161,19 @@ def create_app(
                 if service is not None and service.state == "playing":
                     asyncio.create_task(vendor_park_and_watch(), name="vendor-park")
                 asyncio.create_task(stop_ours(), name="vendor-stop")
-                _light(app, "off")
+                _light(app, "off", live=link)
 
-            client.on_vendor = on_vendor
+            link.on_vendor = on_vendor
             def on_wake(msg: object) -> None:
                 vendor.ours_spoke()
-                _light(app, "wake")
+                app.state.turn_device = device_id
+                if coordinator is not None:
+                    # Sent by the winning plane right after wake_admit: from here the
+                    # house is in a turn, so other candidates get turn_open (K2), and
+                    # this is the recency signal the next same-room arbitration reads.
+                    coordinator.set_turn_open(True)
+                    coordinator.touch(device_id)
+                _light(app, "wake", live=link)
                 # Unified idle rule (9哥, 16:1x): ANY interaction in a session ends
                 # with 「我先下啦」 after session.timeout_s of silence - a wake that
                 # heard nothing, a finished answer, a finished song. The clock is
@@ -1897,31 +2194,61 @@ def create_app(
                     runner.abort()
 
             def on_wake_idle(msg: object) -> None:
+                if coordinator is not None:
+                    # The gate closed without speech: the turn is over. Without this
+                    # every later wake would be rejected turn_open (D1: no promotion).
+                    coordinator.set_turn_open(False)
+                    coordinator.touch(device_id)
                 # The listening gate closed with nothing said. Do NOT close the
                 # session here: the unified rule says a silent wake still gets the
                 # 「我先下啦」 goodbye after session.timeout_s (9哥, 16:1x). The idle
                 # clock was started in on_wake and keeps running; only the light is
                 # turned off because nobody is being listened to any more.
-                _light(app, "off")
+                _light(app, "off", live=link)
                 log.info("wake without speech (%.1f s); idle goodbye in %.0f s",
                          float(getattr(msg, "waited_ms", 0.0)) / 1000.0,
                          max(0.0, runner.idle.remaining()))
 
-            client.on_wake = on_wake
-            client.on_wake_idle = on_wake_idle
+            link.on_wake = on_wake
+            link.on_wake_idle = on_wake_idle
+            if coordinator is not None:
+                def on_wake_candidate(msg: object, d: str = device_id) -> None:
+                    # The plane reports, the arbiter decides. A task keeps the reader
+                    # loop free; app.state.wake_tasks holds the reference so a pending
+                    # verdict cannot be garbage-collected.
+                    task = asyncio.create_task(
+                        coordinator.on_candidate(d, msg), name=f"wake-candidate-{d}")
+                    tasks = getattr(app.state, "wake_tasks", None)
+                    if tasks is not None:
+                        tasks.add(task)
+                        task.add_done_callback(tasks.discard)
+
+                link.on_wake_candidate = on_wake_candidate
             music = getattr(app.state, "music", None)
             if music is not None:
                 # The queue advances only on a file's natural end (the plane's
                 # PlayFinished); a pause or a barge must not look like a finish.
-                client.on_playback_finished = music.on_finished
+                link.on_playback_finished = music.on_finished
 
+
+        def _register_audio_tools() -> None:
+            """Register the volume and memory tools once for the whole process.
+
+            The volume tool resolves the room of the running turn, so it is not bound to
+            one plane: a command changes the volume of the room that asked. The specs are
+            guarded because the lifespan can run twice (TestClient, restarts).
+            """
             # Volume: the speaker's own mixer, never a claim without a call.
             # Measured 08:53: 「音量80%」 was answered 「音量调到80%了。」 with
             # zero tool calls - the old build's false-claim failure mode.
             async def volume_tool(args: dict) -> ToolResult:
                 level = str(args.get("level") or "").strip().lower()
+                # The room that asked, not the last plane that was wired.
+                live = _turn_handle(app)
+                if live is None:
+                    return ToolResult(status="unreachable")
                 try:
-                    now = await client.device_volume()
+                    now = await live.device_volume()
                 except Exception:  # noqa: BLE001 - a dead mixer is a sentence
                     return ToolResult(status="unreachable")
                 if now is None:
@@ -1940,13 +2267,14 @@ def create_app(
                     pct = max(0, min(100, int(digits)))
                 target = round(pct * 255 / 100)
                 try:
-                    got = await client.set_device_volume(target)
+                    got = await live.set_device_volume(target)
                 except Exception:  # noqa: BLE001
                     return ToolResult(status="unreachable")
                 applied = round((got if got is not None else target) * 100 / 255)
                 # Learn it as the target: the reconciler would otherwise put the
                 # configured value back within 16 s (old build: adopt_device_volume).
-                dev_id = client.ready.device_id if client.ready else ""
+                dev_id = (str(getattr(app.state, "turn_device", "") or "")
+                          or (live.ready.device_id if live.ready else ""))
                 dev = next((d for d in cfg.devices if d.id == dev_id),
                            cfg.devices[0] if cfg.devices else None)
                 if dev is not None and config_path is not None:
@@ -1979,53 +2307,161 @@ def create_app(
             runner.set_tools(local_tools)
             app.state.volume_tool = volume_tool
 
-        if start_audio:
-            supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
-            ready = None
+        async def _start_fleet(updated: Config) -> str:
+            """Start one plane per enabled inbound device, then wire the arbiter.
+
+            Over max_planes is a warning, not a refusal: the first rooms start and the
+            refused ids are named in /health (D4: no queueing). A fleet where nothing
+            starts is recorded and does not raise out of startup: the console and /health
+            must still answer, and each failed room is retried by its own watchdog.
+            """
+            fleet = PlaneFleet(updated, config_path=config_path)
+            app.state.audio = fleet
+            app.state.audio_fleet = fleet
+            app.state.fleet_refused = []
+            ids = [device.id for device in _enabled_inbound(updated)]
+            limit = updated.multi_device.max_planes
+            refused = ids[limit:]
+            ids = ids[:limit]
+            if refused:
+                app.state.fleet_refused = refused
+                log.warning("audio fleet: max_planes=%d refused %s", limit, ", ".join(refused))
+            if not ids:
+                log.info("audio fleet: no enabled inbound device; no plane to start")
+                _set_wake_coordinator(updated, fleet, [])
+                return ""
             try:
-                await supervisor.start()
-                ready = supervisor.client.ready if supervisor.client else None
-                log.info(
-                    "audio plane up: pid=%s device=%s capture=%s Hz/%s ch",
-                    supervisor.proc.pid if supervisor.proc else "?",
-                    ready.device_id if ready else "?",
-                    ready.capture_rate if ready else "?",
-                    ready.capture_channels if ready else "?",
-                )
+                await fleet.start(ids)
             except Exception as exc:  # noqa: BLE001 - a device problem must not kill the console
-                supervisor.error = f"{type(exc).__name__}: {exc}"
-                log.warning("audio plane did not start: %s", exc)
-            # Armed even when the first launch failed: the watchdog is what turns
-            # "plane crashed" into a few seconds of silence instead of a manual
-            # restart on the NAS (Docker does not restart on an unhealthy check).
-            supervisor.watch()
-            app.state.audio = supervisor
-            # The handle stays valid across restarts (callbacks are re-applied on
-            # every bind), so the turn path is wired once, not once per launch.
-            _wire_plane(ready.device_id if ready else "", supervisor.handle)
+                app.state.fleet_error = f"{type(exc).__name__}: {exc}"
+                log.warning("audio fleet did not start: %s", exc)
+                _set_wake_coordinator(updated, fleet, [])
+                return app.state.fleet_error
+            app.state.fleet_error = ""
+            app.state.fleet_start_errors = fleet.start_errors
+            _set_wake_coordinator(updated, fleet, ids)
+            for device_id in ids:
+                _wire_plane(device_id, fleet.handle(device_id),
+                            getattr(app.state, "wake_coordinator", None))
+            return ""
+
+        def _set_wake_coordinator(updated: Config, fleet: PlaneFleet,
+                                  ids: list[str]) -> None:
+            """(Re)build the arbiter for the devices that actually got a plane."""
+            previous = getattr(app.state, "wake_coordinator", None)
+            if previous is not None:
+                asyncio.create_task(previous.close(), name="wake-coordinator-close")
+            app.state.output_owner = ""
+            rooms = {device.id: (device.room or "") for device in updated.devices}
+            devices = [ArbiterDevice(device.id, room=device.room or "",
+                                     enabled=device.enabled)
+                       for device in updated.devices]
+            arbiter = WakeArbiter(updated.multi_device, devices)
+            senders: dict[str, object] = {}
+            for device_id in ids:
+                def _sender(msg: object, d: str = device_id) -> object:
+                    async def _send() -> None:
+                        await fleet.handle(d).send(msg)  # type: ignore[attr-defined]
+                    return _send()
+                senders[device_id] = _sender
+            coordinator = WakeCoordinator(arbiter, senders, rooms=rooms)
+            app.state.wake_coordinator = coordinator
+            log.info("wake arbiter: %d plane(s), merge window %.0f ms",
+                     len(ids),
+                     updated.multi_device.arbitration.candidate_merge_window_ms)
+
+        async def _restart_fleet(updated: Config) -> str:
+            """Rebuild every plane from a saved config (device/audio-tier change)."""
+            fleet = _audio_fleet(app)
+            if fleet is not None:
+                with contextlib.suppress(Exception):
+                    await fleet.stop()
+            app.state.audio = None
+            app.state.audio_fleet = None
+            return await _start_fleet(updated)
+
+        async def _stop_audio(updated: Config) -> str:
+            """Stop every plane (the last enabled speaker was removed)."""
+            fleet = _audio_fleet(app)
+            try:
+                if fleet is not None:
+                    await fleet.stop()
+                    app.state.audio = None
+                    app.state.audio_fleet = None
+                    return ""
+                supervisor = getattr(app.state, "audio", None)
+                if supervisor is not None:
+                    supervisor.cfg = updated
+                    await supervisor.stop()
+                    supervisor.watch()
+            except Exception as exc:  # noqa: BLE001 - a dead plane is not a delete failure
+                return f"{type(exc).__name__}: {exc}"
+            return ""
+
+        if start_audio:
+            # Fleet state every helper reads: one callback set per room, one turn and
+            # one output owner for the house (K2). Reset here so a TestClient re-entering
+            # the lifespan never inherits a dead fleet's tasks or owner.
+            app.state.wake_tasks = set()
+            app.state.turn_device = ""
+            app.state.output_owner = ""
+            app.state.fleet_error = ""
+            app.state.fleet_refused = []
+            app.state.fleet_start_errors = {}
+            app.state.output_owner_lost = 0
+            app.state.rebuild_fleet = _restart_fleet
+            app.state.stop_audio = _stop_audio
+            if cfg.multi_device.enabled:
+                await _start_fleet(cfg)
+            else:
+                supervisor = AudioPlaneSupervisor(cfg, config_path=config_path)
+                ready = None
+                try:
+                    await supervisor.start()
+                    ready = supervisor.client.ready if supervisor.client else None
+                    log.info(
+                        "audio plane up: pid=%s device=%s capture=%s Hz/%s ch",
+                        supervisor.proc.pid if supervisor.proc else "?",
+                        ready.device_id if ready else "?",
+                        ready.capture_rate if ready else "?",
+                        ready.capture_channels if ready else "?",
+                    )
+                except Exception as exc:  # noqa: BLE001 - a device problem must not kill the console
+                    supervisor.error = f"{type(exc).__name__}: {exc}"
+                    log.warning("audio plane did not start: %s", exc)
+                # Armed even when the first launch failed: the watchdog is what turns
+                # "plane crashed" into a few seconds of silence instead of a manual
+                # restart on the NAS (Docker does not restart on an unhealthy check).
+                supervisor.watch()
+                app.state.audio = supervisor
+                _wire_plane(ready.device_id if ready else "", supervisor.handle)
+            _register_audio_tools()
+
         # Session end. Polled rather than timed: one loop, 1 s resolution, and the
         # goodbye can never fire mid-turn (check_idle refuses while a turn is open).
         async def idle_watch() -> None:
-            live = getattr(app.state, "audio", None)
             while True:
                 await asyncio.sleep(1.0)
-                client = getattr(live, "client", None) if live is not None else None
+                # Phase 2: the arbiter's owner/playing view must follow the planes, not
+                # the last reply (music keeps sounding after the answer drained).
+                _reconcile_owner(app)
+                client = _primary_client(app)
                 if client is None:
                     continue
                 # Playback is not silence: a 15 s news read or a song must not be
                 # interrupted by the goodbye (the old build hit this and fixed it).
-                def busy(state=live) -> bool:
-                    metrics = getattr(getattr(state, "client", None), "metrics", None)
-                    if metrics is not None and metrics.output_owner:
-                        return True
-                    # Someone is speaking right now: a long sentence must not be cut in
-                    # half. Merely waiting (gate armed for a follow-up) is NOT activity -
-                    # counting it made the 15 s goodbye arrive after 30 s.
-                    if metrics is not None and metrics.gate_speaking:
-                        return True
+                def busy() -> bool:
+                    for live_client in _live_clients(app):
+                        metrics = getattr(live_client, "metrics", None)
+                        if metrics is not None and metrics.output_owner:
+                            return True
+                        # Someone is speaking right now: a long sentence must not be
+                        # cut in half. Merely waiting (gate armed for a follow-up) is
+                        # NOT activity - counting it made the 15 s goodbye arrive at 30 s.
+                        if metrics is not None and metrics.gate_speaking:
+                            return True
                     # A song parked for the vendor is music about to come back:
-                    # the farewell must not talk over the give-back (old build's
-                    # music_due rule).
+                    # the farewell must not talk over the give-back.
                     service = getattr(app.state, "music", None)
                     return bool(service is not None and service.vendor_parked)
 
@@ -2077,11 +2513,11 @@ def create_app(
                 waited = 0.0
                 spoken = False
                 while waited < 120.0:
-                    supervisor = getattr(app.state, "audio", None)
-                    client = supervisor.client if supervisor is not None else None
-                    metrics = client.metrics if client is not None else None
-                    owner = metrics.output_owner if metrics is not None else ""
-                    if client is not None and not runner.busy and not owner:
+                    # K4: no source room, so default_output answers; the owner is only
+                    # relevant while it blocks (a reminder never talks over a turn).
+                    client = _owner_client(app)
+                    if (client is not None and not runner.busy
+                            and not _any_output_owner(app)):
                         await runner.say(
                             text, client.speak, TurnTrace(device_id="reminder")
                         )
@@ -2129,6 +2565,11 @@ def create_app(
         channel_supervisor = getattr(app.state, "channel_supervisor", None)
         if channel_supervisor is not None:
             await channel_supervisor.stop()
+        coordinator = getattr(app.state, "wake_coordinator", None)
+        if coordinator is not None:
+            await coordinator.close()
+        for task in list(getattr(app.state, "wake_tasks", set()) or set()):
+            task.cancel()
         supervisor = getattr(app.state, "audio", None)
         if supervisor is not None:
             await supervisor.stop()
@@ -2417,11 +2858,9 @@ def create_app(
         runner = getattr(app.state, "runner", None)
         if runner is not None:
             runner.set_tools(list(local_tools))
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
-        if client is not None:
+        for handle in _plane_handles(app):
             # The old service's callback must not advance a queue that no longer exists.
-            client.on_playback_finished = None
+            handle.on_playback_finished = None
 
     def _start_music_service(updated: Config) -> bool:
         """Build, bind and register the service for `updated`; False if unsupported."""
@@ -2433,10 +2872,8 @@ def create_app(
         # Runtime enable must bind the natural-end callback that the startup path
         # binds at :1359. Without it the radio queue never advances after the first
         # song (audit round 2 P1-5).
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
-        if client is not None:
-            client.on_playback_finished = service.on_finished
+        for handle in _plane_handles(app):
+            handle.on_playback_finished = service.on_finished
         for spec, handler in build_music_tools(updated, service):
             registry.register(spec, handler)
             local_tools.append((spec, handler))
@@ -2651,8 +3088,7 @@ def create_app(
         and the vendor rewrites it (old deployment: 160 -> 255 -> 160 within minutes). The
         only way to know what the room is actually doing is to ask the device.
         """
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
+        client = _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         try:
@@ -2669,8 +3105,7 @@ def create_app(
         value = patch.get("value")
         if not isinstance(value, int) or not 0 < value <= 255:
             raise HTTPException(status_code=422, detail="value must be an int in 1..255")
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
+        client = _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         try:
@@ -2687,8 +3122,7 @@ def create_app(
         `rui debug-play` spawns its own plane and cannot be used while a server is
         up, which is exactly when these tests run.
         """
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
+        client = _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         if patch.get("stop"):
@@ -2712,8 +3146,7 @@ def create_app(
 
     async def _run_debug_say(text: str) -> dict:
         """One fresh text turn. Shared by ``/debug/say`` and the wizard's try step."""
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
+        client = _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         runner = app.state.runner
@@ -3028,8 +3461,7 @@ def create_app(
         effect = str(patch.get("effect") or "")
         if effect not in LED_STATES:
             raise HTTPException(status_code=422, detail=f"effect must be one of {list(LED_STATES)}")
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
+        client = _primary_client(app)
         if client is None:
             raise HTTPException(status_code=409, detail="no audio plane connected")
         await client.set_led(effect)
@@ -3804,10 +4236,8 @@ def create_app(
 
     def _speaker_client_or_503() -> object:
         """The live plane client, or the sentence that tells the console to fall back."""
-        supervisor = getattr(app.state, "audio", None)
-        client = supervisor.client if supervisor is not None else None
-        if (supervisor is None or not bool(getattr(supervisor, "running", False))
-                or client is None):
+        client = _primary_client(app)
+        if not _plane_running(app) or client is None:
             raise HTTPException(
                 status_code=503,
                 detail="audio plane is not running; retry with output=browser",
@@ -3988,6 +4418,23 @@ def create_app(
         Asks for a fresh snapshot first - the periodic message is up to 2 s old, and a
         stale counter is exactly the kind of number this project refuses to print.
         """
+        fleet = _audio_fleet(app)
+        if fleet is not None:
+            planes: dict = {}
+            for device_id in fleet.device_ids():
+                plane = fleet.supervisor(device_id)
+                if plane.client is not None:
+                    try:
+                        await plane.client.request_metrics(timeout_s=0.5)
+                    except (ConnectionError, TimeoutError):
+                        pass
+                planes[device_id] = plane.status()
+            primary = _primary_device_id(app)
+            body = dict(planes.get(primary) or {"running": False,
+                                                "error": "audio plane not started"})
+            body["running"] = bool(fleet.running_count())
+            body["planes"] = planes
+            return body
         supervisor = getattr(app.state, "audio", None)
         if supervisor is None:
             return {"running": False, "error": "audio plane not started"}
@@ -4216,12 +4663,24 @@ def create_app(
             setattr(cfg, name, getattr(updated, name))
         app.state.cfg = cfg
 
-    async def _restart_audio(supervisor: AudioPlaneSupervisor, updated: Config) -> str:
-        """Restart the audio plane with `updated`; returns an error string (`""` = ok).
+    async def _restart_audio(updated: Config) -> str:
+        """Restart the audio service with `updated`; returns an error string ("" = ok).
 
         Three callers share it: adding/removing a device, the wizard's wake-word step and
-        the console's "restart only the audio plane" button for audio-tier saves.
+        the console's "restart only the audio plane" button for audio-tier saves. In
+        multi-device mode the whole fleet is rebuilt from the new config: the device set,
+        wake words and keywords file are read by each plane at its own startup, so a
+        per-room restart would leave a newly added room without a plane.
         """
+        fleet = _audio_fleet(app)
+        if fleet is not None:
+            rebuild = getattr(app.state, "rebuild_fleet", None)
+            if rebuild is None:
+                return "the audio fleet has not been started yet"
+            return await rebuild(updated)
+        supervisor = getattr(app.state, "audio", None)
+        if supervisor is None:
+            return ""
         supervisor.cfg = updated
         error = ""
         try:
@@ -4243,10 +4702,9 @@ def create_app(
         console offers this instead of a `docker compose restart` that would also drop
         the HTTP session.
         """
-        supervisor = getattr(app.state, "audio", None)
-        if supervisor is None:
+        if getattr(app.state, "audio", None) is None:
             return {"restarted": False, "error": "audio plane not started"}
-        error = await _restart_audio(supervisor, cfg)
+        error = await _restart_audio(cfg)
         log.info("audio plane restart from the console: %s", error or "ok")
         return {"restarted": not error, "error": error}
 
@@ -4292,18 +4750,23 @@ def create_app(
             # would only raise "no device this build can drive". Stop cleanly and let
             # the wizard show an empty device step instead of a plane error the user
             # cannot fix. A disabled leftover is kept in config but still not drivable.
-            supervisor.cfg = updated
-            try:
-                await supervisor.stop()
-            except Exception as exc:  # noqa: BLE001 - a dead plane is not a delete failure
-                error = f"{type(exc).__name__}: {exc}"
-                log.warning("audio plane stop failed after the last device was removed: %s", exc)
-            finally:
-                supervisor.watch()
+            stop = getattr(app.state, "stop_audio", None)
+            if _audio_fleet(app) is not None and stop is not None:
+                error = await stop(updated)
+            else:
+                supervisor.cfg = updated
+                try:
+                    await supervisor.stop()
+                except Exception as exc:  # noqa: BLE001 - a dead plane is not a delete failure
+                    error = f"{type(exc).__name__}: {exc}"
+                    log.warning(
+                        "audio plane stop failed after the last device was removed: %s", exc)
+                finally:
+                    supervisor.watch()
         elif supervisor is not None:
             # The plane holds the device list, the wake model and the keywords file
             # from its own startup: a new speaker or a new wake word needs a restart.
-            error = await _restart_audio(supervisor, updated)
+            error = await _restart_audio(updated)
         app.state.plane_error = error
         if error:
             log.warning("device write saved, but the audio plane did not come back: %s", error)
