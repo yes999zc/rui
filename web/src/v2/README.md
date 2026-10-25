@@ -1,4 +1,4 @@
-# Console v2 (M4 — audio overrides & provenance)
+# Console v2 (M5 — rooms, house policy & global audio)
 
 A second, side-by-side console. The legacy console at `/` keeps working and none
 of its files (`panels.ts`, `PanelHost.vue`, legacy `views/`) are imported here.
@@ -9,13 +9,17 @@ of its files (`panels.ts`, `PanelHost.vue`, legacy `views/`) are imported here.
 web/v2.html                    second Vite entry (multi-page build)
 web/src/v2/main.ts             app bootstrap (shared theme + language init)
 web/src/v2/router.ts           createWebHistory('/v2/')
-web/src/v2/App.vue             shell: Run / Devices / Config, language, theme, token
+web/src/v2/App.vue             shell: Run / Devices / House / Config, language, theme, token
 web/src/v2/api.ts              hand-written C-002 client (`/api/v2/*` only)
 web/src/v2/audio.ts            override surface + provenance row model for the audio tab
+web/src/v2/houseAudio.ts       global audio leaf directory + field-level diff helpers (M5)
+web/src/v2/useCooldown.ts      shared 429 countdown for M5 write buttons
 web/src/v2/i18n.ts             v2-owned zh-Hans + en copy
-web/src/v2/views/              DevicesView, AddDeviceView, DeviceDetailView, RunView, ConfigView, 404
+web/src/v2/views/              DevicesView, AddDeviceView, DeviceDetailView, RoomsView, RunView,
+                               ConfigView, 404
 web/src/v2/components/         StateBlock, StatusBadge, CapabilityChips, ProvenanceTag,
                                TokenDialog, ConfirmDialog
+web/src/v2/components/house/   RoomsPanel, HousePolicyEditor, HouseAudioEditor, HouseAudioField
 web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, AudioPanel, Activity,
                                Connection, TestPanel, ActionsPanel, ConfigPanel, DangerPanel,
                                RestartNotice, PlaneCard, SetupCard, ParamsCard, ErrorNotice
@@ -69,7 +73,17 @@ web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, AudioPan
 - `/v2/run` — house overview from `GET /api/v2/house`: counts, multi-device
   policy, room aggregates and warnings. If `house.rooms` is absent it falls back
   to grouping the existing `GET /api/v2/devices` response (no new endpoint).
-- `/v2/config` — honest "not in this milestone" state.
+- `/v2/rooms` — rooms & house (M5): room cards derived from `devices[].room`
+  (no room CRUD), duplicate-room warnings, default-output staging, the
+  multi-device policy editor (`enabled` / `max_planes` / `default_output` /
+  ordered `room_priority`), and the global audio defaults editor.
+  Both editors send a **field-level diff** and ask for a second confirmation.
+  A global-audio save never restarts the audio plane; the explicit
+  `POST /house/audio/restart` button renders the returned `restart` envelope
+  (scope/status/affected/duration/error, failures red). The page states that
+  global values shadow the plug manifest, shows the `explicit` marker per leaf,
+  and counts devices whose own `/devices/{id}/audio` overrides are non-empty.
+- `/v2/config` — honest "not in this milestone" state (links to Devices/Rooms).
 
 ## Deploy / mount requirements (backend)
 
@@ -137,12 +151,20 @@ data, and every write disables its submit control while in flight.
 
 ## Rules for follow-up work
 
-- **Gate before M5:** `AudioPanel.vue` stays a single file for M4 because the
-  draft baseline, field-level diff, restore verification and the three outcome
-  banners share one state machine (the table, both confirm dialogs and the
-  banners bind the same refs). Before M5 (global audio) adds another editing
-  surface, extract `AudioLeafRow` and a `useAudioDraft` composable; do not grow
-  M5 work inside the current monolith.
+- **M5 draft state:** the global-audio editor lives in `HouseAudioEditor.vue`
+  instead of growing `AudioPanel.vue`. Its clear semantics (`null` removes an
+  explicit global leaf) and restart scope (`audio_plane`) differ from the
+  device-override editor, so the two state machines are intentionally separate
+  for now. `houseAudio.ts` and `audio.ts` currently duplicate the 37-leaf
+  metadata table (paths are 37/37 identical; bounds are checked against
+  `src/rui/config/schema.py` and are not always numerically equal on purpose:
+  the global `ack.echo_ignore_ms` is ≤ 3000, while the per-device override
+  `voice.ack_echo_ignore_ms` is ≤ 5000). **Before M6**, extract the shared
+  leaf metadata and a `useAudioDraft` composable; do not add more surfaces to
+  `AudioPanel.vue`.
+- **Unsaved drafts on `/v2/rooms`:** both editors emit `dirty-change`; the page
+  blocks in-app navigation with a confirmation and only guards `beforeunload`
+  while dirty. Keep new editors on that page wired to the same signal.
 - No model-name branches. Every device difference is read from `capabilities`,
   `params`, or the plugin catalog.
 - Action controls are driven by `effective_capabilities`; when a capability is

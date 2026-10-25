@@ -1,12 +1,14 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 /**
- * v2 routes live under `/v2/` (contract C-002 §2.1). The IA is three sections —
- * Run / Devices / Config — and M1 only implements the device domain:
+ * v2 routes live under `/v2/` (contract C-002 §2.1). The design IA is three
+ * sections — Run / Devices / Config — with rooms/house as a Devices-area page;
+ * the flat top nav exposes it between Devices and Config:
  *
  *   /v2/devices          device list grouped by room
  *   /v2/devices/add      create a device from an available plugin (M3)
  *   /v2/devices/:id      device detail (`?tab=config|danger` are M3 writes)
+ *   /v2/rooms            rooms, multi-device policy, global audio (M5)
  *   /v2/run, /v2/config  honest "not in this milestone" states
  *
  * There is deliberately no import of the legacy panel registry, PanelHost, or
@@ -28,6 +30,7 @@ const routes = [
     component: () => import('./views/DeviceDetailView.vue'),
     props: true,
   },
+  { path: '/rooms', name: 'rooms', component: () => import('./views/RoomsView.vue') },
   { path: '/run', name: 'run', component: () => import('./views/RunView.vue') },
   { path: '/config', name: 'config', component: () => import('./views/ConfigView.vue') },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFoundView.vue') },

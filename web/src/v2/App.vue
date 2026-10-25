@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * v2 shell: three-section navigation (Run / Devices / Config), language + theme
+ * v2 shell: top navigation (Run / Devices / House / Config), language + theme
  * switches, and the token dialog. It also owns the `/api/v2/meta` startup gate:
  * on a contract mismatch or an unreachable backend no page requests are issued
  * and a readable state is shown instead of an empty shell.
@@ -30,11 +30,13 @@ const route = useRoute()
 const navItems: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'run', to: '/run', labelKey: 'v2.nav.run' },
   { key: 'devices', to: '/devices', labelKey: 'v2.nav.devices' },
+  { key: 'rooms', to: '/rooms', labelKey: 'v2.nav.rooms' },
   { key: 'config', to: '/config', labelKey: 'v2.nav.config' },
 ]
 
 const section = computed(() => {
   if (route.path.startsWith('/devices')) return 'devices'
+  if (route.path.startsWith('/rooms')) return 'rooms'
   if (route.path.startsWith('/run')) return 'run'
   if (route.path.startsWith('/config')) return 'config'
   return ''
@@ -42,6 +44,7 @@ const section = computed(() => {
 
 const pageLabel = computed(() => {
   if (section.value === 'devices') return t('v2.nav.devices')
+  if (section.value === 'rooms') return t('v2.nav.rooms')
   if (section.value === 'run') return t('v2.nav.run')
   if (section.value === 'config') return t('v2.nav.config')
   return t('v2.nav.devices')

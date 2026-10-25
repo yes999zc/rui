@@ -19,6 +19,7 @@ const contract = meta.value?.contract ?? ''
 
     <StateBlock kind="unavailable" :title="t('v2.config.stub')" :hint="t('v2.config.stubHint')">
       <RouterLink class="btn" to="/devices">{{ t('v2.config.openDevices') }}</RouterLink>
+      <RouterLink class="btn" to="/rooms">{{ t('v2.config.openRooms') }}</RouterLink>
       <a class="btn btn-primary" href="/">{{ t('v2.config.openLegacy') }}</a>
     </StateBlock>
   </div>

@@ -40,6 +40,14 @@ const summary = computed(() => {
     case 'stopped':
       return t('v2.deviceConfig.restartStopped')
     case 'pending':
+      // A service-scoped pending restart must not claim the audio plane is
+      // restarting; a manual audio-plane restart likewise waits for the button.
+      if (props.restart.scope === 'service') {
+        return t('v2.deviceConfig.restartPendingService')
+      }
+      if (props.restart.scope === 'audio_plane') {
+        return t('v2.deviceConfig.restartPendingAudio')
+      }
       return t('v2.deviceConfig.restartPending')
     default:
       return t('v2.deviceConfig.restartOk')

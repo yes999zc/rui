@@ -296,6 +296,36 @@ export interface DeleteDeviceResponse {
   device_id: string
 }
 
+/**
+ * `GET /house/audio` — the global defaults only (contract §7.4).
+ *
+ * `explicit` names the leaves that were written in config (or differ from the
+ * core default); `effects.fields` names the leaves whose next change needs an
+ * audio-plane restart. Value equality is never used to infer explicitness.
+ */
+export interface HouseAudioInfo {
+  audio: Record<string, unknown>
+  ack: { echo_ignore_ms: number }
+  explicit: string[]
+  effects: { restart: string; fields: string[] }
+}
+
+/** `PATCH /house` body — `multi_device` only, every field optional. */
+export interface PatchHouseRequest {
+  multi_device: {
+    enabled?: boolean
+    max_planes?: number
+    default_output?: string | null
+    room_priority?: string[]
+  }
+}
+
+/** `PATCH /house/audio` body — recursive merge; `null` clears one leaf. */
+export interface PatchHouseAudioRequest {
+  audio?: Record<string, unknown>
+  ack?: Record<string, unknown>
+}
+
 /** `PATCH /house` — `{house, restart}`. */
 export interface HousePatchResponse {
   house: HouseInfo
@@ -303,11 +333,7 @@ export interface HousePatchResponse {
 }
 
 /** `PATCH /house/audio` — audio view plus the `restart` envelope. */
-export interface HouseAudioPatchResponse {
-  audio: Record<string, unknown>
-  ack: Record<string, unknown>
-  explicit: string[]
-  effects: { restart: string; fields: string[] }
+export interface HouseAudioPatchResponse extends HouseAudioInfo {
   restart: Restart
 }
 
@@ -657,6 +683,29 @@ function encodeId(id: string): string {
 export const api = {
   meta: (): Promise<MetaInfo> => request<MetaInfo>('/api/v2/meta'),
   house: (): Promise<HouseInfo> => request<HouseInfo>('/api/v2/house'),
+  /**
+   * `PATCH /house` — only the changed `multi_device` fields. The response's
+   * restart is service-scoped: house policy is never applied to the live
+   * process by this call (contract §4.5/§7.3).
+   */
+  patchHouse: (body: PatchHouseRequest): Promise<HousePatchResponse> =>
+    request<HousePatchResponse>('/api/v2/house', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  houseAudio: (): Promise<HouseAudioInfo> => request<HouseAudioInfo>('/api/v2/house/audio'),
+  /**
+   * `PATCH /house/audio` — recursive merge of only the edited leaves; `null`
+   * removes a leaf from the explicit layer. Never restarts the audio plane.
+   */
+  patchHouseAudio: (body: PatchHouseAudioRequest): Promise<HouseAudioPatchResponse> =>
+    request<HouseAudioPatchResponse>('/api/v2/house/audio', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  /** `POST /house/audio/restart` — explicit whole-fleet audio-plane restart. */
+  restartHouseAudio: (): Promise<RestartResponse> =>
+    request<RestartResponse>('/api/v2/house/audio/restart', { method: 'POST' }),
   plugins: (): Promise<PluginList> => request<PluginList>('/api/v2/plugins'),
   capabilities: (): Promise<CapabilityCatalog> =>
     request<CapabilityCatalog>('/api/v2/capabilities'),
