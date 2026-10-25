@@ -361,7 +361,9 @@ RUI_IMAGE="$IMAGE" docker compose -f "$DIR/docker-compose.yml" --project-directo
 echo "      waiting for the service to answer /health"
 i=0
 while [ "$i" -lt 120 ]; do
-  if docker compose exec -T rui rui-healthcheck >/dev/null 2>&1; then
+  # </dev/null: when this script is piped (`curl ... | sh`) its stdin *is* the
+  # remaining script; an exec that attaches stdin eats the rest of the install.
+  if docker compose exec -T rui rui-healthcheck </dev/null >/dev/null 2>&1; then
     echo "      healthy"
     break
   fi
@@ -387,7 +389,7 @@ fi
 CONSOLE_TOKEN_FILE="$DIR/console-token.txt"
 CURRENT_TOKEN=""
 # Command substitution already drops the trailing newline; the token is one line.
-if ! CURRENT_TOKEN="$(docker compose exec -T rui rui token 2>/dev/null)"; then
+if ! CURRENT_TOKEN="$(docker compose exec -T rui rui token </dev/null 2>/dev/null)"; then
   # On failure the CLI still prints an explanation to stdout; never treat that as the
   # token. Only a zero exit status is a value the console will accept.
   CURRENT_TOKEN=""

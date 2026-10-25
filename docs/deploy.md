@@ -77,6 +77,11 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.2/deploy/insta
 `RUI_IMAGE` 决定运行哪个镜像；两个一起固定，重装或回滚时才不会悄悄换版本。镜像拉取失败时，
 源码回退也用同一个 `RUI_REPO` + `RUI_REF` 克隆/构建，并打印实际 ref 与 commit。
 
+> **管道安装是受支持的**（dot2 #15）：`install.sh` 里每个会读 stdin 的子命令
+> （`docker compose exec -T` 健康探针、`rui token` 读取）都显式重定向了 `</dev/null`，
+> 不会吃掉管道里剩下的脚本字节。CI 里有一条端到端测试把真实脚本从管道喂给 `sh`，
+> 断言退出码 0、收尾提示打印、`console-token.txt` 落盘且为 0600。
+
 安装脚本里可用的环境变量：
 
 ```sh

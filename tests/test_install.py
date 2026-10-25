@@ -857,3 +857,109 @@ def test_install_sh_exits_non_zero_when_models_are_missing(tmp_path: Path) -> No
     ok = _run_install_model_gate(tmp_path, "0")
     assert ok.returncode == 0, ok.stderr
     assert ok.stderr == ""
+
+# ---------------------------------------- piped one-liner (dot2 #15)
+
+_INSTALL_SH = Path(__file__).resolve().parents[1] / "deploy" / "install.sh"
+
+_FAKE_DOCKER = """#!/bin/sh
+# Fake docker for the piped-install regression test (dot2 #15).
+#
+# 'docker compose exec -T' attaches stdin, so the real CLI reads whatever the
+# caller piped in. Draining stdin here reproduces the failure: with the installer
+# run as 'curl ... | sh', the child ate the remaining script bytes and the shell
+# died in the middle of a line ("Unterminated quoted string", exit 2) before it
+# ever wrote the console token.
+for arg in "$@"; do
+  case "$arg" in
+    exec)
+      cat >/dev/null 2>&1 || true
+      case " $* " in
+        *" token "*) printf '%s\\n' 'e2e-console-token' ;;
+      esac
+      exit 0
+      ;;
+  esac
+done
+exit 0
+"""
+
+
+def _run_piped_install(tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    """Run the shipped installer exactly the way the README one-liner does.
+
+    'sh' with the script on stdin is 'curl ... | sh': the script *is* fd 0, so any
+    child that reads stdin steals the not yet parsed bytes. Network and docker are
+    fake; RUI_SKIP_MODELS keeps the run offline.
+    """
+    script = _INSTALL_SH.read_text(encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(_FAKE_DOCKER, encoding="utf-8")
+    docker.chmod(0o755)
+
+    raw = tmp_path / "raw"
+    (raw / "scripts").mkdir(parents=True)
+    (raw / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (raw / "config.example.yaml").write_text("version: 2\n", encoding="utf-8")
+    for name in ("backup.sh", "restore.sh", "acceptance-v1.py"):
+        (raw / "scripts" / name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env = dict(os.environ)
+    env.update({
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "HOME": str(home),
+        "RUI_HOME": str(home / "rui"),
+        # chown to our own ids succeeds (or is unnecessary) on macOS and on CI.
+        "RUI_UID": str(os.getuid()),
+        "RUI_GID": str(os.getgid()),
+        "RUI_SKIP_MODELS": "1",
+        "RUI_RAW": raw.as_uri(),
+        "RUI_REPO": "example/rui",
+        "RUI_REF": "v0.0.0-test",
+        "RUI_IMAGE": "ghcr.io/example/rui:test",
+    })
+    return subprocess.run(
+        ["sh"], input=script, capture_output=True, text=True, env=env,
+        cwd=str(tmp_path), timeout=120,
+    )
+
+
+def test_install_sh_one_liner_run_from_a_pipe_finishes_and_saves_the_token(
+    tmp_path: Path,
+) -> None:
+    """dot2 #15: the documented curl-pipe-sh path must reach its closing lines."""
+    result = _run_piped_install(tmp_path)
+    token = tmp_path / "home" / "rui" / "console-token.txt"
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "healthy" in result.stdout
+    # The done/rollback block and the token file only exist after the probe.
+    assert "done." in result.stdout, result.stdout[-800:]
+    assert "Unterminated" not in result.stderr
+    assert token.exists(), result.stdout[-800:]
+    assert token.read_text(encoding="utf-8").strip() == "e2e-console-token"
+    assert stat.S_IMODE(token.stat().st_mode) == 0o600
+    # The token is persisted, never echoed.
+    assert "e2e-console-token" not in result.stdout + result.stderr
+
+
+def test_every_compose_exec_in_install_sh_detaches_stdin() -> None:
+    """No child may read the installer's own stdin (the #15 class, any future site)."""
+    offenders = []
+    for number, line in enumerate(
+        _INSTALL_SH.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        stripped = line.strip()
+        if stripped.startswith("#") or stripped.startswith("echo "):
+            continue
+        if "docker compose exec" not in line:
+            continue
+        if "</dev/null" not in line:
+            offenders.append(number)
+    assert offenders == [], (
+        "these docker compose exec calls would steal a piped installer stdin: "
+        f"{offenders}"
+    )
