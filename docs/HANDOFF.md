@@ -47,7 +47,7 @@ phase-close: task-16
 ## 约束与禁区
 - 真机语音验收必须 9 哥 本人（家人睡觉时不能测）。
 - 生产变更允许（已授权），但每次先备份 `/vol1/rui/.env`、`config/`、override，并保留回滚镜像。
-- 不打印/不提交 token、密码、证书、内网 IP（secret-scan 会扫 docs：`/Users/` 与 RFC1918 都会红）。
+- 不打印/不提交 token、密码、证书、内网 IP（secret-scan 会扫 docs：绝对家目录路径与 RFC1918 内网地址都会让检查变红）。
 - 不 fork rui 源码；dot2 只做 out-of-tree adapter + 下游镜像层。
 - **已产出的 tag/镜像不移动**（v0.6.0 已出镜像；审计报告的 6 条 MINOR 修订跟 main 走、不进 tag）。
 - 飞牛上 docker build 用 `DOCKER_BUILDKIT=0`。
