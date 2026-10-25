@@ -10,7 +10,7 @@
 |---|---|
 | 项目 | 自托管语音终端：LX06 音箱 + FastAPI 控制面 + 独立音频面 + Vue 控制台；MIT；公开仓 `yes999zc/rui` |
 | 版本 | **v0.4.1**（Jellyfin/Emby 音源、首次登录 token 文件、dot2 生效端口/token_env/冲突修复、follow-up 配置、设备唤醒重探测、README/first-run 重写），2026-10-25 已部署 NAS |
-| 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.4.1`**（官方，digest `sha256:<0.4.1 发布后填>`，amd64+arm64）；`0.4.0` / `0.4.0-local` 保留回滚；非 root uid 1000，healthy、音箱在线 |
+| 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.4.1`**（官方，digest `sha256:380327e5c…`，amd64+arm64）；`0.4.0` / `0.4.0-local` 保留回滚；非 root uid 1000，healthy、音箱在线 |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
 | 质量 | **1141 passed / 18 skipped**（含 compat 回归、dot2 生效端口/token_env、follow-up、wake 重探测、Jellyfin/Emby 测试）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
@@ -45,7 +45,7 @@
 | 冷装证据 | `/vol1/rui-verify/`（269 MB，可删；`install.log` 与冷装 service.log 已拷到验收工作区） |
 | 端口 | 控制台 `8080`、设备入口 `4412`（host network）；`allow_no_token: false` |
 | 开发机 | Mac：仓库 + `.venv`（Python 3.13）+ Node 22；**无 docker CLI**（只有 OrbStack 的 `orb/orbctl`），compose/冷装只能在 NAS 上跑 |
-| GHCR | `0.4.1` / `0.4` / `latest`（同一 manifest，digest `sha256:<0.4.1 发布后填>`，amd64+arm64）；历史 tag 保留 |
+| GHCR | `0.4.1` / `0.4` / `latest`（同一 manifest，digest `sha256:380327e5c…`，amd64+arm64）；历史 tag 保留 |
 
 ## 3. 已定决策（改前先问 9 哥）
 
@@ -131,6 +131,8 @@ docker compose exec -T rui rui config restore --last-good
 其它已知：音箱 root 密码受 squashfs 只读限制；Telegram 出网依赖 NAS mihomo 节点运行时状态。
 
 ## 6. 最近时间线（细节在归档）
+
+- 10-25 中午：0.4.1 发布并部署：Jellyfin/Emby 音源（真实 Jellyfin 12.3.0 / Emby 4.10.2 验收）、首次登录 `console-token.txt`、dot2 生效端口/token_env/冲突 + follow-up 配置 + register 后 wake 重探测、README/first-run 重写；CI/publish 全绿（1141 passed / 18 skipped），GHCR `0.4.1`/`0.4`/`latest` 同一 digest `380327e5…`；生产切 0.4.1（uid 1000、音箱在线），真实 say `audio_bytes=280,312`，`console-token.txt` 0600。
 
 - 10-25 中午：0.4.0 重切并发布：CI/publish 全绿（pytest 1104/17、ruff、secret-scan、多架构），GHCR `0.4.0`/`0.4`/`latest` 同一 digest `c4cd1a61…`，GitHub Release 已发；生产 11:06 切官方镜像（backup `.env.bak.20261025-110622`），uid 1000、音箱在线，真实 say 回合 `audio_bytes=95,864`（deepseek_llm + volc_tts）。dot2 兼容 PR #1 已开，#3/#7 已回复。
 
