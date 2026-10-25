@@ -103,6 +103,7 @@ from ...tools.mcp_manifest import first_party_instances
 from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
+from .config_view import config_raw_document
 from .device_rules import (
     DEFAULT_LISTEN_PORT,
     DEFAULT_TOKEN_ENV,
@@ -2281,6 +2282,20 @@ def create_app(
     @app.get("/api/v1/config", dependencies=[Depends(auth)])
     async def get_config() -> dict:
         return redacted(cfg)
+
+    @app.get("/api/v1/config/raw", dependencies=[Depends(auth)])
+    async def get_config_raw() -> dict:
+        """The effective config as redacted YAML (System page, docs/console.md §12.2c).
+
+        Read-only by construction: there is no write counterpart. Credential values are
+        replaced by `<redacted>` *server-side* and their dotted paths are named in
+        `redacted_keys`, so the page can show what it hid. The same auth dependency as
+        every other API route protects it.
+        """
+        return config_raw_document(
+            getattr(app.state, "cfg", cfg),
+            getattr(app.state, "config_path", config_path),
+        )
 
     # The two conversational sections are the ones a person tunes from the console. Audio
     # and providers stay on disk: changing them under a running audio plane is a different

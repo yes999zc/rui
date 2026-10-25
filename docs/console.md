@@ -238,6 +238,18 @@ Subsonic），保存时自动填 `<data_dir>/lan_media.json` 与 `<data_dir>/mus
 写入走 `POST /api/v1/secrets`。控制台写的 key 现在对 LLM/ASR/TTS/HA/device 全部生效
 （`secrets.get` 统一解析）。
 
+### 12.2c 系统页：配置原文（只读，2026-10-25）
+
+`/panel/system` 底部新增「配置原文（只读）」：`GET /api/v1/config/raw`（与其他 API 同一
+`X-Auth-Token` 鉴权）返回 `{path, mtime, yaml, redacted_keys[], truncated}`。内容是
+`Config.model_dump()` 序列化出的**生效配置**（schema 默认值 + config.yaml，不是磁盘原文）。
+凭据值在服务端即被替换为 `<redacted>` 并记入 `redacted_keys`，页面据此说明隐藏了什么：
+`web.auth_token`、历史内联 `music.password/token`（schema 里 `exclude=True`，迁移失败时
+仍存在于运行期模型）、以及任何密钥形字段（provider/MCP headers/env/设备 params）；
+`*_env`、`secrets_path`、`has_key` 是引用/状态而非值，保留原样。响应体上限 200000 字符，
+超限时返回合法 YAML 说明而不是截断成不可解析的半份文档。前端只有等宽 `<pre>` + 复制按钮，
+**没有任何写入路径**（对应端点只有 GET）。测试：`tests/test_config_raw.py`。
+
 ### 12.3 鉴权与安全
 
 - 非 loopback 绑定且 `web.auth_token` 为空时**拒绝启动**；`rui setup` 生成 token 并打印一次，

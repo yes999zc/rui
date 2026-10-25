@@ -347,6 +347,25 @@ export interface Config {
   }
 }
 
+/**
+ * `GET /api/v1/config/raw`: the effective config (defaults + config.yaml) as YAML.
+ *
+ * The server replaces credential values with `<redacted>` before serialising and names
+ * them in `redacted_keys`, so the payload is safe to display and copy. There is no
+ * counterpart endpoint accepting this document back - the view is read-only.
+ */
+export interface ConfigRaw {
+  /** The file the process loaded; "" when it runs on schema defaults. */
+  path: string
+  /** Epoch seconds of the file's last write; 0 when there is no file. */
+  mtime: number
+  yaml: string
+  /** Dotted paths whose values were replaced server-side. */
+  redacted_keys: string[]
+  /** True when the config exceeded the server's view limit (the YAML explains). */
+  truncated: boolean
+}
+
 /** Legacy five-step shape; kept for `GET /api/v1/setup` and its existing callers. */
 export interface SetupStep {
   id: string
@@ -1273,6 +1292,8 @@ export const api = {
   /** Merge a patch into `assistant` / `session`; resolves with the full redacted config. */
   saveConfig: (patch: ConfigPatch) =>
     request<Config>('/api/v1/config', { method: 'PUT', body: JSON.stringify(patch) }),
+  /** Effective config as redacted YAML (System page). Never contains a secret value. */
+  configRaw: () => request<ConfigRaw>('/api/v1/config/raw'),
   devices: () => request<Device[]>('/api/v1/devices'),
   tools: () => request<{ count: number; names: string[] }>('/api/v1/tools'),
   /** Names that hold a value on the server. There is no read-back endpoint, by design. */
