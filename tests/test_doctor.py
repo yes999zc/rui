@@ -305,7 +305,12 @@ def test_the_doctor_report_carries_the_new_rows_and_degrades_on_a_mismatch(
     report = run_doctor(cfg)
     names = {check.name for check in report.checks}
     assert {"audio_rates", "channels", "console_token"} <= names
-    assert report.verdict == "degraded"
+    checks = {check.name: check for check in report.checks}
+    # CI has no optional extras (sherpa/kws), so the *verdict* is "unsupported" there;
+    # pin the rows this test is about, not the verdict (same lesson as c0d7048).
+    assert checks["audio_rates"].status == "warn"
+    assert "48000" in checks["audio_rates"].value
+    assert report.verdict != "ok"
 
 
 def _write_channels(tmp_path, **channels) -> Path:
