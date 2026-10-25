@@ -98,7 +98,7 @@ from ...security.netguard import OutboundPolicy
 from ...session import phrasebook, phrases, prompts, rules
 from ...session.ack import ensure_ack_wav
 from ...session.briefing import Briefing
-from ...session.memory import MemoryStore
+from ...session.memory import MAX_TEXT, MemoryStore
 from ...session.text import strip_wake
 from ...session.turn import DirectSpeech, TurnRunner
 from ...session.vendor import VendorWindow
@@ -4388,12 +4388,35 @@ def create_app(
         store = getattr(app.state, "memory", None)
         if store is None:
             raise HTTPException(status_code=409, detail="memory is not enabled")
-        action = str(patch.get("action") or "")
-        item_id = str(patch.get("id") or "")
-        text = str(patch.get("text") or "")
+        # Validate here, not in the store: `add` used to slice >200 chars silently and
+        # raise on an empty string, which reached the client as a 500 traceback. The
+        # console needs a 422 it can show, and a long fact must not be stored truncated.
+        action = patch.get("action")
+        if not isinstance(action, str) or action not in {"add", "confirm", "remove"}:
+            raise HTTPException(status_code=422, detail="action must be add/confirm/remove")
+        raw_id = patch.get("id")
+        if raw_id is not None and not isinstance(raw_id, str):
+            raise HTTPException(status_code=422, detail="id must be a string")
+        item_id = (raw_id or "").strip()
+        raw_text = patch.get("text")
+        if raw_text is not None and not isinstance(raw_text, str):
+            raise HTTPException(status_code=422, detail="text must be a string")
+        text = (raw_text or "").strip()
         if action == "add":
+            if not text:
+                raise HTTPException(status_code=422, detail="text must not be empty")
+            if len(text) > MAX_TEXT:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"text is too long: {len(text)} > {MAX_TEXT} characters",
+                )
             item = store.add(text, source="console", confirmed=True)
         elif action == "confirm":
+            if len(text) > MAX_TEXT:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"text is too long: {len(text)} > {MAX_TEXT} characters",
+                )
             item = store.confirm(item_id, text or None)
             if item is None:
                 raise HTTPException(status_code=404, detail="no such memory item")
@@ -4401,8 +4424,6 @@ def create_app(
             if not store.remove(item_id):
                 raise HTTPException(status_code=404, detail="no such memory item")
             item = None
-        else:
-            raise HTTPException(status_code=422, detail="action must be add/confirm/remove")
         return {"items": [i.as_dict() for i in store.items()],
                 "item": item.as_dict() if item else None}
 

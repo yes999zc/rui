@@ -1,8 +1,13 @@
 <script setup lang="ts">
 /**
- * Run / house overview (M1). Reads `GET /api/v2/house` and renders the aggregate
- * the contract already exposes: device counts, multi-device policy, room
- * aggregates, and house warnings.
+ * Run / house overview (M1 → M7).
+ *
+ * Reads `GET /api/v2/house` and renders the aggregate the contract exposes:
+ * device counts, multi-device policy, room aggregates, and house warnings.
+ * Since M7 the page is **exception-first**: `buildAttentionItems` ranks device
+ * errors/offline/disabled states, per-device warnings, house warnings
+ * (`duplicate_room`, fleet limits) and incomplete setup into one section, each
+ * row linking to the device, rooms page, or wizard that can fix it.
  *
  * Room aggregation is used from `house.rooms` when present. Older/partial
  * backends that omit `rooms` fall back to an existing `GET /api/v2/devices`
@@ -13,10 +18,12 @@ import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import AppIcon from '../../components/AppIcon.vue'
 import StateBlock from '../components/StateBlock.vue'
+import AttentionList from '../components/run/AttentionList.vue'
 import { api, promptForToken, type DeviceSummary, type HouseInfo } from '../api'
 import { describeError } from '../errors'
 import { metaFeature } from '../meta'
-import { t, warningKnown, warningTitle } from '../i18n'
+import { t } from '../i18n'
+import { buildAttentionItems } from '../run'
 import { useResource } from '../useResource'
 
 const houseResource = useResource(() => api.house())
@@ -63,15 +70,20 @@ const rooms = computed<RunRoom[]>(() => {
   const info: HouseInfo | null = house.value
   if (info?.rooms?.length) {
     return info.rooms.map((room) => {
-      const derivedIds = deviceItems.value
-        .filter((device) => (room.room === '' ? !device.room : device.room === room.room))
-        .map((device) => device.id)
-      const ids = room.device_ids?.length ? room.device_ids : derivedIds
+      const derived = deviceItems.value.filter((device) =>
+        room.room === '' ? !device.room : device.room === room.room,
+      )
+      const ids = room.device_ids?.length ? room.device_ids : derived.map((device) => device.id)
       return {
         room: room.room,
         deviceIds: ids,
         total: ids.length,
-        online: room.online ?? ids.length,
+        // The house aggregate is authoritative; the device rows are the fallback
+        // for a partial backend (never "all online" just because the count is absent).
+        online:
+          typeof room.online === 'number'
+            ? room.online
+            : derived.filter((device) => device.ready).length,
         defaultOutput: Boolean(room.default_output),
       }
     })
@@ -104,7 +116,11 @@ const rooms = computed<RunRoom[]>(() => {
 
 const roomsDerived = computed(() => !house.value?.rooms?.length && deviceItems.value.length > 0)
 const isEmpty = computed(() => counts.value.total === 0 && rooms.value.length === 0)
-const warnings = computed(() => house.value?.warnings ?? [])
+/**
+ * M7 exceptions-first list: live per-device status wins over house warnings,
+ * and every row is a link to the page that can resolve it (`run.ts`).
+ */
+const attention = computed(() => buildAttentionItems(house.value, deviceItems.value))
 const defaultOutputLabel = computed(() => {
   const id = multi.value?.default_output
   if (!id) return t('v2.run.defaultOutputNone')
@@ -132,8 +148,10 @@ async function load(): Promise<void> {
   if (!featureEnabled) return
   booting.value = true
   try {
-    await houseResource.load()
-    if (!house.value?.rooms?.length) await devicesResource.load()
+    // Both are required since M7: the house aggregate carries rooms/warnings,
+    // but only the device rows carry live `status`/`status_reason` for the
+    // attention list (and the per-room online fallback).
+    await Promise.all([houseResource.load(), devicesResource.load()])
   } finally {
     booting.value = false
   }
@@ -216,6 +234,9 @@ onMounted(() => {
           <p class="note">{{ devicesErrorCopy.hint }}</p>
         </div>
       </div>
+
+      <!-- Exceptions first (M7): every row opens the device/rooms/wizard. -->
+      <AttentionList :items="attention" />
 
       <StateBlock
         v-if="isEmpty"
@@ -308,26 +329,6 @@ onMounted(() => {
           </section>
         </div>
 
-        <section v-if="warnings.length" class="v2-card" :aria-label="t('v2.warning.house')">
-          <h2 class="v2-card-title">
-            <AppIcon name="alert" :size="16" />
-            {{ t('v2.warning.house') }}
-          </h2>
-          <ul class="v2-warning-list">
-            <li v-for="(warning, index) in warnings" :key="`${warning.code}-${index}`">
-              <span class="dot warn" aria-hidden="true" />
-              <strong>{{ warningTitle(warning.code, warning.message) }}</strong>
-              <span class="tag mono">{{ warning.code }}</span>
-              <span v-if="warning.device_id" class="tag mono">{{ warning.device_id }}</span>
-              <span v-if="warning.params?.length" class="tag mono">
-                {{ warning.params.join(', ') }}
-              </span>
-              <span v-if="!warningKnown(warning.code) && warning.hint" class="note">
-                {{ warning.hint }}
-              </span>
-            </li>
-          </ul>
-        </section>
       </template>
     </template>
   </div>

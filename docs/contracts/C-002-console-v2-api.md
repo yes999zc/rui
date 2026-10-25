@@ -1,7 +1,7 @@
 # C-002 控制台 v2 API 契约
 
 > **契约编号**：C-002/1  
-> **状态**：定稿草案（2026-10-25），随 rui 0.6.x 发布：以 **additive** 为主；客户端可见的行为变更共两处，见 Addendum A-2（§5.4 门禁顺序）与 A-5（`setup/plan` 的 test/connect 证据来源）；不改变 C-001（`rui-device/v1`）。  
+> **状态**：定稿草案（2026-10-25），随 rui 0.6.x 发布：以 **additive** 为主；客户端可见的行为变更共三处，见 Addendum A-2（§5.4 门禁顺序）、A-5（`setup/plan` 的 test/connect 证据来源）与 A-6（v1 `memory` 校验与 `/turns` stage 计时，属 bug 修正，既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`）；不改变 C-001（`rui-device/v1`）。  
 > **适用对象**：`web/src/v2/**` 前端实现者、`src/rui/web/api/**` 后端实现者、reviewer/verifier。  
 > **一句话**：v2 控制台只依赖 `/api/v2/*` 与能力（capability）声明；机型差异来自插头 manifest，不来自前端 if/else。
 
@@ -13,8 +13,8 @@
 |---|---|
 | 契约 ID / 版本 | `C-002/1` |
 | API 版本 | `2.0`（路径前缀 `/api/v2`） |
-| rui 版本窗口 | `>=0.6.0, <0.7.0`：只增不改（客户端可见变更见 A-2、A-5），v1 保持可用（两处已记录修正见 A-4） |
-| 破坏性变更 | 本契约 **不含字段删除/重命名**；0.6.x 有意行为变更有两处：§5.4 动作门禁顺序（见 Addendum A-2）与 `setup/plan` test/connect 步的证据来源（见 A-5），均客户端可见；删除/重命名只能进 `/api/v3` 或 0.7 的 C-002/2 |
+| rui 版本窗口 | `>=0.6.0, <0.7.0`：只增不改（客户端可见变更见 A-2、A-5、A-6），v1 保持可用（已记录修正见 A-4 与 A-6） |
+| 破坏性变更 | 本契约 **不含字段删除/重命名**；0.6.x 有意行为变更有三处：§5.4 动作门禁顺序（见 Addendum A-2）、`setup/plan` test/connect 步的证据来源（见 A-5），以及 v1 `POST /api/v1/memory` 校验与 `/api/v1/turns` stage 计时（见 A-6，属 bug 修正；既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`），均客户端可见；删除/重命名只能进 `/api/v3` 或 0.7 的 C-002/2 |
 | 依赖契约 | C-001 `rui-device/v1`（manifest：`capabilities`、`params`、`audio_defaults`、`runtime`、`device_side`）**不变** |
 | 认证 | 沿用 `X-Auth-Token`；无账号/角色/会话 |
 | 前端入口 | `web/v2.html` + `web/src/v2/**`，路由前缀 `/v2/*`；生产由 FastAPI 托管 `v2.html` |
@@ -44,7 +44,7 @@
 
 - 不定义账号/角色/多租户、HA/ESPHome 依赖、OTA/刷机/ADB/WebUSB。
 - 不定义非设备域的 v2 API（providers/integrations/music/memory 在 v2 首次交付仍可调用稳定 v1 端点；迁移时另立契约）。
-- v1 端点的形状与语义保持兼容；仅有两处已记录的实现修正（见 A-4）：device/setup 写不再落盘派生的 `audio.voice.kws_keywords_file`，以及 `GET /api/v1/voice/threshold` 在两个路径字段都为空时改读 `config.yaml` 同目录的 `keywords.txt`（不可读时降级为 `exists=false`）。v2 可在内部复用 v1 的服务层实现，但对外形状以本契约为准。
+- v1 端点的形状与语义保持兼容；已记录的实现修正见 A-4（device/setup 写不再落盘派生的 `audio.voice.kws_keywords_file`；`GET /api/v1/voice/threshold` 在两个路径字段都为空时改读 `config.yaml` 同目录的 `keywords.txt`，不可读时降级为 `exists=false`）与 A-6（`POST /api/v1/memory` 的非法输入改 422、`/api/v1/turns` 的 `stages.*.elapsed_ms`/`attempts` 改为真实观测值；既有字段不变，`attempts[]` 仅新增 `elapsed_ms`）。v2 可在内部复用 v1 的服务层实现，但对外形状以本契约为准。
 - 不新增配置版本；不要求 `CONFIG_VERSION` 升级。
 
 ---
@@ -1133,8 +1133,8 @@ Activity（设备维度事件流）
 
 ### 10.1 兼容窗口
 
-- `>=0.6.0 <0.7.0`：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序（A-2）与 `setup/plan` test/connect 步的证据来源（A-5）外不改语义；`meta.features` 用于渐进点亮。
-- v1 端点与形状保持向后兼容；唯一已知 additive 是 `/api/v1/turns` 每条新增可选 `device_id`（不删不改旧字段，旧消费者可忽略）。v2 不修改 `GET /api/v1/devices`、`PUT /api/v1/devices/{id}`、`/api/v1/setup/step` 的既有字段；这些写路径不再落盘派生的 `kws_keywords_file`，`GET /api/v1/voice/threshold` 的路径推导与不可读降级也见 A-4。
+- `>=0.6.0 <0.7.0`：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序（A-2）、`setup/plan` test/connect 步的证据来源（A-5）与 A-6 的 v1 bug 修正（memory 非法输入改 422、`/turns` stage 计时真实化；既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`）外不改语义；`meta.features` 用于渐进点亮。
+- v1 端点与形状保持向后兼容；唯一已知的**新增字段**仍是 `/api/v1/turns` 每条可选 `device_id`（不删不改旧字段，旧消费者可忽略）；A-6 另外在 `attempts[]` 元素上新增 `elapsed_ms`（不删不改既有元素字段）。v2 不修改 `GET /api/v1/devices`、`PUT /api/v1/devices/{id}`、`/api/v1/setup/step` 的既有字段；这些写路径不再落盘派生的 `kws_keywords_file`，`GET /api/v1/voice/threshold` 的路径推导与不可读降级也见 A-4。`POST /api/v1/memory` 的 422 校验与 `/api/v1/turns` 的 `stages.*.elapsed_ms`/`attempts` 修正见 A-6。
 - C-001 不变：v2 只消费 manifest 的 `capabilities/params/audio_defaults/runtime/device_side`，不新增字段。
 
 ### 10.2 发布顺序
@@ -1189,7 +1189,7 @@ Activity（设备维度事件流）
 1. 契约里每个端点都有方法/路径/请求/响应/错误码，且没有“视情况而定”。
 2. `capabilities` 全部来自 manifest；v2 前端 grep 不到机型字面量。
 3. provenance 的五种 source 与 ack 特例都能在测试中复现。
-4. 0.6.x 不改变 v1 端点的形状与请求/响应字段；仅 A-4 记录的两处实现修正（派生 `kws_keywords_file` 不再落盘、voice threshold 的路径推导与不可读降级）例外；`meta.features` 可关闭全部 v2 能力。
+4. 0.6.x 不改变 v1 端点的形状与请求/响应字段；仅 A-4 记录的实现修正（派生 `kws_keywords_file` 不再落盘、voice threshold 的路径推导与不可读降级）与 A-6 记录的修正（memory 非法输入改 422、`/turns` stage 计时真实化；`attempts[]` 元素新增 `elapsed_ms`）例外；`meta.features` 可关闭全部 v2 能力。
 5. 设备写入返回 `restart`，UI 有“重启全屋音频面”的确认点。
 6. secret 不出现在任何响应/日志/截图。
 7. `/v2` 深链刷新可开；`/api/v2` 404 不落 SPA。
@@ -1199,7 +1199,7 @@ Activity（设备维度事件流）
 
 ## Addendum（0.6.x）
 
-本 Addendum 记录 0.6.x 的 additive 字段与两处**有意变更**（§5.4 门禁顺序、`setup/plan` test/connect 步的证据来源，均客户端可见）；不删除、不重命名既有字段。A-2 明写「本条取代 §5.4 旧顺序」，A-5 明写「本条取代 §7.23 test 步的旧判定」；其余条目对 0.6 的 v2 客户端仍可忽略。
+本 Addendum 记录 0.6.x 的 additive 字段与三处**有意变更**（A-2 §5.4 门禁顺序、A-5 `setup/plan` test/connect 步的证据来源、A-6 v1 memory 校验与 `/turns` stage 计时）；不删除、不重命名既有字段。A-6 的主体是 v1 行为的 bug 修正（非法输入从 500/静默截断改为 422，LLM/TTS 的 `elapsed_ms` 从固定 0.0 改为真实值）；既有字段名与响应形状不变，唯一新增是 `attempts[]` 元素的 `elapsed_ms`（additive，旧消费者可忽略），**不是字段重命名/删除**。A-2 明写「本条取代 §5.4 旧顺序」，A-5 明写「本条取代 §7.23 test 步的旧判定」；其余条目对 0.6 的 v2 客户端仍可忽略。
 
 ### A-1. DeviceDetail 增加 `listen_port` 来源
 
@@ -1245,7 +1245,7 @@ Activity（设备维度事件流）
 
 ### A-5. 行为澄清：`setup/plan` 的 test 步以本设备的最近一次测试结果为准
 
-§7.23 的 `test` 步新增一个 additive 证据字段，并明确 `status` 的判定来源（客户端可见，但不删除/重命名字段）。这是 0.6.x 第二处客户端可见行为变更（与 A-2 并列）：带失败记录的已连接设备从 `done/ok=true` 变成 `pending/ok=false`。
+§7.23 的 `test` 步新增一个 additive 证据字段，并明确 `status` 的判定来源（客户端可见，但不删除/重命名字段）。这是 0.6.x 三处客户端可见行为变更中的第二处（与 A-2 并列；A-6 为第三处，属 v1 bug 修正）：带失败记录的已连接设备从 `done/ok=true` 变成 `pending/ok=false`。
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
@@ -1262,3 +1262,39 @@ Activity（设备维度事件流）
 `checks`/`at` 字段语义不变；`evidence.ok` 在 `tested=true` 时只按记录 `ok` 裁决（不再被 live link 覆盖），`tested=false` 时仍是链路提示。旧客户端忽略 `tested` 即可。该规则只影响 `GET /setup/plan` 与 setup step 响应中的 `plan`，不改 `POST /devices/{id}/test` 的响应。
 
 设备详情（`GET /api/v2/devices/{id}` 的 `setup.last_test_ok/last_test_at`）按同一来源读取：只取**本设备**的 `device.test` 记录（记录内 `device_id` 必须与请求的设备一致），记录结构损坏（`test`/`device`/记录本身不是 dict）时按无记录处理（`last_test_ok=false`、`last_test_at=""`），不得 500；`"ok":"false"` 等非布尔 `true` 同样不算通过。注意 setup store 目前只有**单个**测试槽（最近一次记录，与设备共用），每设备历史记录是后续项，因此详情页也只能展示最近一次而非历史。
+
+### A-6. 行为修正：v1 `memory` 校验与 `/turns` stage 计时（既有字段名不变）
+
+M7/M8 评审发现的两个 v1 实现问题在本轮修正。两者都不删除/重命名既有字段；`stages` 顶层与 memory 响应形状不变，唯一新增是 `attempts[]` 元素里的 `elapsed_ms`（additive，旧消费者可忽略）。但两者都客户端可见（错误码与数值变化），合并为 0.6.x 的第三处有意变更 A-6（计入 §0/§1.2/§10.1）。
+
+#### A-6.1 `POST /api/v1/memory`
+
+请求体 `{action, id?, text?}`；成功响应形状不变：`{items:[...], item:{...}|null}`。
+
+| 条件 | 结果 |
+|---|---|
+| `action` 不是字符串，或不在 `add`/`confirm`/`remove` | 422（`action must be add/confirm/remove`） |
+| `id` 存在但不是字符串 | 422 |
+| `text` 存在但不是字符串 | 422 |
+| `add` + 去空白后为空 | 422（`text must not be empty`）；**不落库** |
+| `add` + 去空白后长度 > `MAX_TEXT` | 422（detail 含实际长度与上限）；**不落库** |
+| `add` + 长度 == `MAX_TEXT` | 200，正常新增 |
+| `confirm` + 不带 `text` 或 `text` 为空白 | 200，保留原文本（文本是可选编辑，空值不是错误） |
+| `confirm` + 非空 `text` 去空白后超过 `MAX_TEXT` | 422；不修改任何记录（修前 store 会静默截断该记录文本） |
+| `confirm`/`remove` + 找不到 `id` | 404 `no such memory item` |
+
+`MAX_TEXT` 的唯一来源是 `src/rui/session/memory.py:36`（当前 200，按 `strip()` 后的字符数计）。客户端不要硬编码上限，以 422 的 `detail` 为准。
+
+store 层 `MemoryStore.add/confirm` 仍保留 `[:MAX_TEXT]` 截断，这是语音工具路径（`local.remember`）的存储保护；本轮不改语音 `remember` 行为（超长仍按原逻辑截断，空文本由工具返回 `empty` 状态、不进入 store）。API 层在调用 store 前完成校验，因此控制台提交的超长文本不会被截断后静默入库。
+
+#### A-6.2 `/api/v1/turns` 的 `stages.*`
+
+`stages` 每个条目仍是 `{used, elapsed_ms, attempts[]}`，顶层字段名与类型不变；本轮把 LLM/TTS 此前恒定的 `elapsed_ms=0.0` 改为真实计时（**行为修正**：观测数据变真实，字段名不变），并把 `attempts[]` 元素从 `{provider,error}` 补齐为 `{provider,error,elapsed_ms}`（additive）。
+
+| stage | `elapsed_ms` 语义 | `attempts` |
+|---|---|---|
+| `asr` | 完整转写调用：从发起最终成功的 provider `transcribe` 调用到返回（`call_stage`）；不含此前失败 attempt 的等待 | 每个 provider/retry 一次 `{provider,error,elapsed_ms}` |
+| `llm` | 该轮**首 token 延迟（TTFT）**：从发起 provider `chat` 调用到收到第一个 chunk，不含后续流式生成；tool 多轮时只保留**最终轮**（产出回答的那一轮）的 report | 最终轮内每个 provider/retry 一次 |
+| `tts` | 整轮**多句累计**：每句从链探测前开始计时，覆盖失败 provider/retry、合成与逐块下发，直到该句结束；`say` 把每句耗时累加为一个 `tts` 条目。没有可播文本的句子不产生 report | 跨句、跨 attempt 合并（前句 attempts + 后句 attempts）；长度 = 整轮实际 provider 尝试次数，**不等于 fallback 次数** |
+
+`attempts[]` 元素形状：`{provider: string, error: string, elapsed_ms: number}`；`error=""` 表示该次尝试成功，否则为 `"TypeName: message"`。跳过的 stage（如 `audio=false` 时没有 TTS）与失败 stage 的呈现不变，本轮只改数值来源。

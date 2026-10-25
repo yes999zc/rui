@@ -34,18 +34,45 @@ const navItems: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'config', to: '/config', labelKey: 'v2.nav.config' },
 ]
 
+/** Sub-navigation under the Run section (M7/M8): overview + three run pages. */
+const runSubnav: Array<{ key: string; to: string; labelKey: MsgKey }> = [
+  { key: 'run', to: '/run', labelKey: 'v2.nav.overview' },
+  { key: 'conversation', to: '/conversation', labelKey: 'v2.nav.conversation' },
+  { key: 'logs', to: '/logs', labelKey: 'v2.nav.logs' },
+  { key: 'memory', to: '/memory', labelKey: 'v2.nav.memory' },
+]
+
 const section = computed(() => {
   if (route.path.startsWith('/devices') || route.path.startsWith('/setup')) return 'devices'
   if (route.path.startsWith('/rooms')) return 'rooms'
-  if (route.path.startsWith('/run')) return 'run'
+  if (
+    route.path.startsWith('/run') ||
+    route.path.startsWith('/conversation') ||
+    route.path.startsWith('/logs') ||
+    route.path.startsWith('/memory')
+  ) {
+    return 'run'
+  }
   if (route.path.startsWith('/config')) return 'config'
   return ''
+})
+
+const runPage = computed(() => {
+  if (route.path.startsWith('/conversation')) return 'conversation'
+  if (route.path.startsWith('/logs')) return 'logs'
+  if (route.path.startsWith('/memory')) return 'memory'
+  return 'run'
 })
 
 const pageLabel = computed(() => {
   if (section.value === 'devices') return t('v2.nav.devices')
   if (section.value === 'rooms') return t('v2.nav.rooms')
-  if (section.value === 'run') return t('v2.nav.run')
+  if (section.value === 'run') {
+    if (runPage.value === 'conversation') return t('v2.nav.conversation')
+    if (runPage.value === 'logs') return t('v2.nav.logs')
+    if (runPage.value === 'memory') return t('v2.nav.memory')
+    return t('v2.nav.run')
+  }
   if (section.value === 'config') return t('v2.nav.config')
   return t('v2.nav.devices')
 })
@@ -193,6 +220,25 @@ onUnmounted(() => {
           </a>
         </div>
       </div>
+
+      <!-- Run sub-navigation: overview, conversation, logs, memory (M7/M8). -->
+      <nav
+        v-if="section === 'run'"
+        class="v2-subnav"
+        :aria-label="t('v2.nav.runSub')"
+        data-testid="run-subnav"
+      >
+        <RouterLink
+          v-for="item in runSubnav"
+          :key="item.key"
+          :to="item.to"
+          class="v2-subnav-link"
+          :class="{ 'is-active': runPage === item.key }"
+          :aria-current="runPage === item.key ? 'page' : undefined"
+        >
+          {{ t(item.labelKey) }}
+        </RouterLink>
+      </nav>
     </header>
 
     <main id="v2-main" class="v2-main" tabindex="-1">

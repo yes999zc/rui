@@ -30,6 +30,10 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 MAX_ITEMS = 200
+# One memory is a sentence, not a paragraph. `add` keeps this as a storage guard, but
+# the console API checks it first and answers 422: the old slice() silently cut a
+# 300-char fact to 200 and the client had no way to know (M7/M8 review).
+MAX_TEXT = 200
 # The old build's DUP_RATIO: a new sentence this close to a remembered one is the same
 # fact said twice, and "记住…" arriving both as a candidate and as a confirmed tool call
 # used to leave two entries for one sentence.
@@ -135,7 +139,7 @@ class MemoryStore:
         「记住…」 the next day. A `confirmed=True` add *promotes* an existing candidate
         instead of writing a second row - that is how the duplicate pair is fixed.
         """
-        clean = (text or "").strip()[:200]
+        clean = (text or "").strip()[:MAX_TEXT]
         if not clean:
             raise ValueError("memory text is empty")
         found = self._find(clean)
@@ -157,7 +161,7 @@ class MemoryStore:
             if item.id == item_id:
                 item.confirmed = True
                 if text and text.strip():
-                    item.text = text.strip()[:200]
+                    item.text = text.strip()[:MAX_TEXT]
                 self._save()
                 return item
         return None

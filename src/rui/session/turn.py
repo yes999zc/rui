@@ -250,19 +250,27 @@ async def open_stream_stage(
 
     A provider that connects and then fails on its first chunk is not a provider; pulling
     one chunk inside the try is what makes the fallback chain meaningful for streaming.
+
+    ``elapsed_ms`` is time-to-first-token (TTFT): from calling the provider until its
+    first chunk arrives. The rest of the stream is consumed by the caller and is not
+    part of this number - the first chunk is what the speaker is actually waiting for.
     """
     attempts: list[dict] = []
     for name, provider in chain:
+        started = time.perf_counter()
         try:
             stream = getattr(provider, method)(*args)
             first = await anext(stream)
         except Exception as exc:  # noqa: BLE001 - that is what the chain is for
-            attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
+            elapsed = round((time.perf_counter() - started) * 1000, 1)
+            attempts.append({"provider": name, "error": f"{type(exc).__name__}: {exc}",
+                             "elapsed_ms": elapsed})
             log_provider_failure(stage, name, exc)
             continue
-        attempts.append({"provider": name, "error": ""})
+        elapsed = round((time.perf_counter() - started) * 1000, 1)
+        attempts.append({"provider": name, "error": "", "elapsed_ms": elapsed})
         return (name, first, stream), StageReport(
-            stage=stage, used=name, attempts=attempts, elapsed_ms=0.0
+            stage=stage, used=name, attempts=attempts, elapsed_ms=elapsed
         )
     raise StageFailure(stage, attempts)
 
@@ -535,11 +543,16 @@ class TurnRunner:
             return "", 0, None, "tts: no ready provider"
         text = speakable
         attempts: list[dict] = []
+        # One sentence's synthesis time. The caller sums these into the turn's `tts`
+        # stage (see `say`); a failed provider attempt is part of the wait, so the
+        # clock starts before the chain is probed.
+        sentence_started = time.perf_counter()
         for name, provider in chain:
             spoken = 0
             retries = max(0, int(getattr(provider, "retries", 0) or 0))
             for attempt in range(retries + 1):
                 spoken = 0
+                attempt_started = time.perf_counter()
                 try:
                     # aclosing: an early exit mid-sentence must close the HTTP stream,
                     # otherwise the vendor keeps a half-read request open and the next
@@ -570,8 +583,10 @@ class TurnRunner:
                         if spoken and gap_ms:
                             await speak(_sentence_gap(self.sample_rate, gap_ms))
                 except Exception as exc:  # noqa: BLE001 - fall through to the next vendor
+                    elapsed = round((time.perf_counter() - attempt_started) * 1000, 1)
                     attempts.append({"provider": name,
-                                     "error": f"{type(exc).__name__}: {exc}"})
+                                     "error": f"{type(exc).__name__}: {exc}",
+                                     "elapsed_ms": elapsed})
                     # MissingKey: one INFO per provider per process. A real vendor
                     # failure: one WARNING per provider per window, never per sentence.
                     log_provider_failure("tts", name, exc)
@@ -580,8 +595,10 @@ class TurnRunner:
                     if attempt < retries:
                         continue
                     break
-                attempts.append({"provider": name, "error": ""})
-                return name, spoken, StageReport("tts", name, attempts, 0.0), ""
+                elapsed = round((time.perf_counter() - attempt_started) * 1000, 1)
+                attempts.append({"provider": name, "error": "", "elapsed_ms": elapsed})
+                elapsed = round((time.perf_counter() - sentence_started) * 1000, 1)
+                return name, spoken, StageReport("tts", name, attempts, elapsed), ""
         return "", 0, None, f"tts failed for every provider: {attempts}"
 
     @property
@@ -718,6 +735,13 @@ class TurnRunner:
                 ]
             used, spoken, report, error = await self._speak_sentence(text, chain, speak, trace)
             if report is not None:
+                # One StageReport per sentence, but the turn has one `tts` entry: sum
+                # the synthesis time (and keep every attempt) instead of letting the
+                # last sentence overwrite the report at 0 ms (M7/M8 review).
+                previous = result.stages.get("tts")
+                if previous is not None:
+                    report.elapsed_ms = round(previous.elapsed_ms + report.elapsed_ms, 1)
+                    report.attempts = previous.attempts + report.attempts
                 result.stages["tts"] = report
                 tts_provider = used
             if error:
@@ -800,6 +824,9 @@ class TurnRunner:
             )
             log.info("llm round: tools=%d first_token=%.0f ms", len(tools),
                      (time.perf_counter() - round_started) * 1000)
+            # `elapsed_ms` is this round's TTFT (time until the vendor's first chunk).
+            # A tool-calling turn streams several rounds; the last one replaces the
+            # entry, and that is the round that produced the spoken answer.
             result.stages["llm"] = report
             trace.mark("llm_first")
             buffer = ""

@@ -48,7 +48,12 @@ _BUILDERS: dict[str, dict[str, Callable[..., Any]]] = {
 class StageReport:
     stage: str
     used: str          # provider name that answered
-    attempts: list[dict]
+    attempts: list[dict]  # {"provider", "error", "elapsed_ms"} per attempt, in order
+    # Wall-clock milliseconds measured by this process:
+    # - asr: the full transcription call;
+    # - llm: time-to-first-token (TTFT) of the streaming round - not the whole stream;
+    # - tts: cumulative synthesis time for every sentence in the turn (per-sentence
+    #   reports are summed by TurnRunner.say), so it is 0.0 only when nothing was said.
     elapsed_ms: float
 
 

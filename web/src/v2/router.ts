@@ -10,7 +10,11 @@ import { createRouter, createWebHistory } from 'vue-router'
  *   /v2/setup            first-run eight-step wizard (M6)
  *   /v2/devices/:id      device detail (`?tab=config|danger` are M3 writes)
  *   /v2/rooms            rooms, multi-device policy, global audio (M5)
- *   /v2/run, /v2/config  honest "not in this milestone" states
+ *   /v2/run              house overview with exceptions first (M7)
+ *   /v2/conversation     recent turns, device/room badges and filters (M8)
+ *   /v2/logs             service-log tail with level filter and copy (M8)
+ *   /v2/memory           memory list + add/confirm/remove (M8)
+ *   /v2/config           honest "not in this milestone" state
  *
  * There is deliberately no import of the legacy panel registry, PanelHost, or
  * any legacy view: v2 owns its route table.
@@ -39,6 +43,13 @@ const routes = [
     component: () => import('./views/SetupView.vue'),
   },
   { path: '/run', name: 'run', component: () => import('./views/RunView.vue') },
+  {
+    path: '/conversation',
+    name: 'conversation',
+    component: () => import('./views/ConversationView.vue'),
+  },
+  { path: '/logs', name: 'logs', component: () => import('./views/LogsView.vue') },
+  { path: '/memory', name: 'memory', component: () => import('./views/MemoryView.vue') },
   { path: '/config', name: 'config', component: () => import('./views/ConfigView.vue') },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFoundView.vue') },
 ]

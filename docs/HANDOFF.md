@@ -14,8 +14,8 @@ phase-close: task-16
 | 下游 pin | dot2 的 `deploy/downstream/Dockerfile` 与 compose 默认值 pin 上述 digest；`docs/canary-0.6.0-official-image.md` 记录 arm64 + x86_64 金丝雀；`docs/contract-report-0.6.0.json` 增 `upstream_pin` 块 | commit `9c696cd` |
 | 生产（NAS 168） | **v2 预览（M1–M6）** `rui-dot2:0.7.0-pre4-642d40b`（底座 `ghcr.io/yes999zc/rui@sha256:299e561b…ccca`，main @ 642d40b）；`/`、`/v2`、`/v2/devices/add`、`/v2/setup` 均 200；`/api/v2/setup/plan` 返回 8 步；`/health` 0.6.0 / cv3 / devices 2 / errors 0 / 双 plane connected / `ack.wav_exists=true`；插件列表只剩 2 条 builtin；回滚镜像 `pre3-825b9e7`、`pre2-9e094e7`、`pre1-4ebf104`、`0.6.0-adc4c2b` 全在 | 构建需 `DOCKER_BUILDKIT=0`；备份 `/vol1/rui/backup/20261026-0612-v2m6/`、`/vol1/rui-backups/plugs-*` |
 | 契约 C-001 | `rui-device/v1`（manifest `audio_defaults` + `ack_echo_ignore_ms`） | `docs/socket-plug-v1.md` §3.2；`src/rui/config/schema.py` |
-| 契约 C-002 | 控制台 v2 `/api/v2/*` 24 端点，1193 行，**冻结 PASS** | `docs/contracts/C-002-console-v2-api.md`；task-6 记录 |
-| 兼容边界 | rui `>=0.6.0, <0.7.0`；0.6.x v1 仅 `/turns` 加 additive `device_id` | 契约 §10.1 |
+| 契约 C-002 | 控制台 v2 `/api/v2/*` 24 端点，1300 行（含 A-6），**冻结 PASS** | `docs/contracts/C-002-console-v2-api.md`；task-6 记录 |
+| 兼容边界 | rui `>=0.6.0, <0.7.0`；0.6.x v1 唯一新增字段仍是 `/api/v1/turns` 每条可选 `device_id`；另有两处已记录修正：`POST /api/v1/memory` 非法输入改 422（不再 500/静默截断）、`/turns` 的 `stages.*.elapsed_ms`/`attempts` 改为真实值（既有字段不变，`attempts[]` 新增 `elapsed_ms`），见 C-002 A-6 | 契约 §10.1 / A-6 |
 
 ## 已完成（含证据）
 - **0.6.0 发布**：内核去厂商命名（74 处文案/注释中性化 + 守卫测试 + scripts P0 修）→ tag → CI 多架构镜像绿 → digest 入 release notes → Release 建立。tag 内不含 v2：`git ls-tree -r --name-only v0.6.0 | grep -cE 'web/src/v2|api/v2'` → 0。
@@ -29,6 +29,7 @@ phase-close: task-16
 - **控制台 v2 M4**（`9e094e7`）：音频 tab，37 个 leaf 的 effective + 来源 + 四层原始值；16 个可覆盖 leaf 字段级 PATCH；「恢复继承」发 null 后重读校验来源（失败保持红色、重试重跑校验，不再静默吞错）；unresolved 插头给中性提示；全局影子提示。E2E 用注入 500 验证红/绿状态切换。
 - **控制台 v2 M5**（`825b9e7`）：`/v2/rooms` 房间与全屋视图；多设备策略（enabled/max_planes/default_output/room_priority）字段级 PATCH + 明确「house 写入是 service 范围、不自动重启」并给音频面重启按钮；全局音频编辑（37 leaf、explicit 标记、null 清除、覆盖计数 N 台、插头 manifest 覆盖警告）；422 dotted path 行内标红、409/429 可读；脏稿离开确认 + `beforeunload`。E2E 抓包验证 `{"multi_device":{"max_planes":5}}`、`{"audio":{"capture":{"rate":48000}}}`、`null` 清除、422 标红、`POST /house/audio/restart` 恰好一次。
 - **控制台 v2 M6**（`642d40b`）：八步向导（keys/models/prepare/params/wake/connect/test/verify），步骤/动作/完成度全部服务端驱动；create 前后续步骤禁用且不发请求；create 只用返回 id；draft 冲突可改 id 继续（真实 E2E 抓出的阻塞缺陷已修）；verify.say 出声前二次确认；逻辑失败不再显示绿色完成。`/v2/setup` 首装入口 + 设备列表空态链过去。
+- **控制台 v2 M7+M8**（commit 待补）：M7 全屋概览“异常优先”（设备离线/未启用/配置问题集中列出并可点入）+ 房间行 + 设备页活动 tab；M8 `/v2/conversation`、`/v2/logs`、`/v2/memory` 三页 v2 重写（过滤/复制/空态/错误，过渡期复用 v1 `/turns`、`/logs`、`/memory`，不 import 旧 views）。同轮后端修正两项 v1 缺陷并写入契约 C-002 A-6：`POST /api/v1/memory` 的 `add` 空/纯空白文本与 `add`/`confirm` 超长文本改 422 且不落库（修前 500 或静默截断）、`/api/v1/turns` 的 `stages.*.elapsed_ms`/`attempts` 改为真实计时（ASR 完整转写、LLM TTFT、TTS 多句累计）；代码评审已 PASS，commit 后补。
 - **生产 v2 预览（M3+M4）**：`rui-dot2:0.7.0-pre2-9e094e7`，healthy、双 plane connected、无 Traceback。
 - **生产 v2 预览**：为让 9 哥 早上能评测新后台，生产临时切到 main 构建 `rui-dot2:0.7.0-pre1-4ebf104`（`/v2` 可用，旧 `/` 不变；`/health` 逐字段一致、无 Traceback、设备 25s 回连）。**这是可控的预览切换，不是正式发布版本**；回滚一行见 §下一步。
 

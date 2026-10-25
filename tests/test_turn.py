@@ -27,29 +27,36 @@ class FakeAsr:
 
 
 class FakeLlm:
-    def __init__(self, chunks: list[str], fail: bool = False) -> None:
+    def __init__(self, chunks: list[str], fail: bool = False, delay: float = 0.0) -> None:
         self.chunks = chunks
         self.fail = fail
+        self.delay = delay
         self.seen: list[list[dict]] = []
 
     async def chat(self, messages: list[dict], tools: list[dict]):
         if self.fail:
             raise RuntimeError("llm down")
         self.seen.append(messages)
+        if self.delay:
+            await asyncio.sleep(self.delay)
         for c in self.chunks:
             yield ChatChunk(delta=c)
 
 
 class FakeTts:
-    def __init__(self, chunk: bytes = b"\x01\x00" * 320, fail: bool = False) -> None:
+    def __init__(self, chunk: bytes = b"\x01\x00" * 320, fail: bool = False,
+                 delay: float = 0.0) -> None:
         self.chunk = chunk
         self.fail = fail
+        self.delay = delay
         self.texts: list[str] = []
 
     async def synthesize(self, text: str, voice: str = ""):
         self.texts.append(text)
         if self.fail:
             raise RuntimeError("tts down")
+        if self.delay:
+            await asyncio.sleep(self.delay)
         yield self.chunk
 
 
@@ -112,6 +119,41 @@ def test_turn_runs_asr_llm_tts_and_marks_latency(monkeypatch) -> None:
     tts_first, llm_first = trace.at("tts_first"), trace.at("llm_first")
     assert tts_first is not None and llm_first is not None
     assert tts_first >= llm_first
+
+
+def test_stage_elapsed_is_measured_and_tts_is_cumulative(monkeypatch) -> None:
+    """M7/M8: `llm` used to be 0.0 and each sentence overwrote `tts` with 0.0.
+
+    The fake providers sleep 20 ms, so the numbers can only be non-zero if the
+    runner measures the real wait:
+    - llm.elapsed_ms is TTFT (time until the first chunk, not the whole stream);
+    - tts.elapsed_ms is the sum over both sentences, not the last report.
+    """
+    llm = FakeLlm(["今天多云转晴，最高二十度。", "明天也是晴天。"], delay=0.02)
+    tts = FakeTts(delay=0.02)
+    patch_chains(monkeypatch, asr=FakeAsr("今天天气怎么样"), llms=[llm], ttss=[tts])
+
+    async def speak(pcm: bytes, *, segment_start: bool = False) -> None:
+        return None
+
+    result = asyncio.run(
+        TurnRunner(Config().providers).run(b"\x00\x00" * 1600, speak, TurnTrace(device_id="living"))
+    )
+
+    assert result.error == ""
+    assert tts.texts == ["今天多云转晴，最高二十度。", "明天也是晴天。"]
+    llm_report = result.stages["llm"]
+    tts_report = result.stages["tts"]
+    assert llm_report.elapsed_ms >= 15, llm_report.elapsed_ms
+    # Two 20 ms syntheses: a single overwritten report would stay near 20 ms.
+    assert tts_report.elapsed_ms >= 40, tts_report.elapsed_ms
+    # `attempts` stays list[dict], one entry per provider attempt.
+    assert isinstance(tts_report.attempts, list)
+    for entry in (*llm_report.attempts, *tts_report.attempts):
+        assert isinstance(entry, dict)
+        assert {"provider", "error", "elapsed_ms"} <= entry.keys()
+    assert len(tts_report.attempts) == 2  # one successful attempt per sentence
+    assert all(entry["elapsed_ms"] >= 15 for entry in tts_report.attempts)
 
 
 def test_a_dead_stage_falls_back_to_the_next_provider(monkeypatch) -> None:

@@ -3,7 +3,9 @@
  *
  * Hand-written from the contract on purpose: the v2 console must not import the
  * legacy client (`../api.ts` pulls `PanelSpec` types from the panel registry) nor
- * any legacy device endpoint. Only `/api/v2/*` is spoken here.
+ * any legacy device endpoint. This module speaks the `/api/v2/*` endpoints plus
+ * the C-002 §1.2 transitional v1 endpoints (`/turns`, `/logs`, `/memory`); no v1
+ * *device* endpoint is called.
  *
  * Auth follows the console convention: localStorage `rui-token`, header
  * `X-Auth-Token`. A 401 means "ask the operator for a token", so it is surfaced
@@ -757,6 +759,108 @@ function encodeId(id: string): string {
   return encodeURIComponent(id)
 }
 
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min
+  return Math.max(min, Math.min(max, Math.trunc(value)))
+}
+
+/* — transitional v1 endpoints (C-002 §1.2) ——————————————————————————
+ *
+ * The contract does not define v2 APIs for the non-device domains yet, so the
+ * M8 run pages still read/write the stable v1 endpoints. Only `/turns`, `/logs`
+ * and `/memory` live here: the v1 *device* endpoints (`/devices*`,
+ * `/setup/step`, `/device/volume`, `/debug/*`) stay forbidden in v2 (C-002
+ * §2.3), and every call still goes through this module rather than a scattered
+ * `fetch`.
+ */
+
+/** One provider attempt inside a stage (`StageReport.attempts[]`). */
+export interface TurnAttempt {
+  provider?: string
+  error?: string
+  elapsed_ms?: number
+}
+
+/** One stage of a turn (`asr` / `llm` / `tts`), as `TurnResult.to_dict()` emits it. */
+export interface TurnStage {
+  used: string
+  /**
+   * Wall-clock milliseconds measured by the backend:
+   * - `asr`: the full transcription call;
+   * - `llm`: time-to-first-token (TTFT) of the streaming round that answered,
+   *   not the whole stream;
+   * - `tts`: synthesis time summed over every sentence of the turn.
+   *
+   * 0 therefore means "not measured" (e.g. a text-only turn said nothing), not
+   * "instant". Mirrors `StageReport.elapsed_ms` in `src/rui/providers/chain.py`.
+   */
+  elapsed_ms: number
+  /**
+   * Every provider attempt, in order. `asr`/`llm` append one entry per provider
+   * tried (a failed one carries `error`, then the one that answered); TTS
+   * appends one successful attempt per sentence, so `length` is *not* a
+   * fallback count. Count entries with a non-empty `error` for that.
+   */
+  attempts: TurnAttempt[]
+}
+
+/**
+ * One recent turn. `device_id` is the additive 0.6.x field (C-002 §1.2); old or
+ * console-spoken turns may carry an empty string, which means "whole house".
+ * `ts` is the server's `HH:MM:SS` label, `ts_epoch` the sortable Unix second.
+ */
+export interface TurnItem {
+  transcript: string
+  reply: string
+  audio_bytes?: number
+  error?: string
+  tools?: string[]
+  stages?: Record<string, TurnStage>
+  device_id?: string
+  ts?: string
+  ts_epoch?: number
+}
+
+/** `GET /api/v1/turns` — newest first; `last` is the last spoken turn. */
+export interface TurnsResponse {
+  turns: TurnItem[]
+  last: TurnItem | null
+}
+
+/** `GET /api/v1/logs` — the tail of `service.log`, oldest line first. */
+export interface LogsResponse {
+  lines: string[]
+  path: string
+  exists: boolean
+}
+
+/** One stored memory entry (`MemoryItem.as_dict()`). */
+export interface MemoryItem {
+  id: string
+  text: string
+  created: number
+  source: string
+  confirmed: boolean
+}
+
+export interface MemoryListResponse {
+  items: MemoryItem[]
+}
+
+export type MemoryAction = 'add' | 'confirm' | 'remove'
+
+export interface MemoryEditRequest {
+  action: MemoryAction
+  id?: string
+  text?: string
+}
+
+/** `POST /api/v1/memory` — the full list after the write, plus the touched row. */
+export interface MemoryEditResponse {
+  items: MemoryItem[]
+  item: MemoryItem | null
+}
+
 export const api = {
   meta: (): Promise<MetaInfo> => request<MetaInfo>('/api/v2/meta'),
   house: (): Promise<HouseInfo> => request<HouseInfo>('/api/v2/house'),
@@ -875,4 +979,31 @@ export const api = {
       `/api/v2/setup/plan/steps/${encodeURIComponent(step)}`,
       { method: 'POST', body: JSON.stringify(body) },
     ),
+
+  /* — transitional non-device endpoints (C-002 §1.2) ————————————————— */
+
+  /** `GET /api/v1/turns?limit=N` — newest first; `limit` is clamped to 1..200. */
+  turns: (limit = 20): Promise<TurnsResponse> =>
+    request<TurnsResponse>(`/api/v1/turns?limit=${clampInt(limit, 1, 200)}`),
+
+  /** `GET /api/v1/logs?lines=N` — tail of the service log; server caps at 2000. */
+  logs: (lines = 300): Promise<LogsResponse> =>
+    request<LogsResponse>(`/api/v1/logs?lines=${clampInt(lines, 1, 2000)}`),
+
+  memoryList: (): Promise<MemoryListResponse> => request<MemoryListResponse>('/api/v1/memory'),
+
+  /**
+   * `POST /api/v1/memory` with `action=add|confirm|remove`.
+   *
+   * 409 means memory is disabled on the server; 404 means a confirm/remove
+   * targeted an entry that no longer exists; 422 is a rejected request —
+   * including an empty, over-long (`MAX_TEXT`), or wrongly typed `text`/`id`,
+   * not just an unknown action. All three keep the list untouched and surface
+   * as readable errors.
+   */
+  memoryEdit: (body: MemoryEditRequest): Promise<MemoryEditResponse> =>
+    request<MemoryEditResponse>('/api/v1/memory', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 }
