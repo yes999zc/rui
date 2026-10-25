@@ -247,9 +247,10 @@ def _resolve_device(
 def _warn_v0_once(plugin_file: Path, device_file: Path) -> None:
     """Visible deprecation notice (v1 §7), once per manifest path per process.
 
-    A v0 manifest keeps working through 0.3.x, but the spec requires a warning at
-    least one minor before removal (earliest 0.5.0). Logging once avoids a warning
-    flood from per-request catalog reads.
+    A v0 manifest keeps working through 0.5.x, but the spec requires a warning at
+    least one minor before removal (now earliest 0.6.0; 0.5.0 kept v0 because the
+    builtin LX06 reference plug is still v0). Logging once avoids a warning flood
+    from per-request catalog reads.
     """
     key = str(device_file)
     with _DEPRECATION_LOCK:
@@ -258,7 +259,7 @@ def _warn_v0_once(plugin_file: Path, device_file: Path) -> None:
         _DEPRECATION_SEEN.add(key)
     log.warning(
         "socket/plug: %s (%s) uses rui-device/v0; v0 is deprecated and will be "
-        "removed no earlier than 0.5.0. Publish rui-device/v1 to keep device_wake "
+        "removed no earlier than 0.6.0. Publish rui-device/v1 to keep device_wake "
         "available; omit wake to stay on RUI KWS.",
         device_file,
         plugin_file,

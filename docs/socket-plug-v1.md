@@ -368,7 +368,7 @@ P3.1 把已内置的 LX06 能力落成一个可被 `load_plugin()` 读取的**�
 
 | 部件 | 内容 | 对应规范 |
 |---|---|---|
-| `plugin.yaml` | id `xiaoai-lx06`，trust `builtin`，`rui_compat: ">=0.2.0 <0.4.0"` | §3.1 / §3.2 |
+| `plugin.yaml` | id `xiaoai-lx06`，trust `builtin`，`rui_compat: ">=0.2.0 <0.6.0"` | §3.1 / §3.2 |
 | `devices/lx06.yaml` | `rui-device/v0`，class A，inbound，`ws`，in-process，能力 `mic_array` / `reference` / `playback` / `led` / `keys` / `volume`，参数 `host` / `room` / `wake_words` | §3、§7 |
 | `rui_plugin_xiaoai/adapter.py` | `build(spec, config)` 转调 `rui.device.xiaoai.build`，不复制 LX06 行为；`set_volume(0–100)` 映射到 `services.set_volume(0–255)` | §4.1 |
 | `wake` | 无；v0 默认 `source: rui`，LX06 继续走 RUI KWS | §2、§7 |
@@ -404,11 +404,11 @@ python -m rui plug-test plugins/rui-plugin-xiaoai \
 
 | 层 | 字段 | v0 | v1 |
 |---|---|---|---|
-| 插件级 | `plugin.yaml.rui_compat` | `>=0.2.0 <0.4.0` | `>=0.3.0 <0.4.0` |
+| 插件级 | `plugin.yaml.rui_compat` | `>=0.2.0 <0.6.0` | `>=0.3.0 <0.6.0` |
 | 机型级 | `compatibility.rui_min` | `0.2.0`（可更低） | `0.3.0` |
 | 允许的 schema | `rui-device/*` | v0 | v1；0.3 loader 同时读 v0 |
 
-- builtin `xiaoai-lx06`：`rui_compat: ">=0.2.0 <0.4.0"`，`rui_min: "0.2.0"`；因为 builtin 绕过 `load_plugin()` 的兼容检查，`plugins/builtin.py` 在 import 时用 `parse_range(...).matches(rui.__version__)` 自检（不匹配直接 RuntimeError，视为 release bug）。
+- builtin `xiaoai-lx06`：`rui_compat: ">=0.2.0 <0.6.0"`，`rui_min: "0.2.0"`；因为 builtin 绕过 `load_plugin()` 的兼容检查，`plugins/builtin.py` 在 import 时用 `parse_range(...).matches(rui.__version__)` 自检（不匹配直接 RuntimeError，视为 release bug）。
 - 参考包 `plugins/rui-plugin-xiaoai/`：同一个 v0 矩阵。
 - 示例包 `examples/plugin-example/`：v1 矩阵 `>=0.3.0 <0.4.0` / `rui_min: "0.3.0"`，不再对 0.2 宣称可用。
 - `rui_compat` 是**唯一插件级**版本门；`rui_min` 是机型下限。能力可用性在运行时按 §4.3 判定，不用版本号猜能力。
@@ -441,7 +441,7 @@ compatibility: {rui_min: "0.3.0", tested_with: ["0.3.2"]}
 
 不要给 v0 manifest 加 `wake` 试图“渐进升级”：loader 会拒绝（§3.3 更正）。0.2 用户只能收到 v0 分支/开发分支的 manifest，不能收到 v1。
 
-**弃用**：`rui-device/v0` 在 0.3.x 继续支持，最早 0.5.0 移除。0.3.2 起 `load_plugin()` 每个 v0 manifest 路径每进程记一次 warning（`src/rui/plugins/loader.py:_warn_v0_once`），避免每请求刷屏；`native_kws` 自 v1 弃用（v1 manifest 直接拒绝）；`streaming_asr` 保留为未定义值；`VendorSignalMsg`/`drain_signals()`/厂商让路窗口不弃用、不改语义；任何字段移除都“先警告、后 minor、再移除”，不得在 patch 移除。
+**弃用**：`rui-device/v0` 在 0.3.x–0.5.x 继续支持，最早 0.6.0 移除（0.5.0 保留 v0，因为内置 LX06 参考插头仍是 v0）。0.3.2 起 `load_plugin()` 每个 v0 manifest 路径每进程记一次 warning（`src/rui/plugins/loader.py:_warn_v0_once`），避免每请求刷屏；`native_kws` 自 v1 弃用（v1 manifest 直接拒绝）；`streaming_asr` 保留为未定义值；`VendorSignalMsg`/`drain_signals()`/厂商让路窗口不弃用、不改语义；任何字段移除都“先警告、后 minor、再移除”，不得在 patch 移除。
 
 **0.4 提取计划（P3.1 只留参考包，不搬代码）**：`plugins/rui-plugin-xiaoai/` 现在是可验收的参考插头；`src/rui/device/xiaoai/` 与 `src/rui/plugins/builtin.py` 的内置 manifest 仍是 0.2.x/0.3.x 的默认回退（同 id 时 builtin 优先）。0.4 计划：
 

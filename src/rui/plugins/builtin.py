@@ -118,7 +118,7 @@ _XIAOAI_LX06_PLUGIN = {
     # v0 matrix (docs/socket-plug-v1.md §7): a v0 manifest stays loadable on the
     # whole 0.2/0.3 line. The builtins bypass ``load_plugin``'s compat check, so this
     # is also asserted in ``_build`` below and in tests/test_plugins.py.
-    "rui_compat": ">=0.2.0 <0.5.0",
+    "rui_compat": ">=0.2.0 <0.6.0",
     "license": "MIT",
     "maintainer": "rui maintainers",
     "homepage": "https://github.com/coderzc/open-xiaoai",

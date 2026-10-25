@@ -79,13 +79,14 @@ def test_reference_manifest_matches_the_builtin_capabilities() -> None:
     ]
     # v0 version matrix (v1 §7): one range for the whole 0.2/0.3 line. The in-code
     # builtin declares the same range and validates it against rui.__version__.
-    assert plugin.rui_compat == ">=0.2.0 <0.5.0"
-    assert builtin.rui_compat == ">=0.2.0 <0.5.0"
+    assert plugin.rui_compat == ">=0.2.0 <0.6.0"
+    assert builtin.rui_compat == ">=0.2.0 <0.6.0"
     compat = parse_range(plugin.rui_compat)
     assert compat.matches("0.2.2")
     assert compat.matches("0.3.2")
     assert compat.matches("0.4.0")
-    assert not compat.matches("0.5.0")
+    assert not compat.matches("0.6.0")
+    assert compat.matches("0.5.0")
 
 
 def test_builtin_manifest_stays_the_catalog_default(tmp_path: Path) -> None:
