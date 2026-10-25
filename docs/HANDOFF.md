@@ -5,14 +5,14 @@ phase-close: task-16
 ## 会话身份
 - 模式：A（双仓库：rui 上游 + rui-dot2-bridge 下游），单会话单任务板
 - 仓库：`$HOME/AI_Workspace/01_Code/projects/house-ear`（rui）、`$HOME/AI_Workspace/01_Code/projects/rui-dot2-bridge`（dot2）
-- 分支/commit：rui `main` @ `b1d2e0c`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
+- 分支/commit：rui `main` @ `d89129c`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
 
 ## 版本与契约
 | 项 | 值 | 证据 |
 |---|---|---|
 | 上游 rui 发布 | tag `v0.6.0` @ `adc4c2b`；镜像 `ghcr.io/yes999zc/rui@sha256:abef1f276c3c21e9155d97c98913ee6c2e98fdfe842e43b90f64a5db6c12b241`（tags `0.6.0`/`0.6`/`sha-adc4c2b`/`latest`，amd64+arm64）；Release <https://github.com/yes999zc/rui/releases/tag/v0.6.0> | `docker-publish` run 40209595988 success；`gh release view v0.6.0` |
 | 下游 pin | dot2 的 `deploy/downstream/Dockerfile` 与 compose 默认值 pin 上述 digest；`docs/canary-0.6.0-official-image.md` 记录 arm64 + x86_64 金丝雀；`docs/contract-report-0.6.0.json` 增 `upstream_pin` 块 | commit `9c696cd` |
-| 生产（NAS 168） | 容器镜像 `rui-dot2:0.6.0-adc4c2b`（= 官方 0.6.0 digest + dot2 1.2.0）；`/health` version 0.6.0、config_version 3、devices 2、device_errors 0、living/dot2 双 plane connected；回滚镜像 `rui-dot2:0.6.2`；备份 `/vol1/rui/backup/20261026-0025/` | 见 §已完成；构建需 `DOCKER_BUILDKIT=0`（飞牛镜像站 401，已写入 dot2 README） |
+| 生产（NAS 168） | **当前临时跑 main 预览版** `rui-dot2:0.7.0-pre1-4ebf104`（底座 = `ghcr.io/yes999zc/rui@sha256:0010e9f642fe…a26c`，main @ 4ebf104，含控制台 v2，供 9 哥 早上看 `/v2`）；`/health` 与切前逐字段一致（0.6.0 / cfg3 / devices 2 / errors 0 / 双 plane connected）；`/` 旧后台与 `/v2` 都 200；回滚镜像 `rui-dot2:0.6.0-adc4c2b`（官方 0.6.0 digest 底座）与 `rui-dot2:0.6.2` 均在；备份 `/vol1/rui/backup/20261026-0121-v2/` | 切换证据在 task-11 记录；构建需 `DOCKER_BUILDKIT=0`（飞牛镜像站 401，已写入 dot2 README） |
 | 契约 C-001 | `rui-device/v1`（manifest `audio_defaults` + `ack_echo_ignore_ms`） | `docs/socket-plug-v1.md` §3.2；`src/rui/config/schema.py` |
 | 契约 C-002 | 控制台 v2 `/api/v2/*` 24 端点，1193 行，**冻结 PASS** | `docs/contracts/C-002-console-v2-api.md`；task-6 记录 |
 | 兼容边界 | rui `>=0.6.0, <0.7.0`；0.6.x v1 仅 `/turns` 加 additive `device_id` | 契约 §10.1 |
@@ -24,6 +24,8 @@ phase-close: task-16
 - **写盘不变量统一**（`b1d2e0c`）：新增 `src/rui/web/api/device_write.py`，v1（enable/disable、PUT、DELETE）+ v2 + 向导共用「repair → 校验 → 端口冲突」；`_write_devices` 在 `save_config` 前兜底，任何写者无法绕过。修前 v1 可在多设备房子写出 `load_config` 失败的配置（已复现），修后正常用例响应逐字节一致、非法用例 422 且文件不变。`led.set` 加入 live-gate（断连 409 `device_not_connected` + hint）。全量 **1445 passed / 17 skipped**，ruff clean。
 - **生产切换 + hot 层清理**：切到官方 digest 底座，`/health` 双 plane connected、`dot2 registered`、无 Traceback；hot1–hot4 与 `/home/yes999zc/hot` 已删，回滚镜像保留。
 - **下游 repo**：pin 改动 + canary 文档已提交并推送（`9c696cd`）。
+- **v2 启动门修复**（`d89129c`）：`/meta` 未就绪前不挂载页面（`meta.ts` 初值 + `metaSettled`，`App.vue` 只在该门通过后渲染 `RouterView`）。修前详情页 5 个资源各请求 2 次、错误 token 仍发 7 个请求；修后每资源 1 次、错误 token 只剩 1 个 meta 请求。独立评审 PASS。
+- **生产 v2 预览**：为让 9 哥 早上能评测新后台，生产临时切到 main 构建 `rui-dot2:0.7.0-pre1-4ebf104`（`/v2` 可用，旧 `/` 不变；`/health` 逐字段一致、无 Traceback、设备 25s 回连）。**这是可控的预览切换，不是正式发布版本**；回滚一行见 §下一步。
 
 ## 未完成任务
 | 项 | 状态 | 卡点 / 下一步 |
@@ -31,12 +33,16 @@ phase-close: task-16
 | 控制台 v2 M3–M10 | pending | 设备增删改 + 配置 tab（M3）、音频覆盖编辑（M4）、房间/全屋 + 全局音频（M5）、八步向导 add/edit（M6）、运行类页面（M7–M8）、配置页组（M9a/M9b）、0.7 切默认（M10）。设计文档 §7 有每步验收 |
 | verifier 记录的偏差（非阻断） | pending | ① `led.set` 已修；② disabled 设备的错误码不自洽（`device_not_connected` / `capability_unsupported` / `device_disabled` 并存）需产品裁决；③ C-002 §7.1 启动门禁在浏览器端未成立（`meta.ts:11` 初值 + `App.vue:225` 提前渲染导致资源重复请求） |
 | v2 DELETE 的端口检查口径 | pending | v2 DELETE 仍 `check_ports=True`，与 v1 不一致；建议传 `check_ports=False` |
+| v2 外壳健壮性（评审 backlog） | pending | `/meta` 返回 200 但 body 空 → 页面空白无兜底；`/meta` 挂起无超时；未来若运行期 reload meta 需给 `metaSettled` 短路 |
+| 生产临时跑 main | pending | 预览验收后二选一：回滚到 0.6.0 底座，或把 v2 正式发 0.6.1/0.7.0 并重新 pin |
 | `PUT /api/v1/config/values` | pending | 可写 `devices.N.*` 但不走共享不变量（全量校验保证不写坏文件，只是不享受 repair） |
 | 真机语音验收（两轮告别路由） | pending | 必须 9 哥 本人；0.6.0 release notes 已写明这一项未勾 |
 | 第二台 Dot2 共存 | pending | 硬件未到货 |
 | 生产磁盘 ~11.3GB 可回收 | pending | 0.1.x–0.4.x 老镜像 + 3 个未挂载 volume；要不要清由 9 哥 定 |
 
 ## 下一步（按顺序，接手方可直接执行）
+0. **生产回滚一行**（若要放弃 v2 预览）：`sed -i 's#image: rui-dot2:0.7.0-pre1-4ebf104#image: rui-dot2:0.6.0-adc4c2b#' /vol1/rui/rui-dot2-override.yml && cd /vol1/rui && docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d --force-recreate`
+   **v2 入口**：`http://<NAS>:8080/v2`，首次打开要输入与旧后台相同的 console token（`/vol1/rui/console-token.txt` = config `web.auth_token`）。
 1. 门禁基线：`pytest -o addopts='' -q` → 0 failed / 17 skipped（当前 1445 passed）；`ruff check src tests` clean；`cd web && npm run typecheck && npm run build` → 双 dist。
 2. 核对生产：`/health`（version 0.6.0、devices=2、errors=0、双 plane connected）；镜像 `rui-dot2:0.6.0-adc4c2b`；回滚镜像在位。
 3. 控制台 v2：先让 9 哥 打开 `/v2` 试；再按 M3 → M4 → M5 → M6 推进写操作（每步独立可回滚，`meta.features` 可关）。动手前先修上面偏差 ③（meta 启动门禁），否则每个页面会重复请求。
