@@ -85,6 +85,8 @@ function hostComponent(block: PanelBlock): Component | null {
       v-else-if="block.type === 'config'"
       :groups="block.groups"
       :tier="block.tier"
+      :paths="block.paths"
+      :exclude-paths="block.exclude_paths"
       :warning="block.warning"
       :panel-id="panelId"
       @saved="emit('saved')"

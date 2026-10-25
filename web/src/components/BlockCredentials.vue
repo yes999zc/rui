@@ -343,6 +343,9 @@ function testMessage(result: MusicTestResult): string {
     </div>
 
     <p class="field-hint credentials-note">{{ pickLocalized(block.note) || t('music.credentialsNote') }}</p>
+    <RouterLink v-if="block.secrets_href" class="credentials-ledger-link" :to="block.secrets_href">
+      {{ t('credentials.manage') }}
+    </RouterLink>
 
     <p v-if="sourcesError" class="note fail" role="alert">
       {{ t('music.sourceRegistryError', { message: sourcesError }) }}
@@ -449,6 +452,13 @@ function testMessage(result: MusicTestResult): string {
 .credentials-note {
   max-width: 76ch;
   margin-bottom: var(--s2);
+}
+
+.credentials-ledger-link {
+  display: inline-block;
+  margin-bottom: var(--s3);
+  font-size: 12px;
+  color: var(--accent);
 }
 
 .source-picker {

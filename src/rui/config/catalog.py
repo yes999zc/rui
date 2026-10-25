@@ -1547,15 +1547,47 @@ def has_music_credentials(cfg: Config) -> bool:
     return bool(music_credentials_state(cfg)["ready"])
 
 
-def _secret_entry(entries: dict[str, dict], name: str, used_by: str,
-                  zh: str, en: str) -> None:
+# Credential categories the console can reason about without guessing from a name.
+# `provider` carries the stage/provider on its consumer; the rest name the one
+# subsystem that reads the value.
+SECRET_CATEGORIES = ("provider", "search", "music", "ha", "device", "console", "other")
+
+
+def _secret_consumer(kind: str, ident: str, zh: str, en: str, *,
+                     href: str = "", **fields: str) -> dict:
+    """One typed reader of a credential - the replacement for front-end regexes.
+
+    `kind` is one of `SECRET_CATEGORIES` (provider/search/music/ha/device/console);
+    consumers with a stage/provider/device also carry those ids so a page can filter
+    without parsing a display string.
+    """
+    consumer = {"id": ident, "kind": kind, "category": kind, "label": _t(zh, en)}
+    if href:
+        consumer["href"] = href
+    for key, value in fields.items():
+        if value:
+            consumer[key] = value
+    return consumer
+
+
+def _secret_entry(entries: dict[str, dict], name: str, consumer: dict,
+                  zh: str, en: str, *, writable: bool = True) -> None:
     name = (name or "").strip()
     if not name:
         return
-    entry = entries.setdefault(
-        name, {"has_value": False, "used_by": [], "hint": _t(zh, en)})
-    if used_by and used_by not in entry["used_by"]:
-        entry["used_by"].append(used_by)
+    entry = entries.setdefault(name, {
+        "has_value": False,
+        "used_by": [],
+        "consumers": [],
+        "hint": _t(zh, en),
+        # A value stored outside `secrets.yaml` (music) is still listed, but the page
+        # must link to its writer instead of offering an env-var input that cannot work.
+        "writable": writable,
+    })
+    if consumer["id"] not in entry["used_by"]:
+        entry["used_by"].append(consumer["id"])
+    if all(item["id"] != consumer["id"] for item in entry["consumers"]):
+        entry["consumers"].append(consumer)
 
 
 def secret_names(cfg: Config) -> list[str]:
@@ -1564,13 +1596,19 @@ def secret_names(cfg: Config) -> list[str]:
 
 
 def secret_presence(cfg: Config) -> dict[str, dict]:
-    """`{name: {has_value, used_by, hint}}` - the only thing the browser may learn.
+    """`{name: {has_value, category, consumers, used_by, hint, writable}}`.
 
     Derived from the *configured chains* (not a hard-coded dev list), so the production
     template's `RUI_*` names and a dev config's `DEEPSEEK_API_KEY` / `XFYUN_*`
     both render. A key that is configured in the environment but not referenced by any
     chain is deliberately absent: filling it would do nothing, and showing it would
     promise an effect it cannot have.
+
+    `category` + `consumers[]` are typed so the console never guesses from a name:
+    provider consumers carry `stage`/`provider`, device consumers carry `device`, and
+    every consumer names the page that writes the value (`href`). Music credentials
+    live in their own 0600 file, so that row is `writable=false` and links to the music
+    page instead of pretending `POST /api/v1/secrets` can set it.
     """
     entries: dict[str, dict] = {}
     for stage in ("asr", "tts", "llm"):
@@ -1585,43 +1623,82 @@ def secret_presence(cfg: Config) -> dict[str, dict]:
             ):
                 _secret_entry(
                     entries, str(getattr(provider, attr, "") or ""),
-                    f"{stage}:{provider_name}",
-                    f"{provider_name}（{stage.upper()} 链）的 {what_zh}；值在「密钥」页填。",
+                    _secret_consumer(
+                        "provider", f"{stage}:{provider_name}",
+                        f"{provider_name}（{stage.upper()} 链）",
+                        f"{provider_name} ({stage} chain)",
+                        href="/panel/providers", stage=stage, provider=provider_name,
+                    ),
+                    f"{provider_name}（{stage.upper()} 链）的 {what_zh}；值在「凭据（只写）」页填。",
                     f"{what_en} for {provider_name} ({stage} chain); enter it on the "
-                    "Secrets page.",
+                    "Credentials page.",
                 )
     _secret_entry(
-        entries, cfg.tools.search.api_key_env, "tool:search",
-        "联网搜索（tools.search）的 key；值在「密钥」页填。",
-        "Key for web search (tools.search); enter it on the Secrets page.",
+        entries, cfg.tools.search.api_key_env,
+        _secret_consumer("search", "tool:search", "联网搜索", "Web search",
+                         href="/panel/integrations"),
+        "联网搜索（tools.search）的 key；值在「凭据（只写）」页填。",
+        "Key for web search (tools.search); enter it on the Credentials page.",
     )
     _secret_entry(
-        entries, cfg.tools.ha.token_env, "tool:ha",
-        "Home Assistant 长期令牌（经 MCP）；值在「密钥」页或 MCP/HA 管理页填。",
-        "Home Assistant long-lived token (MCP); enter it on the Secrets page or the "
-        "MCP / HA page.",
+        entries, cfg.tools.ha.token_env,
+        _secret_consumer("ha", "tool:ha", "Home Assistant", "Home Assistant",
+                         href="/panel/integrations"),
+        "Home Assistant 长期令牌（经 MCP）；值在「凭据（只写）」页或 «工具与集成» 的 MCP 卡片填。",
+        "Home Assistant long-lived token (MCP); enter it on the Credentials page or the "
+        "MCP card under Tools & integrations.",
     )
     for device in cfg.devices:
         _secret_entry(
-            entries, device.token_env, f"device:{device.id}",
+            entries, device.token_env,
+            _secret_consumer("device", f"device:{device.id}",
+                             f"音箱 {device.id}", f"Speaker {device.id}",
+                             href="/panel/devices", device=device.id),
             f"音箱 {device.id} 的入站 token；音箱客户端用 ?token= 拨入时校验。"
             "留空会拒绝连接（除非 allow_no_token）。",
             f"Inbound token for speaker {device.id}; the client's ?token= is checked "
             "against it. Empty refuses the connection (unless allow_no_token).",
         )
     _secret_entry(
-        entries, "web.auth_token", "console:auth",
+        entries, "web.auth_token",
+        _secret_consumer("console", "console:auth", "控制台", "Console",
+                         href="/panel/system"),
         "控制台访问令牌；空 = 局域网无鉴权（只建议在可信网络）。写入走 "
         "POST /api/v1/secrets（name=web.auth_token），永不回显。",
         "Console access token; empty = no auth on the LAN (trusted networks only). "
         "Written via POST /api/v1/secrets (name=web.auth_token); never echoed.",
     )
+    # Music is a consumer too, but its credentials are not env vars. Listing the row
+    # with `writable=false` keeps `/secrets` honest (and links to the real writer)
+    # without folding lan_media.json into secrets.yaml.
+    music_state = music_credentials_state(cfg)
+    entries["music.credentials"] = {
+        "has_value": bool(music_state["ready"]),
+        "category": "music",
+        "used_by": ["music:source"],
+        "consumers": [_secret_consumer(
+            "music", "music:source", "音乐音源", "Music source",
+            href="/panel/music", source=cfg.music.source)],
+        "hint": _t(
+            "音乐音源的凭据存在独立的 0600 文件里；在 «音乐 → 音源与凭据» 页填写，永不回显。",
+            "Music source credentials live in their own 0600 file; enter them on the "
+            "Music → Source & credentials page. Never echoed.",
+        ),
+        "writable": False,
+    }
     for name, entry in entries.items():
         if name == "web.auth_token":
             entry["has_value"] = bool(cfg.web.auth_token)
+        elif name == "music.credentials":
+            entry["has_value"] = bool(music_state["ready"])
         else:
             entry["has_value"] = bool(env_get(name)) or secrets.has(name)
         entry["used_by"].sort()
+        consumers = entry.get("consumers") or []
+        entry["category"] = str(consumers[0]["kind"]) if consumers else "other"
+        if "href" not in entry and consumers and consumers[0].get("href"):
+            entry["href"] = consumers[0]["href"]
+        entry.setdefault("writable", True)
     return dict(sorted(entries.items()))
 
 

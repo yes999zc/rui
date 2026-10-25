@@ -46,6 +46,7 @@ from ...config.catalog import (
     music_credentials,
     music_credentials_path,
     music_credentials_state,
+    secret_presence,
     set_path,
     write_music_credentials,
 )
@@ -96,8 +97,9 @@ from ...session.vendor import VendorWindow
 from ...tools import build_local_tools, build_scheduler
 from ...tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from ...tools.ha import HaBridge
-from ...tools.mcp_manager import MCPManager
+from ...tools.mcp_manager import MCPManager, default_token_env
 from ...tools.mcp_manager import test_server as test_generic_mcp_server
+from ...tools.mcp_manifest import first_party_instances
 from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
@@ -661,11 +663,43 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             },
         },
         {
+            # Phase 3: the tier-1 process/console/SSRF fields keep their data and move
+            # to the name the rail already used ("系统"). `foundation` stays declared
+            # and reachable for one release; the router aliases it here.
+            "id": "system", "title": "系统", "title_en": "System",
+            "icon": "⚙", "group": "config", "order": 47,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/config/catalog", "refresh_s": 0, "blocks": [],
+            # The connection card (bind address, auth badge, copy URL) is hand-written;
+            # it embeds the same catalog editor with `log_level` excluded.
+            "component": "system-console",
+            "component_args": {
+                "groups": ["system", "web", "security"],
+                "excludePaths": ["system.log_level"],
+            },
+        },
+        {
+            # Write-only credential ledger, demoted out of the rail (audit §2.3).
+            # `/secrets` remains a standalone route; this hidden panel id keeps the
+            # `/panel/credentials` destination in the IA document working too.
+            "id": "credentials", "title": "凭据（只写）",
+            "title_en": "Credentials (write-only)",
+            "icon": "key", "group": "config", "order": 48,
+            "enabled": True, "enabled_reason": "",
+            "source": "/api/v1/secrets", "refresh_s": 0, "blocks": [],
+            "component": "secrets-view", "component_args": {"embedded": True},
+        },
+        {
             "id": "logs", "title": "日志", "title_en": "Logs",
             "icon": "≡", "group": "system", "order": 60,
             "enabled": True, "enabled_reason": "",
             "source": "/api/v1/logs?lines=300", "refresh_s": 2,
             "blocks": [
+                # `log_level` stays in the `system` catalog group (so the field keeps a
+                # home and foundation still declares it), but its only rendering is the
+                # log page header: that is where verbosity is an actionable choice.
+                {"type": "config", "groups": ["system"],
+                 "paths": ["system.log_level"]},
                 # The plane's level line lands every 2 s and would drown the 300-line
                 # tail; the reader can reveal it with one checkbox.
                 {"type": "log", "follow": True, "filter": True,
@@ -735,6 +769,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                  "title": {"zh": "音乐音源与凭据", "en": "Music source & credentials"},
                  "status_key": "credentials_ready",
                  "sources_href": "/api/v1/music/sources",
+                 # The ledger lists the typed consumers; music keeps its own writer.
+                 "secrets_href": "/panel/credentials",
                  "note": {"zh": "先选音源预设，再填它要求的字段。密码/token 只写不读，"
                                 "保存后 0600 存到 data_dir/lan_media.json，接口永不回显；"
                                 "空值删除该字段。",
@@ -5094,6 +5130,17 @@ def create_app(
                 **status,
                 "error": getattr(getattr(bridge, "client", None), "last_error", "") or "",
             },
+            # HA is shown as a first-party MCP *instance* in the same tab, without
+            # pretending it is a `tools.mcp_servers` row: the manifest carries its
+            # whitelist/danger policy and `local.ha_*` names, and the bridge itself
+            # stays the only implementation.
+            "first_party": first_party_instances(
+                base_url=ha.base_url,
+                token_env=ha.token_env,
+                has_token=secrets.has(ha.token_env),
+                status=status,
+                wired=bool(ha.base_url),
+            ),
             # Per-server generic status: the console renders add/edit/remove and the
             # connected/tools/latency/error of each entry from this list.
             "servers": servers,
@@ -5143,11 +5190,40 @@ def create_app(
                     secrets.put(str(merged["tools"]["ha"]["token_env"]), token.strip())
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # A `token` field is write-only console sugar: it never reaches config.yaml.
+        # The server keeps `token_env` (a name), the value goes to secrets.yaml, and
+        # the response can only ever answer `has_token`.
+        token_writes: list[tuple[int, str, str]] = []
         if "servers" in payload:
             if not isinstance(payload["servers"], list):
                 raise HTTPException(status_code=422, detail="servers must be a list")
+            rows: list = []
+            for index, raw in enumerate(payload["servers"]):
+                if not isinstance(raw, dict):
+                    rows.append(raw)
+                    continue
+                row = dict(raw)
+                token = row.pop("token", None)
+                if token is not None and not isinstance(token, str):
+                    raise HTTPException(status_code=422, detail=[{
+                        "loc": ["servers", index, "token"],
+                        "msg": "token must be a string",
+                    }])
+                token = str(token or "").strip()
+                if token:
+                    if str(row.get("transport") or "http") == "stdio":
+                        raise HTTPException(status_code=422, detail=[{
+                            "loc": ["servers", index, "token"],
+                            "msg": "a stdio server gets credentials through env, not token",
+                        }])
+                    env_name = str(row.get("token_env") or "").strip()
+                    if not env_name:
+                        env_name = default_token_env(str(row.get("name") or ""))
+                        row["token_env"] = env_name
+                    token_writes.append((index, env_name, token))
+                rows.append(row)
             gate = bool(merged["tools"].get("mcp_allow_stdio", False))
-            local = [index for index, server in enumerate(payload["servers"])
+            local = [index for index, server in enumerate(rows)
                      if isinstance(server, dict)
                      and str(server.get("transport") or "http") == "stdio"]
             if local and not gate:
@@ -5157,7 +5233,7 @@ def create_app(
                             "enable the gate before adding a local server"}
                     for index in local
                 ])
-            merged["tools"]["mcp_servers"] = payload["servers"]
+            merged["tools"]["mcp_servers"] = rows
         try:
             updated = Config.model_validate(merged)
         except ValidationError as exc:
@@ -5165,6 +5241,15 @@ def create_app(
                 {"loc": list(error.get("loc", ())), "msg": str(error.get("msg", ""))}
                 for error in exc.errors(include_url=False)
             ]) from exc
+        # Only after the whole config validated: a rejected server must not leave an
+        # orphan secret behind. A write failure still happens before save_config/apply.
+        for index, env_name, token in token_writes:
+            try:
+                secrets.put(env_name, token)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=[{
+                    "loc": ["servers", index, "token_env"], "msg": str(exc),
+                }]) from exc
         save_config(Path(config_path), updated)
         _apply_config(updated)
         await _apply_ha(updated)
@@ -5184,11 +5269,22 @@ def create_app(
         if any(key in payload for key in ("transport", "url", "command")):
             # `env` travels too: an env-dependent stdio server (tokens in its own
             # environment) can only be tested with the environment it will run with.
+            # `headers`/`token_env` are the HTTP equivalents. A `token` typed into the
+            # form is used for this probe only and is never saved.
             raw = {key: payload[key] for key in
-                   ("name", "transport", "url", "command", "env", "enabled")
+                   ("name", "transport", "url", "command", "env", "headers",
+                    "token_env", "enabled")
                    if key in payload}
             raw.setdefault("name", "probe")
             raw.setdefault("enabled", True)
+            token = str(payload.get("token") or "").strip()
+            headers = raw.get("headers")
+            if token and isinstance(headers, dict) and any(
+                    str(name).lower() == "authorization" for name in headers):
+                raise HTTPException(status_code=422, detail=[{
+                    "loc": ["headers"],
+                    "msg": "set either an Authorization header or token, not both",
+                }])
             try:
                 probe_server = McpServerConfig.model_validate(raw)
             except ValidationError as exc:
@@ -5196,9 +5292,12 @@ def create_app(
                     {"loc": list(error.get("loc", ())), "msg": str(error.get("msg", ""))}
                     for error in exc.errors(include_url=False)
                 ]) from exc
+            probe_kwargs: dict = {}
+            if token:
+                probe_kwargs["token"] = token
             result = await test_generic_mcp_server(
                 probe_server, allow_stdio=bool(cfg.tools.mcp_allow_stdio),
-                policy=_outbound_policy(cfg))
+                policy=_outbound_policy(cfg), **probe_kwargs)
             log.info("mcp test: %s %s ok=%s attempted=%s tools=%d",
                      probe_server.transport, probe_server.name, result["ok"],
                      result.get("attempted", True), result["tools"])
@@ -5225,14 +5324,31 @@ def create_app(
     # ---------------------------------------------------------------- secrets
     @app.get("/api/v1/secrets", dependencies=[Depends(auth)])
     async def list_secrets() -> dict:
-        """Which keys are configured. Names only - there is no endpoint that returns a value."""
+        """Which keys are configured. Names only - there is no endpoint that returns a value.
+
+        `secrets` is the same typed table the catalog embeds (`has_value`, `category`,
+        `consumers[]`, `hint`, `writable`), so a client does not have to guess from a
+        name. `names` stays for older callers and also includes disk-only entries.
+        """
         names = secrets.stored_names()
+        typed = secret_presence(getattr(app.state, "cfg", cfg))
         # The console's own auth token lives in config.yaml (it is read before any request
         # can be authenticated), but the catalog advertises it as a write-only secret so
         # the same page can set it. Report its presence here too.
         if cfg.web.auth_token:
             names = sorted({*names, "web.auth_token"})
-        return {"names": names}
+        for name in names:
+            if name not in typed:
+                # A value left on disk that no configured chain references: report it as
+                # an untyped legacy entry rather than dropping it from the page.
+                typed[name] = {
+                    "has_value": True, "category": "other", "used_by": [],
+                    "consumers": [], "writable": True,
+                    "hint": {"zh": "已保存但当前配置没有引用；填入只会占位。",
+                             "en": "Stored but not referenced by the current config; "
+                                   "filling it would have no effect."},
+                }
+        return {"names": names, "secrets": dict(sorted(typed.items()))}
 
     @app.post("/api/v1/secrets", dependencies=[Depends(auth)])
     async def put_secret(payload: Annotated[dict, Body()]) -> dict:

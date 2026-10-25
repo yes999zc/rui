@@ -26,8 +26,8 @@
 
 - **唤醒词、VAD、回声消除、播放都在本地音频面完成**；ASR 优先本地 SenseVoice，可选火山流式识别 2.0，云端只做兜底；
 - **TTS 链可选讯飞与火山豆包 2.0**，控制台可按音色/语速/情感试听；**完整回合**：唤醒 → 分段 → ASR → LLM（可调工具）→ 流式 TTS → 推回音箱；
-- **能力**：Home Assistant（经 MCP）、通用 MCP 服务、天气/新闻/联网搜索、提醒、记忆、Navidrome/Airsonic/Gonic/Ampache 或任意 Subsonic 兼容音源；
-- **控制台 2.0**：中英双语、明暗主题、四层配置目录、AI 供应商链路与音色试听、安装向导、诊断/日志；
+- **能力**：Home Assistant（作为第一方 MCP 实例，保留六工具白名单/危险域硬拒/`local.ha_*` 工具名）、通用 MCP 服务（HTTP `headers` + 只写 `token_env`/stdio 闸）、天气/新闻/联网搜索、提醒、记忆、Navidrome/Airsonic/Gonic/Ampache 或任意 Subsonic 兼容音源；
+- **控制台 2.0**：中英双语、明暗主题、四层配置目录、类型化只写凭据、AI 供应商链路与音色试听、安装向导、诊断/日志（日志级别在日志页顶部）；
 - **一条命令部署到 NAS**：Docker Compose + 多架构镜像，数据/配置/模型都在卷里；音频面崩溃由 watchdog 拉起。
 
 v1 目前只支持 **Xiaomi 小爱音箱 Pro（LX06）**，且音箱需要运行 **open-xiaoai client** 来拨入本服务。一键安装只部署 NAS 服务，不会修改音箱。
@@ -245,7 +245,7 @@ docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生�
 | `~/rui/data/models/` | SenseVoice、VAD、KWS | 删了可重新 `fetch-models` |
 | `~/rui/data/setup.json` | 向导确认/时间戳 | 0600；不存密钥 |
 
-- **换密钥**：在控制台“AI 供应商/密钥”页或重跑 `keys` 步；密钥只写不读，不要写进 `config.yaml`。
+- **换密钥**：在控制台「凭据（只写）」页（`/panel/credentials`，书签 `/secrets` 仍可用）或消费页内联填写，也可重跑 `keys` 步；密钥只写不读，不要写进 `config.yaml`。
 - **换 device token**：在 `connect` 步重新显示/复制；或在 `.env` 改 `RUI_DEVICE_TOKEN` 后 `docker compose up -d`，再把新值写进 client 并重启，最后回 `test` 确认。
 - **换控制台 token**：`docker compose exec -T rui rui token --rotate`，再 `docker compose restart rui` 让服务加载新值；重启后旧 token 失效，浏览器要重新输入。
 - **升级**：在 `.env` 固定 `RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0`；`docker compose pull && docker compose up -d`，等 healthy 后跑 `docker compose exec -T rui rui doctor`。
@@ -279,12 +279,15 @@ docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生�
 | 音频 | `audio.capture / voice / playback / aec` | 采样率、帧长、VAD、AEC、播放缓冲；改完重启音频面 |
 | 会话 | `session.*` | 空闲超时、结束词、上下文开关、filler 策略 |
 | 音乐 | `music.*` | 音源预设（Navidrome/Airsonic/Gonic/Ampache/自定义 Subsonic）、只写凭据、连接测试、缓存 |
-| 工具 | `tools.*` | 搜索、天气、新闻、Home Assistant、MCP servers、工具暴露策略 |
-| 控制台 | `web.*` | 端口、鉴权 token、日志级别 |
+| 工具 | `tools.*` | 搜索、天气、新闻、Home Assistant（第一方 MCP 实例）、通用 MCP servers（HTTP `headers` + 只写 `token_env`）、工具暴露策略 |
+| 控制台 | `web.*` | 端口、鉴权 token、日志级别（日志级别在「日志」页顶部；系统页只放进程底子/控制台连接/出站安全） |
+| 凭据 | `secrets.yaml` / `lan_media.json` | 「凭据（只写）」页按类型化 consumer 展示 provider/音乐/HA/设备/控制台；值永不回显 |
 
 - 完整字段/效果/重启规则：[docs/config-catalog-contract.md](docs/config-catalog-contract.md)
 - 部署、密钥、音乐/HA 配置：[docs/deploy.md](docs/deploy.md)
-- 音乐层：[docs/music.md](docs/music.md)；音源预设/凭据/测试：[docs/music-sources.md](docs/music-sources.md)；通用 MCP：[docs/mcp-generic.md](docs/mcp-generic.md)
+- 音乐层：[docs/music.md](docs/music.md)；音源预设/凭据/测试：[docs/music-sources.md](docs/music-sources.md)
+- MCP：通用运行时/隔离 [docs/mcp-generic.md](docs/mcp-generic.md)；新增 MCP 服务、headers/只写 token、第一方 HA 清单 [docs/integrations-mcp.md](docs/integrations-mcp.md)
+- 控制台信息架构与 Phase 3 迁移裁决：[docs/console-ia-audit.md](docs/console-ia-audit.md)
 - 模型自建镜像（可选）：`.env` 设 `RUI_ASR_URL` / `RUI_VAD_URL` /
   `RUI_KWS_URL`（完整文件 URL，失败回退内置镜像）；VAD/KWS 默认从镜像 seed 复制，
   不再访问 GitHub release。详见 [docs/deploy.md §3.3](docs/deploy.md#33-模型fetch-models-一次装齐)
@@ -389,7 +392,7 @@ MIT 只覆盖本仓库自己的代码；以上第三方组件各自保留其许�
 
 > wake → segment → local ASR (cloud fallback) → LLM + tools → streaming TTS → PCM back to the speaker.
 
-ASR prefers local SenseVoice, with Volc streaming ASR 2.0 and a cloud fallback as optional chain entries; TTS can use Xfyun and Volc Doubao 2.0, with voice/rate/emotion audition in the console. It also ships a bilingual admin console (four-tier config catalog, provider-chain UX, setup wizard, diagnostics), Home Assistant over MCP, generic MCP servers, weather/news/web search, reminders, memory, and music from Navidrome, Airsonic, Gonic, Ampache or any Subsonic-compatible server.
+ASR prefers local SenseVoice, with Volc streaming ASR 2.0 and a cloud fallback as optional chain entries; TTS can use Xfyun and Volc Doubao 2.0, with voice/rate/emotion audition in the console. It also ships a bilingual admin console (four-tier config catalog, typed write-only credentials, provider-chain UX, setup wizard, diagnostics), Home Assistant as a first-party MCP instance (six-tool whitelist, dangerous-domain refusal, `local.ha_*` names), generic MCP servers (HTTP headers plus a write-only token secret, stdio gate), weather/news/web search, reminders, memory, and music from Navidrome, Airsonic, Gonic, Ampache or any Subsonic-compatible server.
 
 ### Install
 
@@ -560,7 +563,7 @@ The commands below assume `~/rui`; replace the path if you installed under `/vol
 | `~/rui/data/models/` | SenseVoice, VAD, KWS | Re-fetch with `fetch-models` if deleted |
 | `~/rui/data/setup.json` | Wizard confirmations/timestamps | 0600; contains no secrets |
 
-- **Change keys**: use the console "AI providers / secrets" pages or re-run `keys`; keys are write-only and must not go into `config.yaml`.
+- **Change keys**: use the console Credentials (write-only) page (`/panel/credentials`; the bookmarked `/secrets` still works) or the inline slot on the consuming page, or re-run `keys`; keys are write-only and must not go into `config.yaml`.
 - **Change the device token**: show/copy it again in `connect`, or edit `RUI_DEVICE_TOKEN` in `.env` and run `docker compose up -d`; then update the client, restart it, and re-run `test`.
 - **Rotate the console token**: `docker compose exec -T rui rui token --rotate`, then `docker compose restart rui` to load it; the old token stops working after the restart and the browser asks again.
 - **Upgrade**: pin `RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0` in `.env`; `docker compose pull && docker compose up -d`, wait for healthy, then run `docker compose exec -T rui rui doctor`.

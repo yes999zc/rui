@@ -1,48 +1,85 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
-import { api, ApiError, type CatalogDoc, type Config, type SecretPutResult } from '../api'
-import { formatClock, secretConsumerLabel, secretHint, secretLabel, t, type MsgKey } from '../i18n'
+import {
+  api,
+  ApiError,
+  type CatalogDoc,
+  type SecretConsumer,
+  type SecretMeta,
+  type SecretPutResult,
+} from '../api'
+import {
+  formatClock,
+  pickLocalized,
+  secretConsumerLabel,
+  secretHint,
+  secretLabel,
+  t,
+  type MsgKey,
+} from '../i18n'
 
 /**
- * The secrets page (docs/config-catalog-contract.md §1).
+ * The credential ledger (docs/config-catalog-contract.md §1), now a hidden advanced
+ * page (`/panel/credentials` + the bookmarked `/secrets` route).
  *
- * Names come from the catalog's `secrets` table (plus anything already on disk),
- * so a production install shows RUI_* keys and a dev install shows the
- * provider variables — no hard-coded name list. Values are write-only: the page
- * can only ever learn `has_value`, and the input is wiped on success.
+ * Names and types come from the catalog's typed `secrets` table: `category` says what
+ * kind of credential it is and `consumers[]` says who reads it. Values are write-only:
+ * the page can only ever learn `has_value`, and the input is wiped on success.
+ *
+ * Music is listed too, but its credentials live in their own 0600 file, so that row is
+ * `writable=false` and links to the music page instead of offering a dead input.
  */
-interface Kind {
-  labelKey: MsgKey
-  hintKey: MsgKey
+const props = defineProps<{ embedded?: boolean }>()
+
+const CATEGORY_LABELS: Record<string, MsgKey> = {
+  provider: 'secrets.category.provider',
+  search: 'secrets.category.search',
+  music: 'secrets.category.music',
+  ha: 'secrets.category.ha',
+  device: 'secrets.category.device',
+  console: 'secrets.category.console',
+  other: 'secrets.category.other',
 }
 
-const KINDS: { re: RegExp; kind: Kind; order: number }[] = [
-  { re: /XFYUN_APPID|XFYUN_API_SECRET/i, order: 30, kind: { labelKey: 'secrets.kind.tts.label', hintKey: 'secrets.kind.tts.hint' } },
-  { re: /XFYUN|TTS/i, order: 30, kind: { labelKey: 'secrets.kind.tts.label', hintKey: 'secrets.kind.tts.hint' } },
-  { re: /VOLC/i, order: 25, kind: { labelKey: 'secrets.name.volc', hintKey: 'secrets.hint.volc' } },
-  { re: /SILICONFLOW/i, order: 25, kind: { labelKey: 'secrets.name.siliconflow', hintKey: 'secrets.hint.siliconflow' } },
-  { re: /ASR|SILICON/i, order: 20, kind: { labelKey: 'secrets.kind.asr.label', hintKey: 'secrets.kind.asr.hint' } },
-  { re: /LLM|DEEPSEEK|OPENAI|ANTHROPIC|MODEL/i, order: 10, kind: { labelKey: 'secrets.kind.llm.label', hintKey: 'secrets.kind.llm.hint' } },
-  { re: /HASS|HOME|HA_/i, order: 40, kind: { labelKey: 'secrets.kind.ha.label', hintKey: 'secrets.kind.ha.hint' } },
-  { re: /DEVICE|SPEAKER/i, order: 50, kind: { labelKey: 'secrets.kind.device.label', hintKey: 'secrets.kind.device.hint' } },
-  { re: /AUTH|CONSOLE/i, order: 60, kind: { labelKey: 'secrets.kind.auth.label', hintKey: 'secrets.kind.auth.hint' } },
-]
+const CATEGORY_HINTS: Record<string, MsgKey> = {
+  provider: 'secrets.category.providerHint',
+  search: 'secrets.category.searchHint',
+  music: 'secrets.category.musicHint',
+  ha: 'secrets.category.haHint',
+  device: 'secrets.category.deviceHint',
+  console: 'secrets.category.consoleHint',
+  other: 'secrets.category.otherHint',
+}
 
-const GENERIC: Kind = { labelKey: 'secrets.kind.generic.label', hintKey: 'secrets.kind.generic.hint' }
+const CATEGORY_ORDER: Record<string, number> = {
+  provider: 10,
+  search: 20,
+  music: 30,
+  ha: 40,
+  device: 50,
+  console: 60,
+  other: 90,
+}
 
-function kindOf(name: string): Kind & { order: number } {
-  for (const entry of KINDS) {
-    if (entry.re.test(name)) return { ...entry.kind, order: entry.order }
-  }
-  return { ...GENERIC, order: 90 }
+function categoryOf(meta: SecretMeta | undefined): string {
+  const category = String(meta?.category ?? '')
+  return category in CATEGORY_LABELS ? category : 'other'
+}
+
+function categoryLabel(category: string): string {
+  return t(CATEGORY_LABELS[category] ?? CATEGORY_LABELS.other)
 }
 
 interface Slot {
   name: string
   label: string
-  kindLabel: string
+  category: string
+  categoryLabel: string
   hint: string
+  consumers: SecretConsumer[]
+  writable: boolean
+  href: string
 }
 
 type Phase = 'idle' | 'saving' | 'saved' | 'cleared' | 'error'
@@ -58,30 +95,42 @@ interface Row {
 const rows = reactive<Record<string, Row>>({})
 const names = ref<string[]>([])
 const hasKey = reactive<Record<string, boolean>>({})
-const consumers = reactive<Record<string, string[]>>({})
 const catalogDoc = ref<CatalogDoc | null>(null)
 const loading = ref(true)
 const loadError = ref('')
 
-const slots = computed<Slot[]>(() =>
-  [...names.value]
-    .sort((a, b) => kindOf(a).order - kindOf(b).order || a.localeCompare(b))
+const slots = computed<Slot[]>(() => {
+  const table = catalogDoc.value?.secrets ?? {}
+  return [...names.value]
+    .sort((a, b) => {
+      const order = (CATEGORY_ORDER[categoryOf(table[a])] ?? 90)
+        - (CATEGORY_ORDER[categoryOf(table[b])] ?? 90)
+      return order || a.localeCompare(b)
+    })
     .map((name) => {
-      const kind = kindOf(name)
-      const kindLabel = t(kind.labelKey)
+      const meta = table[name]
+      const category = categoryOf(meta)
+      const consumers = meta?.consumers ?? []
       return {
         name,
-        label: secretLabel(name) || kindLabel,
-        kindLabel,
-        hint: secretHint(name) || t(kind.hintKey),
+        label: secretLabel(name) || categoryLabel(category),
+        category,
+        categoryLabel: categoryLabel(category),
+        hint: pickLocalized(meta?.hint) || secretHint(name)
+          || t(CATEGORY_HINTS[category] ?? CATEGORY_HINTS.other),
+        consumers,
+        // A disk-only name from an older install has no metadata; it is still writable.
+        writable: meta?.writable !== false,
+        href: String(meta?.href ?? '/panel/music'),
       }
-    }),
-)
+    })
+})
 
-/** Consumer ids are config identifiers; the visible line uses human wording. */
-function consumerNames(name: string): string {
-  const list = consumers[name]
-  return list?.length ? list.map(secretConsumerLabel).join('、') : t('secrets.nobody')
+/** Consumer labels are backend-provided; the id is only a last-resort fallback. */
+function consumerNames(slot: Slot): string {
+  return slot.consumers.length
+    ? slot.consumers.map((item) => pickLocalized(item.label) || secretConsumerLabel(item.id)).join('、')
+    : t('secrets.nobody')
 }
 
 const configuredCount = computed(() => names.value.filter((name) => hasKey[name]).length)
@@ -90,35 +139,14 @@ function ensureRow(name: string) {
   if (!rows[name]) rows[name] = { value: '', phase: 'idle', at: '', detail: '', confirmClear: false }
 }
 
-function note(mapping: Record<string, string[]>, env: string | undefined, who: string) {
-  if (!env) return
-  const list = (mapping[env] ??= [])
-  if (!list.includes(who)) list.push(who)
-}
-
-function absorbConfig(config: Config) {
-  for (const key of Object.keys(consumers)) delete consumers[key]
-  const catalog = config.providers?.catalog ?? {}
-  for (const [provider, block] of Object.entries(catalog)) {
-    note(consumers, block?.api_key_env, provider)
-    note(consumers, (block as { api_secret_env?: string })?.api_secret_env, provider)
-    note(consumers, (block as { app_id_env?: string })?.app_id_env, provider)
-  }
-  const search = config.tools?.search
-  note(consumers, search?.api_key_env, 'tools.search')
-  note(consumers, config.tools?.ha?.token_env, 'tools.ha')
-  for (const device of config.devices ?? []) {
-    note(consumers, device.token_env, `device:${device.id}`)
-  }
-}
-
 function absorbCatalog(catalog: CatalogDoc, diskNames: string[]) {
   catalogDoc.value = catalog
-  const set = new Set<string>([...Object.keys(catalog.secrets ?? {}), ...diskNames])
+  const table = catalog.secrets ?? {}
+  const set = new Set<string>([...Object.keys(table), ...diskNames])
   names.value = [...set]
   for (const name of names.value) {
     ensureRow(name)
-    hasKey[name] = Boolean(catalog.secrets?.[name]?.has_value) || diskNames.includes(name)
+    hasKey[name] = Boolean(table[name]?.has_value) || diskNames.includes(name)
   }
 }
 
@@ -126,8 +154,7 @@ async function load() {
   loading.value = true
   loadError.value = ''
   try {
-    const [catalog, config, disk] = await Promise.all([api.catalog(), api.config(), api.secrets()])
-    absorbConfig(config)
+    const [catalog, disk] = await Promise.all([api.catalog(), api.secrets()])
     absorbCatalog(catalog, disk.names ?? [])
   } catch (exc) {
     loadError.value = exc instanceof Error ? exc.message : String(exc)
@@ -237,7 +264,7 @@ onMounted(load)
 </script>
 
 <template>
-  <header class="page-head">
+  <header v-if="!props.embedded" class="page-head">
     <div>
       <div class="kicker">{{ t('secrets.kicker') }}</div>
       <h1>{{ t('secrets.title') }}</h1>
@@ -249,6 +276,13 @@ onMounted(load)
       </span>
     </div>
   </header>
+
+  <div v-else class="secret-embedded-head">
+    <p class="lede">{{ t('secrets.lede') }}</p>
+    <span v-if="!loading && !loadError" class="badge badge-ok">
+      {{ t('secrets.configuredCount', { configured: configuredCount, total: names.length }) }}
+    </span>
+  </div>
 
   <p v-if="loading" class="empty">{{ t('common.loading') }}</p>
 
@@ -275,13 +309,13 @@ onMounted(load)
         <div class="secret-head">
           <div class="secret-title">
             <h3>{{ slot.label }}</h3>
-            <span v-if="slot.label !== slot.kindLabel" class="badge">{{ slot.kindLabel }}</span>
+            <span v-if="slot.label !== slot.categoryLabel" class="badge">{{ slot.categoryLabel }}</span>
           </div>
           <span class="badge" :class="hasKey[slot.name] ? 'badge-ok' : 'badge-warn'">
             {{ hasKey[slot.name] ? t('secrets.configured') : t('secrets.missing') }}
           </span>
           <span class="secret-consumer">
-            {{ t('secrets.usedBy', { names: consumerNames(slot.name) }) }}
+            {{ t('secrets.usedBy', { names: consumerNames(slot) }) }}
           </span>
         </div>
         <p class="field-hint">
@@ -289,7 +323,7 @@ onMounted(load)
           <span v-if="!catalogDoc?.secrets?.[slot.name]"> · {{ t('secrets.kind.generic.hint') }}</span>
         </p>
 
-        <div class="secret-entry">
+        <div v-if="slot.writable" class="secret-entry">
           <label class="sr-only" :for="'key-' + slot.name">{{ slot.label }}</label>
           <input
             :id="'key-' + slot.name"
@@ -330,12 +364,17 @@ onMounted(load)
           </span>
         </div>
 
+        <div v-else class="secret-external">
+          <span class="field-hint">{{ t('secrets.externalWriter') }}</span>
+          <RouterLink class="btn btn-sm" :to="slot.href">{{ t('secrets.openWriter') }}</RouterLink>
+        </div>
+
         <details class="secret-tech">
           <summary>{{ t('secrets.advanced') }}</summary>
           <div class="secret-tech-body">
             <span>{{ t('secrets.envName') }}</span>
             <code class="mono">{{ slot.name }}</code>
-            <span>{{ t('secrets.usedByRaw', { names: consumers[slot.name]?.join(', ') || t('secrets.nobody') }) }}</span>
+            <span>{{ t('secrets.usedByRaw', { names: slot.consumers.map((item) => item.id).join(', ') || t('secrets.nobody') }) }}</span>
           </div>
         </details>
 
@@ -361,6 +400,23 @@ onMounted(load)
 </template>
 
 <style scoped>
+.secret-embedded-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s4);
+}
+
+.secret-external {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-top: var(--s3);
+}
+
 .secret-row {
   padding: 18px 0;
   border-top: 1px solid var(--line);

@@ -35,6 +35,9 @@ CONSOLE_ROUTES = [
     "/panel/phrases", "/panel/mcp", "/panel/foundation",
     # Phase 2 combined destinations.
     "/panel/voice-assistant", "/panel/integrations",
+    # Phase 3: system replaces foundation in the rail; credentials is hidden but a
+    # real destination, and `/secrets` remains the standalone bookmark route.
+    "/panel/system", "/panel/credentials",
     "/assistant", "/settings", "/voice", "/models", "/tools", "/secrets",
     "/diagnostics", "/logs", "/setup", "/channels",
 ]
@@ -329,6 +332,60 @@ def test_legacy_panel_ids_stay_declared_for_one_release() -> None:
         response = c.get(f"/panel/{panel_id}")
         assert response.status_code == 200, panel_id
         assert response.headers["content-type"].startswith("text/html"), panel_id
+
+
+def test_system_owns_foundation_data_and_logs_owns_log_level() -> None:
+    """Phase 3 IA: `/panel/system` is the rail name; the data did not move out of the catalog.
+
+    `foundation` stays declared for one release and `/panel/foundation` still answers.
+    `system.log_level` keeps its catalog home but is rendered only by the logs page.
+    """
+    c = client()
+    found = panels(c)
+    system = found["system"]
+    assert system["component"] == "system-console"
+    assert system["source"] == "/api/v1/config/catalog"
+    args = system["component_args"]
+    assert set(args["groups"]) == {"system", "web", "security"}
+    assert args["excludePaths"] == ["system.log_level"]
+
+    catalog = c.get("/api/v1/config/catalog").json()
+    paths = {field["path"] for field in catalog["fields"]}
+    assert {"system.data_dir", "system.log_level", "system.timezone",
+            "web.host", "web.port", "web.allow_anonymous"} <= paths
+    outbound = {path for path in paths if path.startswith("security.outbound.")}
+    assert len(outbound) >= 4, outbound
+    # foundation keeps all 13 fields (its own config-center has no exclusion).
+    assert found["foundation"]["component"] == "config-center"
+    assert set(found["foundation"]["component_args"]["groups"]) == {
+        "system", "web", "security"}
+
+    logs = found["logs"]
+    log_config = [block for block in logs["blocks"] if block["type"] == "config"]
+    assert len(log_config) == 1
+    assert log_config[0]["groups"] == ["system"]
+    assert log_config[0]["paths"] == ["system.log_level"]
+    assert any(block["type"] == "log" for block in logs["blocks"])
+
+    for route in ("/panel/system", "/panel/foundation"):
+        response = c.get(route)
+        assert response.status_code == 200, route
+        assert response.headers["content-type"].startswith("text/html"), route
+
+
+def test_credentials_is_a_hidden_typed_ledger_with_the_old_route_alive() -> None:
+    c = client()
+    found = panels(c)
+    credentials = found["credentials"]
+    assert credentials["component"] == "secrets-view"
+    assert credentials["title"] == "凭据（只写）"
+    assert credentials["title_en"] == "Credentials (write-only)"
+    assert credentials["source"] == "/api/v1/secrets"
+    assert credentials["blocks"] == []
+    for route in ("/panel/credentials", "/secrets"):
+        response = c.get(route)
+        assert response.status_code == 200, route
+        assert response.headers["content-type"].startswith("text/html"), route
 
 
 def test_the_console_declares_the_tools_the_review_found_missing() -> None:

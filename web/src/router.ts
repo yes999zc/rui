@@ -11,7 +11,11 @@ import { createRouter, createWebHistory } from 'vue-router'
  *   /panel/assistant-session, /panel/phrases, /panel/settings -> voice-assistant
  *   /panel/speaker, /panel/devices-admin                      -> devices (audio/manage)
  *   /panel/tools, /panel/mcp                                  -> integrations
- *   /panel/providers, /panel/foundation                       -> unchanged (Phase 3)
+ *   /panel/providers                                          -> unchanged (Phase 3)
+ *   /panel/foundation                                         -> system (Phase 3)
+ *
+ * Phase 3 also adds `/panel/system` and hidden `/panel/credentials`; `/secrets`
+ * remains a standalone route for bookmarks.
  *
  * Static aliases are declared before `/panel/:id`; Vue Router ranks them higher
  * than the dynamic segment, but keeping the order here documents the contract.
@@ -48,6 +52,10 @@ const routes = [
     path: '/panel/mcp',
     redirect: { path: '/panel/integrations', query: { tab: 'mcp' } },
   },
+  {
+    path: '/panel/foundation',
+    redirect: { path: '/panel/system' },
+  },
 
   { path: '/panel/:id', component: () => import('./views/PanelHost.vue') },
 
@@ -66,7 +74,7 @@ const routes = [
   { path: '/logs', redirect: '/panel/logs' },
   { path: '/assistant', redirect: '/panel/voice-assistant' },
   { path: '/settings', redirect: '/panel/voice-assistant' },
-  { path: '/voice', redirect: '/panel/foundation' },
+  { path: '/voice', redirect: '/panel/system' },
   { path: '/models', redirect: '/panel/providers' },
 
   { path: '/:pathMatch(.*)*', redirect: '/panel/overview' },

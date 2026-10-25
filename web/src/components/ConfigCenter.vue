@@ -31,6 +31,10 @@ const props = defineProps<{
   links?: { href: string; label?: LocalizedText | string; label_en?: string }[]
   /** The panel's tier (component_args.tier): only groups of this tier are shown. */
   tier?: number
+  /** Optional allow-list of dotted paths (logs renders only `system.log_level`). */
+  paths?: string[]
+  /** Optional deny-list of dotted paths (system excludes `system.log_level`). */
+  excludePaths?: string[]
   /** Panel-level warning copy (component_args.warning), shown as a banner. */
   warning?: LocalizedText | string
 }>()
@@ -78,7 +82,7 @@ const writableFields = computed(() => fields.value.filter((f) => f.writable !== 
 /** Groups this panel owns after tier normalisation (see selectedGroups below). */
 const panelFieldSet = computed(() => {
   const ids = new Set(selectedGroups.value.map((group) => group.id))
-  return writableFields.value.filter((field) => ids.has(field.group))
+  return scopedFields.value.filter((field) => ids.has(field.group))
 })
 
 function readValue(path: string): Value {
@@ -171,9 +175,25 @@ const selectedGroups = computed<CatalogGroup[]>(() => {
   return [...selected].sort((a, b) => a.tier - b.tier || a.order - b.order)
 })
 
+/**
+ * Path-level scoping, needed once one catalog group has fields on two pages:
+ * `log_level` stays in `system` for foundation/API compatibility but the logs page is
+ * its only rendering, so the logs spec includes exactly that path and the system spec
+ * excludes it. Applied before group/advanced filtering so counts and dirty tracking
+ * cannot include a field the page does not show.
+ */
+const scopedFields = computed<CatalogField[]>(() => {
+  const include = (props.paths ?? []).filter(Boolean)
+  const exclude = new Set((props.excludePaths ?? []).filter(Boolean))
+  return writableFields.value.filter((field) => {
+    if (include.length && !include.includes(field.path)) return false
+    return !exclude.has(field.path)
+  })
+})
+
 const visibleFields = computed<CatalogField[]>(() => {
   const needle = filter.value.trim().toLowerCase()
-  return fields.value.filter((field) => {
+  return scopedFields.value.filter((field) => {
     if (field.kind === 'secret') return false
     if (field.advanced && !showAdvanced.value) return false
     if (!needle) return true
@@ -214,24 +234,41 @@ const hasTierOne = computed(() => visibleTiers.value.includes(1))
 const warningText = computed(() => {
   const given = pickLocalized(props.warning)
   if (given) return given
-  if (props.panelId === 'foundation' && hasTierOne.value) return tierHint(1)
+  if ((props.panelId === 'foundation' || props.panelId === 'system') && hasTierOne.value) {
+    return tierHint(1)
+  }
   return ''
 })
 
-/** Secrets relevant to this panel, straight from the catalog's secrets table. */
-const SECRET_MATCHERS: Record<string, RegExp> = {
-  providers: /LLM|ASR|TTS|DEEPSEEK|SILICON|XFYUN|OPENAI|ANTHROPIC|MODEL/i,
-  tools: /HASS|HOME|HA_|SEARCH/i,
-  speaker: /DEVICE/i,
-  foundation: /AUTH|CONSOLE/i,
+/**
+ * Secrets relevant to this panel, from the catalog's typed `category` field.
+ *
+ * This used to be a per-panel regex over the env name (`/HASS|HOME|HA_/`), which
+ * guessed the consumer and broke whenever a provider renamed its key. The backend now
+ * says what kind of credential it is; the page only decides which kinds belong here.
+ * `writable === false` rows (music) have their own writer and are not rendered as an
+ * env-var input.
+ */
+const SECRET_CATEGORIES: Record<string, string[]> = {
+  providers: ['provider'],
+  tools: ['search', 'ha'],
+  // Integrations owns HA through McpManager, so only the search key is inline here.
+  integrations: ['search'],
+  mcp: ['ha'],
+  speaker: ['device'],
+  devices: ['device'],
+  foundation: ['console'],
+  system: ['console'],
+  music: ['music'],
 }
 
 const secretRows = computed(() => {
   const all = Object.entries(doc.value?.secrets ?? {})
-  const matcher = props.panelId ? SECRET_MATCHERS[props.panelId] : undefined
-  if (!matcher) return []
+  const categories = props.panelId ? SECRET_CATEGORIES[props.panelId] : undefined
+  if (!categories) return []
   return all
-    .filter(([name]) => matcher.test(name))
+    .filter(([, meta]) => meta.writable !== false
+      && categories.includes(String(meta.category ?? '')))
     .map(([name, meta]) => ({ name, has: Boolean(meta?.has_value) }))
 })
 

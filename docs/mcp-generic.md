@@ -26,6 +26,9 @@ tools:
     - name: filesystem
       transport: http
       url: http://mcp.example.lan:7001/mcp
+      headers:                    # 非敏感元数据；CR/LF 与非法头名会被拒绝
+        X-Api-Version: "1"
+      token_env: MCP_FILES_TOKEN  # 只写密钥名；值在 secrets.yaml / 环境里
       enabled: true
 
     # --- stdio：由 rui 启动一个本地子进程（注意 §5 安全） ---
@@ -49,7 +52,11 @@ tools:
 | `transport` | `http` 或 `stdio` |
 | `url` | `http` 必填，例如 `http://host:port/mcp` |
 | `command` | `stdio` 必填，**列表**（第一个是程序，其余是参数；不经过 shell） |
+| `headers` | 仅 HTTP；非敏感请求头。`Authorization` 与 `token_env` 二选一 |
+| `token_env` | 仅 HTTP；大写密钥名。开新会话时从只写密钥库解析为 `Authorization: Bearer` |
 | `enabled` | 默认 true；false = 保留配置但不启动 |
+
+控制台添加/探测/只写 token 的表单见 [integrations-mcp.md](integrations-mcp.md)。
 
 **stdio 安全闸（默认关闭）**：`tools.mcp_allow_stdio: bool = False`（catalog 字段同路径，
 tier 4 / effect=restart）。关闭时：

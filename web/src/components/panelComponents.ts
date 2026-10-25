@@ -21,4 +21,8 @@ export const PANEL_COMPONENTS: Record<string, () => Promise<{ default: Component
   'tools-view': () => import('../views/ToolsView.vue'),
   // Dedicated providers page (LLM/ASR/TTS chains, voice audition, advanced collapsed).
   'providers-v2': () => import('../views/ProvidersView.vue'),
+  // 系统: console connection card + the tier-1 catalog editor (log_level excluded).
+  'system-console': () => import('../views/SystemView.vue'),
+  // Hidden credential ledger at /panel/credentials; /secrets stays by URL.
+  'secrets-view': () => import('../views/SecretsView.vue'),
 }

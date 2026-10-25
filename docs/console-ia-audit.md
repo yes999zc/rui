@@ -114,6 +114,14 @@
 - 向导 step 01 同意改，但**“模型设置”只对了一半**：它同时选 LLM/ASR/TTS 并填凭据。更准确是「模型与语音服务」；短标签可用「模型设置」，副标题必须写 LLM / ASR / TTS。**只改显示文案，不要改 step id `keys`**，否则 setup store 的已完成状态会丢。
 - 额外发现：向导保存时 `merged["providers"][stage]["chain"] = [provider_name]`（`setup_api.py:799`），会把已有 fallback 链**替换成单条**。README 也承认“写成 chain=[selected]”（`README.md:177`）。建议改为“设为主用、保留其余 fallback”，或在 UI 明确显示“这会删除 fallback”。
 
+> 实施状态（2026-10-25，RUI 0.3.4）：§2.3 的降级与类型化已落地。`secret_presence()` 现在返回
+> `category` + `consumers[]`（provider 带 `stage/provider`、device 带 `device`，每项带 `href`），
+> `/api/v1/secrets` 同时返回同一张类型化表；`SecretsView.vue`/`ConfigCenter.vue` 已删除按变量名
+> 猜 consumer 的正则，改为按 `category` 过滤。页面标题改为「凭据（只写）/Credentials (write-only)」，
+> `/secrets` 保留，新增隐藏的 `/panel/credentials`；Models/Music/Integrations/Devices/System
+> 都链入。音乐凭据以 `writable=false` 列出并链回音乐页（不把 `lan_media.json` 并进 `secrets.yaml`）。
+> 值仍只回 `has_value`。
+
 **2.4 xfyun 反复报错：真故障还是噪声？** 在你给的条件下（另一个 TTS 可用），大概率是 fallback 噪声，但配置本身不一致，不能只静音。判据：`MissingKey: no value for XFYUN_...` = 主用未配置；`ProviderError xfyun code=...` / 鉴权/额度错误 = 真故障。完整复现与修法见 §6。
 
 ### 2.5 家庭助理 / MCP / 工具三页重复
@@ -131,6 +139,15 @@
 - 同意把三页合成一个「工具与集成」：内置工具（天气/新闻/搜索）+ MCP 服务器 + HA 作为“第一方 MCP 集成”卡片 + 注册工具只读表 + 暴露策略。
 - 现在就把 HA 显示成 MCP 列表里的一项，但保留它的安全策略和 `local.ha_*` 工具名；不要为了 IA 一致性牺牲白名单/危险域拒绝。
 - 后续给 `McpServerConfig` 加 `headers` 或 `token_env`（推荐后者，值仍在 secrets）、给通用 MCP 加 allowlist/policy，再把 HA 迁移成真正的实例；迁移要保留旧工具名别名。它突出是因为有额外语义，不是因为项目偏心。
+
+> 实施状态（2026-10-25，RUI 0.3.4）：§2.5 已按“UI 实例化、数据模型不合并”落地。
+> `McpServerConfig` 增加经校验的 `headers`（拒绝 CR/LF 与非法头名）和 `token_env`（大写密钥名；
+> 与显式 `Authorization` 二选一，stdio 不接受这两项）；`mcp_manager` 在开新会话时从只写密钥库
+> 解析 Bearer，并把头/令牌指纹纳入热重连签名。控制台新增只写 `token` 字段（后端写入
+> `secrets.yaml`，配置只留 `token_env`，响应只回 `has_token`），探测可带未保存 token。
+> HA 仍是 `tools.ha` + `HaBridge`，但 `GET /api/v1/mcp` 的 `first_party[]` 让 MCP 标签页把它
+> 渲染成第一方实例卡片，并显示白名单/硬拒域/`local.ha_*` 前缀；白名单、危险域拒绝与工具名
+> 均未改变。新增服务指南见 `docs/integrations-mcp.md`。
 
 ### 2.6 用户提出的目标 IA
 
@@ -219,6 +236,12 @@
 - provider 预设 + 新建 + 就绪/探测 + 内联 key；凭据页降级与 consumer 类型化；音乐先 Subsonic 家族，再 Jellyfin/Emby；HA 先 UI 实例化。
 - 验收：预设创建后无需手改 YAML 就能真 probe；错误预设 422；密钥不回显；旧 config 可迁移；未知 `music.source` 不出现“面板 enabled 但服务没起”。
 - 音乐源（2026-10-25 已完成 Subsonic 家族）：预设注册表 + `music.source` select + 每源凭据槽位 + `/music/sources` / `/music/test`；Jellyfin/Emby 需要新适配器，未在 UI 提供假预设。
+- 本切片（2026-10-25，RUI 0.3.4+）完成 §2.3/§2.5 的收尾与系统页：类型化凭据 consumer、
+  凭据页降级（`/panel/credentials` + `/secrets` 兼容）、MCP `headers`/只写 `token_env`、HA 第一方
+  实例卡片（策略/工具名不变）、`/panel/system`（13 个底子字段 + 控制台连接信息），`log_level`
+  移到日志页顶部。旧 `/panel/foundation` 仍 200。验收测试：`tests/test_mcp_manager.py`
+  （headers/token/fake transport）、`tests/test_audit_fixes.py`（consumers/无正则）、
+  `tests/test_panels.py`（system/logs/credentials 与旧路由）。
 
 ### Phase 4 — 收尾（P2）
 - 单一 nav manifest；删旧 panel/路由（至少一个 release 后）；更新 `docs/console-redesign.md`、README、截图；补契约测试。
@@ -266,9 +289,9 @@
 | P1 | 合并音乐播放 + 音源 + 凭据 | `app.py:537-598`、新 `MusicView.vue`、`BlockCredentials.vue` | 一页完成播放/开关/凭据/测试 |
 | P1 | 合并助手/会话/话术 | `app.py:417-485`、`ConfigCenter.vue`、`PhrasebookEditor.vue`、新 `AssistantView.vue` | tab 切换不丢草稿 |
 | P1 | provider 预设 + 新建 + 内联 key + 就绪 | 新 `providers/presets.py`、`app.py`、`schema.py`、`ProvidersView.vue`、`ProviderKeyStrip.vue` | 预设创建后真实 probe 通过；env 名不可自填 |
-| P1 | 凭据页降级 + consumer 类型化 | `SecretsView.vue`、`catalog.py:1465-1525`、`ConfigCenter.vue` | 消费页内联；`/secrets` 仍可书签 |
+| P1 | 凭据页降级 + consumer 类型化（✅ 2026-10-25） | `SecretsView.vue`、`catalog.py:1465-1525`、`ConfigCenter.vue` | 消费页内联；`/secrets` 仍可书签 |
 | P2 | 音乐源适配器（Subsonic 家族 ✅ 2026-10-25；Jellyfin/Emby→Plex 待做） | `music/sources/*`、`music/source.py`、`app.py`、`schema.py` | Subsonic 家族已有 fake server 测试（Navidrome+Airsonic）；未知源 422；凭据不回显；Jellyfin/Emby 仍需新适配器 |
-| P2 | HA 真正实例化 / MCP headers | `schema.py:446-455`、`mcp_manager.py`、`tools/ha.py`、`app.py`、`McpManager.vue` | headers 生效；HA 白名单/危险域不退化；工具名兼容 |
+| P2 | HA 真正实例化 / MCP headers（✅ UI 实例化 + headers/token，数据模型未合并） | `schema.py:446-455`、`mcp_manager.py`、`tools/ha.py`、`app.py`、`McpManager.vue` | headers 生效；HA 白名单/危险域不退化；工具名兼容 |
 | P2 | 单一 nav manifest + hidden/alias | `app.py`、`panels.ts`、`SideNav.vue`、`tests/test_panels.py` | 每个 panel 有归属；测试防回归 |
 | P2 | 文档/截图/飞书技术文档 | `docs/console-redesign.md`、`README.md`、`docs/console-*` | 路由表与截图一致；从 manifest 生成 |
 

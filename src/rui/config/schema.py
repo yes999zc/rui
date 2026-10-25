@@ -443,7 +443,21 @@ class ProvidersConfig(BaseModel):
         return [(n, self.catalog[n]) for n in getattr(self, stage).chain]
 
 
+_MCP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_MCP_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
 class McpServerConfig(BaseModel):
+    """One generic MCP server.
+
+    `headers` carries non-secret request metadata (a vendor version header, an
+    `Accept` override). A credential belongs in `token_env`, which names a value in
+    the write-only secrets store; the value is resolved when the session opens and is
+    never part of config.yaml or an API response. Keeping the two slots separate is
+    deliberate: a token in a header would be readable from `GET /api/v1/config`, and a
+    second auth mechanism would make "which one wins?" ambiguous.
+    """
+
     name: str = Field(min_length=1, max_length=32)
     transport: Literal["stdio", "http"] = "http"
     url: str = ""
@@ -452,7 +466,57 @@ class McpServerConfig(BaseModel):
     # environment). Values end up in config.yaml, so keep secrets out unless the file
     # itself is 0600 and private.
     env: dict[str, str] = Field(default_factory=dict)
+    # HTTP-only request headers. Validated here because the value is written straight
+    # into an httpx client: a CR/LF is header injection, and an invalid name would only
+    # fail later as an opaque transport error.
+    headers: dict[str, str] = Field(default_factory=dict)
+    # Name of a write-only secret holding a bearer token. Empty = no token.
+    token_env: str = ""
     enabled: bool = True
+
+    @field_validator("headers")
+    @classmethod
+    def _headers_are_safe(cls, value: dict[str, str]) -> dict[str, str]:
+        cleaned: dict[str, str] = {}
+        seen: set[str] = set()
+        for raw_name, raw_value in value.items():
+            name = str(raw_name).strip()
+            if not name or not _MCP_HEADER_NAME_RE.fullmatch(name):
+                raise ValueError(f"invalid HTTP header name: {raw_name!r}")
+            if name.lower() in seen:
+                raise ValueError(f"duplicate HTTP header (case-insensitive): {name}")
+            seen.add(name.lower())
+            text = str(raw_value)
+            if any(char in text for char in ("\r", "\n", "\0")):
+                raise ValueError(f"HTTP header {name!r} contains a control character")
+            cleaned[name] = text
+        return cleaned
+
+    @field_validator("token_env")
+    @classmethod
+    def _token_env_is_a_secret_name(cls, value: str) -> str:
+        name = str(value or "").strip()
+        if name and not _MCP_ENV_NAME_RE.fullmatch(name):
+            raise ValueError(
+                "token_env must look like a secret name: UPPER_CASE_WITH_UNDERSCORES"
+            )
+        return name
+
+    @model_validator(mode="after")
+    def _auth_slots_make_sense(self) -> McpServerConfig:
+        if self.transport == "stdio":
+            if self.headers or self.token_env:
+                raise ValueError(
+                    "headers/token_env apply to http MCP servers; a stdio child gets "
+                    "its credentials through `env`"
+                )
+            return self
+        if self.token_env and any(
+                str(name).lower() == "authorization" for name in self.headers):
+            raise ValueError(
+                "set either an explicit Authorization header or token_env, not both"
+            )
+        return self
 
 
 class HaConfig(BaseModel):

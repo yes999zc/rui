@@ -17,6 +17,7 @@ import AppIcon from './AppIcon.vue'
 import {
   api,
   ApiError,
+  type FirstPartyMcpInstance,
   type McpProbe,
   type McpServerPayload,
   type McpServerStatus,
@@ -33,6 +34,13 @@ interface DraftServer {
   command: string
   args: string
   env: string
+  /** HTTP-only request metadata (`Name=value` per line). */
+  headers: string
+  /** Secret name holding the bearer token; never the value. */
+  tokenEnv: string
+  /** Write-only token typed into the form; blank keeps the stored one. */
+  token: string
+  hasToken: boolean
   enabled: boolean
   /** `null` for a new server; the old name when editing (rename support). */
   originalName: string | null
@@ -66,6 +74,17 @@ const formErrors = reactive<Record<string, string>>({})
 const saveError = ref('')
 
 const servers = computed<McpServerStatus[]>(() => state.value?.servers ?? [])
+/**
+ * HA is rendered as an MCP instance, not a second product. The manifest carries the
+ * whitelist/danger policy and `local.ha_*` prefix; older control planes omit it, so
+ * the fallback keeps the card readable without inventing policy.
+ */
+const firstParty = computed<FirstPartyMcpInstance | null>(
+  () => state.value?.first_party?.[0] ?? null,
+)
+const haWhitelist = computed(() => firstParty.value?.whitelist ?? [])
+const haExcluded = computed(() => firstParty.value?.excluded_domains ?? [])
+const haPrefix = computed(() => firstParty.value?.tool_prefix ?? 'local.ha_')
 const generic = computed(() => {
   const given = state.value?.generic
   if (given) return given
@@ -203,7 +222,15 @@ function toolNames(server: McpServerStatus): string {
 }
 
 function emptyDraft(): DraftServer {
-  return { name: '', transport: 'http', url: '', command: '', args: '', env: '', enabled: true, originalName: null }
+  return {
+    name: '', transport: 'http', url: '', command: '', args: '', env: '',
+    headers: '', tokenEnv: '', token: '', hasToken: false,
+    enabled: true, originalName: null,
+  }
+}
+
+function headerLines(headers: Record<string, string>): string {
+  return Object.entries(headers).map(([key, value]) => `${key}=${value}`).join('\n')
 }
 
 function draftFrom(server: McpServerStatus): DraftServer {
@@ -217,6 +244,10 @@ function draftFrom(server: McpServerStatus): DraftServer {
     env: Object.entries(server.env ?? {})
       .map(([key, value]) => `${key}=${value}`)
       .join('\n'),
+    headers: headerLines(server.headers ?? {}),
+    tokenEnv: server.token_env ?? '',
+    token: '',
+    hasToken: Boolean(server.has_token),
     enabled: Boolean(server.enabled),
     originalName: server.name,
   }
@@ -280,6 +311,34 @@ function parseEnv(text: string): { env: Record<string, string>; invalid: { line:
   return { env, invalid: null }
 }
 
+/** `Name=value` per line (a colon also works), matching the backend's validation. */
+function parseHeaders(text: string): {
+  headers: Record<string, string>
+  invalid: { line: number; text: string } | null
+  duplicate: string | null
+} {
+  const headers: Record<string, string> = {}
+  const seen = new Set<string>()
+  const lines = text.split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    const raw = lines[index].trim()
+    if (!raw || raw.startsWith('#')) continue
+    const match = raw.match(/^([!#$%&'*+\-.^_`|~0-9A-Za-z]+)\s*[:=]\s*(.*)$/)
+    if (!match) return { headers, invalid: { line: index + 1, text: raw }, duplicate: null }
+    const key = match[1]
+    if (seen.has(key.toLowerCase())) {
+      return { headers, invalid: null, duplicate: key }
+    }
+    seen.add(key.toLowerCase())
+    headers[key] = match[2]
+  }
+  return { headers, invalid: null, duplicate: null }
+}
+
+function hasAuthorizationHeader(text: string): boolean {
+  return Object.keys(parseHeaders(text).headers).some((key) => key.toLowerCase() === 'authorization')
+}
+
 function draftError(draft: DraftServer): Record<string, string> {
   const errors: Record<string, string> = {}
   const name = draft.name.trim()
@@ -291,6 +350,18 @@ function draftError(draft: DraftServer): Record<string, string> {
     const url = draft.url.trim()
     if (!url) errors.url = t('mcp.formUrlRequired')
     else if (!/^https?:\/\//i.test(url)) errors.url = t('mcp.formUrlScheme')
+    const parsed = parseHeaders(draft.headers)
+    if (parsed.invalid) {
+      errors.headers = t('mcp.headersInvalid', { line: parsed.invalid.line, text: parsed.invalid.text })
+    } else if (parsed.duplicate) {
+      errors.headers = t('mcp.headersDuplicate', { name: parsed.duplicate })
+    } else if (draft.token.trim() && hasAuthorizationHeader(draft.headers)) {
+      errors.headers = t('mcp.headerAuthConflict')
+    }
+    const envName = draft.tokenEnv.trim()
+    if (envName && !/^[A-Z][A-Z0-9_]*$/.test(envName)) {
+      errors.tokenEnv = t('secrets.error.badName')
+    }
   } else {
     if (!draft.command.trim()) errors.command = t('mcp.formCommandRequired')
     const parsed = parseEnv(draft.env)
@@ -304,7 +375,18 @@ function draftError(draft: DraftServer): Record<string, string> {
 function payloadFromDraft(draft: DraftServer): McpServerPayload {
   const name = draft.name.trim()
   if (draft.transport === 'http') {
-    return { name, transport: 'http', url: draft.url.trim(), command: [], env: {}, enabled: draft.enabled }
+    const token = draft.token.trim()
+    return {
+      name,
+      transport: 'http',
+      url: draft.url.trim(),
+      command: [],
+      env: {},
+      headers: parseHeaders(draft.headers).headers,
+      token_env: draft.tokenEnv.trim(),
+      ...(token ? { token } : {}),
+      enabled: draft.enabled,
+    }
   }
   const command = draft.command.trim() ? [draft.command.trim(), ...tokenizeArgs(draft.args)] : []
   return {
@@ -324,6 +406,8 @@ function payloadFromServer(server: McpServerStatus): McpServerPayload {
     url: server.url ?? '',
     command: server.command ?? [],
     env: server.env ?? {},
+    headers: server.headers ?? {},
+    token_env: server.token_env ?? '',
     enabled: Boolean(server.enabled),
   }
 }
@@ -341,7 +425,8 @@ function issueIndex(loc: (string | number)[]): number | null {
 
 function issueField(loc: (string | number)[]): string {
   const last = String(loc[loc.length - 1] ?? '')
-  return ['name', 'transport', 'url', 'command', 'env', 'enabled'].includes(last) ? last : 'general'
+  return ['name', 'transport', 'url', 'command', 'env', 'headers', 'token_env',
+    'token', 'enabled'].includes(last) ? last : 'general'
 }
 
 function applyServerIssues(exc: ApiError, expectedIndex: number, editingName: string): void {
@@ -443,6 +528,8 @@ async function testServer(server: McpServerStatus): Promise<void> {
       transport: server.transport === 'stdio' ? 'stdio' : 'http',
       url: server.url,
       command: server.command ?? [],
+      headers: server.headers ?? {},
+      token_env: server.token_env ?? '',
     })
   } catch (exc) {
     rowProbes[server.name] = probeError(exc)
@@ -456,7 +543,7 @@ async function testDraft(): Promise<void> {
   if (!draft || serverBusy.value) return
   for (const key of Object.keys(formErrors)) delete formErrors[key]
   const errors = draftError(draft)
-  if (['name', 'url', 'command', 'env'].some((key) => errors[key])) {
+  if (['name', 'url', 'command', 'env', 'headers', 'tokenEnv'].some((key) => errors[key])) {
     Object.assign(formErrors, errors)
     return
   }
@@ -469,6 +556,9 @@ async function testDraft(): Promise<void> {
       transport: payload.transport,
       url: payload.url,
       command: payload.command,
+      headers: payload.headers,
+      token_env: payload.token_env,
+      token: payload.token,
     })
   } catch (exc) {
     rowProbes.draft = probeError(exc)
@@ -511,14 +601,41 @@ onMounted(load)
   </div>
 
   <template v-if="state">
-    <!-- — HA bridge: unchanged behaviour ————————————————————— -->
-    <div class="surface health-surface">
+    <!-- — HA as a first-party MCP instance; behaviour is unchanged —————— -->
+    <section class="first-party-card">
       <div class="block-head">
-        <h2>{{ t('mcp.connection') }}</h2>
-        <span class="badge" :class="state.ha.connected ? 'badge-ok' : 'badge-warn'">
-          {{ state.ha.wired ? (state.ha.connected ? t('mcp.connected') : t('mcp.disconnected')) : t('mcp.notConfigured') }}
-        </span>
+        <div>
+          <div class="kicker">{{ t('mcp.firstPartyTitle') }}</div>
+          <h2>{{ firstParty?.name ?? 'Home Assistant' }}</h2>
+          <p class="field-hint first-party-note">{{ t('mcp.firstPartyNote') }}</p>
+        </div>
+        <div class="generic-head-actions">
+          <span class="badge badge-ok">{{ t('mcp.firstPartyBadge') }}</span>
+          <span class="badge" :class="state.ha.connected ? 'badge-ok' : 'badge-warn'">
+            {{ state.ha.wired ? (state.ha.connected ? t('mcp.connected') : t('mcp.disconnected')) : t('mcp.notConfigured') }}
+          </span>
+        </div>
       </div>
+
+      <div class="ha-policy">
+        <span class="ha-prefix mono">{{ t('mcp.toolPrefix') }}: {{ haPrefix }}</span>
+        <details class="ha-policy-details">
+          <summary>{{ t('mcp.policy') }}</summary>
+          <p>{{ t('mcp.whitelist') }}: <code class="mono">{{ haWhitelist.join(', ') || '—' }}</code></p>
+          <p>{{ t('mcp.toolNames', { names: (firstParty?.tool_names ?? []).join(', ') || '—' }) }}</p>
+          <p>{{ t('mcp.excludedDomains') }}: <code class="mono">{{ haExcluded.join(', ') || '—' }}</code></p>
+          <p v-if="firstParty?.danger_policy" class="mono">{{ firstParty.danger_policy }}</p>
+        </details>
+        <RouterLink class="ha-ledger-link" to="/panel/credentials">{{ t('mcp.credentialsLink') }}</RouterLink>
+      </div>
+
+      <div class="surface health-surface">
+        <div class="block-head">
+          <h3>{{ t('mcp.connection') }}</h3>
+          <span class="badge" :class="state.ha.connected ? 'badge-ok' : 'badge-warn'">
+            {{ state.ha.wired ? (state.ha.connected ? t('mcp.connected') : t('mcp.disconnected')) : t('mcp.notConfigured') }}
+          </span>
+        </div>
 
       <div class="mcp-stats">
         <div class="mcp-stat">
@@ -580,7 +697,8 @@ onMounted(load)
       </p>
       <p v-if="notice" class="note ok">{{ notice }}</p>
       <p v-if="error" class="note fail" role="alert">{{ error }}</p>
-    </div>
+      </div>
+    </section>
 
     <!-- — generic MCP servers ——————————————————————————————— -->
     <section class="block mcp-generic">
@@ -659,11 +777,39 @@ onMounted(load)
             <p v-if="formErrors.transport" class="field-error">{{ formErrors.transport }}</p>
           </div>
 
-          <div v-if="editing.transport === 'http'" class="form-field wide" :class="{ invalid: formErrors.url }">
-            <label for="srv-url">{{ t('mcp.url') }}</label>
-            <input id="srv-url" v-model="editing.url" :placeholder="t('mcp.urlPlaceholder')" />
-            <p v-if="formErrors.url" class="field-error">{{ formErrors.url }}</p>
-          </div>
+          <template v-if="editing.transport === 'http'">
+            <div class="form-field wide" :class="{ invalid: formErrors.url }">
+              <label for="srv-url">{{ t('mcp.url') }}</label>
+              <input id="srv-url" v-model="editing.url" :placeholder="t('mcp.urlPlaceholder')" />
+              <p v-if="formErrors.url" class="field-error">{{ formErrors.url }}</p>
+            </div>
+            <div class="form-field wide" :class="{ invalid: formErrors.headers }">
+              <label for="srv-headers">{{ t('mcp.headers') }}</label>
+              <textarea id="srv-headers" v-model="editing.headers" rows="2" :placeholder="t('mcp.headersPlaceholder')" />
+              <p v-if="formErrors.headers" class="field-error">{{ formErrors.headers }}</p>
+            </div>
+            <div class="form-field" :class="{ invalid: formErrors.token }">
+              <label for="srv-token">{{ t('mcp.tokenWriteOnly') }}</label>
+              <input
+                id="srv-token"
+                v-model="editing.token"
+                type="password"
+                autocomplete="new-password"
+                spellcheck="false"
+                :placeholder="t('mcp.tokenWritePlaceholder')"
+              />
+              <p class="field-hint">
+                {{ editing.hasToken ? t('mcp.tokenConfigured') : t('mcp.tokenNotConfigured') }}
+              </p>
+              <p v-if="formErrors.token" class="field-error">{{ formErrors.token }}</p>
+            </div>
+            <div class="form-field" :class="{ invalid: formErrors.tokenEnv }">
+              <label for="srv-token-env">{{ t('mcp.tokenEnv') }}</label>
+              <input id="srv-token-env" v-model="editing.tokenEnv" placeholder="MCP_NOTES_TOKEN" />
+              <p class="field-hint">{{ t('mcp.tokenEnvFieldHint') }}</p>
+              <p v-if="formErrors.tokenEnv" class="field-error">{{ formErrors.tokenEnv }}</p>
+            </div>
+          </template>
 
           <template v-else>
             <div class="form-field" :class="{ invalid: formErrors.command }">
@@ -725,6 +871,9 @@ onMounted(load)
             <span class="dot" :class="serverStatus(server).dot" />
             <h3>{{ server.name }}</h3>
             <span class="badge">{{ server.transport }}</span>
+            <span v-if="server.token_env" class="badge" :class="server.has_token ? 'badge-ok' : 'badge-warn'">
+              {{ server.has_token ? t('mcp.tokenConfigured') : t('mcp.tokenNotConfigured') }}
+            </span>
             <span class="badge" :class="serverStatus(server).badge">{{ serverStatus(server).label }}</span>
           </div>
           <div class="server-stats mono">
@@ -775,8 +924,57 @@ onMounted(load)
   padding: var(--s5) 0;
 }
 
-.health-surface {
+.first-party-card {
   margin-bottom: var(--s6);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.first-party-note {
+  max-width: 82ch;
+  margin-top: 4px;
+}
+
+.ha-policy {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin: var(--s3) 0 var(--s4);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.ha-prefix {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ha-policy-details summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.ha-policy-details p {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.ha-ledger-link {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.health-surface {
+  margin-bottom: 0;
 }
 
 .mcp-advanced {

@@ -1633,6 +1633,7 @@ onMounted(() => {
               </button>
             </div>
             <p class="field-hint">{{ t('dm.connect.tokenHint') }}</p>
+            <RouterLink class="dm-ledger-link" to="/panel/credentials">{{ t('credentials.manage') }}</RouterLink>
           </div>
           <div v-if="!connectInfo.configured" class="dm-warning">
             <strong>{{ t('dm.connect.missingTitle') }}</strong>
@@ -2279,6 +2280,13 @@ onMounted(() => {
 .dm-copy-field {
   margin-top: var(--s3);
   min-width: 0;
+}
+
+.dm-ledger-link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--accent);
 }
 
 .dm-copy-row {

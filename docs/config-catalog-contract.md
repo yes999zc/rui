@@ -34,7 +34,20 @@
      "min": 10, "max": 300, "options": null, "advanced": false, "writable": true}
   ],
   "values": {"assistant.reply_max_chars": 120},
-  "secrets": {"RUI_LLM_KEY": {"has_value": true}},
+  "secrets": {
+    "RUI_LLM_KEY": {
+      "has_value": true,
+      "category": "provider",
+      "consumers": [
+        {"id": "llm:llm", "kind": "provider", "stage": "llm", "provider": "llm",
+         "label": {"zh": "llm（LLM 链）", "en": "llm (llm chain)"},
+         "href": "/panel/providers"}
+      ],
+      "used_by": ["llm:llm"],
+      "hint": {"zh": "...", "en": "..."},
+      "writable": true
+    }
+  },
   "restart_command": "docker compose restart",
   "writable_root": ["assistant", "session", "audio", "ack", "system", "web",
                     "devices", "providers", "tools", "music"]
@@ -45,6 +58,11 @@
 
 - `kind` ∈ `text | textarea | number | bool | select | list | secret`；`secret` 字段只出现在
   `secrets`（`has_value` 布尔），**永不回值**，写入走 `/api/v1/secrets`。
+- 每个 secret 还带类型化元数据：`category` ∈ `provider | search | music | ha | device |
+  console | other`，`consumers[]` 每项含 `id`/`kind`/`label`/`href`（provider 另带
+  `stage`/`provider`，device 带 `device`），`writable=false` 表示该值由专门页面写入
+  （目前只有音乐的 `music.credentials`，链到 `/panel/music`）。`GET /api/v1/secrets`
+  返回同样的 `secrets` 表（外加兼容用的 `names[]`），前端不得再从变量名猜 consumer。
 - `effect` ∈ `save | restart`。`save` = 保存后立即/下一轮生效；`restart` = 需要重启服务
   （`docker compose restart`），或者音频类字段由前端调用音频面重启端点。
 - `tier` 与 9哥 的四类一一对应；`tier=1` 前端要弱化 + 警示。

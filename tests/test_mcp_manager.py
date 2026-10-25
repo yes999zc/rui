@@ -13,8 +13,10 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
-from rui.config import Config, save_config
+from rui import secrets
+from rui.config import Config, load_config, save_config
 from rui.config.catalog import document
 from rui.config.schema import McpServerConfig
 from rui.tools import mcp_manager as manager_module
@@ -23,10 +25,16 @@ from rui.tools.mcp_manager import (
     ManagedServer,
     MCPManager,
     _description,
+    _http_headers,
     _result_text,
+    _signature,
     _stdio_env,
     _stdio_parameters,
+    default_token_env,
     tool_name,
+)
+from rui.tools.mcp_manager import (
+    open_session as real_open_session,
 )
 from rui.tools.mcp_manager import (
     test_server as probe_server,
@@ -268,6 +276,101 @@ def test_stdio_parameters_never_use_a_shell() -> None:
         _stdio_parameters(empty)
 
 
+# ------------------------------------------------------ HTTP headers / token
+
+def test_http_auth_fields_are_validated() -> None:
+    """Headers/token_env are config surface; bad input must fail before transport."""
+    cfg = server(name="notes", token_env="MCP_NOTES_TOKEN",
+                 headers={"X-Api-Version": "1"})
+    assert cfg.headers == {"X-Api-Version": "1"}
+    assert cfg.token_env == "MCP_NOTES_TOKEN"
+
+    with pytest.raises(ValidationError, match="invalid HTTP header name"):
+        server(name="x", headers={"Bad Header": "1"})
+    with pytest.raises(ValidationError, match="control character"):
+        server(name="x", headers={"X-Test": "a\r\nInjected: yes"})
+    with pytest.raises(ValidationError, match="UPPER_CASE"):
+        server(name="x", token_env="lower_case")
+    with pytest.raises(ValidationError, match="not both"):
+        server(name="x", token_env="MCP_X_TOKEN",
+               headers={"Authorization": "Bearer literal"})
+    with pytest.raises(ValidationError, match="apply to http"):
+        server(name="x", transport="stdio", command=["srv"],
+               headers={"X-Test": "1"})
+
+
+def test_http_headers_resolve_headers_and_the_write_only_token(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(secrets, "_name", str(tmp_path / "secrets.yaml"))
+    secrets.put("MCP_NOTES_TOKEN", "tok-from-store")
+    cfg = server(name="notes", token_env="MCP_NOTES_TOKEN",
+                 headers={"X-Api-Version": "1"})
+    assert _http_headers(cfg) == {
+        "X-Api-Version": "1", "Authorization": "Bearer tok-from-store"}
+    # A probe token typed into the form wins for that throwaway session only.
+    assert _http_headers(cfg, "tok-from-form")["Authorization"] == "Bearer tok-from-form"
+    assert default_token_env("my notes") == "MCP_MY_NOTES_TOKEN"
+
+    # The reconnect signature changes when the stored token changes, without keeping
+    # the raw value in the signature.
+    before = _signature(cfg)
+    secrets.put("MCP_NOTES_TOKEN", "tok-rotated")
+    after = _signature(cfg)
+    assert before != after
+    assert "tok-rotated" not in repr(after)
+
+
+def test_open_session_applies_headers_and_token_to_the_http_client(tmp_path,
+                                                                  monkeypatch) -> None:
+    """No network: the SDK's transport/client are replaced, headers are inspected."""
+    monkeypatch.setattr(secrets, "_name", str(tmp_path / "secrets.yaml"))
+    secrets.put("MCP_NOTES_TOKEN", "tok-123")
+    cfg = server(name="notes", token_env="MCP_NOTES_TOKEN",
+                 headers={"X-Api-Version": "1"})
+    captured: dict = {}
+
+    class FakeHttpClient:
+        async def aclose(self) -> None:
+            captured["closed"] = True
+
+    def fake_guarded(policy, headers=None, timeout=30):  # noqa: ANN001
+        captured["headers"] = dict(headers or {})
+        return FakeHttpClient()
+
+    @asynccontextmanager
+    async def fake_streamable(url, http_client=None):  # noqa: ANN001
+        captured["url"] = url
+        yield (object(), object())
+
+    class FakeSession:
+        def __init__(self, read, write) -> None:  # noqa: ANN001
+            captured["session"] = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc) -> None:  # noqa: ANN002
+            return None
+
+    import mcp
+    import mcp.client.streamable_http as streamable_http
+
+    # Earlier tests replace `open_session` directly; restore the real seam for this
+    # test, then let monkeypatch put their stand-in back afterwards.
+    monkeypatch.setattr(manager_module, "open_session", real_open_session)
+    monkeypatch.setattr(manager_module, "guarded_async_client", fake_guarded)
+    monkeypatch.setattr(streamable_http, "streamable_http_client", fake_streamable)
+    monkeypatch.setattr(mcp, "ClientSession", FakeSession)
+
+    async def run() -> None:
+        async with manager_module.open_session(cfg) as session:
+            assert session is not None
+
+    asyncio.run(run())
+    assert captured["headers"]["X-Api-Version"] == "1"
+    assert captured["headers"]["Authorization"] == "Bearer tok-123"
+    assert captured["session"] is True and captured["closed"] is True
+
+
 def test_stdio_child_environment_is_minimal(monkeypatch) -> None:
     """Security audit P0-1: a third-party stdio server must not see the keyring."""
     monkeypatch.setenv("PATH", "/usr/local/bin:/usr/bin:/bin")
@@ -499,8 +602,17 @@ def test_console_mcp_endpoint_exposes_generic_servers(app_with_mcp) -> None:
         # The generic tools are in the same registry the model sees.
         names = http.get("/api/v1/tools").json()["names"]
         assert "mcp.files_read_file" in names
-        # HA stays untouched and keeps its own shape.
+        # HA stays untouched and keeps its own shape. It is also listed as a
+        # first-party MCP instance for the MCP tab, without becoming a generic row.
         assert "ha" in body and body["ha"]["wired"] is False
+        first_party = body["first_party"][0]
+        assert first_party["id"] == "ha" and first_party["kind"] == "first_party"
+        assert first_party["tool_prefix"] == "local.ha_"
+        assert "local.ha_call_service" in first_party["tool_names"]
+        assert "lock." in first_party["excluded_domains"]
+        assert first_party["whitelist"]
+        assert first_party["docs"].endswith("integrations-mcp.md")
+        assert not any(row["name"] == "ha" for row in body["servers"])
 
 
 def test_put_mcp_servers_hot_applies_and_tests_a_new_server(app_with_mcp) -> None:
@@ -536,6 +648,59 @@ def test_invalid_generic_server_payload_is_422(app_with_mcp) -> None:
             {"name": "", "transport": "http"}]}).status_code == 422
         assert http.post("/api/v1/mcp/test", json={
             "name": "x", "transport": "carrier-pigeon"}).status_code == 422
+
+
+def test_console_stores_a_generic_token_write_only(app_with_mcp) -> None:
+    """`token` is console sugar: it goes to secrets.yaml, config keeps only its name."""
+    app, path, _opener = app_with_mcp
+    with TestClient(app) as http:
+        response = http.put("/api/v1/mcp", json={"servers": [
+            {"name": "notes", "transport": "http", "url": "http://127.0.0.1:9/notes",
+             "headers": {"X-Api-Version": "1"}, "token": "tok-console-only"},
+        ]})
+        assert response.status_code == 200, response.text
+        body = response.json()
+        row = next(item for item in body["servers"] if item["name"] == "notes")
+        assert row["token_env"] == "MCP_NOTES_TOKEN"
+        assert row["has_token"] is True
+        assert row["headers"] == {"X-Api-Version": "1"}
+        # Never echoed, never written into config.yaml.
+        assert "tok-console-only" not in response.text
+        assert "tok-console-only" not in path.read_text(encoding="utf-8")
+        saved = next(item for item in load_config(path).tools.mcp_servers
+                     if item.name == "notes")
+        assert saved.token_env == "MCP_NOTES_TOKEN"
+        assert secrets.get("MCP_NOTES_TOKEN") == "tok-console-only"
+
+        # A stdio server has no bearer token slot; reject rather than silently drop it.
+        rejected = http.put("/api/v1/mcp", json={"servers": [
+            {"name": "local", "transport": "stdio", "command": ["srv"],
+             "token": "tok"}, ]})
+        assert rejected.status_code == 422, rejected.text
+
+
+def test_mcp_test_uses_an_unsaved_token_for_the_probe(app_with_mcp, monkeypatch) -> None:
+    app, _path, _opener = app_with_mcp
+    captured: dict = {}
+
+    async def fake_probe(server_cfg, *, allow_stdio: bool = False, policy=None,
+                         token: str = ""):
+        captured["server"] = server_cfg
+        captured["token"] = token
+        return {"ok": True, "attempted": True, "connected": True,
+                "name": server_cfg.name, "transport": "http", "tools": 1,
+                "tool_names": ["probe_ok"], "latency_ms": 1, "error": ""}
+
+    monkeypatch.setattr(app_module, "test_generic_mcp_server", fake_probe)
+    with TestClient(app) as http:
+        response = http.post("/api/v1/mcp/test", json={
+            "name": "probe", "transport": "http", "url": "http://127.0.0.1:9/probe",
+            "headers": {"X-Api-Version": "1"}, "token": "tok-unsaved",
+        })
+    assert response.status_code == 200, response.text
+    assert captured["token"] == "tok-unsaved"
+    assert captured["server"].headers == {"X-Api-Version": "1"}
+    assert "tok-unsaved" not in response.text
 
 
 # --------------------------------------------------- stdio security gate (P0-1)

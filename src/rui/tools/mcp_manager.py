@@ -21,19 +21,23 @@ Design rules, each one learned from the HA client next door:
 * **untrusted data.** Tool descriptions and results come from another process and
   are labelled/stripped exactly like HA entity names (`tools.ha`'s sanitizer), so a
   malicious server cannot write instructions into the prompt through a tool name.
-* **hot re-apply.** `apply()` diffs by name+transport+command/url+enabled, keeps
-  unchanged sessions alive and reconnects only what changed.
+* **hot re-apply.** `apply()` diffs by name+transport+command/url+enabled, plus the
+  HTTP headers and a token fingerprint, keeps unchanged sessions alive and reconnects
+  only what changed.
 * **transports.** Streamable HTTP and stdio (the MCP SDK's own transports). stdio
   runs a local command: treat adding one exactly like running a program from the
   console. It is behind `tools.mcp_allow_stdio` (default false) and the child gets a
   *minimal* environment - never the service's `.env` with provider/HA/device keys.
-  `McpServerConfig` has no `env` field yet; if a future schema adds one it is merged
-  into the minimal env, and it never replaces it with the full `os.environ`.
+  A declared `env` is merged into that minimum, never used instead of it.
+* **auth.** `headers` is non-secret request metadata; `token_env` names a value in the
+  write-only secrets store and becomes `Authorization: Bearer` when the session opens.
+  The value never enters config.yaml or an API response.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +47,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
+from .. import secrets
 from ..config.schema import McpServerConfig
 from ..security.netguard import OutboundPolicy, guarded_async_client
 from .contract import InteractionSpec, Permission, ToolResult, ToolSpec
@@ -75,6 +80,48 @@ def _slug(value: str) -> str:
 def tool_name(server: str, tool: str) -> str:
     """`mcp.<server>_<tool>` - one dot because `ToolRegistry` accepts exactly one."""
     return f"mcp.{_slug(server)}_{_slug(tool)}"
+
+
+def default_token_env(server_name: str) -> str:
+    """A stable secret name for a server whose console form only asked for a token.
+
+    The console never receives the value back, so the name is the only thing it needs
+    to send next time. Operators can override it with `token_env` in the config.
+    """
+    slug = re.sub(r"[^A-Z0-9]+", "_", str(server_name or "").upper()).strip("_")
+    return f"MCP_{slug or 'SERVER'}_TOKEN"
+
+
+def _http_headers(server: McpServerConfig, token_override: str = "") -> dict[str, str]:
+    """Request headers for an HTTP MCP session, resolving the token at open time.
+
+    Explicit `headers` win for non-auth metadata; a token (from `token_env` in the
+    write-only store, or the transient probe value) becomes `Authorization: Bearer`.
+    The schema refuses an explicit Authorization header alongside `token_env`, so
+    there is never an ambiguous winner.
+    """
+    headers = {str(key): str(value)
+               for key, value in (getattr(server, "headers", None) or {}).items()}
+    if any(name.lower() == "authorization" for name in headers):
+        return headers
+    token = str(token_override or "").strip()
+    env_name = str(getattr(server, "token_env", "") or "").strip()
+    if not token and env_name:
+        token = secrets.get(env_name)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _token_fingerprint(server: McpServerConfig) -> str:
+    """A change-only fingerprint of the stored token for the reconnect signature.
+
+    The raw value is never stored or logged; the hash only makes "the operator typed a
+    new token" compare unequal to "the old one", so hot re-apply reconnects that server.
+    """
+    env_name = str(getattr(server, "token_env", "") or "").strip()
+    token = secrets.get(env_name) if env_name else ""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest() if token else ""
 
 
 def _leaf_error(exc: BaseException) -> BaseException:
@@ -116,6 +163,9 @@ def _signature(server: McpServerConfig) -> tuple:
         bool(server.enabled),
         str(getattr(server, "cwd", "") or ""),
         json.dumps(getattr(server, "env", None) or {}, sort_keys=True),
+        json.dumps(getattr(server, "headers", None) or {}, sort_keys=True),
+        str(getattr(server, "token_env", "") or ""),
+        _token_fingerprint(server),
     )
 
 
@@ -153,12 +203,16 @@ def _stdio_parameters(server: McpServerConfig) -> tuple[str, list[str], dict[str
 
 @asynccontextmanager
 async def open_session(server: McpServerConfig,
-                       policy: OutboundPolicy | None = None) -> AsyncIterator[Any]:
+                       policy: OutboundPolicy | None = None,
+                       *, token: str = "") -> AsyncIterator[Any]:
     """One initialized `ClientSession` over the configured transport.
 
     Kept as a module-level async context manager so tests can replace it with a
     fake session: the manager only needs `initialize()`, `list_tools()` and
     `call_tool()`, which is exactly the SDK surface this function exposes.
+
+    `token` is only used by a throwaway probe carrying a token the operator typed but
+    has not saved yet. A live server resolves `token_env` from the write-only store.
     """
     from mcp import ClientSession
 
@@ -181,12 +235,12 @@ async def open_session(server: McpServerConfig,
     url = str(getattr(server, "url", "") or "").strip()
     if not url:
         raise MCPUnavailable(f"{server.name}: http transport needs a url")
-    headers = getattr(server, "headers", None)
+    headers = _http_headers(server, token)
     # The guard is on the request hook, so it covers the handshake and every tool call
     # (and any redirect hop, should the SDK follow one).
     http_client = guarded_async_client(
         policy or OutboundPolicy(),
-        headers=dict(headers) if isinstance(headers, dict) else None,
+        headers=headers or None,
         timeout=30,
     )
     try:
@@ -248,10 +302,14 @@ class ManagedServer:
 
     def __init__(self, cfg: McpServerConfig,
                  on_change: Callable[[], None] | None = None,
-                 policy: OutboundPolicy | None = None) -> None:
+                 policy: OutboundPolicy | None = None,
+                 token: str = "") -> None:
         self.cfg = cfg
         self._on_change = on_change
         self.policy = policy or OutboundPolicy()
+        # Probe-only: a token typed into the form before the server is saved. Live
+        # servers leave this empty and resolve `token_env` from the secrets store.
+        self._token = token
         self._tools: list[dict] = []
         self._queue: asyncio.Queue[tuple[dict, asyncio.Future]] = asyncio.Queue()
         self._task: asyncio.Task | None = None
@@ -315,6 +373,11 @@ class ManagedServer:
             "transport": str(self.cfg.transport),
             "url": self.cfg.url,
             "command": list(self.cfg.command or []),
+            "headers": dict(getattr(self.cfg, "headers", None) or {}),
+            "token_env": str(getattr(self.cfg, "token_env", "") or ""),
+            # Presence only: the value is write-only and never leaves the store.
+            "has_token": bool(str(getattr(self.cfg, "token_env", "") or "")
+                              and secrets.has(str(self.cfg.token_env))),
             "enabled": bool(self.cfg.enabled),
             "connected": bool(self.connected),
             "tools": len(self._tools),
@@ -339,7 +402,11 @@ class ManagedServer:
         while not self._stopped:
             try:
                 connected_at = time.monotonic()
-                async with open_session(self.cfg, self.policy) as session:
+                if self._token:
+                    session_cm = open_session(self.cfg, self.policy, token=self._token)
+                else:
+                    session_cm = open_session(self.cfg, self.policy)
+                async with session_cm as session:
                     await session.initialize()
                     listed = await session.list_tools()
                     handshake_ms = (time.monotonic() - connected_at) * 1000
@@ -541,6 +608,10 @@ class MCPManager:
             servers.append({
                 "name": server.name, "transport": str(server.transport),
                 "url": server.url, "command": list(server.command or []),
+                "headers": dict(getattr(server, "headers", None) or {}),
+                "token_env": str(getattr(server, "token_env", "") or ""),
+                "has_token": bool(str(getattr(server, "token_env", "") or "")
+                                  and secrets.has(str(server.token_env))),
                 "enabled": bool(server.enabled), "connected": False, "tools": 0,
                 "tool_names": [], "latency_ms": None, "error": error,
                 "last_seen": None,
@@ -587,11 +658,13 @@ async def test_server(server: McpServerConfig,
                       timeout_s: float = HANDSHAKE_TIMEOUT_S,
                       *,
                       allow_stdio: bool = False,
-                      policy: OutboundPolicy | None = None) -> dict:
+                      policy: OutboundPolicy | None = None,
+                      token: str = "") -> dict:
     """Connect one throwaway server, list its tools, disconnect. Nothing is saved.
 
     A stdio server is never spawned while `tools.mcp_allow_stdio` is off: the config is
-    validated by the caller and the response says why nothing was attempted.
+    validated by the caller and the response says why nothing was attempted. `token`
+    is the unsaved value from the form; it is used for this probe and discarded.
     """
     base = {"name": server.name, "transport": str(server.transport)}
     if str(server.transport) == "stdio" and not allow_stdio:
@@ -601,7 +674,7 @@ async def test_server(server: McpServerConfig,
             "error": "stdio MCP is disabled: set tools.mcp_allow_stdio: true",
         }
     started = time.monotonic()
-    managed = ManagedServer(server, policy=policy)
+    managed = ManagedServer(server, policy=policy, token=token)
     try:
         ok = await managed.start(timeout_s)
         elapsed = round((time.monotonic() - started) * 1000)

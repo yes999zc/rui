@@ -250,6 +250,64 @@ def test_secret_names_come_from_the_chains_not_a_hardcoded_list(monkeypatch) -> 
     assert "sk-production-secret" not in json.dumps(document(cfg))
 
 
+def test_secret_entries_carry_typed_categories_and_consumers() -> None:
+    """The console must not guess a consumer from an env name (audit §2.3)."""
+    cfg = _production_like_config()
+    table = document(cfg)["secrets"]
+    categories = {"provider", "search", "music", "ha", "device", "console", "other"}
+    for name, entry in table.items():
+        assert entry["category"] in categories, name
+        assert isinstance(entry["consumers"], list) and entry["consumers"], name
+        assert entry["used_by"] == sorted(entry["used_by"]), name
+        for consumer in entry["consumers"]:
+            assert consumer["id"] and consumer["kind"] in categories, name
+            assert consumer["label"]["zh"] and consumer["label"]["en"], name
+            assert consumer.get("href", "").startswith("/panel/"), name
+
+    llm = next(item for item in table["RUI_LLM_KEY"]["consumers"]
+               if item["id"] == "llm:llm")
+    assert llm["kind"] == "provider" and llm["stage"] == "llm"
+    assert llm["provider"] == "llm"
+    assert table["RUI_DEVICE_TOKEN"]["consumers"][0]["device"] == "living"
+    assert table["RUI_HA_TOKEN"]["category"] == "ha"
+    assert table["web.auth_token"]["category"] == "console"
+    # Music is a consumer, but its credentials have their own write-only file.
+    music = table["music.credentials"]
+    assert music["category"] == "music"
+    assert music["writable"] is False
+    assert music["href"] == "/panel/music"
+    assert "music:source" in music["used_by"]
+
+
+def test_the_secrets_endpoint_returns_the_typed_table(tmp_path) -> None:
+    cfg = _production_like_config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    body = TestClient(create_app(cfg)).get("/api/v1/secrets").json()
+    assert "names" in body and "secrets" in body
+    entry = body["secrets"]["RUI_LLM_KEY"]
+    assert entry["category"] == "provider"
+    assert entry["consumers"][0]["stage"] == "llm"
+    assert entry["has_value"] is False
+    # Presence only; there is still no endpoint that returns a value.
+    assert "value" not in entry and "token" not in entry
+
+
+def test_credentials_pages_do_not_guess_consumers_from_names() -> None:
+    """The Phase 3 contract: typed `category`/`consumers`, no name regexes in Vue."""
+    root = pathlib.Path(__file__).resolve().parents[1]
+    for relative in ("web/src/views/SecretsView.vue",
+                     "web/src/components/ConfigCenter.vue"):
+        text = (root / relative).read_text(encoding="utf-8")
+        assert "SECRET_MATCHERS" not in text, relative
+        assert "kindOf(" not in text, relative
+        for guessed in ("XFYUN", "SILICONFLOW", "HASS_TOKEN", "DEEPSEEK"):
+            assert guessed not in text, (relative, guessed)
+    secrets_view = (root / "web/src/views/SecretsView.vue").read_text(encoding="utf-8")
+    config_center = (root / "web/src/components/ConfigCenter.vue").read_text(encoding="utf-8")
+    assert "consumers" in secrets_view and "category" in secrets_view
+    assert "SECRET_CATEGORIES" in config_center
+
+
 def test_secret_names_follow_a_dev_config_too(monkeypatch) -> None:
     cfg = Config()
     cfg.providers.catalog["asr"].api_key_env = "SILICONFLOW_API_KEY"

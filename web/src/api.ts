@@ -279,9 +279,39 @@ export interface SearchConfig {
   [k: string]: unknown
 }
 
+/** One typed reader of a credential. Backend-owned; never inferred from its name. */
+export interface SecretConsumer {
+  id: string
+  /** `provider` | `search` | `music` | `ha` | `device` | `console` | `other`. */
+  kind: string
+  /** Alias of `kind`, kept explicit so both names are typed on the wire. */
+  category?: string
+  label?: LocalizedText | string
+  href?: string
+  stage?: string
+  provider?: string
+  device?: string
+  source?: string
+}
+
+/** The only facts the console may learn about a credential (never the value). */
+export interface SecretMeta {
+  has_value: boolean
+  category?: string
+  consumers?: SecretConsumer[]
+  /** Kept for older callers; the typed decision is `category`/`consumers`. */
+  used_by?: string[]
+  hint?: LocalizedText | string
+  /** False for music credentials, which have their own writer (music page). */
+  writable?: boolean
+  href?: string
+}
+
 /** What `GET /api/v1/secrets` says: names that hold a value on the server's disk. */
 export interface SecretNames {
   names: string[]
+  /** Same typed table as `CatalogDoc.secrets` (additive, older servers omit it). */
+  secrets?: Record<string, SecretMeta>
 }
 
 /** What `POST /api/v1/secrets` answers. Echoes the name, never the value. */
@@ -697,7 +727,31 @@ export interface DeviceConnectInfo {
   hint: string
 }
 
-/** HA over MCP: the endpoint, whether it answers, and how much it lists. */
+/** First-party MCP instance (HA): policy stays visible, tools keep their names. */
+export interface FirstPartyMcpInstance {
+  id: string
+  name: string
+  kind: 'first_party' | string
+  transport: string
+  config_path: string
+  endpoint: string
+  token_env: string
+  has_token: boolean
+  wired: boolean
+  connected: boolean
+  latency_ms: number | null
+  tools: number
+  entities: number
+  tool_prefix: string
+  tool_names: string[]
+  whitelist: string[]
+  excluded_domains: string[]
+  danger_policy: string
+  href: string
+  docs: string
+}
+
+/** Generic MCP server: endpoint/transport plus the live status row. */
 export interface McpServerStatus {
   name: string
   transport: 'http' | 'stdio' | string
@@ -705,6 +759,11 @@ export interface McpServerStatus {
   command: string[]
   /** Present once the backend schema carries per-server env (stdio only). */
   env?: Record<string, string>
+  /** HTTP-only non-secret request headers. */
+  headers?: Record<string, string>
+  /** Secret *name* holding the bearer token; never the value. */
+  token_env?: string
+  has_token?: boolean
   enabled: boolean
   connected: boolean
   tools: number
@@ -733,6 +792,8 @@ export interface McpState {
     entities: number
     error: string
   }
+  /** HA as an MCP instance, with its whitelist/danger policy (additive). */
+  first_party?: FirstPartyMcpInstance[]
   /** Configured generic servers, in config order, merged with live status. */
   servers: McpServerStatus[]
   generic_wired: boolean
@@ -748,13 +809,28 @@ export interface McpServerPayload {
   url?: string
   command?: string[]
   env?: Record<string, string>
+  headers?: Record<string, string>
+  /** Secret name. The backend keeps it when `token` is omitted. */
+  token_env?: string
+  /** Write-only: stored in secrets.yaml, never echoed. */
+  token?: string
   enabled: boolean
 }
 
 /** What `POST /api/v1/mcp/test` accepts: HA `{base_url}` or one generic server. */
 export type McpTestPayload =
   | { base_url: string }
-  | { name: string; transport: 'http' | 'stdio'; url?: string; command?: string[]; enabled?: boolean }
+  | {
+      name: string
+      transport: 'http' | 'stdio'
+      url?: string
+      command?: string[]
+      env?: Record<string, string>
+      headers?: Record<string, string>
+      token_env?: string
+      token?: string
+      enabled?: boolean
+    }
 
 export interface McpProbe {
   ok: boolean
@@ -933,8 +1009,8 @@ export interface CatalogDoc {
   fields: CatalogField[]
   /** Dotted path → current value. Secrets never appear here. */
   values: Record<string, unknown>
-  /** Secret slots the catalog knows about; `has_value` is the only fact exposed. */
-  secrets?: Record<string, { has_value: boolean; used_by?: string[]; hint?: LocalizedText | string }>
+  /** Typed secret slots; `has_value` is the only fact exposed, never a value. */
+  secrets?: Record<string, SecretMeta>
   restart_command?: string
   writable_root?: string[]
 }

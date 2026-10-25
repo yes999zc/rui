@@ -73,6 +73,10 @@ export interface PanelBlock {
   warning?: PanelText
   /** `config` block: catalog groups rendered inline by ConfigCenter. */
   groups?: string[]
+  /** `config` block: render only these dotted paths (logs owns log_level). */
+  paths?: string[]
+  /** `config` block: omit these dotted paths (system omits log_level). */
+  exclude_paths?: string[]
   tier?: number
   fields?: PanelField[]
   columns?: PanelColumn[]
@@ -93,6 +97,8 @@ export interface PanelBlock {
   status_key?: string
   /** `credentials` block: source registry endpoint (presets + credential slots). */
   sources_href?: string
+  /** `credentials` block: link to the write-only credentials ledger. */
+  secrets_href?: string
   /** `credentials` block: write endpoint (PUT) and connection-test endpoint (POST). */
   save?: { href: string; method?: string }
   test?: { href: string; method?: string }
@@ -219,7 +225,9 @@ export const PANEL_NAV_GROUPS: Record<string, string> = {
   music: 'configure',
   providers: 'configure',
   integrations: 'configure',
+  system: 'configure',
   foundation: 'configure',
+  credentials: 'configure',
   // Legacy ids stay reachable by URL (one release of compatibility) but are not
   // separate destinations: their task is already represented by a combined entry.
   'assistant-session': 'configure',
@@ -246,6 +254,8 @@ export const HIDDEN_NAV_PANELS = new Set([
   'phrases',           // 语音助手 → /panel/voice-assistant
   'tools',             // 工具与集成 → /panel/integrations
   'mcp',               // 工具与集成 → /panel/integrations
+  'foundation',        // 系统 → /panel/system
+  'credentials',       // hidden write-only ledger; linked from consumers
 ])
 
 /** Which destination lights up while a legacy panel is open. */
@@ -253,6 +263,7 @@ export const NAV_ACTIVE_ALIASES: Record<string, string[]> = {
   'voice-assistant': ['voice-assistant', 'assistant-session', 'phrases', 'settings'],
   devices: ['devices', 'speaker', 'devices-admin'],
   integrations: ['integrations', 'tools', 'mcp'],
+  system: ['system', 'foundation'],
 }
 
 /**
@@ -264,6 +275,6 @@ export const NAV_GROUPS: { id: 'run' | 'configure'; panelIds: string[] }[] = [
   { id: 'run', panelIds: ['overview', 'turns', 'memory', 'logs'] },
   {
     id: 'configure',
-    panelIds: ['voice-assistant', 'devices', 'music', 'providers', 'integrations', 'foundation'],
+    panelIds: ['voice-assistant', 'devices', 'music', 'providers', 'integrations', 'system'],
   },
 ]

@@ -206,6 +206,8 @@ onUnmounted(() => { if (timer) window.clearInterval(timer) })
           v-if="block.type === 'config'"
           :groups="block.groups"
           :tier="block.tier"
+          :paths="block.paths"
+          :exclude-paths="block.exclude_paths"
           :panel-id="panel.id"
           @saved="reload()"
         />
