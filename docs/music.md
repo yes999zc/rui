@@ -1,5 +1,9 @@
 # D1 音乐：多源接口设计（首源 NAS Navidrome/Subsonic）
 
+> 2026-10-25 更新：音源已产品化为注册表预设（Navidrome/Airsonic/Gonic/Ampache/自定义
+> Subsonic），`NavidromeSource` 是 `SubsonicSource` 的兼容别名。凭据、测试、迁移和 API 见
+> [music-sources.md](music-sources.md)。
+
 2026-10-22 9哥 定：D1 先于 C1；新项目要支持**后台多个音乐源**（接口做好），本次先走 NAS 的
 sonic 服务（Navidrome，与老项目同款）。本文是两份老项目调研（源与数据层、播放与控制层，
 2026-10-22 子 agent 完成）蒸馏出的设计；所有「老项目 xxx」都带 文件:行号，可直接对照源码。
