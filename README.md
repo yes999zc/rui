@@ -60,16 +60,16 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/console-providers-zh.png" width="420" alt="AI 供应商"></td>
+    <td width="50%"><img src="docs/screenshots/console-providers-zh.png" width="420" alt="模型与语音服务"></td>
     <td width="50%"><img src="docs/screenshots/console-setup-en.png" width="420" alt="First-run setup"></td>
   </tr>
   <tr>
-    <td><em>AI 供应商：三段链路、预设/自定义、就绪徽章与试听。</em></td>
+    <td><em>模型与语音服务：LLM/ASR/TTS 三段链路、预设、就绪徽章与试听。</em></td>
     <td><em>首次运行向导：密钥、模型、设备准备/接线、测试、试一句。</em></td>
   </tr>
 </table>
 
-> 截图来自真实控制台，已隐去 LAN 地址和个人路径；截图稍后与内容一起刷新。
+> 截图来自真实控制台（v0.5.0），已隐去内网地址和本机路径。
 
 ### 30 秒快速开始
 
@@ -86,6 +86,22 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.5.0/deploy/insta
 安装后打开 `http://<nas-lan-ip>:8080/`，输入 console token（0.4.1+ 存在 `~/rui/console-token.txt`；
 缺失时运行 `cd ~/rui && docker compose exec -T rui rui token`）。**必须用 NAS 的局域网 IP**，
 否则 `connect` 会生成 `127.0.0.1` 地址。目录权限、代理、源码回退和手动 Compose 见 [docs/deploy.md](docs/deploy.md)。
+
+### 让 Agent 帮你安装（推荐）
+
+如果你本机已有能执行命令的 AI Agent（Claude Code / Codex / Cursor Agent 等），把下面整段复制给它。
+它会先读官方公开文档，再按官方安装脚本部署，并在需要时主动问你配置：
+
+```text
+你是一名在 Linux NAS 上部署自托管服务的工程师。请帮我安装 rui（小瑞）最新稳定版：
+1. 先读 https://github.com/yes999zc/rui 的 README、docs/deploy.md §2 和 docs/first-run.md，只读公开文档，不要改仓库代码；
+2. 按 docs/deploy.md 的官方 install.sh 安装，固定 release tag，不要用 main；
+3. 动手前先问我：NAS 安装目录（默认 ~/rui）、Docker 是否可用、音箱型号和局域网地址、唤醒词、LLM/ASR/TTS 的 key、是否要开 Telegram/音乐/Home Assistant，以及我的城市；
+4. key/token 只通过交互输入或写成 0600 文件，不要写进日志、聊天或 git；
+5. 装完运行 rui-healthcheck 和一次真实回合；任何一步失败就停下把错误发我，不要静默跳过或假装成功。
+```
+
+装好后按下面的「第一次运行」完成 8 步向导即可。
 
 ### 第一次运行
 
@@ -151,7 +167,7 @@ flowchart LR
 - **只支持 LX06**：需要 open-xiaoai client、同 LAN/L2；刷机/装 client 属于上游，Rui 不代刷。
 - **第三方插头隔离**：sidecar、签名/allowlist、多设备 owner 仲裁尚未交付；in-process 需可信 manifest。
 - **音乐协议**：Plex 尚未实现；新增协议需要适配器。
-- **控制台收尾**：Phase 4 已完成；旧 legacy 面板/路由不再兼容（有意），截图稍后与内容一起刷新。
+- **控制台收尾**：Phase 4 已完成；旧 legacy 面板/路由不再兼容（有意）。
 - **体验欠账**：手机对话、音乐收藏/口味 UI 等见 [docs/remaining-work.md](docs/remaining-work.md)。
 - **生产微信**：Telegram 已生产验证；微信 iLink 接口保留，生产验证未完成。
 
@@ -228,16 +244,16 @@ local ASR stay on your machine. No vendor cloud is required; only the providers 
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/console-providers-zh.png" width="420" alt="AI providers"></td>
+    <td width="50%"><img src="docs/screenshots/console-providers-zh.png" width="420" alt="Models & voice services"></td>
     <td width="50%"><img src="docs/screenshots/console-setup-en.png" width="420" alt="First-run setup"></td>
   </tr>
   <tr>
-    <td><em>AI providers: chains, presets/custom endpoints, readiness and audition.</em></td>
+    <td><em>Models & voice services: LLM/ASR/TTS chains, presets, readiness and audition.</em></td>
     <td><em>First-run wizard: keys, models, device prep/hookup, test and one sentence.</em></td>
   </tr>
 </table>
 
-> Captures come from a real console with LAN addresses and personal paths redacted. They show the 0.4.x console; a screenshot refresh is planned with the next content pass.
+> Captures come from a real console (v0.5.0); LAN addresses and local paths are redacted.
 
 ### 30-second quick start
 
@@ -255,6 +271,28 @@ local and only ASR to fetch, about **85 seconds**. Replace the tag with `main` f
 Open `http://<nas-lan-ip>:8080/` and enter the console token (0.4.1+ writes `~/rui/console-token.txt`; if
 missing, run `cd ~/rui && docker compose exec -T rui rui token`). **Use the NAS LAN IP**, or `connect`
 generates a `127.0.0.1` URL. Host requirements, proxies, source fallback and manual Compose: [docs/deploy.md](docs/deploy.md).
+
+### Let an agent install it (recommended)
+
+If you already run a command-capable AI agent (Claude Code / Codex / Cursor Agent, etc.), paste the block
+below into it. The agent reads the public docs first, installs with the official script, and asks you for
+the settings it needs:
+
+```text
+You are an engineer deploying a self-hosted service on a Linux NAS. Please install rui (小瑞), the latest
+stable release:
+1. Read the README, docs/deploy.md section 2 and docs/first-run.md at https://github.com/yes999zc/rui first;
+   read only the public docs and do not modify the repository code.
+2. Install with the official install.sh from docs/deploy.md, pinning a release tag (never main).
+3. Before acting, ask me for: the install directory (default ~/rui), whether Docker is available, the
+   speaker model and LAN address, wake words, the LLM/ASR/TTS keys, whether to enable Telegram / music /
+   Home Assistant, and my city.
+4. Keep keys and tokens in interactive input or 0600 files only; never write them to logs, chat or git.
+5. After the install, run rui-healthcheck and one real turn. If any step fails, stop and show me the error;
+   do not skip it silently or pretend it succeeded.
+```
+
+Then complete the eight-step wizard under "First run" below.
 
 ### First run
 
@@ -323,7 +361,7 @@ plug contract: [docs/socket-plug-v1.md](docs/socket-plug-v1.md).
 - **LX06 only:** needs the open-xiaoai client and same LAN/L2; flashing/client install are upstream, not done by Rui.
 - **Third-party plugs:** sidecar isolation, signing/allowlists and multi-device owner arbitration are not shipped; in-process needs a trusted manifest.
 - **Music protocols:** Plex is not implemented; a new protocol needs an adapter.
-- **Console cleanup:** Phase 4 is complete; legacy panel routes no longer resolve (intentional), and screenshots will be refreshed with the next content pass.
+- **Console cleanup:** Phase 4 is complete; legacy panel routes no longer resolve (intentional).
 - **UX debt:** mobile turns, music favorites/taste UI and more are in [docs/remaining-work.md](docs/remaining-work.md).
 - **WeChat in production:** Telegram is production-verified; the WeChat iLink interface is kept, but production validation is still pending.
 
