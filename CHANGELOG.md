@@ -14,6 +14,32 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [Unreleased]
+
+### Added
+
+- **Agent-friendly install entry point.** The README now carries a copy-paste prompt
+  (zh + en): a command-capable agent is told to read the public docs first, install with
+  the official `install.sh` at a pinned tag, ask the operator for the required settings
+  and keys, and verify with `rui-healthcheck` plus one real turn.
+- **Doctor reports model readiness.** A `models` row checks the local sherpa ASR model +
+  tokens, the configured VAD file and the KWS `tokens.txt`; missing models surface as
+  `degraded` instead of only a WARNING in the install log (dot2 #14.3).
+
+### Fixed
+
+- **`install.sh` wrote `.env` from an unquoted heredoc.** Backticks in the template
+  comments were command-substituted during install - on a machine whose CWD was another
+  compose project that started it - and the printed setup output leaked the console token
+  to stdout. The template is now a quoted heredoc (values appended by `printf`),
+  `rui setup` never prints the token, the installer still persists it to
+  `console-token.txt` (0600), and tests pin the byte-identical template + no canary
+  execution + no token on stdout (dot2 #13).
+- **`fetch-models` could fail silently and the installer still exited 0.** A transient
+  hf-mirror 429 aborted the ASR download with only a WARNING, so the container looked
+  green while ASR was missing. Downloads now retry 429/5xx up to 4 times (1/2/4 s
+  backoff, 404/401 fail fast to the next mirror); the installer fails non-zero after
+  printing remediation, with `RUI_SKIP_MODELS=1` as the documented opt-out (dot2 #14).
 ## [0.5.0] - 2026-10-25
 
 Multi-device 0.5: one control plane, one audio plane per room, one arbiter for the

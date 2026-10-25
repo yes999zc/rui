@@ -709,6 +709,27 @@ HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
 | 0.3.x / 0.4.x | 覆盖该版本的 range（当时为 `<0.5.0`） | 0.4.2 仍是单平面；内置插头已同步 `<0.6.0`，两个版本都能加载 |
 | 0.5.x | 上界必须 > 0.5.0（建议 `>=0.3.0 <0.6.0`） | 多平面/仲裁随 0.5.0 落地，但全部在 rui 内部；adapter/manifest 契约、`drain_wakes()` 时序、`DeviceWake` 六字段、enrich 责任均不变 |
 | 0.6+ | 上界再按当次 release note 抬 | 每次 Major/Minor 发布会在 CHANGELOG 写清需要的上界 |
+### 7.2 渠道（Telegram）出网与代理
+
+容器默认直连外网。NAS 若没有直接外网（常见：本机跑 mihomo 等代理），Telegram 轮询会超时、
+控制台“测试 token”也会 500。把代理地址写进 `/vol1/rui/.env`（端口按实际改），然后**重建**容器
+（`restart` 不会重新读取 `.env`）：
+
+```bash
+# /vol1/rui/.env（0600；不要提交到仓库）
+ALL_PROXY=http://127.0.0.1:7890
+HTTPS_PROXY=http://127.0.0.1:7890
+HTTP_PROXY=http://127.0.0.1:7890
+NO_PROXY=127.0.0.1,localhost,<nas-lan-ip>,<ha-lan-ip>
+```
+
+```bash
+cd ~/rui && docker compose up -d --force-recreate
+```
+
+然后在控制台「通道」页填 bot token 并启用 Telegram。验收看 `GET /api/v1/channels`：
+`telegram.token_configured=true` 且 `gateway.status.running=true`；`telegram.enabled=false` 时网关
+不启动是正常的（新用户默认关闭，想用再开）。
 ## 8. 卷与备份
 
 | 宿主机 | 容器内 | 内容 | 丢了会怎样 |

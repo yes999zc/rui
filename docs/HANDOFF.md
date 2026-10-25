@@ -12,13 +12,14 @@
 | 版本 | **v0.5.0**（多设备 0.5：config v3 每设备音频覆盖 + 多平面/中央仲裁 + 逐设备健康 + 控制台多设备状态 + 下游升级/healthcheck 打磨批），2026-10-25 18:02 已部署 NAS |
 | 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.5.0`**（digest `sha256:01a3afe18faa…`，amd64+arm64）；回滚 `0.4.2`（digest `sha256:3791ccfdb…`）；非 root uid 1000，healthy、音箱在线、`multi_device.enabled=false` |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
-| 质量 | **1278 passed / 18 skipped**（Phase 4 + config v3 + Phase 2 fleet/仲裁/逐设备健康 + Phase 1b 控制台/目录 + 打磨批 healthcheck/doctor/install）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
+| 质量 | **1293 passed / 18 skipped**（0.5.0 + dot2 冷装回归修复 #13/#14）；ruff clean；`sh -n deploy/install.sh` 干净；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | 多设备 0.5：Phase 1 + Phase 2 + Phase 1b + 打磨批已交付 → **v0.5.0 发布**；真机验收 9哥 保留 |
+| 当前主线 | 0.5.0 已发布并上线 → **v0.5.1 冷装回归修复（dot2 #13/#14）待 9哥 点头发版**；真机验收 9哥 保留 |
 
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 
 - **当前发布/生产**：**v0.5.0 已上线**（2026-10-25 18:02；`ghcr.io/yes999zc/rui:0.5.0`，digest `sha256:01a3afe18faa…`，amd64+arm64）。回滚镜像 `0.4.2`；部署前备份：`.env.bak.20261025-180259`（root 0600）、`config/config.yaml.bak.20261025-180259`、`/vol1/rui-backups/rui-backup-20261025-180734.tar.gz`（sha256 `17711958…`）。验收：healthcheck ok、`/health` version 0.5.0、config_version 仍 2、`audio_devices` 仅 living/客厅 running+connected、真实回合 `audio_bytes=120,912`（deepseek_llm + volc_tts）；`multi_device.enabled=false`。
+- **NAS 单机配置补齐（2026-10-25 18:2x）**：时区 `Asia/Shanghai`（真实回合已显示 18:2x）、天气城市沈阳、DeepSeek 搜索开启（`DEEPSEEK_API_KEY` 已存、工具注册）、Telegram 渠道启用（token 已验签、gateway running、reply_mode=both、沿用旧 allowlist 1 个 chat）、音乐 Navidrome 恢复（沿用 `/vol1/house-ear/data/lan_media.json` 凭据，`credentials_ready=true`、搜索返回 20 首）。NAS 无直接外网，Telegram 需容器代理：`.env` 增加 `ALL_PROXY`/`HTTP(S)_PROXY=http://127.0.0.1:7890` + `NO_PROXY` 后 `up -d --force-recreate`；已备份 `.env.bak.*`。HA 仍 connected（86 工具 / 75 实体 / ~5 ms）。
 - **发布状态（2026-10-25 17:4x）**：`main` 已推（HEAD `406785e`）+ tag **`v0.5.0`**；CI 全绿（secret-scan/security/ci/docker-publish，tag 与 main 各一轮）。GHCR `0.5.0`=`0.5`=`sha-406785e` 同一 manifest digest **`sha256:01a3afe18faa…`**（amd64+arm64；发布时 `latest` 也是同一 manifest，之后随 `main` 移动）；`docs/releases/v0.5.0.md` 已补 digest；GitHub Release 已发；#7 已公布 tag/digest/平台/「契约变化=无」。
 - **本会话新完成**（`git log origin/main..main`）：
   - HA 控制台逻辑：测试用表单里的一次性 token（不落盘）、保存并重连覆盖新 token、测试后表单不被清空（`6003700`/`7ae83cf`）；
@@ -30,7 +31,8 @@
 - **本段（17:25 前）完成 Phase 2 接线**：`fce8d8c` 抽取 `_wire_plane`（零行为变化，`git diff -w` 只移动）、`e84fac4` `PlaneFleet` 启动 + 逐设备回调 + `WakeCoordinator` + turn/owner 生命周期 + 单平面端点主平面化、`ec8cf44` 逐设备健康/告警/状态（`/health.audio_devices`、`/api/v1/audio.planes`、设备写 fleet 重建）；新增 `tests/test_app_fleet.py` 7 例（fake `PlaneFleet`，不 spawn），并用 2×mock 真进程 smoke 验证 2 plane 共存与干净退出。
 - **Phase 1b（17:35）**：`multi_device` 目录组（启用/max_planes/default_output/来源优先级/两个窗口/房间优先级/最近活跃窗口）+ 每设备 13 个 `devices[].audio.*` 覆盖字段（AEC 归属/开关、播放后静音、续听、预缓冲、采集布局；空值 = 继承）；体检页多设备卡片（未启用说明 / 逐平面状态 / 超 cap / 启动失败）；`web` typecheck+build 绿。
 - **打磨批（dot2 #12）**：healthcheck 根因（device_errors / fleet / 逐房间）；`doctor` 新增 `container_healthcheck` 一致性行；install.sh 重跑打印当前 `RUI_IMAGE` + 显式升级提示 + prune；0.4.2 release note 占位注释已清；`docs/deploy.md` §7.1 下游升级 + `rui_compat` 兼容矩阵；adapter 音量换算指向 helper。
-- **质量**：全量 **1278 passed / 18 skipped**；ruff clean；`web` typecheck/build 绿。
+- **dot2 干净安装结果（2026-10-25 18:19）+ 冷装回归修复**：0.5.0 vanilla 干净安装通过（约 5 分钟），operator 配置后 `/health`/`plug-test`/`playback_gap=0` 全过，B 路线（`post_playback_mute_ms`）在 0.5.0 单平面也成立（两次长回复 gate 5.0 s、45 s 内 0 条伪造 turn）。他们开了两个 issue：**#13** install.sh 未加引号 heredoc（反引号被执行、console token 打到 stdout）、**#14** fetch-models 429 无重试且安装器 exit 0。修复已落 main：`7dbfecb` #13a、`ef2affd` #13b、`8433113` #14.1、`f032931` #14.2、`b55dcdb` #14.3（doctor `models` 行）、`907fcd1` #14.4 文档；全量 **1293 passed / 18 skipped**、ruff/`sh -n` 干净。**待 9哥 点头发 v0.5.1**（安装路径 bug，影响新用户）。
+- **质量**：全量 **1293 passed / 18 skipped**；ruff clean；`sh -n deploy/install.sh` 干净；`web` typecheck/build 绿。
 - **下一步**：**生产部署 v0.5.0 需 9哥 点头**（备份 `.env`/config → 改 `RUI_IMAGE` → `up -d` → `/health` devices=2 验收）；真机 LX06+2×Dot2 验收与回滚演练等 9哥 安排；dot2 会在发布后做干净安装验收（卡点单独开 issue）。
 - **dot2**：0.4.2 受控切换完成（回滚 21 s / 前滚 11 s，`plug-test` 与 0.3.4/0.4.0/0.4.1 逐项一致）；实测「撤 adapter 门控失败」→ 已定走 B 路线（上游 `devices[].audio.voice.post_playback_mute_ms`，默认 0，Dot2 建议 2500）；#11 确认 Phase 2 内部 IPC、adapter 零改动；#12 下游原地升级冷启动反馈已答复（docs PR 欢迎、install/healthcheck/release-note 进打磨批）。**他们会在 0.5.0 发布后做一次全新安装验收并反馈**；卡点单独开 issue。发布时需在 #7 公布 tag `v0.5.0` + GHCR digest + 平台 + 「相对 0.4.2 契约变化 = 无」。
 - **HA（生产待办，需 9 哥 点头）**：生产 `config/config.yaml` 的 `tools.ha.base_url` 为空、`data/secrets.yaml` 无 `RUI_HA_TOKEN`（`.env` 里是空值）。HA 的地址与长期令牌见 9哥 的本机配置（不入库）；`/api/mcp` 已实测 200、86 工具。0.4.2 控制台上正确顺序：填地址+token → **保存并重连** → 再点测试（0.4.2 的测试按钮只用已保存 token；该坑已在本分支修复）。
