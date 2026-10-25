@@ -5,7 +5,7 @@ phase-close: task-16
 ## 会话身份
 - 模式：A（双仓库：rui 上游 + rui-dot2-bridge 下游），单会话单任务板
 - 仓库：`$HOME/AI_Workspace/01_Code/projects/house-ear`（rui）、`$HOME/AI_Workspace/01_Code/projects/rui-dot2-bridge`（dot2）
-- 分支/commit：rui `main` @ `d89129c`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
+- 分支/commit：rui `main` @ `e78d080`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
 
 ## 版本与契约
 | 项 | 值 | 证据 |
