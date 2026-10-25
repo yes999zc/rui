@@ -11,15 +11,31 @@ from .history import PlayHistory
 from .model import QueryPlan, ResolvedTrack, Track
 from .service import MusicService
 from .source import MusicSource, SourceError
-from .sources.navidrome import NavidromeSource
+from .sources import (
+    PRESETS,
+    MusicSourcePreset,
+    NavidromeSource,
+    SubsonicSource,
+    build_source,
+    get_preset,
+    preset_ids,
+    presets,
+)
 
 __all__ = [
     "MusicService",
     "MusicSource",
+    "MusicSourcePreset",
     "NavidromeSource",
+    "PRESETS",
     "PlayHistory",
     "QueryPlan",
     "ResolvedTrack",
     "SourceError",
+    "SubsonicSource",
     "Track",
+    "build_source",
+    "get_preset",
+    "preset_ids",
+    "presets",
 ]

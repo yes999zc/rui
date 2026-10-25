@@ -26,7 +26,7 @@
 
 - **唤醒词、VAD、回声消除、播放都在本地音频面完成**；ASR 优先本地 SenseVoice，可选火山流式识别 2.0，云端只做兜底；
 - **TTS 链可选讯飞与火山豆包 2.0**，控制台可按音色/语速/情感试听；**完整回合**：唤醒 → 分段 → ASR → LLM（可调工具）→ 流式 TTS → 推回音箱；
-- **能力**：Home Assistant（经 MCP）、通用 MCP 服务、天气/新闻/联网搜索、提醒、记忆、Navidrome/Subsonic 音乐；
+- **能力**：Home Assistant（经 MCP）、通用 MCP 服务、天气/新闻/联网搜索、提醒、记忆、Navidrome/Airsonic/Gonic/Ampache 或任意 Subsonic 兼容音源；
 - **控制台 2.0**：中英双语、明暗主题、四层配置目录、AI 供应商链路与音色试听、安装向导、诊断/日志；
 - **一条命令部署到 NAS**：Docker Compose + 多架构镜像，数据/配置/模型都在卷里；音频面崩溃由 watchdog 拉起。
 
@@ -63,7 +63,7 @@ flowchart LR
   ctl --> tools["工具<br/>天气 · 新闻 · 搜索 · 提醒"]
   ctl --> ha["Home Assistant<br/>via MCP"]
   ctl --> mcp["通用 MCP 服务<br/>HTTP / stdio"]
-  ctl --> music["Navidrome / Subsonic"]
+  ctl --> music["Subsonic family (Navidrome/Airsonic/...)"]
 ```
 
 几条固定规则：
@@ -278,13 +278,13 @@ docker compose exec -T rui rui token --rotate # 轮换（随后重启服务生�
 | 音箱 | `devices[]` | adapter、回连端口、房间、唤醒词、音量、LED；v1 仅 LX06 |
 | 音频 | `audio.capture / voice / playback / aec` | 采样率、帧长、VAD、AEC、播放缓冲；改完重启音频面 |
 | 会话 | `session.*` | 空闲超时、结束词、上下文开关、filler 策略 |
-| 音乐 | `music.*` | `navidrome` 源、凭据写入、缓存；凭据只写不读 |
+| 音乐 | `music.*` | 音源预设（Navidrome/Airsonic/Gonic/Ampache/自定义 Subsonic）、只写凭据、连接测试、缓存 |
 | 工具 | `tools.*` | 搜索、天气、新闻、Home Assistant、MCP servers、工具暴露策略 |
 | 控制台 | `web.*` | 端口、鉴权 token、日志级别 |
 
 - 完整字段/效果/重启规则：[docs/config-catalog-contract.md](docs/config-catalog-contract.md)
 - 部署、密钥、音乐/HA 配置：[docs/deploy.md](docs/deploy.md)
-- 音乐层：[docs/music.md](docs/music.md)；通用 MCP：[docs/mcp-generic.md](docs/mcp-generic.md)
+- 音乐层：[docs/music.md](docs/music.md)；音源预设/凭据/测试：[docs/music-sources.md](docs/music-sources.md)；通用 MCP：[docs/mcp-generic.md](docs/mcp-generic.md)
 - 模型自建镜像（可选）：`.env` 设 `RUI_ASR_URL` / `RUI_VAD_URL` /
   `RUI_KWS_URL`（完整文件 URL，失败回退内置镜像）；VAD/KWS 默认从镜像 seed 复制，
   不再访问 GitHub release。详见 [docs/deploy.md §3.3](docs/deploy.md#33-模型fetch-models-一次装齐)
@@ -389,7 +389,7 @@ MIT 只覆盖本仓库自己的代码；以上第三方组件各自保留其许�
 
 > wake → segment → local ASR (cloud fallback) → LLM + tools → streaming TTS → PCM back to the speaker.
 
-ASR prefers local SenseVoice, with Volc streaming ASR 2.0 and a cloud fallback as optional chain entries; TTS can use Xfyun and Volc Doubao 2.0, with voice/rate/emotion audition in the console. It also ships a bilingual admin console (four-tier config catalog, provider-chain UX, setup wizard, diagnostics), Home Assistant over MCP, generic MCP servers, weather/news/web search, reminders, memory, and Navidrome/Subsonic music.
+ASR prefers local SenseVoice, with Volc streaming ASR 2.0 and a cloud fallback as optional chain entries; TTS can use Xfyun and Volc Doubao 2.0, with voice/rate/emotion audition in the console. It also ships a bilingual admin console (four-tier config catalog, provider-chain UX, setup wizard, diagnostics), Home Assistant over MCP, generic MCP servers, weather/news/web search, reminders, memory, and music from Navidrome, Airsonic, Gonic, Ampache or any Subsonic-compatible server.
 
 ### Install
 
@@ -594,14 +594,14 @@ flowchart LR
   ctl --> tools["Tools<br/>weather · news · search · reminders"]
   ctl --> ha["Home Assistant via MCP"]
   ctl --> mcp["Generic MCP servers"]
-  ctl --> music["Navidrome / Subsonic"]
+  ctl --> music["Subsonic family (Navidrome/Airsonic/...)"]
 ```
 
 Hard rules: only the audio plane touches mic/speaker; playback has a single owner (cue P0 → reply P1 → reminder P2 → music P3); devices dial in, the control plane does not dial out. Deeper details: [docs/architecture.md](docs/architecture.md) · [docs/audio-pipeline.md](docs/audio-pipeline.md).
 
 ### Configuration
 
-Provider order and fields live in `config.yaml`: `providers.catalog` plus one ordered chain per stage (`providers.asr/tts/llm.chain`). The console can create a provider from a preset or a custom OpenAI-compatible endpoint (write-only inline key, readiness badge) without hand-editing YAML; see [docs/provider-presets.md](docs/provider-presets.md). The setup wizard selects one provider per use and keeps existing fallbacks, so an unconfigured fallback never blocks first-run completion. Speakers are `devices[]`; the audio plane is `audio.*`; session, music, tools and console/security settings are grouped in the console's four-tier catalog. Everything is editable in the console (422 validation maps back onto fields), or via the CLI/config file. See [docs/config-catalog-contract.md](docs/config-catalog-contract.md) and [docs/deploy.md](docs/deploy.md).
+Provider order and fields live in `config.yaml`: `providers.catalog` plus one ordered chain per stage (`providers.asr/tts/llm.chain`). The console can create a provider from a preset or a custom OpenAI-compatible endpoint (write-only inline key, readiness badge) without hand-editing YAML; see [docs/provider-presets.md](docs/provider-presets.md). The setup wizard selects one provider per use and keeps existing fallbacks, so an unconfigured fallback never blocks first-run completion. Speakers are `devices[]`; the audio plane is `audio.*`; session, music, tools and console/security settings are grouped in the console's four-tier catalog. Everything is editable in the console (422 validation maps back onto fields), or via the CLI/config file. The music source is a preset list with write-only per-source credentials and a real connection test; see [docs/music-sources.md](docs/music-sources.md). See also [docs/config-catalog-contract.md](docs/config-catalog-contract.md) and [docs/deploy.md](docs/deploy.md).
 
 ### Status and known gaps
 

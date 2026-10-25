@@ -63,6 +63,16 @@
 - 同意把播放、音源、凭据合成一个“音乐”页；不要叫“音乐配置”，那会再次把播放降级成配置。
 - 预设优先级：Navidrome/Airsonic/Gonic/Ampache（同一个 Subsonic 适配器）→ Jellyfin/Emby（新适配器）→ Plex → Music Assistant/LMS。没有适配器的预设是假按钮，别先承诺。
 
+> 实施状态（2026-10-25，RUI 0.3.4）：§2.1 的音源预设已落地。注册表
+> `music/sources/presets.py`（navidrome / airsonic / gonic / ampache / custom，全部
+> `subsonic` 家族，带双语显示名、文档、默认端口/路径、凭据槽位）；运行时只有一套
+> `SubsonicSource`，`NavidromeSource` 保留为兼容别名。`music.source` 已改为注册表驱动的
+> select；`GET /api/v1/music/sources` 给出预设 + 凭据 presence，`PUT /api/v1/music/credentials`
+> 支持 `source` + 只写槽位，`POST /api/v1/music/test` 做真实 `ping`。未知 id 在保存时 422，
+> 手改 YAML 的未知值让面板/API 明确 `enabled=false` / `source_known=false`。旧
+> `music.url/user/password` 启动迁移到 0600 `lan_media.json` 并从 config 擦除。Jellyfin/Emby
+> 仍未实现，因此不提供预设。契约、迁移和 fake-server 测试见 `docs/music-sources.md`。
+
 ### 2.2 LLM / 模型 provider 预设与自定义
 
 **裁决：同意，而且问题比“字段生硬”更严重——当前控制台根本不能新增 provider。**
@@ -208,6 +218,7 @@
 ### Phase 3 — 产品化 provider / 凭据 / 音乐源（P1）
 - provider 预设 + 新建 + 就绪/探测 + 内联 key；凭据页降级与 consumer 类型化；音乐先 Subsonic 家族，再 Jellyfin/Emby；HA 先 UI 实例化。
 - 验收：预设创建后无需手改 YAML 就能真 probe；错误预设 422；密钥不回显；旧 config 可迁移；未知 `music.source` 不出现“面板 enabled 但服务没起”。
+- 音乐源（2026-10-25 已完成 Subsonic 家族）：预设注册表 + `music.source` select + 每源凭据槽位 + `/music/sources` / `/music/test`；Jellyfin/Emby 需要新适配器，未在 UI 提供假预设。
 
 ### Phase 4 — 收尾（P2）
 - 单一 nav manifest；删旧 panel/路由（至少一个 release 后）；更新 `docs/console-redesign.md`、README、截图；补契约测试。
@@ -256,7 +267,7 @@
 | P1 | 合并助手/会话/话术 | `app.py:417-485`、`ConfigCenter.vue`、`PhrasebookEditor.vue`、新 `AssistantView.vue` | tab 切换不丢草稿 |
 | P1 | provider 预设 + 新建 + 内联 key + 就绪 | 新 `providers/presets.py`、`app.py`、`schema.py`、`ProvidersView.vue`、`ProviderKeyStrip.vue` | 预设创建后真实 probe 通过；env 名不可自填 |
 | P1 | 凭据页降级 + consumer 类型化 | `SecretsView.vue`、`catalog.py:1465-1525`、`ConfigCenter.vue` | 消费页内联；`/secrets` 仍可书签 |
-| P2 | 音乐源适配器（Subsonic 家族→Jellyfin/Emby→Plex） | `music/sources/*`、`music/source.py`、`app.py`、`schema.py` | 每源有 fake server 测试；凭据不回显 |
+| P2 | 音乐源适配器（Subsonic 家族 ✅ 2026-10-25；Jellyfin/Emby→Plex 待做） | `music/sources/*`、`music/source.py`、`app.py`、`schema.py` | Subsonic 家族已有 fake server 测试（Navidrome+Airsonic）；未知源 422；凭据不回显；Jellyfin/Emby 仍需新适配器 |
 | P2 | HA 真正实例化 / MCP headers | `schema.py:446-455`、`mcp_manager.py`、`tools/ha.py`、`app.py`、`McpManager.vue` | headers 生效；HA 白名单/危险域不退化；工具名兼容 |
 | P2 | 单一 nav manifest + hidden/alias | `app.py`、`panels.ts`、`SideNav.vue`、`tests/test_panels.py` | 每个 panel 有归属；测试防回归 |
 | P2 | 文档/截图/飞书技术文档 | `docs/console-redesign.md`、`README.md`、`docs/console-*` | 路由表与截图一致；从 manifest 生成 |

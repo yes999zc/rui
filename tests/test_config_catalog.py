@@ -186,8 +186,10 @@ def test_effects_match_where_the_value_is_read() -> None:
         assert fields[path]["writable"] is False, path
     # The ack text is a rendered file the plane re-reads, so it is a save.
     assert fields["ack.text"]["effect"] == "save"
-    # The music source needs the service rebuilt.
-    assert fields["music.source"]["effect"] == "restart"
+    # The music source/paths rebuild the service at runtime (Phase 3).
+    assert fields["music.source"]["effect"] == "save"
+    assert fields["music.secrets_path"]["effect"] == "save"
+    assert fields["music.cache_dir"]["effect"] == "save"
     # ...while enabling it assembles the layer at runtime.
     assert fields["music.enabled"]["effect"] == "save"
     # Read-only display entries exist for the pages that own their writes.
@@ -353,9 +355,10 @@ def test_changing_the_music_source_autofills_its_paths(tmp_path) -> None:
             "values": {"music.source": "navidrome"}})
         assert response.status_code == 200, response.text
         body = response.json()
-        assert body["restart_required"] is True
+        # Source + path saves rebuild the music service at runtime now.
+        assert body["restart_required"] is False
         assert {"music.source", "music.secrets_path", "music.cache_dir"} <= set(
-            body["restart_fields"])
+            body["applied"])
         assert any("自动更新" in warning for warning in body["warnings"])
         values = http.get("/api/v1/config/catalog").json()["values"]
         data_dir = pathlib.Path(cfg.system.data_dir)

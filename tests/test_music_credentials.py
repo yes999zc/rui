@@ -44,16 +44,18 @@ def test_music_panel_has_the_credentials_block(tmp_path) -> None:
     assert {"stats", "now", "actions", "list", "credentials"} <= {
         block["type"] for block in blocks}
     credentials = next(block for block in blocks if block["type"] == "credentials")
-    assert credentials["status_key"] == "credentials_present"
+    assert credentials["status_key"] == "credentials_ready"
     assert credentials["title"]["zh"] and credentials["title"]["en"]
     fields = {field["key"]: field for field in credentials["fields"]}
-    assert set(fields) == {"url", "user", "password"}
+    assert set(fields) == {"url", "user", "password", "token"}
     assert fields["url"]["kind"] == "text"
     assert fields["user"]["kind"] == "text"
     assert fields["password"]["kind"] == "password"
+    assert fields["token"]["kind"] == "password"
     for field in credentials["fields"]:
         for key in ("zh", "en"):
             assert field["label"][key] and field["hint"][key], field["key"]
+    assert credentials["sources_href"] == "/api/v1/music/sources"
     assert credentials["save"] == {"href": "/api/v1/music/credentials",
                                    "method": "PUT"}
     assert credentials["test"] == {"href": "/api/v1/music/test", "method": "POST"}

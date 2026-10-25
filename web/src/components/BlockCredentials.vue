@@ -1,48 +1,112 @@
 <script setup lang="ts">
 /**
- * Music credentials (panel block `credentials`).
+ * Music source + credentials (panel block `credentials`).
  *
- * The backend never returns url/user/password, only `credentials_present`. The form
- * is therefore write-only: fields start empty, only touched fields are sent, and an
- * emptied field is sent as "" (the backend's delete semantics). Password inputs are
- * cleared after a successful save and never stored outside this component's drafts.
+ * When the block declares `sources_href`, the backend registry drives the whole
+ * section: the source select lists real presets, only the selected preset's credential
+ * slots are rendered, and Save sends `{source, ...touched}` in one write. The backend
+ * validates the preset id (unknown = 422) and applies a source switch at runtime.
  *
- * Saves are explicit; nothing autosaves. The panel's 4 s poll refreshes the badge.
+ * Values are write-only: the API returns presence only, fields start empty, only
+ * touched fields are sent, and an emptied field is sent as "" (delete semantics).
+ * Password/token inputs are cleared after a successful save and never stored outside
+ * this component's drafts. Without `sources_href` the block keeps its original
+ * single-source behaviour (static `fields`).
  */
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import type { PanelBlock } from '../panels'
 import { lookup } from '../panels'
-import { api, ApiError, type MusicTestResult } from '../api'
+import {
+  api,
+  ApiError,
+  type MusicCredentialField,
+  type MusicCredentialsPatch,
+  type MusicSourcesDoc,
+  type MusicTestResult,
+} from '../api'
 import { pickLocalized, t } from '../i18n'
 import AppIcon from './AppIcon.vue'
 
 const props = defineProps<{ block: PanelBlock; data: unknown; refresh?: () => void }>()
 
-const fields = computed(() => props.block.fields ?? [])
+/** The registry shape and the panel's static fallback share this view. */
+interface FieldView {
+  key: string
+  kind: string
+  required: boolean
+  label: unknown
+  hint: unknown
+  placeholder: unknown
+}
 
-/** `status_key` is a panel-data path (e.g. `credentials_present`). */
-const credentialsPresent = computed(() => {
+const sources = ref<MusicSourcesDoc | null>(null)
+const sourcesError = ref('')
+const selectedSource = ref('')
+const sourceTouched = ref(false)
+
+const savedSource = computed(() => sources.value?.current ?? '')
+const activePreset = computed(() =>
+  sources.value?.sources.find((preset) => preset.id === selectedSource.value) ?? null,
+)
+
+const fallbackFields = computed<FieldView[]>(() =>
+  (props.block.fields ?? []).map((field) => ({
+    key: field.key,
+    kind: field.kind ?? 'text',
+    required: false,
+    label: field.label,
+    hint: field.hint,
+    placeholder: field.placeholder,
+  })),
+)
+
+const fields = computed<FieldView[]>(() => {
+  if (!sources.value) return fallbackFields.value
+  const preset = activePreset.value
+  if (!preset) return []
+  return preset.credential_fields.map((field: MusicCredentialField) => ({
+    key: field.key,
+    kind: field.kind,
+    required: field.required,
+    label: field.label,
+    hint: field.hint,
+    placeholder: field.placeholder,
+  }))
+})
+
+/** `status_key` is a panel-data path; the registry is fresher when it is loaded. */
+const dataPresence = computed(() => {
   const key = props.block.status_key
   if (!key) return false
   return Boolean(lookup(key.startsWith('$') ? key : `$.${key}`, props.data))
 })
-
-/** The save response is used until the panel poll brings the same value back. */
-const statusOverride = ref<boolean | null>(null)
-const hasCredentials = computed(() => statusOverride.value ?? credentialsPresent.value)
-
-watch(credentialsPresent, () => { statusOverride.value = null })
+const hasCredentials = computed(() => {
+  if (!sources.value) return dataPresence.value
+  return sources.value.credentials.ready && selectedSource.value === savedSource.value
+})
+const sourceKnown = computed(() => !sources.value || sources.value.source_known)
+const sourcePending = computed(() =>
+  Boolean(sources.value && selectedSource.value !== savedSource.value),
+)
 
 const draft = reactive<Record<string, string>>({})
 const touched = reactive<Record<string, boolean>>({})
 const busy = ref<'' | 'save' | 'test' | 'clear'>('')
 const error = ref('')
+const sourceError = ref('')
 const savedMessage = ref('')
 const testResult = ref<MusicTestResult | null>(null)
 const fieldErrors = reactive<Record<string, string>>({})
 
-const dirtyCount = computed(() => fields.value.filter((field) => touched[field.key]).length)
-const canSave = computed(() => dirtyCount.value > 0 && busy.value === '')
+const dirtyFields = computed(() => fields.value.filter((field) => touched[field.key]).length)
+const dirtyCount = computed(() => dirtyFields.value + (sourcePending.value ? 1 : 0))
+const canSave = computed(() =>
+  dirtyCount.value > 0 && busy.value === '' && Boolean(selectedSource.value)
+    && (sourceKnown.value || !sources.value),
+)
+const canClear = computed(() =>
+  hasCredentials.value && !sourcePending.value && busy.value === '',
+)
 
 function draftOf(key: string): string {
   return draft[key] ?? ''
@@ -57,6 +121,16 @@ function onInput(key: string, value: string): void {
   testResult.value = null
 }
 
+function onSourceChange(value: string): void {
+  selectedSource.value = value
+  sourceTouched.value = true
+  sourceError.value = ''
+  error.value = ''
+  savedMessage.value = ''
+  testResult.value = null
+  for (const field of fields.value) delete fieldErrors[field.key]
+}
+
 function clearForm(): void {
   for (const field of fields.value) {
     draft[field.key] = ''
@@ -65,25 +139,33 @@ function clearForm(): void {
   }
 }
 
-function placeHolder(field: { key: string }): string {
-  if (field.key === 'url') return t('music.credentialsUrlPlaceholder')
-  if (field.key === 'user') return t('music.credentialsUserPlaceholder')
-  if (field.key === 'password') return t('music.credentialsPasswordPlaceholder')
+function fieldType(field: FieldView): string {
+  return field.kind === 'password' ? 'password' : 'text'
+}
+
+function placeHolder(field: FieldView): string {
+  return pickLocalized(field.placeholder) || defaultPlaceholder(field.key)
+}
+
+function defaultPlaceholder(key: string): string {
+  if (key === 'url') return t('music.credentialsUrlPlaceholder')
+  if (key === 'user') return t('music.credentialsUserPlaceholder')
+  if (key === 'password') return t('music.credentialsPasswordPlaceholder')
   return ''
 }
 
-function fieldHint(field: { key: string; hint?: string }): string {
-  return pickLocalized(field.hint)
+function fieldHint(field: FieldView): string {
+  return pickLocalized(field.hint) || defaultHint(field.key)
 }
 
-function defaultHint(field: { key: string }): string {
-  if (field.key === 'password') return t('music.credentialsWriteOnly')
+function defaultHint(key: string): string {
+  if (key === 'password' || key === 'token') return t('music.credentialsWriteOnly')
   return ''
 }
 
 /** Only touched fields travel; empty means "delete this field" on the backend. */
-function payload(): Record<string, string> {
-  const values: Record<string, string> = {}
+function payload(): MusicCredentialsPatch {
+  const values: MusicCredentialsPatch = {}
   for (const field of fields.value) {
     if (!touched[field.key]) continue
     values[field.key] = draftOf(field.key).trim()
@@ -91,24 +173,66 @@ function payload(): Record<string, string> {
   return values
 }
 
+async function loadSources(): Promise<void> {
+  const href = props.block.sources_href
+  if (!href) return
+  try {
+    const doc = await api.musicSources(href)
+    sources.value = doc
+    sourcesError.value = ''
+    if (!sourceTouched.value) {
+      selectedSource.value = doc.current
+    } else if (!doc.sources.some((preset) => preset.id === selectedSource.value)) {
+      // The registry no longer offers the staged id (e.g. a release removed it).
+      selectedSource.value = doc.current
+      sourceTouched.value = false
+    }
+  } catch (exc) {
+    sourcesError.value = exc instanceof Error ? exc.message : String(exc)
+    if (!selectedSource.value) {
+      const fromData = lookup('$.source', props.data)
+      selectedSource.value = typeof fromData === 'string' ? fromData : ''
+    }
+  }
+}
+
+watch(() => lookup('$.source', props.data), (next) => {
+  if (typeof next !== 'string' || next === selectedSource.value) return
+  if (!sourceTouched.value) {
+    selectedSource.value = next
+    void loadSources()
+  }
+})
+
+onMounted(loadSources)
+
 async function save(): Promise<void> {
   if (!canSave.value) return
   busy.value = 'save'
   error.value = ''
+  sourceError.value = ''
   savedMessage.value = ''
   testResult.value = null
   for (const field of fields.value) delete fieldErrors[field.key]
   try {
-    const result = await api.saveMusicCredentials(payload(), props.block.save?.href)
-    statusOverride.value = result.has_credentials
+    const values = payload()
+    const body: MusicCredentialsPatch = { ...values }
+    if (props.block.sources_href && selectedSource.value) body.source = selectedSource.value
+    const result = await api.saveMusicCredentials(body, props.block.save?.href)
     clearForm()
-    savedMessage.value = t('music.credentialsSaved')
+    sourceTouched.value = false
+    savedMessage.value = result.has_credentials
+      ? t('music.credentialsSaved')
+      : t('music.credentialsSavedIncomplete')
+    await loadSources()
     props.refresh?.()
   } catch (exc) {
     if (exc instanceof ApiError) {
       for (const issue of exc.issues) {
         const key = String((issue.loc ?? [])[0] ?? '')
-        if (key && fields.value.some((field) => field.key === key)) {
+        if (key === 'source') {
+          sourceError.value = issue.msg
+        } else if (key && fields.value.some((field) => field.key === key)) {
           fieldErrors[key] = key === 'url' && /must start with http/i.test(issue.msg)
             ? t('music.credentialsUrlInvalid')
             : issue.msg
@@ -116,9 +240,12 @@ async function save(): Promise<void> {
       }
     }
     const count = Object.values(fieldErrors).filter(Boolean).length
-    error.value = count
-      ? t('music.credentialsValidationFailed', { n: count })
-      : t('music.credentialsError', { message: exc instanceof Error ? exc.message : String(exc) })
+    error.value = sourceError.value
+      || (count
+        ? t('music.credentialsValidationFailed', { n: count })
+        : t('music.credentialsError', {
+            message: exc instanceof Error ? exc.message : String(exc),
+          }))
   } finally {
     busy.value = ''
   }
@@ -126,8 +253,14 @@ async function save(): Promise<void> {
 
 async function test(): Promise<void> {
   if (busy.value) return
+  if (!sourceKnown.value) {
+    testResult.value = {
+      ok: false, latency_ms: null, error: t('music.sourceUnknownTest'),
+    }
+    return
+  }
   const values = payload()
-  if (!hasCredentials.value && !Object.keys(values).length) {
+  if (!hasCredentials.value && !Object.keys(values).length && !sourcePending.value) {
     testResult.value = { ok: false, latency_ms: null, error: t('music.credentialsTestMissing') }
     return
   }
@@ -136,7 +269,9 @@ async function test(): Promise<void> {
   savedMessage.value = ''
   testResult.value = null
   try {
-    testResult.value = await api.testMusic(values, props.block.test?.href)
+    const body: MusicCredentialsPatch = { ...values }
+    if (props.block.sources_href && selectedSource.value) body.source = selectedSource.value
+    testResult.value = await api.testMusic(body, props.block.test?.href)
   } catch (exc) {
     testResult.value = {
       ok: false,
@@ -149,20 +284,21 @@ async function test(): Promise<void> {
 }
 
 async function clearCredentials(): Promise<void> {
-  if (busy.value || !hasCredentials.value) return
+  if (!canClear.value) return
   if (!window.confirm(t('music.credentialsClearConfirm'))) return
   busy.value = 'clear'
   error.value = ''
   savedMessage.value = ''
   testResult.value = null
   try {
-    const result = await api.saveMusicCredentials(
-      { url: '', user: '', password: '' },
-      props.block.save?.href,
-    )
-    statusOverride.value = result.has_credentials
+    const values: MusicCredentialsPatch = {}
+    for (const field of fields.value) values[field.key] = ''
+    const result = await api.saveMusicCredentials(values, props.block.save?.href)
     clearForm()
-    savedMessage.value = t('music.credentialsCleared')
+    savedMessage.value = result.has_credentials
+      ? t('music.credentialsSaved')
+      : t('music.credentialsCleared')
+    await loadSources()
     props.refresh?.()
   } catch (exc) {
     error.value = t('music.credentialsError', {
@@ -171,6 +307,26 @@ async function clearCredentials(): Promise<void> {
   } finally {
     busy.value = ''
   }
+}
+
+function badgeClass(): string {
+  if (!sourceKnown.value) return 'badge-fail'
+  if (sourcePending.value) return 'badge-warn'
+  return hasCredentials.value ? 'badge-ok' : 'badge-warn'
+}
+
+function badgeText(): string {
+  if (!sourceKnown.value) return t('music.sourceUnknown')
+  if (sourcePending.value) return t('music.sourcePending')
+  return hasCredentials.value
+    ? t('music.credentialsConfigured')
+    : t('music.credentialsMissing')
+}
+
+function presetLabel(preset: { name: unknown; protocol_family: string; default_port: number | null }): string {
+  const name = pickLocalized(preset.name)
+  const port = preset.default_port ? ` :${preset.default_port}` : ''
+  return `${name} · ${preset.protocol_family.toUpperCase()}${port}`
 }
 
 function testMessage(result: MusicTestResult): string {
@@ -183,12 +339,50 @@ function testMessage(result: MusicTestResult): string {
   <section class="block credentials-block">
     <div class="block-head">
       <h2>{{ pickLocalized(block.title) || t('music.credentialsTitle') }}</h2>
-      <span class="badge" :class="hasCredentials ? 'badge-ok' : 'badge-warn'">
-        {{ hasCredentials ? t('music.credentialsConfigured') : t('music.credentialsMissing') }}
-      </span>
+      <span class="badge" :class="badgeClass()">{{ badgeText() }}</span>
     </div>
 
     <p class="field-hint credentials-note">{{ pickLocalized(block.note) || t('music.credentialsNote') }}</p>
+
+    <p v-if="sourcesError" class="note fail" role="alert">
+      {{ t('music.sourceRegistryError', { message: sourcesError }) }}
+    </p>
+
+    <div v-if="block.sources_href" class="source-picker">
+      <div class="field-meta">
+        <label class="field-label" for="cred-source">{{ t('music.sourceLabel') }}</label>
+        <p class="field-hint">{{ t('music.sourceHint') }}</p>
+      </div>
+      <div class="field-control">
+        <select
+          id="cred-source"
+          :value="selectedSource"
+          :disabled="busy !== '' || !sources"
+          :class="{ invalid: sourceError }"
+          @change="onSourceChange(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-if="sources && !sources.source_known" :value="selectedSource">
+            {{ t('music.sourceUnknownOption', { id: selectedSource }) }}
+          </option>
+          <option v-for="preset in sources?.sources ?? []" :key="preset.id" :value="preset.id">
+            {{ presetLabel(preset) }}
+          </option>
+        </select>
+        <p v-if="sourceError" class="field-error">{{ sourceError }}</p>
+        <p v-else-if="sources && !sources.source_known" class="field-error">
+          {{ t('music.sourceUnknownError', { id: sources.current }) }}
+        </p>
+        <p v-if="activePreset" class="field-hint source-description">
+          {{ pickLocalized(activePreset.description) }}
+          <a :href="activePreset.docs_url" target="_blank" rel="noreferrer">
+            {{ t('music.sourceDocs') }}
+          </a>
+        </p>
+        <p v-if="sources?.restart_required" class="field-hint source-restart">
+          {{ t('music.sourceRestart', { running: sources.running_source, current: sources.current }) }}
+        </p>
+      </div>
+    </div>
 
     <p v-if="!fields.length" class="empty">{{ pickLocalized(block.empty) || t('music.credentialsEmpty') }}</p>
 
@@ -204,14 +398,13 @@ function testMessage(result: MusicTestResult): string {
             {{ pickLocalized(field.label) || field.key }}
           </label>
           <p v-if="fieldHint(field)" class="field-hint">{{ fieldHint(field) }}</p>
-          <p v-else-if="defaultHint(field)" class="field-hint">{{ defaultHint(field) }}</p>
         </div>
         <div class="field-control">
           <input
             :id="`cred-${field.key}`"
             :value="draftOf(field.key)"
-            :type="field.kind === 'password' ? 'password' : 'text'"
-            :placeholder="field.placeholder || placeHolder(field)"
+            :type="fieldType(field)"
+            :placeholder="placeHolder(field)"
             :autocomplete="field.kind === 'password' ? 'new-password' : 'off'"
             spellcheck="false"
             :disabled="busy !== ''"
@@ -231,7 +424,7 @@ function testMessage(result: MusicTestResult): string {
         <AppIcon name="activity" :size="14" />
         {{ busy === 'test' ? t('music.credentialsTesting') : t('music.credentialsTest') }}
       </button>
-      <button v-if="hasCredentials" type="button" class="btn btn-danger" :disabled="busy !== ''" @click="clearCredentials">
+      <button v-if="hasCredentials" type="button" class="btn btn-danger" :disabled="!canClear" @click="clearCredentials">
         {{ busy === 'clear' ? t('common.saving') : t('music.credentialsClear') }}
       </button>
       <span v-if="dirtyCount" class="badge badge-warn">{{ t('music.credentialsDirty', { n: dirtyCount }) }}</span>
@@ -256,6 +449,42 @@ function testMessage(result: MusicTestResult): string {
 .credentials-note {
   max-width: 76ch;
   margin-bottom: var(--s2);
+}
+
+.source-picker {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: var(--s3);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s2);
+}
+
+.source-picker .field-control {
+  max-width: 520px;
+}
+
+.source-picker select {
+  width: 100%;
+}
+
+.source-picker select.invalid {
+  border-color: var(--fail);
+}
+
+.source-description {
+  margin-top: 6px;
+}
+
+.source-description a {
+  margin-left: 6px;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.source-restart {
+  margin-top: 6px;
+  color: var(--warn);
 }
 
 .credentials-fields .field-row {
@@ -311,13 +540,15 @@ function testMessage(result: MusicTestResult): string {
 }
 
 @media (max-width: 720px) {
-  .credentials-fields .field-row {
+  .credentials-fields .field-row,
+  .source-picker {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
     padding: 12px 0;
   }
 
-  .credentials-fields .field-control {
+  .credentials-fields .field-control,
+  .source-picker .field-control {
     max-width: none;
   }
 

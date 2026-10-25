@@ -510,22 +510,34 @@ class ToolsConfig(BaseModel):
 
 
 class MusicConfig(BaseModel):
-    """The music layer. One enabled source today; the interface is the point.
+    """The music layer. One enabled source at a time; the interface is the point.
 
-    The old deployment ran its NAS music on Navidrome (a Subsonic-compatible server,
-    `tools/music.py` there) and that is the first source here too. Everything
-    source-specific lives behind `MusicSource`; a second source (the old build's
-    online fallback) plugs in without touching the tools or the queue.
+    The source id is a preset (`music/sources/presets.py`): Navidrome, Airsonic,
+    Gonic, Ampache and a custom Subsonic-compatible URL all share one adapter. The
+    preset decides the display name, defaults and which credential slots exist; the
+    values themselves never enter this file.
+
+    `url`/`user`/`password`/`token` below are **legacy read-only migration fields**.
+    Older configs kept the credentials inline; on startup `migrate_legacy_music_credentials`
+    moves them into the 0600 credentials JSON and clears them. They are `exclude=True`,
+    so every dump (including `save_config`) leaves them out and a save erases them.
     """
 
     # Off by default: without the NAS reachable the tools would only ever answer
     # 「曲库里没找到」, and a dead tool list is noise the model has to talk around.
     enabled: bool = False
+    # A preset id from the registry. Unknown ids are rejected by every write path;
+    # a hand-edited YAML still loads so the panel can explain why music is off.
     source: str = "navidrome"
-    # Credential keys (url/user/password) inside this json; values never enter the
+    # Credential keys are the preset's slots inside this json; values never enter the
     # config or the log. Empty = none provisioned: a production default must not
     # point at one person's home directory.
     secrets_path: str = ""
+    # Legacy inline credentials (migration only; excluded from every dump).
+    url: str = Field(default="", exclude=True)
+    user: str = Field(default="", exclude=True)
+    password: str = Field(default="", exclude=True)
+    token: str = Field(default="", exclude=True)
     # Resolved PCM (16 kHz mono s16) is cached here. The old build transcoded and
     # deleted, so replaying one song meant downloading its flac again.
     cache_dir: str = "/tmp/rui-music"
@@ -542,12 +554,21 @@ class MusicConfig(BaseModel):
     # back. 2.5 s still leaves a beat for 「换一首」 without the wake word.
     resume_hold_ms: int = Field(default=2500, ge=0, le=10000)
 
+    def legacy_credentials(self) -> dict[str, str]:
+        """The inline values an older config may still carry (never re-saved)."""
+        return {key: str(getattr(self, key) or "").strip()
+                for key in ("url", "user", "password", "token")
+                if str(getattr(self, key) or "").strip()}
+
     @model_validator(mode="after")
     def _music_needs_credentials(self) -> MusicConfig:
-        if self.enabled and not self.secrets_path:
+        legacy = self.legacy_credentials()
+        has_legacy = bool(legacy.get("url") and legacy.get("user")
+                          and (legacy.get("password") or legacy.get("token")))
+        if self.enabled and not self.secrets_path and not has_legacy:
             raise ValueError(
-                "music.enabled needs music.secrets_path: a json with url/user/password "
-                "(values never go in the config file)"
+                "music.enabled needs music.secrets_path: a json with the source's "
+                "credential fields (values never go in the config file)"
             )
         return self
 

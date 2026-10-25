@@ -11,9 +11,7 @@ import json
 import logging
 import os
 import re
-import shutil
 import socket
-import tempfile
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -42,12 +40,14 @@ from ...config.catalog import (
     coerce,
     field_specs,
     get_path,
-    has_music_credentials,
     keyword_file,
     keyword_settings,
+    migrate_legacy_music_credentials,
     music_credentials,
     music_credentials_path,
+    music_credentials_state,
     set_path,
+    write_music_credentials,
 )
 from ...config.catalog import (
     document as config_catalog,
@@ -70,8 +70,16 @@ from ...device.registry import build_adapters
 from ...doctor import run_doctor
 from ...env import get as env_get
 from ...log_setup import LOG_FILE_NAME, tail_lines
-from ...music import MusicService, NavidromeSource, PlayHistory
+from ...music import MusicService, PlayHistory, build_source, get_preset
 from ...music.names import AliasStore, NameResolver
+from ...music.sources.presets import (
+    missing_credentials,
+    preset_document,
+    preset_ids,
+)
+from ...music.sources.presets import (
+    presets as music_presets,
+)
 from ...music.tools import build_music_tools
 from ...plugins import ParamSpec, ParamType, PlugCatalog, ResolvedPlug
 from ...providers import keycheck, presets
@@ -296,14 +304,42 @@ def _outbound_policy(cfg: Config) -> OutboundPolicy:
     return OutboundPolicy.from_config(cfg.security)
 
 
-# Sources that actually have a runtime builder. `music.source` may hold another
-# name for a future adapter, but until that adapter exists the service cannot start;
-# the panel below must not claim otherwise (IA audit §2.1/§5 Phase 1).
-SUPPORTED_MUSIC_SOURCES = frozenset({"navidrome"})
+# Sources that actually have a runtime builder. The list lives in the preset registry
+# (`music/sources/presets.py`); `music.source` may still hold another name from a
+# hand-edited YAML, but until an adapter exists the service cannot start and the panel
+# below must not claim otherwise (IA audit §2.1/§5 Phase 1 + Phase 3).
+# A change here is a change to the preset registry only.
+MUSIC_REBUILD_FIELDS = frozenset({
+    "music.enabled", "music.source", "music.secrets_path", "music.cache_dir",
+})
 
 
 def _music_source_supported(source: str) -> bool:
-    return source in SUPPORTED_MUSIC_SOURCES
+    preset = get_preset(source)
+    return bool(preset is not None and preset.supported)
+
+
+def _music_runtime_key(cfg: Config) -> tuple[str, ...]:
+    """What a running service was assembled from; a change means rebuild it."""
+    return (
+        cfg.music.source,
+        str(music_credentials_path(cfg)),
+        str(Path(cfg.music.cache_dir).expanduser()),
+        str(cfg.music.cache_tracks),
+    )
+
+
+def _new_music_source(cfg: Config, source_id: str | None = None):
+    """The runtime source for one preset in file mode (credentials read per call)."""
+    preset = get_preset(source_id or cfg.music.source)
+    if preset is None or not preset.supported:
+        return None
+    return build_source(
+        preset.id,
+        music_credentials_path(cfg),
+        Path(cfg.music.cache_dir), cfg.music.cache_tracks,
+        policy=_outbound_policy(cfg),
+    )
 
 
 def _new_music_service(cfg: Config, sender: object) -> MusicService | None:
@@ -313,15 +349,11 @@ def _new_music_service(cfg: Config, sender: object) -> MusicService | None:
     service owns the source, history, aliases and name resolver, and registering the
     nine tools is what makes the model able to play anything.
     """
-    if not _music_source_supported(cfg.music.source):
+    source = _new_music_source(cfg)
+    if source is None:
         log.warning("music: source %r has no runtime builder; leaving music off",
                     cfg.music.source)
         return None
-    source = NavidromeSource(
-        Path(cfg.music.secrets_path).expanduser(),
-        Path(cfg.music.cache_dir), cfg.music.cache_tracks,
-        policy=_outbound_policy(cfg),
-    )
     history = PlayHistory(
         Path(cfg.system.data_dir) / "music_history.json", keep=cfg.music.history_max)
     aliases = AliasStore(Path(cfg.system.data_dir) / "music_aliases.json")
@@ -355,6 +387,22 @@ def _flat_errors(exc: ValidationError, supplied: list[str] | None = None) -> lis
     return out
 
 
+def _autofill_music_paths(merged: dict, source: str) -> bool:
+    """Point credentials/cache at the data dir for a supported source.
+
+    Every preset in the Subsonic family uses the same pair, which is what keeps an
+    existing `navidrome` deployment working unchanged. Returns False for an unknown
+    source so the caller can warn instead of inventing a path.
+    """
+    if not _music_source_supported(source):
+        return False
+    data_dir = Path(str(merged.get("system", {}).get("data_dir") or "~")).expanduser()
+    music = merged.setdefault("music", {})
+    music["secrets_path"] = str(data_dir / "lan_media.json")
+    music["cache_dir"] = str(data_dir / "music_cache")
+    return True
+
+
 def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
     """The PanelSpec table (docs/console.md, docs/config-catalog-contract.md §2).
 
@@ -368,11 +416,14 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
     # refused to start (audit §2.1). The page still opens: it is where you fix it.
     music_source_ok = _music_source_supported(music_source)
     music_panel_enabled = music_enabled and music_source_ok
-    if not music_enabled:
-        music_reason = f"music.enabled 未开启（配置的源：{music_source}）"
-    elif not music_source_ok:
+    if not music_source_ok:
+        # The invalid source is the actionable problem even when the feature is off:
+        # the page must say so instead of only "enable music".
+        available = ", ".join(item.id for item in music_presets() if item.supported)
         music_reason = (
-            f"音乐源 {music_source!r} 不受支持：服务不会启动（当前仅支持 navidrome）")
+            f"音乐源 {music_source!r} 不受支持：服务不会启动（可选：{available}）")
+    elif not music_enabled:
+        music_reason = f"music.enabled 未开启（配置的源：{music_source}）"
     else:
         music_reason = ""
     return [
@@ -674,28 +725,40 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                  "title": "最近爱听", "items": "$.top",
                  "item_title": "$.artist", "item_sub": "$.plays 次",
                  "empty": "还没有播放记录", "max": 5},
-                # Credentials are write-only: the block shows `credentials_present` and
-                # posts url/user/password to PUT /api/v1/music/credentials; Test calls
-                # POST /api/v1/music/test. Never renders a stored value.
+                # Source + credentials are one write-only section: pick a preset, the
+                # block shows only that preset's slots, and Test calls
+                # POST /api/v1/music/test. `sources_href` is the registry the block
+                # renders; the static fields below are the safe fallback if that fetch
+                # fails. Never renders a stored value.
                 {"type": "credentials",
                  "section_title": {"zh": "音源与凭据", "en": "Source & credentials"},
-                 "title": {"zh": "音乐凭据", "en": "Music credentials"},
-                 "status_key": "credentials_present",
+                 "title": {"zh": "音乐音源与凭据", "en": "Music source & credentials"},
+                 "status_key": "credentials_ready",
+                 "sources_href": "/api/v1/music/sources",
+                 "note": {"zh": "先选音源预设，再填它要求的字段。密码/token 只写不读，"
+                                "保存后 0600 存到 data_dir/lan_media.json，接口永不回显；"
+                                "空值删除该字段。",
+                          "en": "Pick a source preset, then fill the fields it asks for. "
+                                "Password/token are write-only: stored 0600 at "
+                                "data_dir/lan_media.json, never returned; empty deletes."},
                  "fields": [
                      {"key": "url", "kind": "text",
                       "label": {"zh": "服务器地址", "en": "Server URL"},
-                      "hint": {"zh": "Navidrome/Subsonic 地址，http:// 或 https:// 开头",
-                               "en": "Navidrome/Subsonic URL, starting with http:// or https://"}},
+                      "hint": {"zh": "含协议和端口，指向服务根路径（Subsonic 兼容）",
+                               "en": "Scheme and port, pointing at the server root "
+                                     "(Subsonic-compatible)"}},
                      {"key": "user", "kind": "text",
                       "label": {"zh": "用户名", "en": "Username"},
                       "hint": {"zh": "曲库登录用户名",
                                "en": "Library login user"}},
                      {"key": "password", "kind": "password",
                       "label": {"zh": "密码", "en": "Password"},
-                      "hint": {"zh": "只写不读：保存后 0600 存到 data_dir/lan_media.json，"
-                                     "接口永不回显；留空表示删除该字段",
-                               "en": "Write-only: stored 0600 at data_dir/lan_media.json, "
-                                     "never returned; empty deletes the field"}},
+                      "hint": {"zh": "只写不读；与 API token 二选一",
+                               "en": "Write-only; use a password or an API token"}},
+                     {"key": "token", "kind": "password",
+                      "label": {"zh": "API token（可选）", "en": "API token (optional)"},
+                      "hint": {"zh": "用 token 代替密码时填写；留空就用密码",
+                               "en": "Fill when a token replaces the password; blank = password"}},
                  ],
                  "save": {"href": "/api/v1/music/credentials", "method": "PUT"},
                  "test": {"href": "/api/v1/music/test", "method": "POST"}},
@@ -1181,14 +1244,6 @@ def _redact_error(exc: BaseException) -> str:
     return _SECRET_QUERY_RE.sub(r"\1***", text)
 
 
-def _write_credentials_file(path: Path, data: dict[str, str]) -> None:
-    """Atomic 0600 write of the music credentials JSON (never into config.yaml)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
-
 
 def _write_keywords_preserving(cfg_now: Config, *, threshold: float | None = None,
                                boost: float | None = None) -> bool:
@@ -1463,6 +1518,19 @@ def create_app(
     recovery: RecoveryInfo | None = None,
 ) -> FastAPI:
     secrets.configure(cfg.system.data_dir)
+    # A config from the inline-credentials era still carries music.url/user/password.
+    # Move them into the write-only 0600 JSON once; the schema excludes them from every
+    # dump, so the next save writes a config without plaintext.
+    try:
+        if migrate_legacy_music_credentials(cfg):
+            log.info("music: legacy credentials moved to %s",
+                     music_credentials_path(cfg))
+            # Rewrite the config once without the inline plaintext (the fields are
+            # excluded from every dump). The usual atomic writer keeps a backup.
+            if config_path is not None:
+                save_config(Path(config_path), cfg)
+    except OSError as exc:
+        log.warning("music: could not migrate legacy credentials: %s", exc)
     # The injected clock line ("现在几点") follows `system.timezone`: a container inherits
     # no TZ from the NAS, so without this the assistant answers in UTC.
     prompts.set_timezone(cfg.system.timezone)
@@ -2116,8 +2184,10 @@ def create_app(
     if music_service is not None:
         music_service.sender = _music_sender(app)
         app.state.music = music_service
+        app.state.music_runtime = _music_runtime_key(cfg)
     else:
         app.state.music = None
+        app.state.music_runtime = None
     # The console registry (docs/console.md): panels are declared where their feature
     # is assembled, the frontend renders them and never asks "does this exist".
     app.state.panels = _build_panels(cfg.music.enabled, cfg.music.source)
@@ -2317,60 +2387,89 @@ def create_app(
         if config_path is None or not Path(config_path).exists():
             raise HTTPException(status_code=409, detail="there is no config file on disk to write")
         try:
-            return load_config(config_path)
+            loaded = load_config(config_path)
         except ConfigError as exc:
             raise HTTPException(
                 status_code=409, detail=f"config on disk is not readable: {exc}"
             ) from exc
+        # A re-read must not resurrect inline music credentials and then write them
+        # back: migrate once here as well, so the returned model is plaintext-free.
+        try:
+            migrate_legacy_music_credentials(loaded)
+        except OSError as exc:
+            log.warning("music: could not migrate legacy credentials: %s", exc)
+        return loaded
 
     def _refresh_panels() -> None:
         """The music panel follows `music.enabled`; everything else is static."""
         app.state.panels = _build_panels(cfg.music.enabled, cfg.music.source)
 
-    async def _apply_music(updated: Config) -> bool:
-        """Assemble or tear down the music layer at runtime (a `music.enabled` save).
+    async def _stop_music_service() -> None:
+        """Stop and unregister the running music layer, if any."""
+        service = getattr(app.state, "music", None)
+        if service is None:
+            return
+        with contextlib.suppress(Exception):
+            await service.stop()
+        names = [name for name in registry.names() if name.startswith("local.music_")]
+        registry.unregister(names)
+        local_tools[:] = [(spec, handler) for spec, handler in local_tools
+                          if not spec.name.startswith("local.music_")]
+        app.state.music = None
+        app.state.music_runtime = None
+        runner = getattr(app.state, "runner", None)
+        if runner is not None:
+            runner.set_tools(list(local_tools))
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if client is not None:
+            # The old service's callback must not advance a queue that no longer exists.
+            client.on_playback_finished = None
 
-        Returns False when the source has no runtime builder, so the endpoint can report
-        "restart required" instead of claiming a live change that did not happen.
+    def _start_music_service(updated: Config) -> bool:
+        """Build, bind and register the service for `updated`; False if unsupported."""
+        service = _new_music_service(updated, _music_sender(app))
+        if service is None:
+            return False
+        app.state.music = service
+        app.state.music_runtime = _music_runtime_key(updated)
+        # Runtime enable must bind the natural-end callback that the startup path
+        # binds at :1359. Without it the radio queue never advances after the first
+        # song (audit round 2 P1-5).
+        supervisor = getattr(app.state, "audio", None)
+        client = supervisor.client if supervisor is not None else None
+        if client is not None:
+            client.on_playback_finished = service.on_finished
+        for spec, handler in build_music_tools(updated, service):
+            registry.register(spec, handler)
+            local_tools.append((spec, handler))
+        runner = getattr(app.state, "runner", None)
+        if runner is not None:
+            runner.set_tools(list(local_tools))
+        log.info("music: enabled at runtime (source=%s)", updated.music.source)
+        return True
+
+    async def _apply_music(updated: Config) -> bool:
+        """Assemble, rebuild or tear down the music layer at runtime.
+
+        Called for `music.enabled` and for the source/path fields that change what the
+        service is assembled from. Returns False when the source has no runtime builder,
+        so the endpoint can report "restart required" instead of claiming a live change
+        that did not happen.
         """
         service = getattr(app.state, "music", None)
-        if updated.music.enabled and service is None:
-            service = _new_music_service(updated, _music_sender(app))
-            if service is None:
-                return False
-            app.state.music = service
-            # Runtime enable must bind the natural-end callback that the startup path
-            # binds at :1359. Without it the radio queue never advances after the first
-            # song (audit round 2 P1-5).
-            supervisor = getattr(app.state, "audio", None)
-            client = supervisor.client if supervisor is not None else None
-            if client is not None:
-                client.on_playback_finished = service.on_finished
-            for spec, handler in build_music_tools(updated, service):
-                registry.register(spec, handler)
-                local_tools.append((spec, handler))
-            runner = getattr(app.state, "runner", None)
-            if runner is not None:
-                runner.set_tools(list(local_tools))
-            log.info("music: enabled at runtime (source=%s)", updated.music.source)
-        elif not updated.music.enabled and service is not None:
-            with contextlib.suppress(Exception):
-                await service.stop()
-            names = [name for name in registry.names() if name.startswith("local.music_")]
-            registry.unregister(names)
-            local_tools[:] = [(spec, handler) for spec, handler in local_tools
-                              if not spec.name.startswith("local.music_")]
-            app.state.music = None
-            runner = getattr(app.state, "runner", None)
-            if runner is not None:
-                runner.set_tools(list(local_tools))
-            supervisor = getattr(app.state, "audio", None)
-            client = supervisor.client if supervisor is not None else None
-            if client is not None:
-                # The old service's callback must not advance a queue that no longer exists.
-                client.on_playback_finished = None
-            log.info("music: disabled at runtime")
-        return True
+        if not updated.music.enabled:
+            if service is not None:
+                await _stop_music_service()
+                log.info("music: disabled at runtime")
+            return True
+        runtime = getattr(app.state, "music_runtime", None)
+        desired = _music_runtime_key(updated)
+        if service is not None and runtime == desired:
+            return True
+        if service is not None:
+            await _stop_music_service()
+        return _start_music_service(updated)
 
     async def _apply_live(updated: Config, changed: list[str]) -> tuple[list[str], list[str]]:
         """Apply what can be applied without a restart; report the rest.
@@ -2410,9 +2509,14 @@ def create_app(
             # stdio child must not keep executing until the next restart. Turning it on
             # re-applies immediately too, so a saved local server can start.
             await _apply_generic_mcp(updated)
-        if "music.enabled" in applied and not await _apply_music(updated):
-            applied.remove("music.enabled")
-            restart_fields.append("music.enabled")
+        if MUSIC_REBUILD_FIELDS & set(changed):
+            # Source/path changes rebuild the service with the same single assembly
+            # path as an enable toggle. If the source has no adapter, every claimed
+            # music change moves to restart_fields (and the panel says why).
+            if not await _apply_music(updated):
+                for path in [p for p in applied if p.startswith("music.")]:
+                    applied.remove(path)
+                    restart_fields.append(path)
         return sorted(applied), sorted(restart_fields)
 
     @app.put("/api/v1/config/values", dependencies=[Depends(auth)])
@@ -2483,20 +2587,16 @@ def create_app(
         music = merged.setdefault("music", {})
         if "music.source" in checked:
             source = str(music.get("source") or "")
-            if source == "navidrome":
-                data_dir = Path(str(merged["system"]["data_dir"])).expanduser()
-                music["secrets_path"] = str(data_dir / "lan_media.json")
-                music["cache_dir"] = str(data_dir / "music_cache")
-                warnings.append("music.source=navidrome：secrets_path / cache_dir 已按音源自动更新")
+            if _autofill_music_paths(merged, source):
+                warnings.append(
+                    f"music.source={source}：secrets_path / cache_dir 已按音源自动更新")
             else:
                 warnings.append(
                     f"未知音源 {source!r}：secrets_path / cache_dir 保持手动值，请自行确认")
-        elif music.get("enabled") and not music.get("secrets_path") \
-                and str(music.get("source") or "") == "navidrome":
-            data_dir = Path(str(merged["system"]["data_dir"])).expanduser()
-            music["secrets_path"] = str(data_dir / "lan_media.json")
-            music["cache_dir"] = str(data_dir / "music_cache")
-            warnings.append("启用音乐：已自动补上 navidrome 的 secrets_path / cache_dir")
+        elif music.get("enabled") and not music.get("secrets_path"):
+            source = str(music.get("source") or "")
+            if _autofill_music_paths(merged, source):
+                warnings.append(f"启用音乐：已自动补上 {source} 的 secrets_path / cache_dir")
         if any(path.startswith("devices.") for path in checked):
             # A device edit through the catalog must leave a keywords file behind even
             # when the config came from schema defaults (no path). Same rule as the wizard.
@@ -2938,21 +3038,58 @@ def create_app(
         await client.set_led(effect)
         return {"effect": effect}
 
+    @app.get("/api/v1/music/sources", dependencies=[Depends(auth)])
+    async def music_sources() -> dict:
+        """The source registry the console renders plus presence-only credential state.
+
+        The list is the same `PRESETS` table that validates `music.source` on save, so
+        the UI cannot offer a source the runtime cannot build. No credential value is
+        returned: only whether each slot exists and whether the active source is usable.
+        """
+        preset = get_preset(cfg.music.source)
+        service = getattr(app.state, "music", None)
+        running = getattr(getattr(service, "source", None), "source_id", "")
+        state = music_credentials_state(cfg)
+        return {
+            "current": cfg.music.source,
+            "source_known": preset is not None,
+            "current_preset": preset_document(preset) if preset is not None else None,
+            "sources": [preset_document(item) for item in music_presets()],
+            "credentials": state,
+            "enabled": service is not None,
+            "running_source": running or "",
+            "restart_required": bool(service is not None and running
+                                     and running != cfg.music.source),
+        }
+
     @app.get("/api/v1/music", dependencies=[Depends(auth)])
     async def music_status() -> dict:
         """What is playing and what was played: the console page and the self-tests.
 
         `credentials_present` is a boolean only - whether the credentials json exists at
-        `music.secrets_path` (or data_dir/lan_media.json when unset). The url/user/password
-        are write-only through PUT /api/v1/music/credentials and never appear here.
+        `music.secrets_path` (or data_dir/lan_media.json when unset). `credentials_ready`
+        is whether the active preset's required slots are all present. Values are
+        write-only through PUT /api/v1/music/credentials and never appear here.
         """
-        present = music_credentials_path(cfg).is_file()
+        preset = get_preset(cfg.music.source)
+        state = music_credentials_state(cfg)
         service = getattr(app.state, "music", None)
+        running = getattr(getattr(service, "source", None), "source_id", "")
+        base = {
+            "enabled": service is not None,
+            "credentials_present": state["present"],
+            "credentials_ready": state["ready"],
+            "credentials_missing": state["missing"],
+            "source": cfg.music.source,
+            "source_known": preset is not None,
+            "source_name": ({"zh": preset.name_zh, "en": preset.name_en}
+                            if preset is not None else None),
+            "running_source": running or "",
+        }
         if service is None:
-            return {"enabled": False, "credentials_present": present}
+            return base
         return {
-            "enabled": True,
-            "credentials_present": present,
+            **base,
             **service.status(),
             "top": [{"artist": a, "plays": n} for a, n in service.history.top(5)],
             "last": service.history.last(),
@@ -3033,21 +3170,59 @@ def create_app(
     # ------------------------------------------------------------ music credentials
     @app.put("/api/v1/music/credentials", dependencies=[Depends(auth)])
     async def music_credentials_update(payload: Annotated[dict, Body()]) -> dict:
-        """Write the source credentials (url/user/password) to data_dir/lan_media.json.
+        """Write the active source's credential slots to data_dir/lan_media.json.
 
-        Write-only: the response lists which fields exist and never their content. An
-        empty string deletes that field; when nothing remains the file is removed. The
-        file is 0600 and atomic, and it is never part of config.yaml or the log.
+        The body may include `source` (a preset id) together with any of that preset's
+        credential slots. A source switch is validated against the registry and applied
+        at runtime; an unknown id is a 422, never a saved typo. Values are write-only:
+        the response lists which slots exist and never their content. An empty string
+        deletes that slot; when nothing remains the file is removed. The file is 0600
+        and atomic, and it is never part of config.yaml or the log.
         """
-        if not any(key in payload for key in ("url", "user", "password")):
-            raise HTTPException(
-                status_code=422,
-                detail=[{"loc": ["values"], "msg": "provide url, user and/or password"}],
-            )
+        source_given = "source" in payload
+        source_id = cfg.music.source
+        if source_given:
+            raw_source = payload.get("source")
+            if not isinstance(raw_source, str):
+                raise HTTPException(status_code=422, detail=[
+                    {"loc": ["source"], "msg": "must be a string preset id"}])
+            source_id = raw_source.strip()
+            if get_preset(source_id) is None:
+                raise HTTPException(status_code=422, detail=[{
+                    "loc": ["source"],
+                    "msg": f"unknown music source {source_id!r}; choose one of "
+                           f"{', '.join(preset_ids())}",
+                }])
+        preset = get_preset(source_id)
+        if preset is None:
+            raise HTTPException(status_code=422, detail=[{
+                "loc": ["source"],
+                "msg": f"configured music source {source_id!r} is unknown; choose one of "
+                       f"{', '.join(preset_ids())}",
+            }])
+        if not preset.supported:
+            raise HTTPException(status_code=422, detail=[{
+                "loc": ["source"],
+                "msg": f"music source {preset.id!r} has no runtime adapter yet",
+            }])
+        fields = {item.key: item for item in preset.credential_fields}
+        unknown = sorted(key for key in payload if key != "source" and key not in fields)
+        if unknown:
+            raise HTTPException(status_code=422, detail=[
+                {"loc": [key],
+                 "msg": f"unknown credential field for {preset.id}; expected "
+                        f"{', '.join(fields)}"}
+                for key in unknown
+            ])
+        if not source_given and not any(key in payload for key in fields):
+            raise HTTPException(status_code=422, detail=[{
+                "loc": ["values"],
+                "msg": f"provide source and/or one of: {', '.join(fields)}",
+            }])
         path = music_credentials_path(cfg)
         data = dict(music_credentials(cfg))
         errors: list[dict] = []
-        for key in ("url", "user", "password"):
+        for key, field in fields.items():
             if key not in payload:
                 continue
             raw = payload.get(key)
@@ -3057,7 +3232,8 @@ def create_app(
                 errors.append({"loc": [key], "msg": "must be a string"})
                 continue
             value = raw.strip()
-            if key == "url" and value and not value.startswith(("http://", "https://")):
+            if field.kind == "url" and value and not value.startswith(
+                    ("http://", "https://")):
                 errors.append({"loc": [key],
                                "msg": "url must start with http:// or https://"})
                 continue
@@ -3068,12 +3244,27 @@ def create_app(
         if errors:
             raise HTTPException(status_code=422, detail=errors)
         if data:
-            _write_credentials_file(path, data)
+            write_music_credentials(path, data)
         else:
             path.unlink(missing_ok=True)
-        log.info("music credentials updated (fields=%s)", sorted(data))
+        if source_given and source_id != cfg.music.source:
+            current = (_read_config_or_409() if config_path is not None and
+                       Path(config_path).exists() else cfg)
+            merged = current.model_dump(mode="json")
+            merged.setdefault("music", {})["source"] = preset.id
+            _autofill_music_paths(merged, preset.id)
+            updated = Config.model_validate(merged)
+            if config_path is not None:
+                save_config(Path(config_path), updated)
+            _apply_config(updated)
+            _refresh_panels()
+            await _apply_music(updated)
+            log.info("music: source changed to %s from the console", preset.id)
+        state = music_credentials_state(cfg)
+        log.info("music credentials updated (source=%s fields=%s)",
+                 cfg.music.source, sorted(data))
         return {
-            "has_credentials": has_music_credentials(cfg),
+            "has_credentials": bool(state["ready"]),
             "has_url": bool(data.get("url")),
             "has_user": bool(data.get("user")),
             "has_password": bool(data.get("password")),
@@ -3081,35 +3272,56 @@ def create_app(
 
     @app.post("/api/v1/music/test", dependencies=[Depends(auth)])
     async def music_test(patch: Annotated[dict | None, Body()] = None) -> dict:
-        """Ping the Navidrome/Subsonic library and report latency, never the secret.
+        """Ping a source and report latency, never the secret.
 
-        Body fields are optional: with `url`/`user`/`password` present the probe tests
-        those unsaved values (a temp 0600 file, deleted afterwards); otherwise it tests
-        the stored credentials. `random(1)` is a real `getRandomSongs` round trip - the
-        same client and auth path a song request uses, without downloading anything.
+        Body fields are optional: `source` selects a preset (otherwise the configured
+        one) and any credential slots present test those unsaved values without writing
+        anything. `ping.view` is the same authenticated round trip a song request uses;
+        no download happens. The connection is built in fixed mode, so an unsaved draft
+        never touches disk.
         """
         body = patch or {}
+        source_raw = body.get("source")
+        source_id = (str(source_raw).strip() if source_raw is not None
+                     else cfg.music.source)
+        preset = get_preset(source_id)
+        if preset is None:
+            raise HTTPException(status_code=422, detail=[{
+                "loc": ["source"],
+                "msg": f"unknown music source {source_id!r}; choose one of "
+                       f"{', '.join(preset_ids())}",
+            }])
+        if not preset.supported:
+            raise HTTPException(status_code=422, detail=[{
+                "loc": ["source"],
+                "msg": f"music source {preset.id!r} has no runtime adapter yet",
+            }])
+        fields = {item.key for item in preset.credential_fields}
         data = dict(music_credentials(cfg))
-        overrides = {key: str(body[key]).strip() for key in ("url", "user", "password")
+        overrides = {key: str(body[key]).strip() for key in fields
                      if isinstance(body.get(key), str) and str(body[key]).strip()}
         data.update(overrides)
-        timed_out = {"ok": False, "latency_ms": None,
-                     "error": "缺少 url/user/password：先在配置中心保存音乐凭据"}
-        if not all(data.get(key) for key in ("url", "user", "password")):
-            return timed_out
-        temp_dir: Path | None = None
-        source: NavidromeSource | None = None
-        use = music_credentials_path(cfg)
-        if overrides:
-            temp_dir = Path(tempfile.mkdtemp(prefix="rui-music-test-"))
-            use = temp_dir / "lan_media.json"
-            _write_credentials_file(use, data)
+        missing = missing_credentials(preset, data)
+        if missing:
+            return {
+                "ok": False, "latency_ms": None,
+                "source": preset.id,
+                "error": "缺少凭据字段：" + ", ".join(missing)
+                         + "；先在「音源与凭据」保存或填写后再测试",
+            }
+        source = None
         started = time.perf_counter()
         try:
-            source = NavidromeSource(
-                use, Path(cfg.music.cache_dir or tempfile.gettempdir()), 1,
-                policy=_outbound_policy(cfg))
-            await asyncio.wait_for(source.random(1), timeout=8.0)
+            source = build_source(
+                preset.id, None, Path(cfg.music.cache_dir), 1,
+                transport=getattr(app.state, "music_test_transport", None),
+                policy=_outbound_policy(cfg),
+                base_url=str(data.get("url") or ""),
+                user=str(data.get("user") or ""),
+                password=str(data.get("password") or ""),
+                token=str(data.get("token") or ""),
+            )
+            await asyncio.wait_for(source.ping(), timeout=8.0)
             error = ""
         except Exception as exc:  # noqa: BLE001 - the point of the endpoint is to report it
             error = _redact_error(exc)
@@ -3117,11 +3329,11 @@ def create_app(
             if source is not None:
                 with contextlib.suppress(Exception):
                     await source.close()
-            if temp_dir is not None:
-                shutil.rmtree(temp_dir, ignore_errors=True)
         latency_ms = round((time.perf_counter() - started) * 1000)
-        log.info("music test: ok=%s latency=%sms", not error, latency_ms)
-        return {"ok": not error, "latency_ms": latency_ms, "error": error}
+        log.info("music test: source=%s ok=%s latency=%sms",
+                 preset.id, not error, latency_ms)
+        return {"ok": not error, "latency_ms": latency_ms, "source": preset.id,
+                "error": error}
 
     @app.get("/api/v1/debug/prompt", dependencies=[Depends(auth)])
     async def debug_prompt() -> dict:

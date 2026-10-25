@@ -19,6 +19,7 @@ Effects:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -1109,57 +1110,76 @@ def _tool_fields(cfg: Config) -> list[dict]:
     return fields
 
 
+def _music_source_registry() -> tuple[list[str], str, str]:
+    """The select options and bilingual one-line list, from the preset registry."""
+    from ..music.sources.presets import PRESETS
+
+    available = [preset for preset in PRESETS if preset.supported]
+    ids = [preset.id for preset in available]
+    zh = "、".join(f"{preset.name_zh}（{preset.id}）" for preset in available)
+    en = ", ".join(f"{preset.name_en} ({preset.id})" for preset in available)
+    return ids, zh, en
+
+
 def _music_fields() -> list[dict]:
+    source_ids, source_list_zh, source_list_en = _music_source_registry()
     return [
         _field("music.enabled", "music", "bool",
                _t("启用音乐", "Music enabled"),
                _t("打开后模型获得点歌/暂停/下一首等 9 个工具，控制台出现音乐面板。"
-                  "需要先在下面填好音乐凭据（URL/用户/密码）并测试连接。"
+                  "需要先在「音源与凭据」里选音源、填好凭据并测试连接。"
                   "保存即生效（运行期装配服务与工具）；关掉立即摘掉这些工具。",
                   "On gives the model the nine music tools and the console its music "
-                  "panel. Fill the credentials (URL/user/password) below and test the "
-                  "connection first. Applies on save; off removes the tools at once.")),
+                  "panel. Pick a source, fill its credentials and test the connection "
+                  "under Source & credentials first. Applies on save; off removes the "
+                  "tools at once.")),
         _field("music.has_credentials", "music", "bool",
                _t("凭据已配置", "Credentials present"),
-               _t("是否已有可用的音乐凭据（只报存在，绝不回显 url/用户/密码）。"
-                  "在配置中心填写后保存到 data_dir/lan_media.json（0600），再用"
+               _t("当前音源所需的凭据是否齐全（只报存在，绝不回显任何值）。"
+                  "在「音源与凭据」里保存到 data_dir/lan_media.json（0600），再用"
                   "「测试连接」验证；空值删除。",
-                  "Whether usable music credentials exist (presence only; the url/user/"
-                  "password are never returned). Saved to data_dir/lan_media.json (0600) "
-                  "from the config center, verified with Test connection; empty deletes."),
-               effect="restart", writable=False, virtual=True),
+                  "Whether the current source's required credentials are complete "
+                  "(presence only; no value is ever returned). Saved to "
+                  "data_dir/lan_media.json (0600) from Source & credentials and verified "
+                  "with Test connection; empty deletes."),
+               effect="save", writable=False, virtual=True),
         # Select, not free text: a typo used to leave the panel "enabled" while the
-        # runtime silently kept music off. New adapters add their id here.
+        # runtime silently kept music off. The options come from the preset registry,
+        # so a new adapter is one entry there rather than a second list here.
         _field("music.source", "music", "select",
                _t("音乐源", "Music source"),
-               _t("音源类型（当前 navidrome = Subsonic 兼容；以后接入新适配器时在这里增加选项）。"
-                  "选 navidrome 时后端会自动把 secrets_path 填成 <data_dir>/lan_media.json、"
-                  "cache_dir 填成 <data_dir>/music_cache。没有适配器的音源不会启动服务，"
-                  "音乐页会明确显示停用原因。改完重启服务。",
-                  "Source kind (navidrome = Subsonic-compatible today; new adapters add "
-                  "their option here). Choosing navidrome auto-fills secrets_path "
-                  "(<data_dir>/lan_media.json) and cache_dir (<data_dir>/music_cache). "
-                  "A source without an adapter cannot start the service, and the music "
-                  "page says so instead of pretending it is enabled. Restart to apply."),
-               effect="restart", options=["navidrome"]),
+               _t(f"音源预设（{source_list_zh}）。Subsonic 家族共用同一套协议与凭据槽位；"
+                  "自定义 = 任何 Subsonic 兼容的自建地址。保存后运行期重建音乐服务，"
+                  "并把 secrets_path 填成 <data_dir>/lan_media.json、"
+                  "cache_dir 填成 <data_dir>/music_cache。未知音源保存时 422；"
+                  "手改 YAML 的未知值不会让面板假装已启用。",
+                  f"Source preset ({source_list_en}). The Subsonic family shares one "
+                  "protocol and credential slots; Custom is any self-hosted "
+                  "Subsonic-compatible URL. Saving rebuilds the music service at runtime "
+                  "and points secrets_path at <data_dir>/lan_media.json and cache_dir at "
+                  "<data_dir>/music_cache. An unknown source is a 422 on save; a "
+                  "hand-edited unknown value cannot make the panel claim it is enabled."),
+               effect="save", options=source_ids),
         _field("music.secrets_path", "music", "text",
                _t("凭据文件", "Credentials file"),
-               _t("存 url/user/password 的 json 路径（值不进配置文件、不进日志）。"
+               _t("存当前音源凭据的 json 路径（值不进配置文件、不进日志）。"
                   "换音源时通常自动更新；手动改要保证 NAS 上该文件存在。"
-                  "凭据本身用「音乐凭据」端点写入（PUT /api/v1/music/credentials），"
-                  "这里只决定文件放哪。改完重启服务。",
-                  "JSON path holding url/user/password (never in the config or the log). "
-                  "Auto-updated on a source change; a manual path must exist on the NAS. "
-                  "Write the credentials via PUT /api/v1/music/credentials; this only "
-                  "decides where the file lives. Restart to apply."),
-               effect="restart", advanced=True),
+                  "凭据本身用「音源与凭据」端点写入（PUT /api/v1/music/credentials），"
+                  "这里只决定文件放哪。保存后运行期重建音乐服务。",
+                  "JSON path holding the current source's credentials (never in the "
+                  "config or the log). Auto-updated on a source change; a manual path "
+                  "must exist on the NAS. Write the credentials via "
+                  "PUT /api/v1/music/credentials; this only decides where the file "
+                  "lives. Saving rebuilds the music service at runtime."),
+               effect="save", advanced=True),
         _field("music.cache_dir", "music", "text",
                _t("缓存目录", "Cache directory"),
                _t("解析后的 PCM 缓存在这里（重放同一首不用再下载转码）。换音源时通常自动更新；"
-                  "改完重启服务，旧缓存留在旧目录。",
+                  "保存后运行期重建音乐服务，旧缓存留在旧目录。",
                   "Resolved PCM cache (replaying a song avoids a re-download/transcode). "
-                  "Auto-updated on a source change; restart, the old cache stays behind."),
-               effect="restart"),
+                  "Auto-updated on a source change; saving rebuilds the music service, "
+                  "the old cache stays behind."),
+               effect="save"),
         _field("music.cache_tracks", "music", "number",
                _t("缓存首数", "Cached tracks"),
                _t("最多缓存几首歌的 PCM（1–64）。调大省流量但占磁盘；改完重启服务。",
@@ -1433,9 +1453,7 @@ def music_credentials_path(cfg: Config) -> Path:
     return Path(cfg.system.data_dir).expanduser() / MUSIC_CREDENTIALS_FILE
 
 
-def music_credentials(cfg: Config) -> dict[str, str]:
-    """The stored credentials, or an empty dict. Never logged, never returned by the API."""
-    path = music_credentials_path(cfg)
+def _read_music_credentials_file(path: Path) -> dict[str, str]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1445,9 +1463,88 @@ def music_credentials(cfg: Config) -> dict[str, str]:
     return {str(k): str(v) for k, v in data.items() if v not in (None, "")}
 
 
-def has_music_credentials(cfg: Config) -> bool:
+def music_credentials(cfg: Config) -> dict[str, str]:
+    """The stored credentials, or an empty dict. Never logged, never returned by the API.
+
+    The file layout is flat and keyed by the active preset's credential slots
+    (`url/user/password/token` today). A legacy config that still carries
+    `music.url/user/password` is merged in without writing anything; see
+    `migrate_legacy_music_credentials` for the one-time move to the 0600 file.
+    """
+    data = _read_music_credentials_file(music_credentials_path(cfg))
+    for key, value in cfg.music.legacy_credentials().items():
+        if not data.get(key):
+            data[key] = value
+    return data
+
+
+def write_music_credentials(path: Path, data: dict[str, str]) -> None:
+    """Atomic 0600 write of the music credentials JSON (never into config.yaml)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.chmod(tmp, 0o600)          # chmod before the first byte, umask-proof
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=1)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+
+
+def migrate_legacy_music_credentials(cfg: Config) -> bool:
+    """Move inline `music.url/user/password/token` into the write-only JSON.
+
+    Returns True when legacy values were present (whether or not the file changed).
+    Raises OSError when the file cannot be written; the caller logs it and leaves the
+    in-memory values alone rather than losing the only copy. On success the inline
+    fields are cleared, so the next `save_config` writes a file with no plaintext.
+    """
+    legacy = cfg.music.legacy_credentials()
+    if not legacy:
+        return False
+    path = music_credentials_path(cfg)
+    stored = _read_music_credentials_file(path)
+    changed = False
+    for key, value in legacy.items():
+        if not stored.get(key):
+            stored[key] = value
+            changed = True
+    if changed:
+        write_music_credentials(path, stored)
+    for key in ("url", "user", "password", "token"):
+        setattr(cfg.music, key, "")
+    # A config that relied on inline credentials had no secrets_path; after the move
+    # it must point at the file, or the next load rejects `enabled` with no path.
+    if not cfg.music.secrets_path.strip():
+        cfg.music.secrets_path = str(path)
+    return True
+
+
+def music_credentials_state(cfg: Config) -> dict[str, Any]:
+    """Presence-only view for the console: never a credential value."""
+    from ..music.sources.presets import get_preset, missing_credentials
+
+    preset = get_preset(cfg.music.source)
     data = music_credentials(cfg)
-    return all(data.get(key) for key in ("url", "user", "password"))
+    if preset is None:
+        missing = ("url", "user", "password")
+        keys = ("url", "user", "password", "token")
+    else:
+        missing = missing_credentials(preset, data)
+        keys = tuple(item.key for item in preset.credential_fields)
+    return {
+        "present": music_credentials_path(cfg).is_file(),
+        "ready": not missing,
+        "missing": list(missing),
+        "fields": {key: bool(str(data.get(key) or "").strip()) for key in keys},
+    }
+
+
+def has_music_credentials(cfg: Config) -> bool:
+    return bool(music_credentials_state(cfg)["ready"])
 
 
 def _secret_entry(entries: dict[str, dict], name: str, used_by: str,

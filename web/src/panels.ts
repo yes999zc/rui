@@ -89,8 +89,10 @@ export interface PanelBlock {
   label?: string
   min?: number
   note?: string
-  /** `credentials` block: boolean path in the panel data (`credentials_present`). */
+  /** `credentials` block: boolean path in the panel data (`credentials_ready`). */
   status_key?: string
+  /** `credentials` block: source registry endpoint (presets + credential slots). */
+  sources_href?: string
   /** `credentials` block: write endpoint (PUT) and connection-test endpoint (POST). */
   save?: { href: string; method?: string }
   test?: { href: string; method?: string }

@@ -55,9 +55,10 @@
   timeout）、search（enabled/kind/base_url/api_key_env/count/timeout）、ha（base_url/token_env）、
   mcp_servers（列表，只读展示即可）、music（enabled/source/secrets_path/cache_dir/
   cache_tracks/queue_min_tracks/queue_batch/history_max）。
-- 音乐源路径自动更新：`music.source` 变化时后端自动填 `music.secrets_path`
-  （navidrome → `<data_dir>/lan_media.json`）与 `cache_dir`（`<data_dir>/music_cache`），
-  catalog hint 里写明；未知源保持人工值并提示。
+- 音乐源路径自动更新：`music.source` 是注册表驱动的 select（Subsonic 家族：navidrome /
+  airsonic / gonic / ampache / custom），变化时后端自动填 `music.secrets_path`
+  （`<data_dir>/lan_media.json`）与 `cache_dir`（`<data_dir>/music_cache`），并运行期重建
+  音乐服务；未知源保存时 422，catalog hint 里写明。详见 `docs/music-sources.md`。
 
 ### PUT `/api/v1/config/values`
 

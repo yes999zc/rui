@@ -189,8 +189,9 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 restart 字段保存后返回 `restart_fields`，界面显示 `docker compose restart` 命令与「仅重启音频面」按钮
 （`POST /api/v1/system/audio/restart`，实测 0.4 s、音箱重连）。
 
-**音乐源路径自动更新**：`music.source` 改为 `navidrome` 时自动填 `<data_dir>/lan_media.json` 与
-`<data_dir>/music_cache`；未知源保留手动值并 warning。音乐凭据可在配置中心填写
+**音乐源路径自动更新**：`music.source` 是预设 select（Navidrome/Airsonic/Gonic/Ampache/自定义
+Subsonic），保存时自动填 `<data_dir>/lan_media.json` 与 `<data_dir>/music_cache` 并运行期重建服务；
+未知源保存 422，手改 YAML 的未知值由面板报告停用。详见 `docs/music-sources.md`。音乐凭据可在配置中心填写
 （`PUT /api/v1/music/credentials`，写 0600 文件、值不回显）并有「测试连接」（`POST /api/v1/music/test`）。
 
 **密钥**：`catalog.secrets` 由 provider 链实际引用的 `api_key_env/app_id_env/api_secret_env` +

@@ -1105,12 +1105,41 @@ export interface ProviderProbeResult {
 /* — music credentials (write-only; the panel never receives the values) ————— */
 
 export interface MusicCredentialsPatch {
+  /** Preset id; the backend validates it against the source registry. */
+  source?: string
   url?: string
   user?: string
   password?: string
+  token?: string
+  [key: string]: string | undefined
 }
 
-/** Presence only: the backend never returns url/user/password values. */
+/** One write-only credential slot a preset asks for. */
+export interface MusicCredentialField {
+  key: string
+  kind: 'text' | 'url' | 'password'
+  required: boolean
+  secret: boolean
+  label: LocalizedText
+  placeholder: LocalizedText
+  hint: LocalizedText
+}
+
+/** One source shape from the registry (`GET /api/v1/music/sources`). */
+export interface MusicSourcePreset {
+  id: string
+  name: LocalizedText
+  protocol_family: string
+  docs_url: string
+  default_port: number | null
+  default_path: string
+  description: LocalizedText
+  custom: boolean
+  available: boolean
+  credential_fields: MusicCredentialField[]
+}
+
+/** Presence only: the backend never returns url/user/password/token values. */
 export interface MusicCredentialsState {
   has_credentials: boolean
   has_url: boolean
@@ -1118,9 +1147,28 @@ export interface MusicCredentialsState {
   has_password: boolean
 }
 
+export interface MusicCredentialState {
+  present: boolean
+  ready: boolean
+  missing: string[]
+  fields: Record<string, boolean>
+}
+
+export interface MusicSourcesDoc {
+  current: string
+  source_known: boolean
+  current_preset: MusicSourcePreset | null
+  sources: MusicSourcePreset[]
+  credentials: MusicCredentialState
+  enabled: boolean
+  running_source: string
+  restart_required: boolean
+}
+
 export interface MusicTestResult {
   ok: boolean
   latency_ms: number | null
+  source?: string
   error: string
 }
 
@@ -1176,9 +1224,13 @@ export const api = {
    * Write music credentials. Absent keys keep the stored value; an empty string
    * deletes that field. Values are write-only and never read back.
    */
+  /** The source registry the credentials block renders; no values, only presence. */
+  musicSources: (href = '/api/v1/music/sources') =>
+    request<MusicSourcesDoc>(href),
+  /** Write the selected source and/or its credential slots (write-only). */
   saveMusicCredentials: (patch: MusicCredentialsPatch, href = '/api/v1/music/credentials') =>
     request<MusicCredentialsState>(href, { method: 'PUT', body: JSON.stringify(patch) }),
-  /** Ping the music source; with drafts it tests those unsaved values first. */
+  /** Ping the selected music source; with drafts it tests those unsaved values first. */
   testMusic: (patch: MusicCredentialsPatch = {}, href = '/api/v1/music/test') =>
     request<MusicTestResult>(href, { method: 'POST', body: JSON.stringify(patch) }),
   /** P5: device admin (edit/delete use the id; probe is the wizard's SSH check). */
