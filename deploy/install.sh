@@ -166,7 +166,12 @@ echo "[3/5] env"
 if [ ! -f "$DIR/.env" ]; then
   # One random secret per install, never printed except as a length.
   DEVICE_TOKEN="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-  cat > "$DIR/.env" <<ENV
+  # The template is a quoted heredoc: backticks, $ and braces in these comments are
+  # literal text. Without the quotes the comment below executes `docker compose up -d`
+  # in the caller's working directory during install (dot2 #13) and the written .env no
+  # longer matches the template. Values are printed after it, so nothing here expands.
+  {
+    cat <<'ENV'
 RUI_LLM_KEY=
 RUI_ASR_KEY=
 VOLC_API_KEY=
@@ -174,14 +179,17 @@ XFYUN_APPID=
 XFYUN_API_KEY=
 XFYUN_API_SECRET=
 RUI_HA_TOKEN=
-RUI_DEVICE_TOKEN=$DEVICE_TOKEN
-# Pin the image compose uses, so a later plain `docker compose up -d` (or a reboot)
-# keeps the version that was installed instead of falling back to :latest.
-RUI_IMAGE=$IMAGE
-# Container identity. compose reads these for `user:`; the same pair owns config/data.
-RUI_UID=$RUI_UID
-RUI_GID=$RUI_GID
+# Values below are filled in by this installer for this install.
+# RUI_IMAGE pins the image compose uses, so a later plain `docker compose up -d`
+# (or a reboot) keeps the installed version instead of falling back to :latest.
+# RUI_UID / RUI_GID are the container identity: compose reads them for `user:`, and
+# the same pair owns config/data.
 ENV
+    printf 'RUI_DEVICE_TOKEN=%s\n' "$DEVICE_TOKEN"
+    printf 'RUI_IMAGE=%s\n' "$IMAGE"
+    printf 'RUI_UID=%s\n' "$RUI_UID"
+    printf 'RUI_GID=%s\n' "$RUI_GID"
+  } > "$DIR/.env"
   chmod 600 "$DIR/.env"
   echo "      wrote .env with a generated device token (${#DEVICE_TOKEN} hex chars)"
 else

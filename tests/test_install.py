@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import io
 import os
+import re
 import shlex
 import stat
 import subprocess
@@ -442,6 +443,9 @@ def test_install_sh_saves_the_console_token_with_mode_600(tmp_path: Path) -> Non
     assert token_file.read_text(encoding="utf-8").strip() == "tok-abc123"
     assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
     assert "console token saved" in result.stdout
+    # Pasting install logs must not leak the token (dot2 #13): only the 0600 path is
+    # ever printed, never the value itself.
+    assert "tok-abc123" not in result.stdout + result.stderr
 
 
 def test_install_sh_does_not_overwrite_an_existing_console_token(tmp_path: Path) -> None:
@@ -455,6 +459,7 @@ def test_install_sh_does_not_overwrite_an_existing_console_token(tmp_path: Path)
     assert result.returncode == 0, result.stderr
     assert token_file.read_text(encoding="utf-8") == "saved-before\n"
     assert "does not match the running console token" in result.stdout
+    assert "rotated-token" not in result.stdout + result.stderr
 
 
 def test_install_sh_warns_but_succeeds_when_the_token_cannot_be_read(tmp_path: Path) -> None:
@@ -509,3 +514,111 @@ def test_install_sh_mentions_image_pruning_after_rollback() -> None:
         Path(__file__).resolve().parents[1] / "docs" / "releases" / "v0.4.2.md"
     ).read_text(encoding="utf-8")
     assert "Verification filled from the 0.4.2 CI run" not in note
+
+
+# ------------------------------------- .env template (dot2 #13)
+
+NL = chr(10)
+
+
+def _install_script() -> str:
+    return (
+        Path(__file__).resolve().parents[1] / "deploy" / "install.sh"
+    ).read_text(encoding="utf-8")
+
+
+def _env_heredoc_template(script: str) -> str:
+    """The literal .env template, extracted from the quoted heredoc.
+
+    Reading it out of the script means a comment edit is covered automatically: the
+    assertion is "the file on disk is exactly the template", not a copy of it.
+    """
+    marker = "cat <<'ENV'"
+    start = script.index(marker) + len(marker)
+    # Skip the rest of the command line (the newline that opens the heredoc body).
+    body_start = script.index(NL, start) + 1
+    end = script.index(NL + "ENV" + NL, body_start)
+    return script[body_start:end] + NL
+
+
+def _run_install_env_block(
+    tmp_path: Path,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Run the shipped [3/5] env block in a temp home with a recording fake docker.
+
+    A fake docker is the canary: the unquoted heredoc this replaced executed the
+    backticked "docker compose up -d" in the comment while writing .env, so any
+    docker invocation here means command substitution happened again.
+    """
+    script = _install_script()
+    start = script.index('echo "[3/5] env"')
+    end = script.index('echo "[4/5] local models', start)
+    block = script[start:end]
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/bin/sh" + NL + 'echo "$@" >> "$DOCKER_CALLS"' + NL, encoding="utf-8"
+    )
+    docker.chmod(0o755)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    harness = tmp_path / "env-block.sh"
+    harness.write_text(
+        "set -eu" + NL
+        + 'DIR="$1"' + NL
+        + 'IMAGE="ghcr.io/example/rui:test"' + NL
+        + 'RUI_UID="1000"' + NL
+        + 'RUI_GID="1000"' + NL
+        + block,
+        encoding="utf-8",
+    )
+    env = {
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "DOCKER_CALLS": str(tmp_path / "docker-calls"),
+    }
+    result = subprocess.run(
+        ["sh", str(harness), str(home)], capture_output=True, text=True, env=env
+    )
+    return result, home
+
+
+def test_install_sh_writes_the_env_template_without_expanding_comments(
+    tmp_path: Path,
+) -> None:
+    """The .env must be the template byte for byte; backticks must not run commands."""
+    script = _install_script()
+    result, home = _run_install_env_block(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+    env_text = (home / ".env").read_text(encoding="utf-8")
+    match = re.search(r"^RUI_DEVICE_TOKEN=([0-9a-f]{48})$", env_text, re.MULTILINE)
+    assert match is not None, env_text
+    expected = "".join([
+        _env_heredoc_template(script),
+        f"RUI_DEVICE_TOKEN={match.group(1)}" + NL,
+        "RUI_IMAGE=ghcr.io/example/rui:test" + NL,
+        "RUI_UID=1000" + NL,
+        "RUI_GID=1000" + NL,
+    ])
+    assert env_text == expected
+    # The two comments that used to be executed are present literally.
+    backtick = chr(96)
+    assert backtick + "docker compose up -d" + backtick in env_text
+    assert backtick + "user:" + backtick in env_text
+    # No command substitution ran: the fake docker was never invoked.
+    calls = tmp_path / "docker-calls"
+    assert not calls.exists(), calls.read_text(encoding="utf-8")
+    assert stat.S_IMODE((home / ".env").stat().st_mode) == 0o600
+    # The generated device token is never echoed, only its length.
+    assert match.group(1) not in result.stdout + result.stderr
+    assert "48 hex chars" in result.stdout
+
+
+def test_install_sh_env_heredoc_delimiter_is_quoted() -> None:
+    """Static guard: reverting to an unquoted delimiter re-opens the bug."""
+    script = _install_script()
+    assert "cat <<'ENV'" in script
+    assert re.search(r"<<-?ENV", script) is None
