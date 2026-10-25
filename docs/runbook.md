@@ -132,7 +132,7 @@ curl -s localhost:8080/health | python -m json.tool
   镜像默认 `USER`（无需重建镜像），但 `config/`、`data/` 必须 chown 成同一对身份。
   `install.sh` 保留已有 compose 文件（不覆盖自定义）；旧文件也能非 root 运行（镜像
   `USER rui`），但 `read_only`/`tmpfs`/`cap_drop` 等加固要手工合并新 compose 才会生效。
-- 生产把版本写死在 `.env`：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0`
+- 生产把版本写死在 `.env`：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1`
   （或 `@sha256:<digest>`）。`latest` 是滚动默认，不是唯一推荐。
   `install.sh` 会把安装时用的 image 写进生成的 `.env`；**手工装**时也要写，否则之后
   `docker compose up -d` 会回落到 `latest` 并尝试拉取（实测：本地 rehearsal 镜像没写
@@ -199,7 +199,7 @@ root 可以读写 1000 所有的文件。继续用 `1000:1000` 跑旧镜像也�
 | 唤醒后没回答 | 日志 `turn:` / `asr`；provider 密钥 | `.env` 密钥空/错 → 填好 `up -d`；本地 ASR 模型缺失会走云 ASR（慢但可用） |
 | 音乐没声音 | `/api/v1/music`；`music.enabled`；配置的 `music.secrets_path` 是否可读（`docker compose exec rui test -r <path>`）；`ffmpeg -version` | 枚举：enabled=false / secrets 文件不存在或权限不是 600 可读 / Navidrome 地址不可达 / 镜像太旧没有 ffmpeg |
 | HA 指令没反应 | 日志 `grep "ha:"`；`tools.ha.base_url`；token | HA MCP Server 集成没开 / token 过期 / base_url 少了端口；HA 挂了不影响说话 |
-| 控制台 401 | `web.auth_token` | 在「设置→密钥」或控制台登录框填同一个 token |
+| 控制台 401 | `web.auth_token`；`~/rui/console-token.txt` | 先 `cat ~/rui/console-token.txt`（`install.sh` 保存的副本）；文件不在或过期就用 `cd ~/rui && docker compose exec -T rui rui token`。在控制台登录框填同一个 token；`--rotate` 轮换后重启服务并按 deploy.md §2.4 刷新该文件 |
 | 磁盘满 | `docker system df`；`du -sh data/*` | 清 `data/music-cache`、旧 `*.bak.*`、`docker image prune`（谨慎） |
 | 时间/提醒不准 | 宿主机时区（`date`） | 容器用宿主机时钟；提醒存 `data/`，时区改动后核对一条 |
 

@@ -32,6 +32,9 @@ const needToken = ref(false)
 const tokenOpen = ref(false)
 const tokenDraft = ref(token.get())
 const tokenInput = ref<HTMLInputElement | null>(null)
+/** The recovery commands are documented with the deploy guide (docs/deploy.md §2.4). */
+const tokenDocsUrl =
+  'https://github.com/yes999zc/rui/blob/main/docs/deploy.md#24-%E6%8E%A7%E5%88%B6%E5%8F%B0-token'
 
 let timer: number | undefined
 
@@ -296,6 +299,16 @@ onUnmounted(() => {
         </button>
       </div>
       <p v-if="needToken" class="banner banner-fail">{{ t('nav.token.neededHint') }}</p>
+      <div v-if="needToken" class="token-recover">
+        <p class="token-recover-title">{{ t('nav.token.recover') }}</p>
+        <p class="field-hint">{{ t('nav.token.recoverHint') }}</p>
+        <pre class="token-cmd"><code>cd ~/rui &amp;&amp; docker compose exec -T rui rui token</code></pre>
+        <pre class="token-cmd"><code>cat ~/rui/console-token.txt</code></pre>
+        <p class="field-hint">{{ t('nav.token.recoverSaved') }}</p>
+        <a class="token-docs" :href="tokenDocsUrl" target="_blank" rel="noopener noreferrer">
+          {{ t('nav.token.recoverDocs') }} ↗
+        </a>
+      </div>
       <p class="field-hint">{{ t('nav.token.hint') }}</p>
       <label class="sr-only" for="token-input">{{ t('nav.token.label') }}</label>
       <input
@@ -448,6 +461,51 @@ onUnmounted(() => {
 
 .token-modal .actions {
   margin-top: var(--s4);
+}
+
+.token-recover {
+  margin-bottom: var(--s3);
+  padding: var(--s3);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+
+.token-recover-title {
+  margin-bottom: var(--s1);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.token-recover .field-hint {
+  margin-bottom: var(--s2);
+}
+
+.token-cmd {
+  margin: 0 0 var(--s2);
+  padding: var(--s2) var(--s3);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.token-cmd code {
+  font-size: inherit;
+  white-space: pre;
+}
+
+.token-docs {
+  font-size: 12.5px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.token-docs:hover {
+  color: var(--accent-hover);
 }
 
 @media (max-width: 1200px) {

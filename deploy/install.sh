@@ -351,9 +351,58 @@ if [ "$i" -ge 120 ]; then
   exit 1
 fi
 
+# Persist the console token where the operator can find it later (issue #4): the
+# `console token:` line from "2/5" scrolls away, and the only recovery was to
+# remember `docker compose exec`. Ask the running container for the same value the
+# console expects (the `rui token` CLI; docs/deploy.md §2.4) and write it 0600.
+# The token is captured, never echoed again. Idempotent: an existing file is kept
+# byte for byte, so a rerun/upgrade never replaces a secret the operator may have
+# already stored elsewhere. If the file disagrees with the running token (a rotate
+# since the last run), say so and how to refresh it instead of silently overwriting.
+CONSOLE_TOKEN_FILE="$DIR/console-token.txt"
+CURRENT_TOKEN=""
+# Command substitution already drops the trailing newline; the token is one line.
+if ! CURRENT_TOKEN="$(docker compose exec -T rui rui token 2>/dev/null)"; then
+  # On failure the CLI still prints an explanation to stdout; never treat that as the
+  # token. Only a zero exit status is a value the console will accept.
+  CURRENT_TOKEN=""
+fi
+if [ -z "$CURRENT_TOKEN" ]; then
+  echo "      WARNING: could not read the console token from the container."
+  echo "               recover it with: cd $DIR && docker compose exec -T rui rui token"
+elif [ -f "$CONSOLE_TOKEN_FILE" ]; then
+  if [ "$(cat "$CONSOLE_TOKEN_FILE" 2>/dev/null)" = "$CURRENT_TOKEN" ]; then
+    echo "      console token already saved: $CONSOLE_TOKEN_FILE"
+  else
+    echo "      WARNING: $CONSOLE_TOKEN_FILE does not match the running console token."
+    echo "               if you rotated it, refresh the file:"
+    echo "                 cd $DIR && docker compose exec -T rui rui token > console-token.txt"
+    echo "                 chmod 600 console-token.txt"
+  fi
+else
+  TMP_TOKEN="$CONSOLE_TOKEN_FILE.tmp.$$"
+  # One subshell: umask keeps the transient file private, and a failure (read-only
+  # RUI_HOME, full disk) stays a warning instead of aborting under `set -e`.
+  if ( umask 077 \
+      && printf '%s\n' "$CURRENT_TOKEN" > "$TMP_TOKEN" \
+      && chmod 600 "$TMP_TOKEN" \
+      && mv "$TMP_TOKEN" "$CONSOLE_TOKEN_FILE" ) 2>/dev/null; then
+    echo "      console token saved: $CONSOLE_TOKEN_FILE (mode 600)"
+  else
+    rm -f "$TMP_TOKEN" 2>/dev/null || true
+    echo "      WARNING: could not write $CONSOLE_TOKEN_FILE; the install is still usable."
+    echo "               print the token with: cd $DIR && docker compose exec -T rui rui token"
+  fi
+fi
+
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
 echo "done. open http://${IP:-127.0.0.1}:${PORT}/"
+if [ -f "$CONSOLE_TOKEN_FILE" ]; then
+  echo "  console: token saved to $CONSOLE_TOKEN_FILE (mode 600) - the 401 dialog points here"
+else
+  echo "  console: token -> cd $DIR && docker compose exec -T rui rui token"
+fi
 echo "  doctor:  cd $DIR && docker compose exec rui rui doctor"
 echo "  logs:    cd $DIR && docker compose logs -f rui"
 echo "  keys:    open the console -> Setup -> Keys (one provider per use), or fill $DIR/.env"

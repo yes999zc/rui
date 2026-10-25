@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
+import shlex
+import stat
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -391,3 +395,73 @@ def test_playback_defaults_are_playable_by_the_device_adapter() -> None:
 def test_music_cannot_be_enabled_without_credentials() -> None:
     with pytest.raises(ValidationError):
         MusicConfig(enabled=True, secrets_path="")
+
+
+# ------------------------------------------------- console token persistence (issue #4)
+
+
+def _run_install_token_block(
+    tmp_path: Path, docker_stdout: str, docker_exit: int = 0
+) -> subprocess.CompletedProcess[str]:
+    """Run the shipped token-persistence shell block against a fake `docker`.
+
+    The block is extracted from deploy/install.sh by its marker comments, so this
+    exercises the real shell rather than a copy: a fresh install must leave a 0600
+    file, a rerun must keep it, and a failed read must only warn.
+    """
+    script = (
+        Path(__file__).resolve().parents[1] / "deploy" / "install.sh"
+    ).read_text(encoding="utf-8")
+    start = script.index("# Persist the console token")
+    end = script.index('IP="$(hostname -I', start)
+    block = script[start:end]
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/bin/sh\nprintf '%s\\n' " + shlex.quote(docker_stdout) + f"\nexit {docker_exit}\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    harness = tmp_path / "token-block.sh"
+    harness.write_text('set -eu\nDIR="$1"\n' + block, encoding="utf-8")
+    env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    return subprocess.run(
+        ["sh", str(harness), str(home)], capture_output=True, text=True, env=env
+    )
+
+
+def test_install_sh_saves_the_console_token_with_mode_600(tmp_path: Path) -> None:
+    result = _run_install_token_block(tmp_path, "tok-abc123")
+    assert result.returncode == 0, result.stderr
+    token_file = tmp_path / "home" / "console-token.txt"
+    assert token_file.read_text(encoding="utf-8").strip() == "tok-abc123"
+    assert stat.S_IMODE(token_file.stat().st_mode) == 0o600
+    assert "console token saved" in result.stdout
+
+
+def test_install_sh_does_not_overwrite_an_existing_console_token(tmp_path: Path) -> None:
+    """A rerun/upgrade must not replace a secret the operator already stored."""
+    home = tmp_path / "home"
+    home.mkdir()
+    token_file = home / "console-token.txt"
+    token_file.write_text("saved-before\n", encoding="utf-8")
+    token_file.chmod(0o600)
+    result = _run_install_token_block(tmp_path, "rotated-token")
+    assert result.returncode == 0, result.stderr
+    assert token_file.read_text(encoding="utf-8") == "saved-before\n"
+    assert "does not match the running console token" in result.stdout
+
+
+def test_install_sh_warns_but_succeeds_when_the_token_cannot_be_read(tmp_path: Path) -> None:
+    """An empty/failed token CLI must not fail an otherwise healthy install."""
+    result = _run_install_token_block(
+        tmp_path, "web.auth_token is empty", docker_exit=1
+    )
+    assert result.returncode == 0, result.stderr
+    assert "could not read the console token" in result.stdout
+    assert not (tmp_path / "home" / "console-token.txt").exists()

@@ -62,15 +62,15 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 固定发布版本（生产推荐；脚本、compose 文件和镜像都锁在同一个 tag）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/install.sh \
-  | RUI_REF=v0.3.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.1/deploy/install.sh \
+  | RUI_REF=v0.4.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1 sh
 ```
 
 装到 `/vol1/rui`（目录需可写）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/install.sh \
-  | RUI_HOME=/vol1/rui RUI_REF=v0.3.0 RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.1/deploy/install.sh \
+  | RUI_HOME=/vol1/rui RUI_REF=v0.4.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1 sh
 ```
 
 `RUI_REF` 决定脚本拉取的 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，
@@ -83,7 +83,7 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/deploy/insta
 RUI_HOME=~/rui          # 安装目录
 RUI_REPO=yes999zc/rui   # fork
 RUI_REF=main            # 分支/tag
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0   # 生产建议固定 tag 或 digest
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1   # 生产建议固定 tag 或 digest
 RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
                         # 可选：raw 不通时换成镜像前缀，例如
                         # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main
@@ -99,14 +99,14 @@ RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
 | 2 | `setup` 写**生产模板**（provider 链、模型路径、playback 16k/1ch）+ 生成 `keywords.txt`（默认唤醒词）和**控制台 token**，无设备/无密钥 | `~/rui/config/config.yaml`、`config/keywords.txt` |
 | 3 | 生成 `.env`，含随机 device token | `~/rui/.env`（chmod 600） |
 | 4 | 检查 ASR/VAD/KWS 三件套；任一缺失就 `fetch-models`（先从镜像 seed 复制 VAD/KWS，再下 SenseVoice） | `~/rui/data/models/` |
-| 5 | `docker compose up -d` 并等 `/health` 通过；120 s 仍不健康则打印探针/日志命令并 `exit 1` | 容器 `rui` |
+| 5 | `docker compose up -d` 并等 `/health` 通过；健康后把控制台 token 存到 `console-token.txt`（0600，已存在不覆盖）；120 s 仍不健康则打印探针/日志命令并 `exit 1` | 容器 `rui`、`~/rui/console-token.txt` |
 
 ### 2.3 期望输出与耗时
 
 ```text
 [1/5] compose file
 [2/5] config + wake words
-console token: <console-token>          ← 只在这里打印一次，先复制
+console token: <console-token>          ← 只在这里打印一次；[5/5] 会另存到 console-token.txt
 [3/5] env
       wrote .env with a generated device token (48 hex chars)
 [4/5] local models: ASR + VAD + wake word
@@ -114,7 +114,9 @@ console token: <console-token>          ← 只在这里打印一次，先复制
 [5/5] starting
       waiting for the service to answer /health
       healthy
+      console token saved: ~/rui/console-token.txt (mode 600)
 done. open http://<nas-lan-ip>:8080/
+  console: token saved to ~/rui/console-token.txt (mode 600) - the 401 dialog points here
 ```
 
 镜像已在本机（或拉取很快）且只需下载 ASR 时，实测约 **85 秒**到 `healthy`；首次含镜像拉取和
@@ -124,16 +126,28 @@ done. open http://<nas-lan-ip>:8080/
 
 ### 2.4 控制台 token
 
-`rui setup` 在 `[2/5]` 生成随机 `web.auth_token` 并打印一次。错过了就进容器读：
+`rui setup` 在 `[2/5]` 生成随机 `web.auth_token` 并打印一次。安装脚本在服务 healthy 后会把
+它存到 **`~/rui/console-token.txt`**（chmod 600），不用再从滚屏日志里找：
 
 ```bash
-cd ~/rui
-docker compose exec -T rui rui token
-docker compose exec -T rui rui token --rotate  # 轮换；重启服务后生效
+cat ~/rui/console-token.txt                       # 安装时保存的那份
+cd ~/rui && docker compose exec -T rui rui token  # 容器内实时读取（文件丢失/过期时用）
 ```
 
-控制台没有 token 会返回 401（页面会提示输入 `X-Auth-Token`）。**只有在本机开发**才可以显式
-`web.allow_anonymous: true` 关闭鉴权；生产模板默认关闭，且非 loopback + 空 token 会拒绝启动。
+- **重跑/升级不覆盖**：`install.sh` 发现 `console-token.txt` 已存在就原样保留；如果它和当前
+  token 不一致（例如执行过 `--rotate`），脚本会提示文件过期，按下面的命令刷新即可。
+- **轮换**：`docker compose exec -T rui rui token --rotate`，重启服务后生效；随后刷新文件：
+  ```bash
+  cd ~/rui
+  docker compose exec -T rui rui token > console-token.txt.new \
+    && mv console-token.txt.new console-token.txt && chmod 600 console-token.txt
+  ```
+- **401 恢复**：控制台没有 token 会返回 401（页面登录框提示粘贴 `X-Auth-Token`）；先
+  `cat ~/rui/console-token.txt`，文件不在就跑容器里的 `rui token`。**只有在本机开发**才可以
+  显式 `web.allow_anonymous: true` 关闭鉴权；生产模板默认关闭，且非 loopback + 空 token 会
+  拒绝启动。
+- `console-token.txt` 和 `.env` 的 **device token 不是同一个**；device token 给音箱 client
+  用（§3.0.6），控制台 token 只用于网页/API 的 `X-Auth-Token`。
 
 > **分享前脱敏**：`install.sh` 的日志和 `setup` 输出都包含这个控制台 token（以及生成的
 > device token）。贴日志、截图或发 issue 之前先把它替换成 `***`。
@@ -164,9 +178,9 @@ docker compose exec -T rui rui token --rotate  # 轮换；重启服务后生效
 
 ```bash
 mkdir -p /vol1/rui/config /vol1/rui/data/models /vol1/rui/data/state /vol1/rui/scripts && cd /vol1/rui
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/docker-compose.yml -O
-curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.3.0/config.example.yaml -O
-IMAGE=ghcr.io/yes999zc/rui:0.3.0
+curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.1/docker-compose.yml -O
+curl -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.1/config.example.yaml -O
+IMAGE=ghcr.io/yes999zc/rui:0.4.1
 # 容器以 1000:1000 运行，先让两个可写卷归它所有（root/sudo）。
 chown -R 1000:1000 config data
 docker run --rm --user 1000:1000 -v /vol1/rui/config:/config "$IMAGE" \
@@ -465,7 +479,7 @@ XFYUN_API_KEY=...
 XFYUN_API_SECRET=...
 RUI_HA_TOKEN=...       # 接 Home Assistant 时填
 RUI_DEVICE_TOKEN=...   # install.sh 生成的，音箱 client 用同一个值
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.3.0   # 安装脚本写入；固定版本，回滚时改这里
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1   # 安装脚本写入；固定版本，回滚时改这里
 ```
 
 只填实际用到的即可。**没有讯飞 key 时**，在向导 `keys` 步把 TTS 选成 `volc_tts` 并填
@@ -497,6 +511,7 @@ docker compose logs --tail=100 rui
 | 位置 | 内容 | 权限/备注 |
 |---|---|---|
 | `~/rui/config/config.yaml` | `devices[]`、provider 链、`web.auth_token` | 0600；改动前先备份 |
+| `~/rui/console-token.txt` | 安装时保存的控制台 token（同 `web.auth_token`） | 0600；重跑不覆盖，轮换后按 §2.4 刷新 |
 | `~/rui/data/secrets.yaml` | 向导保存的密钥 | 0600，只写不读；环境变量优先 |
 | `~/rui/.env` | `RUI_DEVICE_TOKEN`、`RUI_IMAGE`、`RUI_UID`/`RUI_GID`、可选 key | 0600；`docker compose` 注入 |
 | `~/rui/config/keywords.txt` | 唤醒词/KWS 参数 | 改唤醒词后重新生成 |
@@ -509,7 +524,7 @@ docker compose logs --tail=100 rui
   `~/rui/.env` 的 `RUI_DEVICE_TOKEN`，`docker compose up -d`，再把新值写进 client 并重启；
   最后回 `test` 确认 `speaker_connected=true`。旧 client token 会得到 401/close 1008，
   NAS 日志是 `xiaoai: rejected ... (bad or missing token)`。
-- **换控制台 token**：`docker compose exec -T rui rui token --rotate`，再 `docker compose restart rui` 让服务加载新值；重启后旧 token 失效。
+- **换控制台 token**：`docker compose exec -T rui rui token --rotate`，再 `docker compose restart rui` 让服务加载新值；重启后旧 token 失效，并按 §2.4 刷新 `console-token.txt`（重跑 `install.sh` 不会自动覆盖旧文件）。
 - **升级**：`.env` 固定 `RUI_IMAGE` → `docker compose pull && docker compose up -d` →
   `docker compose ps` 等 healthy → `docker compose exec -T rui rui doctor`。
 - **升级到非 root 镜像（已有安装，一次性）**：先 `scripts/backup.sh --out ~/rui-backups`，
@@ -660,7 +675,7 @@ uv sync && uv run rui doctor
 uv run rui serve
 ```
 
-## 10. 已知缺口（历史 P15 记录；0.3.0 仍适用部分）
+## 10. 已知缺口（历史 P15 记录；0.4.0 仍适用部分）
 
 - **`setup` 仍不写 devices**：这是有意的（不替用户猜设备）。模板已带 provider 链、模型路径、
   `keywords.txt`；正常冷装由 `/setup` 向导的 `params` 步写入 `devices[]`、`keys` 步写密钥，
@@ -681,7 +696,7 @@ uv run rui serve
 | client 日志 401 / close 1008；NAS 日志 `xiaoai: rejected ... (bad or missing token)` | client 还带着旧 token，或两边不是同一个值 | 到 `/setup` 的 `connect` 步重新复制当前 ws URL + device token，更新 client 配置并重启；确认 `.env` 的 `RUI_DEVICE_TOKEN` 没被改过。控制台 token 不用于这里 |
 | 重跑 `install.sh` 报容器 `rui` 已存在 | 同一 `RUI_HOME` 重跑是安全的；容器属于另一个 compose project 时脚本拒绝接管 | 按脚本打印的目录去执行 `docker compose down`，或在旧目录停掉旧安装后再重跑。0.1.x 的 `house-ear`：`docker stop house-ear && docker rm house-ear` |
 | `docker pull ghcr.io/...` TLS handshake timeout / 403 | Docker daemon 没有代理/镜像源，或 GHCR 不可达 | 给 daemon 配代理或 registry mirror；或 `docker pull` + `save` 到 NAS `load`。脚本会自动按 `RUI_REF` 从源码构建同一 tag（需 `git`）；`raw` 卡住用 `RUI_RAW` |
-| 灯环不亮 | 0.3.0 新建 LX06 默认 `led.enabled: true`；老配置/手动配置可能仍是关闭 | 到 `params` 的“灯效”打开，或检查 `config.yaml` 的 `devices[].led.enabled`；保存会重启平面 |
-| 控制台 401 / 找不到 console token | `[2/5]` 的 `console token:` 只打印一次，容易被日志刷走 | `cd ~/rui && docker compose exec -T rui rui token` 找回；`--rotate` 轮换后重启服务。它和 `.env` 的 device token 不是同一个 |
+| 灯环不亮 | 0.4.0 新建 LX06 默认 `led.enabled: true`；老配置/手动配置可能仍是关闭 | 到 `params` 的“灯效”打开，或检查 `config.yaml` 的 `devices[].led.enabled`；保存会重启平面 |
+| 控制台 401 / 找不到 console token | `[2/5]` 的 `console token:` 只打印一次，容易被日志刷走 | 先 `cat ~/rui/console-token.txt`（安装时已保存）；文件不在或过期就用 `cd ~/rui && docker compose exec -T rui rui token` 找回。`--rotate` 轮换后重启服务并刷新该文件。它和 `.env` 的 device token 不是同一个 |
 | `install.sh` 最后报 120 s 不健康 | 容器起了但 `/health` 未通过；常见是 token/端口/模型或配置问题 | 按脚本提示跑 `docker compose exec -T rui rui-healthcheck` 和 `docker compose logs --tail=100 rui`；修好后重跑脚本（同目录安全） |
 | 升级后容器反复重启 / 日志 `Permission denied` / healthcheck `cannot read config` | 非 root 镜像（uid 1000）读不了 root 所有的 bind mount | 备份后 `sudo chown -R 1000:1000 config data`，再 `docker compose up -d --force-recreate`；见 [security.md](security.md) |
