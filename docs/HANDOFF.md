@@ -4,7 +4,7 @@ phase-close: task-8
 
 ## 会话身份
 - 模式：A（双仓库：rui 上游 + rui-dot2-bridge 下游），单会话单任务板
-- 仓库：`/Users/bakeyzhang/AI_Workspace/01_Code/projects/house-ear`（rui）、`/Users/bakeyzhang/AI_Workspace/01_Code/projects/rui-dot2-bridge`（下游）
+- 仓库：`$HOME/AI_Workspace/01_Code/projects/house-ear`（rui）、`$HOME/AI_Workspace/01_Code/projects/rui-dot2-bridge`（下游）
 - 分支/commit：rui `main` @ `8400fdd`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `ba0ba54`
 
 ## 版本与契约
@@ -35,7 +35,7 @@ phase-close: task-8
 | hot 层清理 | pending | `rui-dot2:0.5.2-hot1..4` 与 `/home/yes999zc/hot`；保留 0.6.0/0.6.2 回滚 |
 | 告别只从本房间出（两轮真机） | pending | 必须 9 哥 本人；0.6.0 已带着这一项未验收发布（release notes 已写明） |
 | 第二台 Dot2 共存验收 | pending | 硬件未到货 |
-| `.34` 金丝雀部署 v2 | pending | 授权可用（`192.168.5.34`，`~/rui` 现 0.5.3）；用本地构建 + 双假设备配置验 `/v2` 与 `/api/v2` |
+| `.34` 金丝雀部署 v2 | pending | 授权可用（测试机 `.34`，`~/rui` 现 0.5.3）；用本地构建 + 双假设备配置验 `/v2` 与 `/api/v2` |
 | `PATCH /house/audio` 显式写 null/核心默认值不落盘 | pending | 受 `config/store.py::_audio_for_disk` 限制，需单独立项（v2 声音层遗留） |
 
 ## 下一步（按顺序，接手方可直接执行）
@@ -77,7 +77,7 @@ phase-close: task-8
 
 ## 核验命令（接手方先跑一遍，再相信上面的版本号）
 ```bash
-cd /Users/bakeyzhang/AI_Workspace/01_Code/projects/house-ear
+cd $HOME/AI_Workspace/01_Code/projects/house-ear
 git status --short && git log --oneline -3 && git describe --tags
 .venv/bin/python -m pytest -o addopts='' -q
 .venv/bin/python -m ruff check src tests scripts
