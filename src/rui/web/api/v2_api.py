@@ -859,6 +859,33 @@ def _plugin_public(plugin: object, source: str, error: str) -> dict[str, Any]:
     }
 
 
+def _device_test_record(saved: dict[str, Any],
+                        device: DeviceConfig | None) -> dict[str, Any]:
+    """The stored ``device.test`` record, but only when it belongs to ``device``.
+
+    The setup store is house-wide (one ``test/device/test`` slot), so the record a
+    probe wrote for one room must never become evidence for another room, and a draft
+    (``device is None``) must never inherit any record at all. Records without a
+    matching ``device_id`` -- including pre-M6 ones that never wrote the field -- are
+    "no record" for everyone. Every layer is checked with ``isinstance`` because
+    ``setup.json`` is user-editable and a non-dict there must not 500 a read.
+    """
+    if device is None:
+        return {}
+    test = saved.get("test")
+    if not isinstance(test, dict):
+        return {}
+    device_node = test.get("device")
+    if not isinstance(device_node, dict):
+        return {}
+    record = device_node.get("test")
+    if not isinstance(record, dict) or not record:
+        return {}
+    if str(record.get("device_id") or "") != device.id:
+        return {}
+    return record
+
+
 def _catalog_entries(data_dir: str | Path | None) -> tuple[dict[str, Any], list[str]]:
     """(plugin id -> (plugin, source, error), load errors) from the shared resolver."""
     catalog = PlugCatalog(data_dir)
@@ -1199,14 +1226,15 @@ def install_v2_routes(
 
     def _setup_summary(config: Config, device: DeviceConfig) -> dict[str, Any]:
         stored = setup_store.read(config.system.data_dir)
-        test = stored.get("test", {}).get("device", {}).get("test", {})
-        if not isinstance(test, dict):
-            test = {}
+        # The setup store has one house-wide `test/device/test` slot; only this
+        # device's own record may show up on its detail card (C-002 A-5). Corrupt
+        # layers read as "no record", and only the JSON boolean true is a pass.
+        record = _device_test_record(stored, device)
         resolved = resolve(device, config)
         return {
             "configured": bool(device.host and device.wake_words and resolved is not None),
-            "last_test_ok": bool(test.get("ok")),
-            "last_test_at": str(test.get("at") or ""),
+            "last_test_ok": record.get("ok") is True,
+            "last_test_at": str(record.get("at") or "") if record else "",
         }
 
     async def device_rows(config: Config, *, detail: bool = False) -> list[dict[str, Any]]:
@@ -2865,7 +2893,12 @@ def install_v2_routes(
         ]
         steps.extend({
             "id": name, "scope": "device", "required": name != "verify",
-            "status": "pending", "evidence": {}, "actions": [],
+            "status": "pending",
+            # A blocked plan has no evidence, but the test step keeps the §7.23 shape
+            # so clients that read `tested`/`ok` do not have to special-case it.
+            "evidence": ({"ok": False, "tested": False, "checks": [], "at": ""}
+                         if name == "test" else {}),
+            "actions": [],
         } for name in ("prepare", "params", "wake", "connect", "test", "verify"))
         return {
             "mode": ctx["mode"],
@@ -2895,7 +2928,6 @@ def install_v2_routes(
         keys_done = all(keys_stages.get(stage, False) for stage in ("asr", "tts", "llm"))
         models = _models_state(config)
         models_done = all(models.values())
-        plane = app_module._plane_snapshot(app)
         plane_error = str(getattr(app.state, "plane_error", "") or "")
 
         manual = saved.get("prepare", {}).get("manual", {})
@@ -3002,7 +3034,15 @@ def install_v2_routes(
         transport = (str(ctx["resolved"].device.transport)
                      if ctx["resolved"] is not None else "inbound")
         outbound = transport == "outbound"
-        connected = bool(plane.get("speaker_connected"))
+        # `_plane_snapshot` aggregates the fleet: a connected living room must not turn
+        # this draft or this other room's link hint green. Ask the device's own plane,
+        # and give a draft (no device yet) no link at all.
+        if device is not None:
+            device_plane = app_module._device_plane(app, device.id)
+            connected = bool(device_plane.get("speaker_connected")) and str(
+                device_plane.get("speaker_device") or "") in ("", device.id)
+        else:
+            connected = False
         env = (token_env_of(device, ctx["resolved"]) if device is not None
                else (manifest.runtime.token_env if manifest.runtime is not None
                      else "RUI_DEVICE_TOKEN"))
@@ -3021,16 +3061,18 @@ def install_v2_routes(
             "actions": [],
         }
 
-        stored_test = saved.get("test", {}).get("device", {}).get("test", {})
-        if not isinstance(stored_test, dict):
-            stored_test = {}
+        # Only this device's own record counts: the setup store is house-wide, and a
+        # draft (device is None) owns no record at all (C-002 A-5).
+        stored_test = _device_test_record(saved, device)
         # `device.test` always writes this record (ok/at/checks), so a non-empty dict
         # means a probe ran. `ok=false` is a result, not a missing one: the live link
         # must never overwrite a failed test, otherwise a connected speaker with a bad
         # token/capability would look "done" and the wizard would skip the failing
         # checks. The link is only a hint for the never-tested case (inbound only).
         tested = bool(stored_test)
-        stored_ok = bool(stored_test.get("ok"))
+        # Only the JSON boolean true is a pass; a corrupted `"ok": "false"` string or a
+        # missing key is a failed (or incomplete) record, never a pass.
+        stored_ok = stored_test.get("ok") is True
         if tested:
             test_done = stored_ok
             test_ok = stored_ok

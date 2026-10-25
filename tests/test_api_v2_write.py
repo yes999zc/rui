@@ -7,6 +7,7 @@ is a 200 with `blocked`, 422 bodies always carry `details.fields[]`, and a legac
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,43 @@ class _Plane:
             "error": "",
             "metrics": {"speaker_connected": self.connected},
         }
+
+
+def _write_outbound_plug(tmp_path: Path) -> None:
+    """Install a user plug whose only device is outbound (we dial it).
+
+    The built-in LX06 is inbound-only, and the plan's outbound branch (no link hint,
+    `pending` until a probe record exists) needs a manifest that says `outbound`.
+    """
+    root = tmp_path / "data" / "plugs" / "demo-outbound"
+    (root / "devices").mkdir(parents=True, exist_ok=True)
+    (root / "plugin.yaml").write_text(
+        "schema: rui-plugin/v0\n"
+        "id: demo-outbound\n"
+        "name: Outbound demo plug\n"
+        "version: 1.0.0\n"
+        'rui_compat: ">=0.0.1 <999.0.0"\n'
+        "license: MIT\n"
+        "maintainer: Test <test@example.invalid>\n"
+        "trust: builtin\n"
+        "devices:\n"
+        "  - devices/outbound.yaml\n",
+        encoding="utf-8",
+    )
+    (root / "devices" / "outbound.yaml").write_text(
+        "schema: rui-device/v1\n"
+        "id: outbound-demo\n"
+        "model: OUT1\n"
+        "name: Outbound Demo Speaker\n"
+        "vendor: Demo Inc.\n"
+        "class: A\n"
+        "transport: outbound\n"
+        "protocol: {kind: ws, version: '1'}\n"
+        "capabilities: [playback]\n"
+        "params:\n"
+        "  - {key: host, label: Address, type: string, required: true}\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.fixture()
@@ -453,9 +491,9 @@ def test_setup_step_device_test_returns_checks(console):
 
 
 # ------------------------------------------- setup plan evidence must stay honest
-def _plan(client) -> dict:
+def _plan(client, device_id: str = "living", *, plugin_id: str = "xiaoai-lx06") -> dict:
     return client.get(
-        "/api/v2/setup/plan?plugin_id=xiaoai-lx06&device_id=living",
+        f"/api/v2/setup/plan?plugin_id={plugin_id}&device_id={device_id}",
         headers=AUTH,
     ).json()
 
@@ -496,7 +534,8 @@ def test_a_failed_device_test_is_not_hidden_by_a_connected_link(console):
     assert step["status"] == "pending"
     assert step["evidence"]["ok"] is False
     assert step["evidence"]["tested"] is True
-    assert step["evidence"]["checks"]
+    assert any(check["code"] == "device_disabled" and check["status"] == "fail"
+               for check in step["evidence"]["checks"])
 
 
 def test_a_passing_device_test_completes_the_step(console):
@@ -517,6 +556,15 @@ def test_a_passing_device_test_completes_the_step(console):
     assert step["evidence"]["ok"] is True
     assert step["evidence"]["tested"] is True
 
+    # The link is only a hint for the never-tested case. Drop it: the stored pass must
+    # keep the step done, which is what separates "record says pass" from "link is up".
+    client.app.state.audio = _Plane(connected=False)
+    step = _set_test_step(_plan(client))
+    assert step["status"] == "done"
+    assert step["evidence"]["ok"] is True
+    assert step["evidence"]["tested"] is True
+    assert step["evidence"]["checks"]
+
 
 def test_never_tested_but_connected_keeps_the_link_hint(console):
     """No record is not a failure: the live link is still the "not tested yet" hint."""
@@ -534,6 +582,125 @@ def test_never_tested_but_connected_keeps_the_link_hint(console):
     assert step["status"] == "pending"
     assert step["evidence"]["ok"] is False
     assert step["evidence"]["tested"] is False
+
+
+# ------------------------------------ the test record belongs to one device only
+def _no_record(step: dict) -> None:
+    assert step["status"] == "pending"
+    assert step["evidence"] == {"ok": False, "tested": False, "checks": [], "at": ""}
+
+
+def test_a_test_record_never_leaks_to_another_device(console):
+    """M6 review BLOCKER: living's pass must not complete study's test step.
+
+    The setup store has one house-wide test slot, so the plan has to compare
+    `device_id` before treating a record as evidence (and a draft has no id to match).
+    """
+    client, _, _ = console(devices=[_device(), _device(id="study", room="书房")])
+    client.app.state.audio = _Plane(connected=True)
+
+    tested = client.post(
+        "/api/v2/setup/plan/steps/test", headers=AUTH,
+        json={"plugin_id": "xiaoai-lx06", "device_id": "living",
+              "action": "device.test", "values": {}},
+    )
+    assert tested.status_code == 200, tested.text
+    assert tested.json()["result"]["ok"] is True
+
+    _no_record(_set_test_step(_plan(client, "study")))
+
+
+def test_a_failed_test_for_one_device_does_not_fail_another(console):
+    """The reverse direction: study's failure must not turn living's step pending."""
+    client, _, _ = console(
+        devices=[_device(), _device(id="study", room="书房", enabled=False)])
+    client.app.state.audio = _Plane(connected=True)
+
+    failed = client.post(
+        "/api/v2/setup/plan/steps/test", headers=AUTH,
+        json={"plugin_id": "xiaoai-lx06", "device_id": "study",
+              "action": "device.test", "values": {}},
+    )
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["result"]["ok"] is False
+
+    step = _set_test_step(_plan(client, "living"))
+    # No record for living -> the inbound link is the only hint, and it says "untested".
+    assert step["status"] == "done"
+    assert step["evidence"] == {"ok": True, "tested": False, "checks": [], "at": ""}
+
+
+def test_a_draft_device_never_inherits_a_record_or_a_link_hint(console):
+    """A draft id does not exist yet: someone else's record and link are not its own."""
+    client, _, _ = console()
+    client.app.state.audio = _Plane(connected=True)
+    tested = client.post(
+        "/api/v2/setup/plan/steps/test", headers=AUTH,
+        json={"plugin_id": "xiaoai-lx06", "device_id": "living",
+              "action": "device.test", "values": {}},
+    )
+    assert tested.json()["result"]["ok"] is True
+
+    draft = _plan(client, "study")
+    assert draft["mode"] == "add"
+    assert draft["device_id"] == "study"
+    _no_record(_set_test_step(draft))
+    connect = next(step for step in draft["steps"] if step["id"] == "connect")
+    assert connect["status"] == "pending"
+
+
+def test_an_outbound_device_without_a_record_stays_pending(console, tmp_path):
+    """Outbound has no inbound link to hint with (and a neighbour's record is not one)."""
+    _write_outbound_plug(tmp_path)
+    outbound = _device(id="study", adapter="outbound-demo", host="10.0.0.9",
+                       room="书房", params={"plug_id": "demo-outbound"})
+    client, _, _ = console(devices=[_device(), outbound])
+    client.app.state.audio = _Plane(connected=True)
+    tested = client.post(
+        "/api/v2/setup/plan/steps/test", headers=AUTH,
+        json={"plugin_id": "xiaoai-lx06", "device_id": "living",
+              "action": "device.test", "values": {}},
+    )
+    assert tested.json()["result"]["ok"] is True
+
+    plan = _plan(client, "study", plugin_id="demo-outbound")
+    assert plan["blocked"] is None
+    assert plan["plugin"]["id"] == "demo-outbound"
+    connect = next(step for step in plan["steps"] if step["id"] == "connect")
+    assert connect["status"] == "skipped"  # outbound: there is no inbound link
+    _no_record(_set_test_step(plan))
+
+
+def test_a_corrupt_test_record_never_passes_and_never_500s(console):
+    """setup.json is user-editable: bad layers are "no record", wrong `ok` is a fail."""
+    client, config, _ = console()
+    client.app.state.audio = _Plane(connected=False)
+    setup = Path(config.system.data_dir) / "setup.json"
+    setup.parent.mkdir(parents=True, exist_ok=True)
+    cases = {
+        # `"false"` is a truthy string; only the JSON boolean true may pass.
+        "string ok": ({"test": {"device": {"test": {
+            "ok": "false", "device_id": "living"}}}}, True),
+        # A non-dict anywhere in the chain must read as "no record", not AttributeError.
+        "test layer": ({"test": ["boom"]}, False),
+        "device layer": ({"test": {"device": "boom"}}, False),
+        # A record without `ok` is an incomplete probe: conservative failure.
+        "missing ok": ({"test": {"device": {"test": {"device_id": "living"}}}}, True),
+    }
+    for name, (payload, has_record) in cases.items():
+        setup.write_text(json.dumps(payload), encoding="utf-8")
+        step = _set_test_step(_plan(client))
+        assert step["status"] == "pending", name
+        assert step["evidence"]["ok"] is False, name
+        assert step["evidence"]["tested"] is has_record, name
+
+
+def test_a_blocked_plan_keeps_the_test_evidence_shape(console):
+    """§7.23: a blocked plan still carries the test step's `tested`/`ok` fields."""
+    client, _, _ = console()
+    body = client.get("/api/v2/setup/plan?plugin_id=no-such-plug", headers=AUTH).json()
+    assert body["blocked"]["code"] == "plug_unavailable"
+    _no_record(_set_test_step(body))
 
 
 def test_a_failed_keys_test_never_completes_the_keys_step(console):

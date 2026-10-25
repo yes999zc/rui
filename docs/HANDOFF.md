@@ -28,6 +28,7 @@ phase-close: task-16
 - **控制台 v2 M3**（`d73b0a1`）：设备配置 tab（房间/主机/启用/音量/唤醒词/端口）+ 字段级 diff（未改字段不发、`listen_port` 留空表示继承、清空发 null）+ 保存前确认「重建全屋音频面」+ 新增设备（409 device_exists / 422 port_conflict）+ 删除需手输 id。E2E 抓包验证 PATCH body 恰好 `{"room":...}` / `{"volume_target":...}` / `{"listen_port":null}`。
 - **控制台 v2 M4**（`9e094e7`）：音频 tab，37 个 leaf 的 effective + 来源 + 四层原始值；16 个可覆盖 leaf 字段级 PATCH；「恢复继承」发 null 后重读校验来源（失败保持红色、重试重跑校验，不再静默吞错）；unresolved 插头给中性提示；全局影子提示。E2E 用注入 500 验证红/绿状态切换。
 - **控制台 v2 M5**（`825b9e7`）：`/v2/rooms` 房间与全屋视图；多设备策略（enabled/max_planes/default_output/room_priority）字段级 PATCH + 明确「house 写入是 service 范围、不自动重启」并给音频面重启按钮；全局音频编辑（37 leaf、explicit 标记、null 清除、覆盖计数 N 台、插头 manifest 覆盖警告）；422 dotted path 行内标红、409/429 可读；脏稿离开确认 + `beforeunload`。E2E 抓包验证 `{"multi_device":{"max_planes":5}}`、`{"audio":{"capture":{"rate":48000}}}`、`null` 清除、422 标红、`POST /house/audio/restart` 恰好一次。
+- **控制台 v2 M6**（checkpoint `6cc2fab` + 收尾修复）：八步向导（keys/models/prepare/params/wake/connect/test/verify），步骤/动作/完成度全部服务端驱动；create 前后续步骤禁用且不发请求；create 只用返回 id；draft 冲突可改 id 继续（真实 E2E 抓出的阻塞缺陷已修）；verify.say 出声前二次确认；逻辑失败不再显示绿色完成。`/v2/setup` 首装入口 + 设备列表空态链过去。
 - **生产 v2 预览（M3+M4）**：`rui-dot2:0.7.0-pre2-9e094e7`，healthy、双 plane connected、无 Traceback。
 - **生产 v2 预览**：为让 9 哥 早上能评测新后台，生产临时切到 main 构建 `rui-dot2:0.7.0-pre1-4ebf104`（`/v2` 可用，旧 `/` 不变；`/health` 逐字段一致、无 Traceback、设备 25s 回连）。**这是可控的预览切换，不是正式发布版本**；回滚一行见 §下一步。
 

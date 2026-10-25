@@ -40,6 +40,7 @@ from ...audio.protocol import PauseMusic, PlayFile, ResumeMusic, StopAudio
 from ...channels.supervisor import ChannelSupervisor
 from ...channels.weixin import WeixinAdapter
 from ...config.catalog import (
+    KEYWORD_DEFAULTS,
     coerce,
     field_specs,
     get_path,
@@ -5015,6 +5016,11 @@ def create_app(
         readable only because a device write materialized the first field. Device
         writes no longer do (C-002 Addendum A-4), so derive the setup-evidence path
         next to `config.yaml` instead of probing a cwd-relative `keywords.txt`.
+
+        A read-only endpoint must never 500 on a file it cannot read: a directory in
+        place of `keywords.txt`, a permission error or a broken mount degrades to the
+        defaults with `exists=false` (the same shape `keyword_meta` returns) and a log
+        line, so the console can say "not readable" instead of dropping the page.
         """
         voice = cfg.audio.voice
         if voice.kws_keywords_file:
@@ -5025,7 +5031,17 @@ def create_app(
             path = Path(config_path).resolve().parent / "keywords.txt"
         else:
             path = Path("keywords.txt")
-        return keyword_meta(path)
+        try:
+            return keyword_meta(path)
+        except OSError as exc:
+            log.warning("voice threshold: cannot read %s: %s", path, exc)
+            return {
+                "file": str(path),
+                "exists": False,
+                "threshold": KEYWORD_DEFAULTS["threshold"],
+                "boost": KEYWORD_DEFAULTS["boost"],
+                "keywords": 0,
+            }
 
     @app.get("/api/v1/audio", dependencies=[Depends(auth)])
     async def audio_status() -> dict:

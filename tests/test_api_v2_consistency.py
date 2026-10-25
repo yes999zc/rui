@@ -213,6 +213,39 @@ def test_threshold_endpoint_stays_readable_with_no_configured_path(console):
     assert created["keywords"] == 1
 
 
+def test_threshold_endpoint_degrades_instead_of_500_when_unreadable(console, monkeypatch,
+                                                                    caplog):
+    """A read-only endpoint must not 500 on a keywords path it cannot read.
+
+    A directory where `keywords.txt` should be (or a permission/mount error) used to
+    raise out of `keyword_meta`; the console then lost the whole page for a file it
+    only shows. Degrade to the default gate with `exists=false` and log it.
+    """
+    config = Config(web={"auth_token": TOKEN},
+                    devices=[_device(wake_words=["你好小瑞"])])
+    client, path, _ = console(config=config, set_keywords_path=False)
+    keywords = path.parent / "keywords.txt"
+    keywords.write_text("n ǐ h ǎo x iǎo r uì :3.00 #0.20 @你好小瑞\n",
+                        encoding="utf-8")
+
+    def unreadable(target):
+        raise OSError(21, "Is a directory", str(target))
+
+    monkeypatch.setattr("rui.web.api.app.keyword_meta", unreadable)
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/api/v1/voice/threshold", headers=AUTH)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "file": str(keywords),
+        "exists": False,
+        "threshold": 0.15,
+        "boost": 2.00,
+        "keywords": 0,
+    }
+    assert any("cannot read" in record.getMessage() for record in caplog.records)
+
+
 def test_unreadable_derived_copy_skips_the_mirror_instead_of_500(console, monkeypatch,
                                                                  caplog):
     """A copy that exists but cannot be read must not turn a saved device into a 500.

@@ -902,7 +902,7 @@ onBeforeUnmount(() => {
               :data-step-id="step.id"
               :data-status="step.status"
               :data-scope="step.scope"
-              :data-disabled="stepDisabled(step) ? 'true' : 'false'"
+              :data-disabled="stepHeadDisabled(step) ? 'true' : 'false'"
             >
               <button
                 type="button"
@@ -971,6 +971,7 @@ onBeforeUnmount(() => {
                             class="input mono"
                             autocomplete="off"
                             spellcheck="false"
+                            :disabled="cooldownActive"
                             data-testid="setup-collision-id"
                             @input="onIdChange(($event.target as HTMLInputElement).value)"
                           />

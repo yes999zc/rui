@@ -2123,6 +2123,12 @@
   border: 0;
 }
 
+/* A failing `device.test` check row: the server's status badge stays the source
+   of truth; the tint only makes the reason row stand out from passing rows. */
+.v2-setup-step .table tbody tr.is-fail td {
+  background: color-mix(in srgb, var(--fail-soft) 70%, var(--surface));
+}
+
 .v2-setup-step.is-disabled .v2-setup-step-head {
   cursor: default;
 }

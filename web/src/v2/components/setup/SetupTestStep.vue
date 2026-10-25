@@ -3,12 +3,18 @@
  * `test` step: evidence-only `device.test`. It never plays audio or changes
  * LEDs/volume; the server's check rows are rendered verbatim.
  *
- * The badge describes *this* run, not `step.evidence.ok`: the backend evidence
- * may report `ok:true` for a connected device even when the last `device.test`
- * returned `ok:false`, and painting that green would claim a pass that never
- * happened. Only the run's own `result.ok` plus every check being
- * ok/skipped/not_applicable turns the card green; a failed run stays red and
- * lists the failing checks.
+ * `result` only exists for a run started in this page session. After a reload it
+ * is null and the plan's stored evidence is the last server-side run:
+ *
+ * - `evidence.tested === true` means a probe ran, so `evidence.ok` decides the
+ *   badge (green/red) and `evidence.checks` lists the reasons.
+ * - `evidence.tested !== true` stays idle even when `evidence.ok` is true: the
+ *   backend also reports `ok:true` for a connected device that was never tested,
+ *   and painting that green would claim a pass that never happened.
+ *
+ * A live run still uses its own `result.ok` plus every check being
+ * ok/skipped/not_applicable; a failed run stays red and lists the failing
+ * checks (unknown statuses are treated as failures, not silently dropped).
  */
 import { computed } from 'vue'
 import type { SetupStep } from '../../api'
@@ -34,17 +40,24 @@ const runResult = computed<Record<string, unknown> | null>(() =>
 const checks = computed(() =>
   runResult.value ? checksFrom(runResult.value.checks) : setupChecks(props.step),
 )
-const failedChecks = computed(() => checks.value.filter((check) => check.status === 'fail'))
+// Anything that is not explicitly acceptable needs a reason row, including
+// status strings this build does not know yet.
+const failedChecks = computed(() => checks.value.filter((check) => !checkPasses(check.status)))
 const allChecksPass = computed(
   () => checks.value.length > 0 && checks.value.every((check) => checkPasses(check.status)),
 )
 const ranOk = computed(
   () => runResult.value !== null && runResult.value.ok === true && allChecksPass.value,
 )
+const evidenceTested = computed(() => props.step.evidence?.tested === true)
+const evidenceOk = computed(() => props.step.evidence?.ok === true)
 const resultState = computed<'idle' | 'ok' | 'fail'>(() => {
-  if (!runResult.value) return 'idle'
-  return ranOk.value ? 'ok' : 'fail'
+  if (runResult.value) return ranOk.value ? 'ok' : 'fail'
+  if (!evidenceTested.value) return 'idle'
+  return evidenceOk.value ? 'ok' : 'fail'
 })
+/** A run (live or stored) exists, so an empty `checks` list is server data, not "never ran". */
+const hasOutcome = computed(() => resultState.value !== 'idle')
 const checkedAt = computed(() => {
   const result = runResult.value
   if (result) {
@@ -132,7 +145,9 @@ function run(): void {
         </tbody>
       </table>
     </div>
-    <p v-else class="note">{{ t('v2.setup.test.empty') }}</p>
+    <p v-else class="note" data-testid="setup-test-empty">
+      {{ hasOutcome ? t('v2.setup.test.emptyChecks') : t('v2.setup.test.empty') }}
+    </p>
 
     <div class="v2-save-bar">
       <button

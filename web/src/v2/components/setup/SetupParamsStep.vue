@@ -350,7 +350,14 @@ const conflictText = computed(() =>
             data-testid="setup-port"
             @input="touch('listen_port')"
           />
-          <p v-if="visibleError('listen_port')" class="field-error" data-testid="setup-error-listen-port">
+          <!-- A `port_conflict` response feeds both `serverFields.listen_port`
+               and the structured `conflictText` (port + device ids); render the
+               detailed one only, not the same error twice. -->
+          <p
+            v-if="visibleError('listen_port') && !conflictText"
+            class="field-error"
+            data-testid="setup-error-listen-port"
+          >
             {{ visibleError('listen_port') }}
           </p>
           <p v-if="conflictText" class="field-error" data-testid="setup-error-port-conflict">

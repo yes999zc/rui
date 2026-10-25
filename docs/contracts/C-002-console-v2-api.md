@@ -1,7 +1,7 @@
 # C-002 控制台 v2 API 契约
 
 > **契约编号**：C-002/1  
-> **状态**：定稿草案（2026-10-25），随 rui 0.6.x 发布：以 **additive** 为主，唯一客户端可见的行为变更见 Addendum A-2（§5.4 门禁顺序）；不改变 C-001（`rui-device/v1`）。  
+> **状态**：定稿草案（2026-10-25），随 rui 0.6.x 发布：以 **additive** 为主；客户端可见的行为变更共两处，见 Addendum A-2（§5.4 门禁顺序）与 A-5（`setup/plan` 的 test/connect 证据来源）；不改变 C-001（`rui-device/v1`）。  
 > **适用对象**：`web/src/v2/**` 前端实现者、`src/rui/web/api/**` 后端实现者、reviewer/verifier。  
 > **一句话**：v2 控制台只依赖 `/api/v2/*` 与能力（capability）声明；机型差异来自插头 manifest，不来自前端 if/else。
 
@@ -13,8 +13,8 @@
 |---|---|
 | 契约 ID / 版本 | `C-002/1` |
 | API 版本 | `2.0`（路径前缀 `/api/v2`） |
-| rui 版本窗口 | `>=0.6.0, <0.7.0`：只增不改（唯一行为变更见 A-2），v1 全部保持可用 |
-| 破坏性变更 | 本契约 **不含字段删除/重命名**；0.6.x 唯一有意行为变更是 §5.4 动作门禁顺序（客户端可见，见 Addendum A-2）；删除/重命名只能进 `/api/v3` 或 0.7 的 C-002/2 |
+| rui 版本窗口 | `>=0.6.0, <0.7.0`：只增不改（客户端可见变更见 A-2、A-5），v1 保持可用（两处已记录修正见 A-4） |
+| 破坏性变更 | 本契约 **不含字段删除/重命名**；0.6.x 有意行为变更有两处：§5.4 动作门禁顺序（见 Addendum A-2）与 `setup/plan` test/connect 步的证据来源（见 A-5），均客户端可见；删除/重命名只能进 `/api/v3` 或 0.7 的 C-002/2 |
 | 依赖契约 | C-001 `rui-device/v1`（manifest：`capabilities`、`params`、`audio_defaults`、`runtime`、`device_side`）**不变** |
 | 认证 | 沿用 `X-Auth-Token`；无账号/角色/会话 |
 | 前端入口 | `web/v2.html` + `web/src/v2/**`，路由前缀 `/v2/*`；生产由 FastAPI 托管 `v2.html` |
@@ -44,7 +44,7 @@
 
 - 不定义账号/角色/多租户、HA/ESPHome 依赖、OTA/刷机/ADB/WebUSB。
 - 不定义非设备域的 v2 API（providers/integrations/music/memory 在 v2 首次交付仍可调用稳定 v1 端点；迁移时另立契约）。
-- 不改变 v1 任何端点语义；v2 可在内部复用 v1 的服务层实现，但对外形状以本契约为准。
+- v1 端点的形状与语义保持兼容；仅有两处已记录的实现修正（见 A-4）：device/setup 写不再落盘派生的 `audio.voice.kws_keywords_file`，以及 `GET /api/v1/voice/threshold` 在两个路径字段都为空时改读 `config.yaml` 同目录的 `keywords.txt`（不可读时降级为 `exists=false`）。v2 可在内部复用 v1 的服务层实现，但对外形状以本契约为准。
 - 不新增配置版本；不要求 `CONFIG_VERSION` 升级。
 
 ---
@@ -871,6 +871,7 @@ Activity（设备维度事件流）
 
 - `checks[].status`: `ok | fail | not_applicable | skipped`；`code` 稳定；`detail` 不含 secret。
 - checks 的组合与 code：
+  - `device`：仅设备 disabled 时出现，`device_disabled`（A-2；排在 `plugin` 之前，disabled 设备的 `checks[0]` 就是它）。
   - `plugin`：始终出现；`plug_resolved | plug_unresolved`。
   - `link`：始终出现；inbound `connected | device_not_connected`，outbound `host_reachable | device_unreachable`。
   - `plane`：仅 outbound 出现，`not_applicable`（inbound 不出现）。
@@ -957,7 +958,8 @@ Activity（设备维度事件流）
     {"id": "connect", "scope": "device", "required": true, "status": "pending",
      "evidence": {"configured": false, "ws_url_masked": null}, "actions": []},
     {"id": "test", "scope": "device", "required": true, "status": "pending",
-     "evidence": {"ok": false, "checks": []}, "actions": ["device.test"]},
+     "evidence": {"ok": false, "tested": false, "checks": [], "at": ""},
+     "actions": ["device.test"]},
     {"id": "verify", "scope": "device", "required": false, "status": "pending",
      "evidence": {"text_tested": false}, "actions": ["verify.say"]}
   ],
@@ -974,6 +976,7 @@ Activity（设备维度事件流）
 - `mode`：`first-run`（house 无设备）、`add`（house 有设备且 `device_id` 不存在）、`edit`（`device_id` 已存在；只用于修配置，UI 不把它当向导入口）。`add` 模式下 `keys`/`models` 必须 done，否则 `blocked={"code":"house_setup_incomplete","message":...}`。
 - `mode=edit` 的 `params` 步 action 是 `device.update`（PATCH 语义，必须已有 `device_id`）；`mode=add/first-run` 才是 `device.create`。`edit` 不创建第二台设备。
 - `device_id` 必须是合法 slug；不创建草稿，不写配置；不存在是正常 draft。
+- `test`/`connect` 步的证据只取该 `device_id` 自己的 setup 记录与平面；draft（`device_id` 不存在）没有记录也没有平面（见 A-5），不得借用其他设备的记录或 `speaker_connected`。
 - `plugin_id`：`add/first-run` 必填；`edit` 可省略（从 device 推断）；两者都给但不匹配 → `409 plug_mismatch`。
 - `model_id`：可选；插件有多个 device manifest 时必填，否则 `422 model_required`（与 §7.11 一致）。
 - `params` 步的 `detail.params_schema` 来自 manifest；`defaults` 只给非 secret 默认 + 建议 room（不强制）。
@@ -1028,7 +1031,7 @@ Activity（设备维度事件流）
 
 - `device.create` 后返回的 `device` 必须与 7.12 同形；UI 据 `plan.next_step` 继续。
 - step `status` 只有 `pending|done|skipped|error`；`next_step` 可为 `null`；不写配置的 step 返回 `restart:null`。
-- 首次安装（`mode=first-run`）与 add 模式共用端点；旧 `/api/v1/setup/step` 保持不动，v2 不调用它。
+- 首次安装（`mode=first-run`）与 add 模式共用端点；旧 `/api/v1/setup/step` 的形状与语义保持不动（唯一已记录的实现修正见 A-4：其设备写也不再落盘派生的 `kws_keywords_file`），v2 不调用它。
 - 错误码补充：`house_setup_incomplete`（409）、`plug_mismatch`（409）、`plug_unavailable`（409）、`device_exists`（409）、`missing_prerequisite`（422，`details.step`）、`step_in_progress`（409）。
 
 ---
@@ -1130,8 +1133,8 @@ Activity（设备维度事件流）
 
 ### 10.1 兼容窗口
 
-- `>=0.6.0 <0.7.0`：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序外不改语义（见 Addendum A-2）；`meta.features` 用于渐进点亮。
-- v1 端点与形状保持向后兼容；唯一已知 additive 是 `/api/v1/turns` 每条新增可选 `device_id`（不删不改旧字段，旧消费者可忽略）。v2 不修改 `GET /api/v1/devices`、`PUT /api/v1/devices/{id}`、`/api/v1/setup/step` 的既有字段。
+- `>=0.6.0 <0.7.0`：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序（A-2）与 `setup/plan` test/connect 步的证据来源（A-5）外不改语义；`meta.features` 用于渐进点亮。
+- v1 端点与形状保持向后兼容；唯一已知 additive 是 `/api/v1/turns` 每条新增可选 `device_id`（不删不改旧字段，旧消费者可忽略）。v2 不修改 `GET /api/v1/devices`、`PUT /api/v1/devices/{id}`、`/api/v1/setup/step` 的既有字段；这些写路径不再落盘派生的 `kws_keywords_file`，`GET /api/v1/voice/threshold` 的路径推导与不可读降级也见 A-4。
 - C-001 不变：v2 只消费 manifest 的 `capabilities/params/audio_defaults/runtime/device_side`，不新增字段。
 
 ### 10.2 发布顺序
@@ -1186,7 +1189,7 @@ Activity（设备维度事件流）
 1. 契约里每个端点都有方法/路径/请求/响应/错误码，且没有“视情况而定”。
 2. `capabilities` 全部来自 manifest；v2 前端 grep 不到机型字面量。
 3. provenance 的五种 source 与 ack 特例都能在测试中复现。
-4. 0.6.x 不改 v1；`meta.features` 可关闭全部 v2 能力。
+4. 0.6.x 不改变 v1 端点的形状与请求/响应字段；仅 A-4 记录的两处实现修正（派生 `kws_keywords_file` 不再落盘、voice threshold 的路径推导与不可读降级）例外；`meta.features` 可关闭全部 v2 能力。
 5. 设备写入返回 `restart`，UI 有“重启全屋音频面”的确认点。
 6. secret 不出现在任何响应/日志/截图。
 7. `/v2` 深链刷新可开；`/api/v2` 404 不落 SPA。
@@ -1196,7 +1199,7 @@ Activity（设备维度事件流）
 
 ## Addendum（0.6.x）
 
-本 Addendum 记录 0.6.x 的 additive 字段与一处**有意变更**（§5.4 门禁顺序，客户端可见）；不删除、不重命名既有字段。A-2 明写「本条取代 §5.4 旧顺序」，其余条目对 0.6 的 v2 客户端仍可忽略。
+本 Addendum 记录 0.6.x 的 additive 字段与两处**有意变更**（§5.4 门禁顺序、`setup/plan` test/connect 步的证据来源，均客户端可见）；不删除、不重命名既有字段。A-2 明写「本条取代 §5.4 旧顺序」，A-5 明写「本条取代 §7.23 test 步的旧判定」；其余条目对 0.6 的 v2 客户端仍可忽略。
 
 ### A-1. DeviceDetail 增加 `listen_port` 来源
 
@@ -1234,20 +1237,28 @@ Activity（设备维度事件流）
 
 任何 v2 device 写（`POST/PATCH/DELETE /api/v2/devices`、setup 的 `device.create`）不再把派生的 `audio.voice.kws_keywords_file` 写入 `config.yaml`，因此 `GET /api/v2/house/audio` 的 `explicit` 集合在设备写前后保持不变（除非用户通过 `/house/audio` 真的改过该字段）。已知例外：v1 的 `PUT /api/v1/config/values` 编辑 `devices.*` 时仍可能把该派生键写入 `config.yaml`（预存在行为，另开任务处理）。
 
+这条修正直接落在共享写路径 `_write_devices` 上，所以 **v1 的设备/向导写也受影响**：`PUT /api/v1/devices/{id}`、`DELETE /api/v1/devices/{id}`、`POST /api/v1/setup/step` 的请求/响应形状与字段集合不变，但 `config.yaml` 里不再出现派生的 `kws_keywords_file`。读取端 `keyword_file()` 仍按同一规则推导路径，所以生效的 keywords 文件不变。
+
+`GET /api/v1/voice/threshold` 的路径推导同时收窄：`kws_keywords_file` 与 `kws_model_dir` 都为空时，读 `config.yaml` 同目录的 `keywords.txt`，不再探测 cwd 相对的 `keywords.txt`（旧行为只因 device 写把它落盘才碰巧可读）。该文件存在但不可读（目录占位、权限、挂载错误）时不再 500，而是返回 `keyword_meta` 形状的降级值（`exists=false`、`threshold=0.15`、`boost=2.00`、`keywords=0`）并记 warning。
+
 关键字文件路径仍有两个仅运行时的派生位置：配置未写 `kws_keywords_file` 时，音频面在 `kws_model_dir` 非空时使用 `audio.voice.kws_model_dir/keywords.txt`；两者都为空时音频面没有 keywords 文件（此时仅 setup 证据与旧控制台使用 `config.yaml` 同目录的 `keywords.txt`）。`rui doctor` 不读 `keywords.txt`（它的 KWS 检查只看模型目录下的 `tokens.txt`）。
 
-### A-5. 行为澄清：`setup/plan` 的 test 步以最近一次测试结果为准
+### A-5. 行为澄清：`setup/plan` 的 test 步以本设备的最近一次测试结果为准
 
-§7.23 的 `test` 步新增一个 additive 证据字段，并明确 `status` 的判定来源（客户端可见，但不删除/重命名字段）：
+§7.23 的 `test` 步新增一个 additive 证据字段，并明确 `status` 的判定来源（客户端可见，但不删除/重命名字段）。这是 0.6.x 第二处客户端可见行为变更（与 A-2 并列）：带失败记录的已连接设备从 `done/ok=true` 变成 `pending/ok=false`。
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
-| `tested` | `bool` | setup store 中是否存在最近一次 `device.test` 记录（`ok/at/checks` 由该探针写入） |
+| `tested` | `bool` | setup store 中存在**属于该 `device_id`** 的最近一次 `device.test` 记录（记录里的 `device_id` 必须与请求的设备一致；`add/first-run` 的草稿没有设备，一律视为无记录） |
 
 判定规则：
 
 - `tested=true`：`status` 与 `evidence.ok` 都只由记录里的 `ok` 决定。即最近一次测试 `ok:false` 时，即使链路当前 `speaker_connected=true`，test 步仍为 `pending`、`evidence.ok=false`，`evidence.checks` 保留失败的检查项，`next_step` 不会跳过 test。
-- `tested=false`（从未测过）且 transport 为 inbound：保留原有提示语义——链路已连接时 `status=done`、`evidence.ok=true`，由 `tested=false` 区分「未测但链路通」与「测试通过」。
+- `tested=false`（从未测过）且 transport 为 inbound：保留原有提示语义——**该设备自己的**链路已连接时 `status=done`、`evidence.ok=true`，由 `tested=false` 区分「未测但链路通」与「测试通过」。
 - `tested=false` 且 transport 为 outbound：仍为 `pending`/`ok=false`（outbound 没有入站链路可作提示）。
+- 记录加固：只有 JSON 布尔 `true` 算通过；`"ok": "false"` 这类字符串、缺 `ok` 的残记录按失败（保守）；`test`/`device`/记录本身不是 dict 时视为无记录（`tested=false`），不得抛 500。
+- connect 步同样按设备取链路：`speaker_connected` 提示来自该设备自己的平面；草稿（`device_id` 不存在）没有平面，connect 为 `pending`，不会因别的房间在线而 `done`。
 
-`evidence.ok`/`checks`/`at` 字段语义不变；旧客户端忽略 `tested` 即可。该规则只影响 `GET /setup/plan` 与 setup step 响应中的 `plan`，不改 `POST /devices/{id}/test` 的响应。
+`checks`/`at` 字段语义不变；`evidence.ok` 在 `tested=true` 时只按记录 `ok` 裁决（不再被 live link 覆盖），`tested=false` 时仍是链路提示。旧客户端忽略 `tested` 即可。该规则只影响 `GET /setup/plan` 与 setup step 响应中的 `plan`，不改 `POST /devices/{id}/test` 的响应。
+
+设备详情（`GET /api/v2/devices/{id}` 的 `setup.last_test_ok/last_test_at`）按同一来源读取：只取**本设备**的 `device.test` 记录（记录内 `device_id` 必须与请求的设备一致），记录结构损坏（`test`/`device`/记录本身不是 dict）时按无记录处理（`last_test_ok=false`、`last_test_at=""`），不得 500；`"ok":"false"` 等非布尔 `true` 同样不算通过。注意 setup store 目前只有**单个**测试槽（最近一次记录，与设备共用），每设备历史记录是后续项，因此详情页也只能展示最近一次而非历史。

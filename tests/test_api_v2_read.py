@@ -251,6 +251,61 @@ def test_device_detail_has_provenance_and_no_secret_values(console):
     assert "fake-device-token-xyz" not in dumped
 
 
+def _write_setup_record(config: Config, payload: object) -> None:
+    setup = Path(config.system.data_dir) / "setup.json"
+    setup.parent.mkdir(parents=True, exist_ok=True)
+    setup.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_device_setup_summary_never_reads_another_devices_test(console):
+    """M6 review BLOCKER: the detail card's `setup` must be per-device evidence.
+
+    The setup store has one house-wide `test/device/test` slot, so a pass recorded
+    for the living room must not render as the study's last test result.
+    """
+    study = DeviceConfig(id="study", adapter="xiaoai", host="speaker.study",
+                         room="书房", params={"plug_id": "xiaoai-lx06"})
+    client, config = console(devices=[DEVICE, study])
+    _write_setup_record(config, {"test": {"device": {"test": {
+        "device_id": "living", "ok": True, "at": "2026-10-26T01:00:00+08:00",
+    }}}})
+
+    living = client.get("/api/v2/devices/living", headers=AUTH).json()["setup"]
+    assert living["last_test_ok"] is True
+    assert living["last_test_at"] == "2026-10-26T01:00:00+08:00"
+
+    other = client.get("/api/v2/devices/study", headers=AUTH).json()["setup"]
+    assert other["last_test_ok"] is False
+    assert other["last_test_at"] == ""
+    assert other["last_test_at"] != living["last_test_at"]
+
+
+def test_a_string_ok_is_not_a_passing_device_test(console):
+    """`"ok": "false"` is a truthy string; only the JSON boolean true may pass."""
+    client, config = console()
+    _write_setup_record(config, {"test": {"device": {"test": {
+        "device_id": "living", "ok": "false", "at": "2026-10-26T02:00:00+08:00",
+    }}}})
+
+    setup = client.get("/api/v2/devices/living", headers=AUTH).json()["setup"]
+    assert setup["last_test_ok"] is False
+    # A failing record is still a record: keep its timestamp visible.
+    assert setup["last_test_at"] == "2026-10-26T02:00:00+08:00"
+
+
+def test_a_corrupt_setup_store_does_not_500_the_device_detail(console):
+    """setup.json is user-editable: a non-dict `test` layer is "no record"."""
+    client, config = console()
+    _write_setup_record(config, {"test": ["boom"]})
+
+    response = client.get("/api/v2/devices/living", headers=AUTH)
+    assert response.status_code == 200
+    setup = response.json()["setup"]
+    assert set(setup) == {"configured", "last_test_ok", "last_test_at"}
+    assert setup["last_test_ok"] is False
+    assert setup["last_test_at"] == ""
+
+
 def test_device_audio_endpoint_reports_all_four_layers(console):
     client, _ = console()
     body = client.get("/api/v2/devices/living/audio", headers=AUTH).json()
