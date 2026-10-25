@@ -19,7 +19,7 @@
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 
 - **当前发布/生产**：v0.4.2 在线（`ghcr.io/yes999zc/rui:0.4.2`，digest `sha256:3791ccfd…`，amd64+arm64；回滚 `0.4.1`/`0.4.0`）；本会话**没有动生产**。
-- **本地仓库**：main 比 origin **领先 16 个提交，未 push**（有意：push 会触发 `latest` 镜像重建，9哥 要求攒批）。最后一次已推送提交 `6003700` 的 CI 全绿（secret-scan/security/ci/docker-publish）。
+- **发布状态（2026-10-25 17:4x）**：`main` 已推（HEAD `406785e`）+ tag **`v0.5.0`**；CI 全绿（secret-scan/security/ci/docker-publish，tag 与 main 各一轮）。GHCR `0.5.0`=`0.5`=`latest`=`sha-406785e` 同一 manifest digest **`sha256:01a3afe18faa…`**（amd64+arm64）；`docs/releases/v0.5.0.md` 已补 digest；GitHub Release 已发；#7 已公布 tag/digest/平台/「契约变化=无」。
 - **本会话新完成**（`git log origin/main..main`）：
   - HA 控制台逻辑：测试用表单里的一次性 token（不落盘）、保存并重连覆盖新 token、测试后表单不被清空（`6003700`/`7ae83cf`）；
   - §9 决策冻结 + `docs/multi-device-design.md` §11 答复 dot2 #11（`aa0bdb4`），Phase 2 契约草案 v0.1 写入 §12（`f3f0135`）；
@@ -31,7 +31,7 @@
 - **Phase 1b（17:35）**：`multi_device` 目录组（启用/max_planes/default_output/来源优先级/两个窗口/房间优先级/最近活跃窗口）+ 每设备 13 个 `devices[].audio.*` 覆盖字段（AEC 归属/开关、播放后静音、续听、预缓冲、采集布局；空值 = 继承）；体检页多设备卡片（未启用说明 / 逐平面状态 / 超 cap / 启动失败）；`web` typecheck+build 绿。
 - **打磨批（dot2 #12）**：healthcheck 根因（device_errors / fleet / 逐房间）；`doctor` 新增 `container_healthcheck` 一致性行；install.sh 重跑打印当前 `RUI_IMAGE` + 显式升级提示 + prune；0.4.2 release note 占位注释已清；`docs/deploy.md` §7.1 下游升级 + `rui_compat` 兼容矩阵；adapter 音量换算指向 helper。
 - **质量**：全量 **1278 passed / 18 skipped**；ruff clean；`web` typecheck/build 绿。
-- **下一步主线**：Phase 1b 控制台多设备状态（P5.3）→ 打磨批（P5.4）→ v0.5.0 发布流程；见 §0.2。真机验收 9哥 要求先保留。
+- **下一步**：**生产部署 v0.5.0 需 9哥 点头**（备份 `.env`/config → 改 `RUI_IMAGE` → `up -d` → `/health` devices=2 验收）；真机 LX06+2×Dot2 验收与回滚演练等 9哥 安排；dot2 会在发布后做干净安装验收（卡点单独开 issue）。
 - **dot2**：0.4.2 受控切换完成（回滚 21 s / 前滚 11 s，`plug-test` 与 0.3.4/0.4.0/0.4.1 逐项一致）；实测「撤 adapter 门控失败」→ 已定走 B 路线（上游 `devices[].audio.voice.post_playback_mute_ms`，默认 0，Dot2 建议 2500）；#11 确认 Phase 2 内部 IPC、adapter 零改动；#12 下游原地升级冷启动反馈已答复（docs PR 欢迎、install/healthcheck/release-note 进打磨批）。**他们会在 0.5.0 发布后做一次全新安装验收并反馈**；卡点单独开 issue。发布时需在 #7 公布 tag `v0.5.0` + GHCR digest + 平台 + 「相对 0.4.2 契约变化 = 无」。
 - **HA（生产待办，需 9 哥 点头）**：生产 `config/config.yaml` 的 `tools.ha.base_url` 为空、`data/secrets.yaml` 无 `RUI_HA_TOKEN`（`.env` 里是空值）。HA 的地址与长期令牌见 9哥 的本机配置（不入库）；`/api/mcp` 已实测 200、86 工具。0.4.2 控制台上正确顺序：填地址+token → **保存并重连** → 再点测试（0.4.2 的测试按钮只用已保存 token；该坑已在本分支修复）。
 - **环境坑（新会话必读）**：见 §0.3。
@@ -42,7 +42,7 @@ Phase 2 接线已完成并验证，**不要再改** `src/rui/audio/{protocol,pro
 
 1. **Phase 1b ✅**（P5.3）：`multi_device.*` / `devices[].audio.*` 已进目录（`multi_device` 组 + 每设备 13 个 audio 覆盖字段），体检页有多设备卡片（未启用/逐平面状态/超 cap/启动失败）；`web` 构建绿。
 2. **打磨批 ✅**（P5.4）：healthcheck 根因 + doctor 一致性行、install.sh 升级提示 + prune、0.4.2 占位注释清理、`docs/deploy.md` §7.1 下游升级/兼容矩阵、音量换算 pointer；dot2 docs PR 当前无 open，发布前再查。
-3. **v0.5.0 发布**：CHANGELOG（Unreleased 已有 Phase 2 条目）+ `docs/releases/v0.5.0.md` + 版本号 + tag → CI → digest → GitHub Release；发布时在 #7 公布 tag/digest/平台/「相对 0.4.2 契约变化=无」；部署与回滚演练需 9哥 明确点头。
+3. **v0.5.0 发布 ✅**（2026-10-25）：tag `v0.5.0`、digest `sha256:01a3afe1…`、CI 全绿、Release 已发、#7 已公布；**剩生产部署与回滚演练（需 9哥 明确点头）**。
 4. **真机验收**（9哥 保留）：LX06 + 2×Dot2 的共存/各自唤醒/同词单 turn/barge 归属/故障隔离/回滚；记录 2/4 平面 RSS/CPU 与唤醒→首字延迟。
 
 ### 0.3 环境与命令（新会话必读）
