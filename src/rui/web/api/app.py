@@ -122,6 +122,7 @@ from .device_rules import (
 )
 from .security import install_security_headers
 from .setup_api import install_setup_routes
+from .v2_api import install_v2_routes
 
 START = time.time()
 log = logging.getLogger(__name__)
@@ -1682,11 +1683,39 @@ def _audio_devices_health(app: FastAPI, config: Config) -> list[dict]:
     return rows
 
 
+def _port_conflict_warning(config: Config) -> list[dict]:
+    """The `port_conflict` judgment the console's writers use (`device_rules.py`).
+
+    Startup deliberately does not refuse such a config (the console can still fix one
+    speaker), but two enabled inbound devices on one port can never both be driven, so
+    `/health` must say so instead of looking green. One rule, one implementation: this
+    calls the same `port_conflict()` a v2 device write validates with.
+    """
+    conflict = port_conflict(config.devices, config.system.data_dir)
+    if conflict is None:
+        return []
+    ids = [str(item) for item in conflict.get("device_ids") or []]
+    return [{
+        "code": "port_conflict",
+        "message": (
+            f"enabled devices share inbound port {conflict.get('port')}: "
+            f"{', '.join(ids)}; only one can be driven"
+        ),
+        "details": {
+            "port": conflict.get("port"),
+            "device_ids": ids,
+        },
+    }]
+
+
 def _device_warnings(app: FastAPI, config: Config) -> list[dict]:
     """Per-room warnings a person can act on before blaming the speaker.
 
-    Single-plane mode keeps the 0.3 notice ("more than one enabled inbound speaker,
-    only one can be driven"). Multi-device mode drops that notice - every room is meant
+    Single-plane mode keeps the notice that more than one enabled inbound speaker cannot
+    all be driven at once. Since 0.6 that is a *mode* statement, not a 0.3 limit: every
+    enabled inbound room gets its own plane once multi_device arbitration is on. The
+    notice names the driven device, its room and both fixes (disable the others, or
+    enable multi-device mode). Multi-device mode drops the notice - every room is meant
     to be live - and instead names what is actually wrong: devices refused over
     max_planes, a fleet that failed to start, and each enabled room whose plane is down.
     """
@@ -1696,16 +1725,20 @@ def _device_warnings(app: FastAPI, config: Config) -> list[dict]:
         inbound = _enabled_inbound(config)
         if len(inbound) <= 1:
             return []
+        active = next((device for device in inbound if device.id == active_id), None)
+        active_room = active.room if active is not None else ""
+        label = f"{active_id} ({active_room})" if active_room else (active_id or "none")
         ignored = [device.id for device in inbound if device.id != active_id]
         return [{
             "code": "multiple_enabled_inbound",
             "message": (
-                "0.3 supports one active inbound audio plane; only "
-                f"{active_id or 'none'} is driven. Disable the other device or wait for "
-                "multi-device arbitration."
+                "0.6 drives every enabled inbound speaker only once multi-device "
+                f"arbitration is enabled; only {label} is driven. Disable the other "
+                "device or enable multi-device arbitration."
             ),
             "details": {
                 "active_device": active_id,
+                "active_room": active_room,
                 "enabled_inbound": [device.id for device in inbound],
                 "ignored_devices": ignored,
                 "max_active_inbound": 1,
@@ -1938,8 +1971,16 @@ def _turn_hold(result: object) -> float | None:
     return None
 
 
-def _record_turn(app: FastAPI, turn: dict) -> None:
-    """Keep the last N turns for the console's conversation panel."""
+def _record_turn(app: FastAPI, turn: dict, device_id: str = "") -> None:
+    """Keep the last N turns for the console's conversation panel.
+
+    ``device_id`` is C-002 §7.22's evidence for a per-device activity feed: a turn that
+    happened in one room must not show up on another device's page. The plane callbacks
+    pass their own room; other callers fall back to the live ``turn_device`` (set before
+    every spoken turn), and the field is additive for v1's ``/turns``.
+    """
+    if "device_id" not in turn:
+        turn = {**turn, "device_id": str(device_id or getattr(app.state, "turn_device", "") or "")}
     app.state.last_turn = turn
     ring = getattr(app.state, "recent_turns", None)
     if ring is None:
@@ -2491,7 +2532,7 @@ def create_app(
                         result.audio_bytes = spoken
                 if asr_report is not None:
                     result.stages.setdefault("asr", asr_report)
-                _record_turn(app, result.to_dict())
+                _record_turn(app, result.to_dict(), device_id)
                 trace.note_playback_metrics(getattr(link, "metrics", None))
                 traces.add(trace)
                 # A music/volume turn wants the song back the moment the reply
@@ -3124,6 +3165,11 @@ def create_app(
             # allowed to make the aggregate (and the container) unhealthy; every old
             # top-level field above keeps its meaning.
             "audio_devices": _audio_devices_health(app, cfg_now),
+            # Additive in 0.6: the actionable warnings the console renders, plus the
+            # `port_conflict` finding for two enabled inbound speakers on one port.
+            # Startup still accepts that config on purpose; this is where it surfaces.
+            "warnings": [*_device_warnings(app, cfg_now),
+                         *_port_conflict_warning(cfg_now)],
             "multi_device": {
                 "enabled": bool(cfg_now.multi_device.enabled),
                 "max_planes": cfg_now.multi_device.max_planes,
@@ -3682,7 +3728,7 @@ def create_app(
         await client.reply_finished(hold_music_s=_turn_hold(result))
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
                            _turn_light(result), live=client)
-        _record_turn(app, result.to_dict())
+        _record_turn(app, result.to_dict(), device_id)
         trace.note_playback_metrics(getattr(client, "metrics", None))
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)
@@ -5558,6 +5604,26 @@ def create_app(
         scheme = request_ws_scheme(request)
         url = f"{scheme}://{host}:{port}/?token={quote(token, safe='')}"
         return url, host, host_source, loopback
+
+    # C-002 console v2: registered after the shared write closures exist and before the
+    # old shell's catch-all at the end of this factory. The module owns every
+    # /api/v2 route plus /v2 and /v2/assets; v1 is untouched.
+    install_v2_routes(
+        app,
+        auth,
+        config_path=config_path,
+        current=lambda: getattr(app.state, "cfg", cfg),
+        write_devices=_write_devices,
+        write_config=_write_config,
+        restart_audio=_restart_audio,
+        run_debug_say=_run_debug_say,
+        probe_host=lambda host: _probe_host(host),
+        host_value=_host,
+        room_value=_room,
+        wake_words_value=_wake_words,
+        ws_url_for=_device_ws_url,
+        dist=WEB_DIST,
+    )
 
     @app.post("/api/v1/devices/{device_id}/enabled", dependencies=[Depends(auth)])
     async def device_enabled(device_id: str, payload: Annotated[dict, Body()]) -> dict:

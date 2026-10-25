@@ -1,9 +1,12 @@
 """Atomic config writes with backups; never rewrite a file in place."""
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
+from collections.abc import Iterator
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 
@@ -197,9 +200,13 @@ def _audio_for_disk(audio: AudioConfig, previous: set[str] | None) -> dict[str, 
     """The `audio` mapping to persist: what the file already states or what changed.
 
     A field is written when the previous file already had it (an explicit choice stays
-    explicit) or when it differs from the neutral core default (an operator/code change).
-    Fields that are merely at the core default drop out, so the device manifest keeps
-    supplying the layout the config never chose.
+    explicit), when the write path pinned it as an explicit choice, or when it differs
+    from the neutral core default (an operator/code change). Fields that are merely at
+    the core default drop out, so the device manifest keeps supplying the layout the
+    config never chose.
+
+    `previous` is also the pinned explicit set of :func:`explicit_audio_layers`: a field
+    the patch cleared is absent from it, so it is not resurrected from the old file.
     """
     full = audio.model_dump(mode="json")
     out: dict[str, dict] = {}
@@ -215,6 +222,31 @@ def _audio_for_disk(audio: AudioConfig, previous: set[str] | None) -> dict[str, 
         if part:
             out[name] = part
     return out
+
+
+#: The explicit audio/ack layer pinned by a write path that knows the operator's intent.
+#: A context variable keeps that knowledge next to the save without changing the
+#: `write_config`/`write_devices` callables every console write shares.
+_PINNED_LAYERS: ContextVar[tuple[set[str], bool] | None] = ContextVar(
+    "rui_explicit_audio_layers", default=None
+)
+
+
+@contextlib.contextmanager
+def explicit_audio_layers(audio_paths: set[str], ack_echo: bool) -> Iterator[None]:
+    """Pin the exact explicit `audio.*` / ack layer for the next save in this task.
+
+    The console's audio patch knows which fields the operator actually chose - including
+    one that happens to equal the core default - and which ones it cleared. A
+    revalidated full model dump cannot carry that (every field counts as set there), so
+    without this `save_config` falls back to the previous file and resurrects a field the
+    operator just cleared. The pin is reset even when the write raises.
+    """
+    token = _PINNED_LAYERS.set((set(audio_paths), bool(ack_echo)))
+    try:
+        yield
+    finally:
+        _PINNED_LAYERS.reset(token)
 
 
 def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
@@ -240,8 +272,12 @@ def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
         # Audio (and the cue window) are the blocks with a layer below the config (the
         # device manifest's audio_defaults), so their core defaults must not be
         # materialized on every write.
-        previous_audio, previous_ack_window = _persisted_layers(p)
-        audio_data = _audio_for_disk(cfg.audio, previous_audio)
+        pinned = _PINNED_LAYERS.get()
+        if pinned is None:
+            stated_audio, stated_ack_window = _persisted_layers(p)
+        else:
+            stated_audio, stated_ack_window = pinned
+        audio_data = _audio_for_disk(cfg.audio, stated_audio)
         if audio_data:
             data["audio"] = audio_data
         else:
@@ -249,7 +285,7 @@ def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
         ack_data = data.get("ack")
         if (
             isinstance(ack_data, dict)
-            and not previous_ack_window
+            and not stated_ack_window
             and cfg.ack.echo_ignore_ms == AckConfig().echo_ignore_ms
         ):
             ack_data.pop("echo_ignore_ms", None)

@@ -488,7 +488,7 @@ xiaoai 仍随 rui 仓库与镜像一起版本化。运行时两者已经同构�
 | 9 | 小爱语义只剩 plug 一处真相 | manifest + adapter 全在 `plugs/xiaoai/`；核心只经 manifest/entrypoint 泛化加载 | ✅ 达成 |
 | 10 | 内核无构建期设备耦合 | **残留**：`Dockerfile` 硬编码 xiaoai 冒烟/PYTHONPATH；`pyproject.toml` pytest 路径 | ❌ 转交 |
 | 11 | 仓库工具链可用 | `scripts/measure_*.py` 经 `scripts/_xiaoai_plug.py` 从 manifest/entrypoint 加载 plug；3 个脚本 import smoke + `--help` 通过；`ruff check src tests scripts` clean（§8） | ✅ 达成 |
-| 12 | 回归门禁 | 基线口径 `pytest -q --ignore=并行 v2 测试` → 1349 passed / 17 skipped；当前全仓 1385/17（+36 为并行 v2 测试）；`ruff check src tests scripts` → All checks passed!；新增 `tests/test_kernel_decoupling.py` | ✅ 达成 |
+| 12 | 回归门禁 | 本任务口径 `pytest -q --ignore-glob='tests/test_api_v2_*.py'` → 1349 passed / 17 skipped；`ruff check src tests scripts` → All checks passed!；全仓数字随并行 v2 测试增长，不作为验收口径；新增 `tests/test_kernel_decoupling.py` | ✅ 达成 |
 
 **总体判定**：**功能耦合层已达成**（M2：无 import/分支/硬件参数依赖；本轮不改变这一点）；**命名层**非 web 达成、
 web 未达成；**整仓“完全剥离”未达成**，
@@ -509,15 +509,16 @@ $ .venv/bin/python -m pytest -o addopts='' -q
 ### 6.2 修复后
 
 ```text
-# 本任务基线口径（排除并行控制台任务新增的两个未跟踪测试文件）：
-$ .venv/bin/python -m pytest -o addopts='' -q \
-    --ignore=tests/test_api_v2_provenance.py --ignore=tests/test_api_v2_read.py
-1349 passed, 17 skipped in 76.76s (0:01:16)
+# 本任务基线口径（忽略并行控制台任务的全部未跟踪 v2 测试）：
+$ .venv/bin/python -m pytest -o addopts='' -q --ignore-glob='tests/test_api_v2_*.py'
+1349 passed, 17 skipped in 77.44s (0:01:17)
 
-# 当前全仓（含并行 v2 测试）：
-$ .venv/bin/python -m pytest -o addopts='' -q
-1385 passed, 17 skipped in 79.65s (0:01:19)
-# +36 来自 tests/test_api_v2_provenance.py + tests/test_api_v2_read.py（并行任务，未跟踪，非本任务）
+# 只忽略 reviewer 点名的两个文件时，会多出并行任务后加入的第三个 write 测试：
+$ .venv/bin/python -m pytest -o addopts='' -q --ignore=tests/test_api_v2_provenance.py --ignore=tests/test_api_v2_read.py
+1369 passed, 17 skipped in 83.56s (0:01:23)
+
+# 当前全仓数字随并行 v2 测试增长（快照 1385/17 之后又加入了 test_api_v2_write.py），
+# 因此不作为本任务的验收口径；本任务固定用上面的 --ignore-glob。
 
 $ .venv/bin/python -m ruff check src tests scripts
 All checks passed!
@@ -530,8 +531,9 @@ $ .venv/bin/python -m pytest -o addopts='' -q tests/test_kernel_decoupling.py
 1 passed in 0.05s
 ```
 
-数字变化说明：本任务基线 1348 → 1349 只因为新增 `tests/test_kernel_decoupling.py`；当前全仓 1385 是并行控制台任务
-新增的两个测试文件（+36），不是本任务的改动。没有删除/跳过任何既有测试。
+数字变化说明：本任务基线 1348 → 1349 只因为新增 `tests/test_kernel_decoupling.py`；并行控制台任务新增的
+`tests/test_api_v2_*.py`（provenance/read/write）全部未跟踪，与本任务无关，验收时用 `--ignore-glob` 排除。
+没有删除/跳过任何既有测试。
 
 ruff 说明：`ruff check src tests scripts` 全绿；本轮改动的 20 个 src 文件、`scripts/` 下 4 个文件与新增测试也单独复跑通过。
 
@@ -584,90 +586,73 @@ src/rui/web/api/setup_api.py:1010:                # A fresh LX06 has a working 1
 
 ```text
 $ git grep -in -e xiaoai -e lx06 -e 小爱 -e "open-xiaoai" -- src/ plugs/ web/src/ docs/ | wc -l
-     501
+    1262
 ```
 
 ### 6.4 扩展证据
 
-> 快照时点：本报告最后一次生成（`scripts/` 的 P0 修复已包含；并行 v2 未跟踪文件仍在编辑，非本任务）。
+> 快照时点：本报告最后一次生成。本任务改动已由 Lead 提交为 `adc4c2b`
+> （chore(kernel): finish removing core-level vendor naming），该 commit 已 push 到 `origin/main`，
+> 并且 `v0.6.0` tag 指向 `adc4c2b`。**tag 决定（2026-10-26，Lead）：tag 不移动**——adc4c2b 已触发
+> 多架构镜像构建，镜像产出后 tag 不可移动；这 6 条是审计文档的准确性修订，不影响代码行为，因此
+> **跟 main 走、不进 tag**，待镜像 digest/Release 完成后与并行任务一起提交。代码修复 #1（catalog 文案）
+> 已包含在 `adc4c2b` / `v0.6.0` 内。
 
 ```text
 $ .venv/bin/python -c 'import rui.device.xiaoai'
 ModuleNotFoundError: No module named 'rui.device.xiaoai'
 
-$ git diff --stat
- scripts/measure_capture.py       | 12 ++++---
- scripts/measure_erle.py          |  6 +++-
- scripts/measure_turn_pipeline.py |  6 +++-
- scripts/watch-rui-upstream.py    |  4 +--
- src/rui/audio/ack_render.py      |  2 +-
- src/rui/audio/arbiter.py         |  2 +-
- src/rui/audio/chime.py           |  2 +-
- src/rui/audio/decimate.py        |  2 +-
- src/rui/audio/probe.py           |  4 +--
- src/rui/audio/process.py         |  6 ++--
- src/rui/audio/protocol.py        |  4 +--
- src/rui/config/catalog.py        | 70 ++++++++++++++++++++--------------------
- src/rui/config/schema.py         | 24 +++++++-------
- src/rui/config/store.py          |  2 +-
- src/rui/config/template.yaml     |  5 +--
- src/rui/device/contract.py       | 20 ++++++------
- src/rui/device/mock.py           |  2 +-
- src/rui/device/registry.py       |  4 +--
- src/rui/doctor/probes.py         |  6 ++--
- src/rui/plugins/builtin.py       |  2 +-
- src/rui/plugins/contract.py      |  2 +-
- src/rui/plugins/loader.py        |  2 +-
- src/rui/plugins/models.py        |  2 +-
- src/rui/session/vendor.py        |  6 ++--
- 24 files changed, 105 insertions(+), 92 deletions(-)
+$ git show --stat --oneline adc4c2b
+adc4c2b chore(kernel): finish removing core-level vendor naming (0.6.0 DoD)
+ docs/audit/xiaoai-decoupling.md  | 1212 ++++++++++++++++++++++++++++++++++++++
+ scripts/_xiaoai_plug.py          |   65 ++
+ scripts/measure_capture.py       |   12 +-
+ scripts/measure_erle.py          |    6 +-
+ scripts/measure_turn_pipeline.py |    6 +-
+ scripts/watch-rui-upstream.py    |    4 +-
+ src/rui/audio/ack_render.py      |    2 +-
+ src/rui/audio/arbiter.py         |    2 +-
+ src/rui/audio/chime.py           |    2 +-
+ src/rui/audio/decimate.py        |    2 +-
+ src/rui/audio/probe.py           |    4 +-
+ src/rui/audio/process.py         |    6 +-
+ src/rui/audio/protocol.py        |    4 +-
+ src/rui/config/catalog.py        |   70 +--
+ src/rui/config/schema.py         |   24 +-
+ src/rui/config/store.py          |    2 +-
+ src/rui/config/template.yaml     |    5 +-
+ src/rui/device/contract.py       |   20 +-
+ src/rui/device/mock.py           |    2 +-
+ src/rui/device/registry.py       |    4 +-
+ src/rui/doctor/probes.py         |    6 +-
+ src/rui/plugins/builtin.py       |    2 +-
+ src/rui/plugins/contract.py      |    2 +-
+ src/rui/plugins/loader.py        |    2 +-
+ src/rui/plugins/models.py        |    2 +-
+ src/rui/session/vendor.py        |    6 +-
+ tests/test_kernel_decoupling.py  |   64 ++
+ 27 files changed, 1446 insertions(+), 92 deletions(-)
 
-$ git status --short
- M scripts/measure_capture.py
- M scripts/measure_erle.py
- M scripts/measure_turn_pipeline.py
- M scripts/watch-rui-upstream.py
- M src/rui/audio/ack_render.py
- M src/rui/audio/arbiter.py
- M src/rui/audio/chime.py
- M src/rui/audio/decimate.py
- M src/rui/audio/probe.py
- M src/rui/audio/process.py
- M src/rui/audio/protocol.py
- M src/rui/config/catalog.py
- M src/rui/config/schema.py
- M src/rui/config/store.py
- M src/rui/config/template.yaml
- M src/rui/device/contract.py
- M src/rui/device/mock.py
- M src/rui/device/registry.py
- M src/rui/doctor/probes.py
- M src/rui/plugins/builtin.py
- M src/rui/plugins/contract.py
- M src/rui/plugins/loader.py
- M src/rui/plugins/models.py
- M src/rui/session/vendor.py
+$ git status --short   # 本任务文件已提交，只剩并行 v2 的未跟踪/修改文件
+ M docs/audit/xiaoai-decoupling.md
  M src/rui/web/api/app.py
  M web/vite.config.ts
-?? docs/audit/
 ?? docs/contracts/
 ?? docs/design/
-?? scripts/_xiaoai_plug.py
 ?? src/rui/web/api/v2_api.py
 ?? tests/test_api_v2_provenance.py
 ?? tests/test_api_v2_read.py
 ?? tests/test_api_v2_write.py
-?? tests/test_kernel_decoupling.py
 ?? web/src/v2/
 ?? web/v2.html
 ```
 
 > 说明：`M src/rui/web/api/app.py`、`M web/vite.config.ts` 以及 `docs/contracts/`、`docs/design/`、
-> `src/rui/web/api/v2_api.py`、`web/src/v2/`、`web/v2.html` 属于并行控制台 v2 任务，不属于本任务；本任务没有修改
-> `web/` 或 `src/rui/web/`。本任务产物是 20 个 `src/rui/` 文件的文案/注释修改、
-> `scripts/_xiaoai_plug.py`（新增）、3 个 `scripts/measure_*.py` 的 import 修复、`scripts/watch-rui-upstream.py`
-> 的 1 处纯 lint 改名、`tests/test_kernel_decoupling.py` 与 `docs/audit/xiaoai-decoupling.md`。
-> 未 commit / push / tag（遵守红线）。
+> `src/rui/web/api/v2_api.py`、`tests/test_api_v2_*.py`、`web/src/v2/`、`web/v2.html` 属于并行控制台 v2 任务，
+> 不属于本任务；本任务没有修改 `web/` 或 `src/rui/web/`。本任务产物（20 个 `src/rui/` 文件的文案/注释修改、
+> `scripts/_xiaoai_plug.py`、3 个 `scripts/measure_*.py` 的 import 修复、`scripts/watch-rui-upstream.py` 的
+> lint 改名、`tests/test_kernel_decoupling.py` 与 `docs/audit/xiaoai-decoupling.md` 的初版）已包含在 `adc4c2b`
+> 并已 push；本报告的 6 条评审修订跟 main 走、不进 `v0.6.0` tag，待镜像 digest/Release 完成后提交。
 
 ## 7. 交接与遗留风险
 
