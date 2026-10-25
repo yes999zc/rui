@@ -46,11 +46,11 @@ Rui 的起点是「音箱已经运行 open-xiaoai client，并能回连 NAS」�
 curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install.sh | sh
 ```
 
-生产固定版本（脚本、compose 和镜像都锁到同一个 tag；当前发布为 **0.4.1**）：
+生产固定版本（脚本、compose 和镜像都锁到同一个 tag；当前发布为 **0.4.2**）：
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.1/deploy/install.sh \
-  | RUI_REF=v0.4.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.2/deploy/install.sh \
+  | RUI_REF=v0.4.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2 sh
 ```
 
 - `RUI_REF` 决定 `docker-compose.yml` / `config.example.yaml` 来自哪个 ref，`RUI_IMAGE`
@@ -196,7 +196,7 @@ KWS 的唯一来源。手动改过 `devices[].wake_words` 后要重跑 `keywords
   `docker compose up -d`，再把新值写进 client 并重启，最后回 `test` 确认。
 - **换控制台 token**：`docker compose exec -T rui rui token --rotate`，再
   `docker compose restart rui` 让服务加载新值；重启后旧 token 失效，并刷新 `console-token.txt`。
-- **升级**：在 `.env` 固定 `RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1`；
+- **升级**：在 `.env` 固定 `RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2`；
   `docker compose pull && docker compose up -d`，等 healthy 后跑
   `docker compose exec -T rui rui doctor`。
 - **升级到非 root 镜像（已有安装）**：先 `scripts/backup.sh --out ~/rui-backups`，再
@@ -269,11 +269,11 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/main/deploy/install
 ```
 
 For production, pin a release (script, compose files and image all come from the same tag;
-the current release is **0.4.1**):
+the current release is **0.4.2**):
 
 ```bash
-curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.1/deploy/install.sh \
-  | RUI_REF=v0.4.1 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1 sh
+curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.2/deploy/install.sh \
+  | RUI_REF=v0.4.2 RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2 sh
 ```
 
 - `RUI_REF` selects the ref for `docker-compose.yml` / `config.example.yaml`; `RUI_IMAGE`
@@ -432,7 +432,7 @@ The commands below assume `~/rui`; replace the path if you installed under `/vol
 - **Rotate the console token**: `docker compose exec -T rui rui token --rotate`, then
   `docker compose restart rui` to load it; the old token stops working after the restart, so
   refresh `console-token.txt` too.
-- **Upgrade**: pin `RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1` in `.env`;
+- **Upgrade**: pin `RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2` in `.env`;
   `docker compose pull && docker compose up -d`, wait for healthy, then run
   `docker compose exec -T rui rui doctor`.
 - **Upgrade to the non-root image (existing installs)**: back up first

@@ -1,6 +1,8 @@
 # 控制台重构 — 设计方向与系统
 
 > 2026-10-23 · console-ui（task-6）· 契约 `docs/config-catalog-contract.md`
+> **IA 更新（0.4.2 Phase 4，2026-10-25）：** §3 与 §11 已改为单一 `nav` manifest；
+> 旧四组/18 入口和旧路径重定向作废。视觉系统与页面构图仍适用。
 > 本文是实现的**设计合同**：实现、视觉 critic、回归都以它为准。
 > 目标不是"好看的网页"，而是一台家用语音设备的**控制面板**：开机即懂、改一个参数知道会发生什么、
 > 在手机上也像被设计过。
@@ -30,21 +32,40 @@
 
 ```
 Rui console
-├─ 运行 RUN        overview（概览）· turns（对话）· logs（日志）· [devices 在线设备]
-├─ 生活 LIFE       music（音乐）· memory（记忆）
-├─ 配置 CONFIG     assistant-session（助手与会话）· speaker（音箱参数）
-│                  providers（外部资源）· tools（工具）· foundation（底子·高级）
-└─ 维护 MAINTAIN   devices-admin（设备管理）· mcp（MCP/HA）· phrases（话术）
-                   secrets（密钥）· diagnostics（体检）· setup（安装向导）
+├─ 运行 RUN        overview（概览）· turns（对话）· memory（记忆）· logs（日志）
+└─ 配置与维护 CONFIGURE
+   voice-assistant（语音助手）· devices（设备与音频）· music（音乐）
+   providers（模型与语音服务）· integrations（工具与集成）· system（系统）
+   [hidden] credentials（凭据，只直达）· utilities: channels / diagnostics / setup
 ```
 
-- 面板仍由后端 `GET /api/v1/panels` 声明；前端按 `group` 归入四组，未知 group 追加到末尾（不丢面板）。
-- 兼容旧 group id：`status→run`、`living→life`、`system→maintain`、`config→config`。
-- 旧路径全部重定向：`/assistant`、`/settings`→`/panel/assistant-session`；`/voice`→`/panel/foundation`；
-  `/models`→`/panel/providers`；`/tools`→`/panel/tools`；`/overview`、`/devices`、`/logs` 保留。
-- 桌面：左侧 **244px 索引轨**（分组小标 + 条目 + 底部语言/主题/令牌）；内容最大 1160px，左对齐。
+- **唯一 manifest**：后端 `GET /api/v1/panels` 的每条 PanelSpec 带
+  `nav {section: "run" | "configure", order, hidden, icon}`；`section` 只允许两值，
+  `order` 决定段内顺序，`hidden` 只移出侧栏，`icon` 是 `AppIcon.vue` 的图标键。
+- **11 个面板**：run 4 + configure 6 + hidden credentials；原“四组/18 入口”是 0.3.x 历史，
+  Phase 4 已不再适用。
+- **前端 `nav.ts` 只做两件事**：section 标题 + 三条工具路由（`/channels`、`/diagnostics`、
+  `/setup`，`setupOnly`）；`/secrets` 不进入侧栏，`/panel/credentials` 作为 hidden 面板直达。
+- **7 个兼容面板删除**：`assistant-session`、`speaker`、`devices-admin`、`tools`、`mcp`、
+  `foundation`、`phrases`；内容并入合并页，不保留 alias。
+- **路由是外壳**：`/`（→ overview）、`/panel/:id`、`/setup`、`/channels`、`/secrets`、
+  `/diagnostics`、catch-all。旧顶层别名已从 router 删除；retired `/panel/<id>` 显示
+  `PanelHost` 的 not-found。这是有意的 breaking change。
+- 桌面：左侧 **244px 索引轨**（两段小标 + 条目 + 底部语言/主题/令牌）；内容最大 1160px，左对齐。
 - 手机：顶部 56px 工具条（品牌 + 信号点 + 菜单）；导航为全屏抽屉；内容单列；
   配置保存条固定底部（`env(safe-area-inset-bottom)`）。
+
+### 3.1 Phase 4（0.4.2）单一 manifest
+
+Phase 4 把导航从“后端 group + 前端 id→group 映射 + i18n 标题覆盖”的三个事实来源，
+收敛为 **PanelSpec.nav 单一 manifest**。前端不再维护 `PANEL_NAV_GROUPS` 或
+`PANEL_TITLE_KEYS`；`nav.ts` 只剩 section 标题和工具路由。新增/移动页面只改后端一条
+PanelSpec，侧栏、移动抽屉和深链同时生效。
+
+**Breaking change**：旧 panel id（上列 7 个）不会被静默重定向到合并页，而是落到
+`PanelHost` 的 not-found；旧顶层别名（`/overview`、`/devices`、`/logs`、`/assistant`、
+`/settings`、`/voice`、`/models`、`/tools`）已从 router 删除，由 catch-all 兜底。
+接受这个代价，是为了让“一个页面只有一个 URL”，删掉的兼容页不会以别名复活。
 
 ## 4. 视觉系统（token）
 
@@ -182,19 +203,19 @@ Rui console
 - deep-design-qa：render → critic（只读）→ fix → re-render → compare，报告评分与已修项。
 - 功能：配置中心 dirty/save/reset、422 红框、restart 提示、音频面重启、语言切换、明暗切换、深链刷新。
 
-## 11. 实现映射（2026-10-23, console-ui）
+## 11. 实现映射（2026-10-23；Phase 4 更新 2026-10-25）
 
 | 目标 | 落点 |
 |---|---|
 | 语言 | `web/src/i18n.ts`：`MsgKey = keyof typeof zh`，en 字典类型上必须键齐全；`localizeBackend()` 双向桥接后端 PanelSpec 文案/枚举；侧栏 `中文 / EN`，localStorage + `<html lang>` + `document.title` |
 | 明暗 | `web/src/theme.ts` + `index.html` 首帧内联脚本；`system / light / dark` 三段开关并记忆，`data-theme` 驱动 token |
 | 设计系统 | `web/src/style.css`：颜色/间距/字体/圆角/阴影/动效 token、focus-visible、reduced-motion、移动断点；对比度已按 WCAG AA 校准（`--muted #6d675d`、`--warn #8f5c0d`） |
-| 外壳 | `App.vue` + `components/SideNav.vue`：分组导航（运行/生活/配置/维护）、手机抽屉（关闭时 `inert` + `aria-hidden`）、signal ledger、语言/主题/令牌 |
+| 外壳 | `App.vue` + `components/SideNav.vue`：两段导航（run/configure）由 `PanelSpec.nav` 驱动，`nav.ts` 只提供 section 标题与工具路由；手机抽屉（关闭时 `inert` + `aria-hidden`）、signal ledger、语言/主题/令牌 |
 | 概览构图 | `views/PanelHost.vue` 的 `.blocks-overview`：7/5 不对称网格，试一试 + 操作在左、遥测 ledger 在右；右栏 4 格遥测按 2×2 排 |
-| 配置中心 | `components/ConfigCenter.vue`：catalog 驱动；`component_args.tier` 归一化分组（speaker = 全部 tier2，foundation = 仅 tier1 + `warning`）；tier1 警示；组索引条；字段 label/hint/效果徽章/单位/范围/选项；只读字段折叠原始值；密钥从 `catalog.secrets` 渲染写入口（`POST /api/v1/secrets`）；dirty/save/reset；422 字段红框 + 自动滚动；`restart_required` 命令 + 音频面单独重启；`warnings` 展示 |
-| 导航 IA | 面板按 id 归组（覆盖后端历史 group id：logs→运行、devices/设备管理/话术/MCP→维护），未知面板回退 `group` |
-| 其余页面 | blocks 十种统一重绘；`SetupView`/`DeviceManager`/`McpManager`/`PhrasebookEditor`/`SecretsView`/`HealthView`/`ToolsView` 全部走字典与 token；语音/模型只读页由配置中心承接，旧路径重定向 |
-| 旧路径 | `/assistant`→assistant-session、`/settings` 与 `/panel/settings`→assistant-session、`/voice`→foundation、`/models`→providers、`/overview`/`/devices`/`/logs` 保留；`/tools` 保留只读注册表页，并从工具配置页链入 |
+| 配置中心 | `components/ConfigCenter.vue`：catalog 驱动；config block 按 `tier`/`groups` 渲染（devices → tier2，system → tier1 + `warning`）；tier1 警示；组索引条；字段 label/hint/效果徽章/单位/范围/选项；只读字段折叠原始值；密钥从 `catalog.secrets` 渲染写入口（`POST /api/v1/secrets`）；dirty/save/reset；422 字段红框 + 自动滚动；`restart_required` 命令 + 音频面单独重启；`warnings` 展示 |
+| 导航 IA | `PanelSpec.nav {section,order,hidden,icon}` 是唯一事实来源；`web/src/nav.ts` 只放两个 section 标题 + `/channels`、`/diagnostics`、`/setup` 三条工具路由；`/secrets` 不进入侧栏 |
+| 其余页面 | blocks 与合并页组件统一重绘；`SetupView`/`DeviceManager`/`McpManager`/`PhrasebookEditor`/`SecretsView`/`HealthView`/`ToolsView` 全部走字典与 token；7 个兼容 panel 已删除，旧路径不再映射 |
+| 路由 | 只保留 `/`→overview、`/panel/:id`、`/setup`、`/channels`、`/secrets`、`/diagnostics` 和 catch-all；7 个旧 panel id 与 8 个旧顶层别名不再映射，retired `/panel/<id>` 显示 not-found |
 
 ## 12. QA（deep-design-principles + deep-design-qa）
 

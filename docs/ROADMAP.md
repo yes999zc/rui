@@ -6,12 +6,12 @@
 
 ## 现状快照（2026-10-25，0.4.0）
 
-- 版本/发布：0.4.1 已发布（官方镜像/Release），Jellyfin/Emby、首次登录 token 文件、dot2 修复与 README 重写进版；生产 `/vol1/rui` 跑官方 `0.4.1`（回滚 `0.4.0` / `0.4.0-local`），healthy、音箱在线、非 root uid 1000。0.4.0 重切基线：tag `9f13a0f`、digest `c4cd1a61…`、Release 已发。
-- 质量：全量 **1141 passed / 18 skipped**；ruff clean；secret-scan 绿；web typecheck/build 绿；CI 原生 runner（PR #10）已合入，publish 不再被 QEMU arm64 卡 40min。
-- 已交付：v1 四门槛；0.1–0.4 发布；Socket/Plug v1（device_wake/契约工具/参考插头）；控制台 IA Phase 1–3；P3.5 安全（SSRF/non-root/CVE CI）；CHANGELOG/发布说明工具；0.4.0 重切；0.4.1（Jellyfin/Emby MediaBrowser 适配器 + 真机服务器验收、首次登录 `console-token.txt`、dot2 生效端口/token_env/冲突、`audio.voice.followup_delay_ms`/`followup_replay`、register 后 wake 重探测、README/first-run 重写）。
+- 版本/发布：0.4.2（Phase 4）已发布并部署；控制台导航收敛为单一 PanelSpec nav manifest（11 面板，7 个 legacy panel/旧路由退役），README 瘦身并新增多设备设计文档；生产 `/vol1/rui` 跑官方 `0.4.2`（回滚 `0.4.1` / `0.4.0`），healthy、音箱在线、非 root uid 1000。
+- 质量：全量 **1142 passed / 18 skipped**；ruff clean；secret-scan 绿；web typecheck/build 绿；CI 原生 runner（PR #10）已合入，publish 不再被 QEMU arm64 卡 40min。
+- 已交付：v1 四门槛；0.1–0.4 发布；Socket/Plug v1；控制台 IA Phase 1–4（两分组、合并页、单一 nav manifest、legacy 退役）；P3.5 安全；CHANGELOG/发布说明工具；Jellyfin/Emby 音源；首次登录 token 文件；dot2 修复；README/first-run 重写；多设备/卫星/唤醒仲裁设计文档 `docs/multi-device-design.md`（设计稿）。
 - 关键文档：`HANDOFF.md`、`docs/socket-plug-v1.md`、`docs/console-ia-audit.md`、`docs/install-flow-audit.md`、`docs/provider-presets.md`、`docs/music-sources.md`、`docs/integrations-mcp.md`、`docs/security.md`、验收工作区 `04_Docs/20261024-house-ear-acceptance/`。
-- 已知问题/欠账：控制台 Phase 4 清理（0.4.2，旧路由/文档/截图/单一 nav manifest）；只读 YAML 代码视图；dot2 设备内层 token 轮换契约（两层 auth，需 adapter 明确接口）；socket sidecar/多设备仲裁/每设备 AEC/EQ（提前，不阻塞 0.4.x）。
-- 下一步：0.4.2 Phase 4（单一 nav manifest、删 legacy、390px/截图）→ 只读代码视图 → 多设备/sidecar/播放 gap；生产升级固定 `.env` 的 `RUI_IMAGE` + `docker compose pull && up -d`，先备份、失败回上一个 tag。
+- 已知问题/欠账：只读 YAML 代码视图；多设备设计文档 §9 的 15 个待定决策（是否强制主音箱、全局单 turn、房间优先级、reminders 路由、每设备 AEC/EQ 字段、per-device plane 模型）；dot2 设备内层 token 轮换契约；socket sidecar/播放 gap；README 截图待刷新。
+- 下一步：只读 YAML 代码视图 → 多设备 Phase 1（config v3，先保持 single-active）→ multi-plane/仲裁 → sidecar/播放 gap；0.4.2 发布后 dot2 在 .34 做受控切换；生产升级固定 `.env` 的 `RUI_IMAGE` + `docker compose pull && up -d`，先备份、失败回上一个 tag。
 
 ## 0. 先明确两个词
 

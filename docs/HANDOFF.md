@@ -9,12 +9,12 @@
 | 项 | 当前值 |
 |---|---|
 | 项目 | 自托管语音终端：LX06 音箱 + FastAPI 控制面 + 独立音频面 + Vue 控制台；MIT；公开仓 `yes999zc/rui` |
-| 版本 | **v0.4.1**（Jellyfin/Emby 音源、首次登录 token 文件、dot2 生效端口/token_env/冲突修复、follow-up 配置、设备唤醒重探测、README/first-run 重写），2026-10-25 已部署 NAS |
-| 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.4.1`**（官方，digest `sha256:380327e5c…`，amd64+arm64）；`0.4.0` / `0.4.0-local` 保留回滚；非 root uid 1000，healthy、音箱在线 |
+| 版本 | **v0.4.2**（控制台 IA Phase 4：单一 nav manifest、11 面板、7 个 legacy panel/旧路由退役、README 瘦身、多设备设计文档），2026-10-25 已部署 NAS |
+| 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.4.2`**（官方，digest `sha256:<0.4.2 发布后填>`，amd64+arm64）；`0.4.1` / `0.4.0` 保留回滚；非 root uid 1000，healthy、音箱在线 |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
-| 质量 | **1141 passed / 18 skipped**（含 compat 回归、dot2 生效端口/token_env、follow-up、wake 重探测、Jellyfin/Emby 测试）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
+| 质量 | **1142 passed / 18 skipped**（含 Phase 4 面板/路由断言）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | Phase 4 清理（0.4.2：单一 nav manifest、删 legacy、文档/截图）→ 只读代码视图 → 多设备/sidecar/播放 gap（提前）；dot2 仅剩设备内层 token 轮换契约待谈 |
+| 当前主线 | 只读 YAML 代码视图 → 多设备/sidecar/播放 gap（按用户要求提前）；0.4.2 发布后 dot2 在 .34 做受控切换真机验证（9哥已同意）；截图与内容一起刷新 |
 
 ## 1. 项目与架构契约
 
@@ -45,7 +45,7 @@
 | 冷装证据 | `/vol1/rui-verify/`（269 MB，可删；`install.log` 与冷装 service.log 已拷到验收工作区） |
 | 端口 | 控制台 `8080`、设备入口 `4412`（host network）；`allow_no_token: false` |
 | 开发机 | Mac：仓库 + `.venv`（Python 3.13）+ Node 22；**无 docker CLI**（只有 OrbStack 的 `orb/orbctl`），compose/冷装只能在 NAS 上跑 |
-| GHCR | `0.4.1` / `0.4` 同一 manifest（digest `sha256:380327e5c…`，amd64+arm64）；`latest` 随 `main` 自动重建、digest 会变（安装请固定 `0.4.1` 或 digest）；历史 tag 保留 |
+| GHCR | `0.4.2` / `0.4` 同一 manifest（digest `sha256:<0.4.2 发布后填>`，amd64+arm64）；`latest` 随 `main` 自动重建、digest 会变（安装请固定 `0.4.2` 或 digest）；历史 tag 保留 |
 
 ## 3. 已定决策（改前先问 9 哥）
 
@@ -131,6 +131,8 @@ docker compose exec -T rui rui config restore --last-good
 其它已知：音箱 root 密码受 squashfs 只读限制；Telegram 出网依赖 NAS mihomo 节点运行时状态。
 
 ## 6. 最近时间线（细节在归档）
+
+- 10-25 下午：0.4.2（Phase 4）发布并部署：单一 nav manifest（PanelSpec nav）、11 面板、7 个 legacy panel/旧路由退役、providers 更名「模型与语音服务」、ConfigCenter/ToolsView 死分支清理、README 512→366 行、多设备设计文档；测试 1142/18，ruff/web 绿；dot2 受控切换已获 9哥同意。
 
 - 10-25 中午：0.4.1 发布并部署：Jellyfin/Emby 音源（真实 Jellyfin 12.3.0 / Emby 4.10.2 验收）、首次登录 `console-token.txt`、dot2 生效端口/token_env/冲突 + follow-up 配置 + register 后 wake 重探测、README/first-run 重写；CI/publish 全绿（1141 passed / 18 skipped），GHCR `0.4.1`/`0.4`/`latest` 同一 digest `380327e5…`；生产切 0.4.1（uid 1000、音箱在线），真实 say `audio_bytes=280,312`，`console-token.txt` 0600。
 

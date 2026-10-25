@@ -132,7 +132,7 @@ curl -s localhost:8080/health | python -m json.tool
   镜像默认 `USER`（无需重建镜像），但 `config/`、`data/` 必须 chown 成同一对身份。
   `install.sh` 保留已有 compose 文件（不覆盖自定义）；旧文件也能非 root 运行（镜像
   `USER rui`），但 `read_only`/`tmpfs`/`cap_drop` 等加固要手工合并新 compose 才会生效。
-- 生产把版本写死在 `.env`：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.1`
+- 生产把版本写死在 `.env`：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.4.2`
   （或 `@sha256:<digest>`）。`latest` 是滚动默认，不是唯一推荐。
   `install.sh` 会把安装时用的 image 写进生成的 `.env`；**手工装**时也要写，否则之后
   `docker compose up -d` 会回落到 `latest` 并尝试拉取（实测：本地 rehearsal 镜像没写

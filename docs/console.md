@@ -3,6 +3,34 @@
 2026-10-22 9哥 定：后台界面结合新项目特点重构，**重点是通用型**；派子 agent 调研了老项目
 控制台全文报告（本文件为蒸馏，老项目引用均指 xiaoai-voice-entry，只读）。
 
+## 0. 当前 IA（0.4.2 Phase 4）
+
+> **0.4.2 Phase 4（2026-10-25）的控制台 IA 收尾。** 导航唯一事实来源是后端
+> `GET /api/v1/panels` 里每条 PanelSpec 的 `nav {section, order, hidden, icon}`；
+> `web/src/nav.ts` 只保留两个 section 标题和三条工具路由。
+> 这里的 Phase 4 是 0.4.2 的 IA 收尾，不是 §3 历史表里的旧 P4 安装向导。
+
+| section | 面板（按 `nav.order`） |
+|---|---|
+| `run`（运行） | overview 10 · turns 20 · memory 30 · logs 40 |
+| `configure`（配置与维护） | voice-assistant 10 · devices 20 · music 30 · providers 40 · integrations 50 · system 60 · **credentials 70（hidden）** |
+
+- **11 个面板**：run 4 + configure 6 + hidden credentials；`hidden:true` 只移出侧栏，
+  `/panel/credentials` 仍可直达，消费页也会链入。
+- **7 个兼容面板已删除**：`assistant-session`、`speaker`、`devices-admin`、`tools`、
+  `mcp`、`foundation`、`phrases`。它们的内容已并入对应合并页，不再保留 alias。
+- **前端只消费 nav**：`buildNav()` 过滤 `nav.hidden`，按 `nav.section`/`nav.order` 排序；
+  `web/src/nav.ts` 仅声明 section 标题 + `/channels`、`/diagnostics`、`/setup` 三条工具路由
+  （`/setup` 在向导完成后隐藏），`/secrets` 不进入侧栏。
+- **`icon` 是 `AppIcon.vue` 的图标名**；后端为旧控制面保留的 `group/order` 字段不再被前端读取。
+- **路由只剩外壳**：`/`（→ `/panel/overview`）、`/panel/:id`、`/setup`、`/channels`、
+  `/secrets`、`/diagnostics` 和 catch-all。旧顶层别名（`/overview`、`/devices`、`/logs`、
+  `/assistant`、`/settings`、`/voice`、`/models`、`/tools`）不再映射；旧 panel id 的
+  `/panel/<id>` 由 `PanelHost` 显示 not-found。**这是有意的 breaking change**：旧 panel id 不会
+  被静默重定向到合并页；旧顶层别名已从 router 删除。
+- 设计历史与原因见 [docs/console-ia-audit.md](console-ia-audit.md) §3/§5（该文档保留为
+  审计记录，当前 IA 以本节和 [docs/console-redesign.md](console-redesign.md) 为准）。
+
 ## 1. 调研结论速览
 
 **老项目形态**（server/webapp.py 561 行 + web/index.html + app.js 1250 行）：标准库 HTTP +
@@ -38,7 +66,8 @@ Docker 两阶段构建）——「零构建 vs 框架」已被项目回答：保
 
 ```json
 {
-  "id": "music", "title": "音乐", "icon": "♪", "group": "living", "order": 30,
+  "id": "music", "title": "音乐", "title_en": "Music",
+  "nav": {"section": "configure", "order": 30, "hidden": false, "icon": "note"},
   "enabled": true, "enabled_reason": "",
   "source": "/api/v1/music", "refresh_s": 4,
   "blocks": [
@@ -62,7 +91,8 @@ Docker 两阶段构建）——「零构建 vs 框架」已被项目回答：保
 
 ### 渲染规则
 
-1. 前端拉注册表 → 按 group/order 生成导航 → 单个 `PanelHost.vue` 渲染一切。
+1. 前端拉注册表 → 按 `nav.section` / `nav.order` 生成两段导航（run / configure）→
+   单个 `PanelHost.vue` 渲染一切；`nav.hidden` 只影响侧栏，不影响 URL 可达。
 2. `enabled=false` 的面板**灰化显示原因**，不消失（「为什么没有音乐面板」本身就是信息）。
 3. 表达式刻意极小：`$.path` 取值 + `map` 翻译 + `enabled_when: "$.state=playing"` 单等值
    比较。**不搞图灵完备**；表达不了的交互走逃生舱（见 §2.4）。
@@ -74,8 +104,9 @@ Docker 两阶段构建）——「零构建 vs 框架」已被项目回答：保
 6. form block 统一：draft/baseline/dirty 三态 + `PUT /api/v1/config` + 422 按 loc 回字段
    红框（抽 AssistantView 的 issueKey 成 `useConfigForm`）。
 7. **控制台路由是 SPA**：任何非 `/api/*` 路径由服务端回 `index.html`（`web/api/app.py: console`），
-   刷新/收藏/深链都必须能开；`/api/*` 打错仍回 JSON 404。`/health` 已归 API，体检页在
-   `/diagnostics`。
+   刷新/收藏/深链都必须能开；`/api/*` 打错仍回 JSON 404。客户端只保留 `/`、`/panel/:id`、
+   `/setup`、`/channels`、`/secrets`、`/diagnostics` 和 catch-all；Phase 4 删除了旧 panel id
+   与旧顶层别名（见 §0）。`/health` 已归 API，体检页在 `/diagnostics`。
 
 ### 2.4 block 词表（2026-10-23 复核后）
 
@@ -92,11 +123,12 @@ Docker 两阶段构建）——「零构建 vs 框架」已被项目回答：保
 | `say` | 试一试：打字走一整轮 | `href,placeholder,hint` |
 | `volume` | 设备混音器读写 | `href,label,min,max,note` |
 
-### 2.5 逃生舱（已实现，当前无使用者）
+### 2.5 逃生舱（已实现，合并页在用）
 
 PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComponents.ts`
-懒加载手写 Vue 组件替换 blocks。注册表现在是空的：现有页面都被 block 覆盖，
-机制先就位，等第一个真需要专属交互的面板（P4 向导/设备探测）再用。
+懒加载手写 Vue 组件替换 blocks。当前用于 `providers-v2`、`device-manager`、`mcp-manager`、
+`phrasebook-editor`、`system-console`、`secrets-view`，以及嵌入 integrations 标签页的
+`tools-view`；新面板优先用 blocks，只有专属交互才用逃生舱。
 
 
 ### 需新增后端端点（最小集）
@@ -109,6 +141,9 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 - （P3）`GET /api/v1/logs?lines=`——日志 tail。
 
 ## 3. 分期
+
+> P1–P6 记录 0.3.x 的落地过程；个别 legacy panel id（`devices-admin`、`mcp`、`phrases` 等）
+> 已在 0.4.2 Phase 4 删除，当前 IA 见 §0。
 
 | 期 | 内容 | 验收 |
 |---|---|---|
@@ -126,9 +161,12 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 
 ---
 
-## 12. 控制台 2.0（2026-10-23，含审计修复）
+## 12. 控制台视觉与配置系统（0.3.x 起，含审计修复）
 
-设计契约全文：**`docs/console-redesign.md`**（方向/信息架构/设计系统/QA 报告）；参数契约：
+> IA 在 0.4.2 Phase 4 改为单一 `nav` manifest；导航以 `web/src/nav.ts` 为准，见 §0。
+> 本节保留 0.3.x 的视觉/配置系统记录；"控制台 2.0" 是当时的称呼，不是当前版本名。
+
+设计契约全文：**[docs/console-redesign.md](console-redesign.md)**（方向/信息架构/设计系统/QA 报告）；参数契约：
 **`docs/config-catalog-contract.md`**；审计与修复状态：**内部审计（未公开）**。
 
 **一句话**：控制台从「手写设置面板」变成「catalog 驱动的配置中心 + 双语气象仪器界面」。
@@ -141,9 +179,10 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 - **i18n**：zh-Hans / en，`web/src/i18n.ts` 类型完备字典（en 缺键 typecheck 失败）、侧栏切换、
   localStorage、`<html lang>`、document.title；后端 PanelSpec `title_en` 优先、缺失回退中文。
 - **主题**：light / dark / system，CSS 变量 token，记忆用户选择，`prefers-reduced-motion` 生效。
-- **导航**：运行（概览/对话/日志）· 生活（音乐/记忆）· 配置（助手与会话/音箱参数/外部资源/工具/
-  底子·高级）· 维护（设备/设备管理/话术/MCP-HA/密钥/体检/安装向导）；桌面 244px 索引轨，
-  手机抽屉（inert + 滚动）。旧路径 `/assistant`、`/settings`、`/voice`、`/models` 等全部重定向。
+- **导航**：Phase 4 起由 PanelSpec 的 `nav` 单一 manifest 驱动：*运行*（概览/对话/记忆/日志）
+  与 *配置与维护*（语音助手/设备与音频/音乐/模型与语音服务/工具与集成/系统；凭据隐藏但可直达）。
+  `web/src/nav.ts` 只保留 section 标题和 channels/diagnostics/setup 三条工具路由；桌面 244px
+  索引轨，手机抽屉（inert + 滚动）。旧 panel id 已删除，旧顶层别名已从 router 删除。
 - **响应式**：1440 与 390 双端截图与 DOM 断言：0 横向溢出；配置保存控件桌面 sticky 顶栏、手机 fixed 底条。
 
 ### 12.2b 外部资源页 Providers v2 与火山额度（2026-10-23 晚）

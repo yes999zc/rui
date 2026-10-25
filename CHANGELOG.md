@@ -18,6 +18,78 @@ canonical per-version record.
 
 <!-- Add changes here as they land; move them under the next version at release time. -->
 
+## [0.4.2] - 2026-10-25
+
+Console IA Phase 4 cleanup. Navigation now comes from one backend manifest, the seven
+compatibility-only panels and their redirects are retired, and the homepage
+documentation is slimmer. No config-schema change and no audio/runtime change.
+
+### Added
+
+- **One navigation manifest.** Every `PanelSpec` from `GET /api/v1/panels` now carries
+  `nav: {section, order, hidden, icon}` (sections `run` / `configure`). The rail and
+  the page kicker read it directly, and a panel this build does not know is placed by
+  the backend instead of being guessed into "configure". Nav icons are validated
+  against the shell's `AppIcon` vocabulary.
+- **Multi-device design document.** `docs/multi-device-design.md` is a design-only
+  proposal for rooms, the primary/satellite question and double-wake arbitration:
+  current 0.4.1 code facts, four options, a recommended hub arbitration with one audio
+  plane per device, a `config v3` sketch, a phased plan and open decisions. No runtime
+  change ships with it.
+- **README 0.4.2 section** covering the Phase 4 result and the new navigation model.
+
+### Changed
+
+- **Eleven panels, seven retired.** The compatibility-only declarations
+  `assistant-session`, `speaker`, `devices-admin`, `tools`, `mcp`, `foundation` and
+  `phrases` were removed after their one-release window in 0.4.0/0.4.1. Their content
+  lives on the merged destinations (voice-assistant, devices, integrations, system);
+  `/panel/credentials` and `/secrets` remain for the write-only ledger.
+- **Legacy console URLs are gone, intentionally.** Old `/panel/<legacy-id>` URLs
+  (including `/panel/settings`) no longer redirect; they render the console's
+  "No such panel" state with a link back to the overview. The removed top-level
+  aliases (`/overview`, `/devices`, `/logs`, `/assistant`, `/settings`, `/voice`,
+  `/models`, `/tools`) fall through the SPA catch-all to `/panel/overview`. Update
+  bookmarks; this ends the compatibility window announced in 0.4.0.
+- **Providers page renamed** from "外部资源 / Providers" to
+  "模型与语音服务 / Models & voice services"; the id `/panel/providers` is unchanged.
+- **Duplicate navigation code removed.** The id→group map, hidden-panel set, active
+  alias map and per-id title overrides (`PANEL_NAV_GROUPS`, `HIDDEN_NAV_PANELS`,
+  `NAV_ACTIVE_ALIASES`, `NAV_GROUPS`, `PANEL_TITLE_KEYS`, `GROUP_KEY`) are deleted.
+  `web/src/nav.ts` keeps only the section titles and the three hand-written utility
+  routes (channels, diagnostics, first-run setup).
+- **README slimmed** from 512 to 366 lines: install, wizard and troubleshooting detail
+  moved to `docs/first-run.md`; the screenshot refresh is deferred to the next content
+  pass. The compact docs index and the 0.4.2 "what's new" block replace the long page.
+
+### Fixed
+
+- **Navigation drift.** A panel's rail placement, page kicker and title used to be
+  declared in three places (backend group, frontend mapping, i18n override), so a
+  backend change could leave the rail and the page disagreeing (the Logs case found in
+  the IA audit). The backend `nav` object and backend titles are now the only inputs.
+- **No setting lost its home.** The fields the deleted pages used to edit still render
+  on the merged pages: assistant/session on the voice-assistant reply tab, speaker
+  hardware on the devices audio tab, process/console/SSRF in `/panel/system`, and
+  `system.log_level` on the logs page.
+- **Unknown nav icons** now fail the panel contract tests instead of silently rendering
+  a blank icon in the rail.
+
+### Upgrade notes
+
+- **From 0.4.1:** no config migration, no chown and no config-schema change. Pull and
+  recreate; this release changes the console and docs only. Audio, providers, music and
+  device behaviour are unchanged.
+- **Bookmarks:** the old panel URLs now show "No such panel" (intentional). Use
+  `/panel/voice-assistant` (assistant/session/phrases), `/panel/devices`
+  (status/audio/manage), `/panel/integrations` (tools/MCP/HA) and `/panel/system`
+  (process/console/SSRF).
+- **API:** `/api/v1/*` paths are unchanged. `GET /api/v1/panels` gains the additive
+  `nav` object and no longer lists the seven retired panel ids; integrations that
+  enumerate panels should read `nav` and tolerate a smaller list.
+- **Rollback:** the config is unchanged, so a 0.4.1 image can run the same data
+  directory; old bookmarks regain their redirects if you roll back.
+
 ## [0.4.1] - 2026-10-25
 
 Compatibility polish for the 0.4.0 console: Jellyfin and Emby join the music-source
@@ -461,7 +533,8 @@ First public release, after all four v1 acceptance gates passed.
 
 Quality at release: 749 passed / 17 skipped, ruff clean, web typecheck/build green.
 
-[Unreleased]: https://github.com/yes999zc/rui/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/yes999zc/rui/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/yes999zc/rui/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/yes999zc/rui/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/yes999zc/rui/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/yes999zc/rui/compare/v0.3.3...v0.3.4
