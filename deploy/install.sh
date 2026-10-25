@@ -240,13 +240,16 @@ echo "[4/5] local models: ASR + VAD + wake word"
 # own wake word. A rerun must repair a *partial* install too, so run fetch-models
 # whenever any required artifact is missing - not only when ASR and KWS happen to be
 # present. fetch-models copies the image seed first, so this keeps the seed-first
-# behavior and only downloads what is actually absent. Loud when it fails, but never
-# blocks the install.
+# behavior and only downloads what is actually absent. A failure now makes the install
+# exit non-zero (dot2 #14): the old warning-then-exit-0 let a transient 429 look like a
+# successful install with no local ASR. RUI_SKIP_MODELS=1 is the explicit opt-out for a
+# cloud-only/offline install; it is documented in docs/deploy.md.
 ASR_DIR="$DIR/data/models/sensevoice"
 VAD_FILE="$DIR/data/models/silero_vad.onnx"
 KWS_DIR="$DIR/data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
 KWS_TOKENS="$KWS_DIR/tokens.txt"
 MISSING_MODELS=""
+FETCH_FAILED=0
 if [ ! -f "$ASR_DIR/model.int8.onnx" ] && [ ! -f "$ASR_DIR/model.onnx" ]; then
   MISSING_MODELS="$MISSING_MODELS asr-model"
 fi
@@ -254,7 +257,10 @@ fi
 [ -f "$VAD_FILE" ] || MISSING_MODELS="$MISSING_MODELS vad"
 [ -d "$KWS_DIR" ] || MISSING_MODELS="$MISSING_MODELS kws-dir"
 [ -f "$KWS_TOKENS" ] || MISSING_MODELS="$MISSING_MODELS kws-tokens"
-if [ -z "$MISSING_MODELS" ]; then
+if [ "${RUI_SKIP_MODELS:-}" = "1" ]; then
+  echo "      RUI_SKIP_MODELS=1: skipping the model check"
+  echo "      ASR falls back to the cloud, the VAD gate never starts, the wake word stays off"
+elif [ -z "$MISSING_MODELS" ]; then
   echo "      models already present (ASR + VAD + KWS)"
 else
   echo "      missing:$MISSING_MODELS; running fetch-models (image seed first)"
@@ -268,11 +274,16 @@ else
     [ -n "$value" ] && FETCH_PROXY="$FETCH_PROXY -e $var=$value"
   done
   # shellcheck disable=SC2086  # FETCH_PROXY is a list of docker flags, not a path
-  docker run --rm --network host --user "$RUN_AS" -v "$DIR/data:/data" $FETCH_PROXY "$IMAGE" \
+  if docker run --rm --network host --user "$RUN_AS" -v "$DIR/data:/data" $FETCH_PROXY "$IMAGE" \
       fetch-models --dest /data/models/sensevoice \
       --vad-dest /data/models/silero_vad.onnx \
-      --kws-dest /data/models/kws \
-    || echo "      WARNING: model download failed; ASR falls back to the cloud, wake word stays off (see docs/deploy.md)"
+      --kws-dest /data/models/kws; then
+    echo "      models ready (ASR + VAD + KWS)"
+  else
+    FETCH_FAILED=1
+    echo "ERROR: model fetch failed; the install is not complete." >&2
+    echo "       without ASR/VAD/KWS, ASR falls back to the cloud and the wake word stays off." >&2
+  fi
 fi
 # setup already generated config/keywords.txt from the default wake word; only a change
 # of devices[].wake_words needs a regeneration.
@@ -426,3 +437,20 @@ echo "  pin:     image is pinned in $DIR/.env ($IMAGE); edit that line to change
 echo "  rollback: set the previous tag in $DIR/.env and run docker compose up -d"
 echo "  prune:   old images are kept on purpose for rollback; once done: docker image prune -f"
 echo "  re-run:  this script is safe to run again; it reconciles this directory's container"
+
+# A model fetch failure is a failed install (dot2 #14). The service is already up so the
+# wizard stays reachable, but the exit status must not hide the missing models: callers
+# (CI, a NAS job, the operator's shell) read 0 as "everything is ready". The opt-out is
+# RUI_SKIP_MODELS=1 in [4/5].
+if [ "$FETCH_FAILED" = "1" ]; then
+  echo
+  echo "ERROR: install finished with ASR/VAD/KWS models missing." >&2
+  echo "       the service is running (the wizard still works), but local models are not ready:" >&2
+  echo "       re-run the download, then restart:" >&2
+  echo "         docker run --rm --user $RUN_AS -v \"$DIR/data:/data\" \"$IMAGE\" fetch-models \\" >&2
+  echo "           --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws" >&2
+  echo "         cd $DIR && docker compose up -d" >&2
+  echo "       or re-run this installer (same directory is safe); it repairs a partial tree." >&2
+  echo "       cloud-only install: re-run with RUI_SKIP_MODELS=1 to accept the degradation." >&2
+  exit 1
+fi

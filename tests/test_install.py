@@ -748,3 +748,112 @@ def test_install_sh_env_heredoc_delimiter_is_quoted() -> None:
     script = _install_script()
     assert "cat <<'ENV'" in script
     assert re.search(r"<<-?ENV", script) is None
+
+
+# ------------------------- a failed model fetch is a failed install (dot2 #14)
+
+def _run_install_models_block(
+    tmp_path: Path,
+    *,
+    docker_exit: int = 0,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the shipped [4/5] block with no model files on disk."""
+    script = _install_script()
+    start = script.index('echo "[4/5] local models')
+    end = script.index('echo "[5/5] starting', start)
+    block = script[start:end]
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/bin/sh" + NL
+        + 'echo "$@" >> "$DOCKER_CALLS"' + NL
+        + "exit " + str(docker_exit) + NL,
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    home = tmp_path / "home"
+    home.mkdir()
+    harness = tmp_path / "models-block.sh"
+    harness.write_text(
+        "set -eu" + NL
+        + 'DIR="$1"' + NL
+        + 'RUN_AS="1000:1000"' + NL
+        + 'IMAGE="ghcr.io/example/rui:test"' + NL
+        + block + NL
+        + "echo FETCH_FAILED=$FETCH_FAILED" + NL,
+        encoding="utf-8",
+    )
+    env = {
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "DOCKER_CALLS": str(tmp_path / "docker-calls"),
+    }
+    env.update(extra_env or {})
+    return subprocess.run(
+        ["sh", str(harness), str(home)], capture_output=True, text=True, env=env
+    )
+
+
+def test_install_sh_fetches_models_when_artifacts_are_missing(tmp_path: Path) -> None:
+    result = _run_install_models_block(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "missing:" in result.stdout
+    calls = tmp_path / "docker-calls"
+    assert calls.exists()
+    assert "fetch-models" in calls.read_text(encoding="utf-8")
+    assert "FETCH_FAILED=0" in result.stdout
+    assert "models ready" in result.stdout
+
+
+def test_install_sh_still_starts_after_a_failed_model_fetch(tmp_path: Path) -> None:
+    """The wizard must stay reachable; the exit status is reconciled at the end."""
+    result = _run_install_models_block(tmp_path, docker_exit=1)
+    assert result.returncode == 0, result.stderr
+    assert "FETCH_FAILED=1" in result.stdout
+    assert "ERROR: model fetch failed" in result.stderr
+
+
+def test_install_sh_skip_models_is_an_explicit_opt_out(tmp_path: Path) -> None:
+    result = _run_install_models_block(
+        tmp_path, extra_env={"RUI_SKIP_MODELS": "1"})
+    assert result.returncode == 0, result.stderr
+    assert "RUI_SKIP_MODELS=1: skipping the model check" in result.stdout
+    assert "FETCH_FAILED=0" in result.stdout
+    assert not (tmp_path / "docker-calls").exists()
+
+
+def _run_install_model_gate(
+    tmp_path: Path, failed: str,
+) -> subprocess.CompletedProcess[str]:
+    """Run the shipped final exit-status gate on its own."""
+    script = _install_script()
+    start = script.index("# A model fetch failure is a failed install")
+    block = script[start:]
+    harness = tmp_path / "model-gate.sh"
+    harness.write_text(
+        "set -eu" + NL
+        + 'FETCH_FAILED="$1"' + NL
+        + 'DIR="/srv/rui"' + NL
+        + 'RUN_AS="1000:1000"' + NL
+        + 'IMAGE="ghcr.io/example/rui:test"' + NL
+        + block,
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        ["sh", str(harness), failed], capture_output=True, text=True)
+
+
+def test_install_sh_exits_non_zero_when_models_are_missing(tmp_path: Path) -> None:
+    """dot2 #14: a transient 429 must no longer look like a successful install."""
+    result = _run_install_model_gate(tmp_path, "1")
+    assert result.returncode == 1, result.stdout
+    assert "install finished with ASR/VAD/KWS models missing" in result.stderr
+    assert "fetch-models" in result.stderr
+    assert "RUI_SKIP_MODELS=1" in result.stderr
+
+    ok = _run_install_model_gate(tmp_path, "0")
+    assert ok.returncode == 0, ok.stderr
+    assert ok.stderr == ""
