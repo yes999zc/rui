@@ -9,8 +9,8 @@
 | 项 | 当前值 |
 |---|---|
 | 项目 | 自托管语音终端：LX06 音箱 + FastAPI 控制面 + 独立音频面 + Vue 控制台；MIT；公开仓 `yes999zc/rui` |
-| 版本 | **v0.4.2**（控制台 IA Phase 4：单一 nav manifest、11 面板、7 个 legacy panel/旧路由退役、README 瘦身、多设备设计文档），2026-10-25 已部署 NAS |
-| 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.4.2`**（官方，digest `sha256:3791ccfdb…`，amd64+arm64）；`0.4.1` / `0.4.0` 保留回滚；非 root uid 1000，healthy、音箱在线 |
+| 版本 | **v0.5.0**（多设备 0.5：config v3 每设备音频覆盖 + 多平面/中央仲裁 + 逐设备健康 + 控制台多设备状态 + 下游升级/healthcheck 打磨批），2026-10-25 18:02 已部署 NAS |
+| 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.5.0`**（digest `sha256:01a3afe18faa…`，amd64+arm64）；回滚 `0.4.2`（digest `sha256:3791ccfdb…`）；非 root uid 1000，healthy、音箱在线、`multi_device.enabled=false` |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
 | 质量 | **1278 passed / 18 skipped**（Phase 4 + config v3 + Phase 2 fleet/仲裁/逐设备健康 + Phase 1b 控制台/目录 + 打磨批 healthcheck/doctor/install）；ruff clean；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
@@ -18,7 +18,7 @@
 
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 
-- **当前发布/生产**：v0.4.2 在线（`ghcr.io/yes999zc/rui:0.4.2`，digest `sha256:3791ccfd…`，amd64+arm64；回滚 `0.4.1`/`0.4.0`）；本会话**没有动生产**。
+- **当前发布/生产**：**v0.5.0 已上线**（2026-10-25 18:02；`ghcr.io/yes999zc/rui:0.5.0`，digest `sha256:01a3afe18faa…`，amd64+arm64）。回滚镜像 `0.4.2`；部署前备份：`.env.bak.20261025-180259`（root 0600）、`config/config.yaml.bak.20261025-180259`、`/vol1/rui-backups/rui-backup-20261025-180734.tar.gz`（sha256 `17711958…`）。验收：healthcheck ok、`/health` version 0.5.0、config_version 仍 2、`audio_devices` 仅 living/客厅 running+connected、真实回合 `audio_bytes=120,912`（deepseek_llm + volc_tts）；`multi_device.enabled=false`。
 - **发布状态（2026-10-25 17:4x）**：`main` 已推（HEAD `406785e`）+ tag **`v0.5.0`**；CI 全绿（secret-scan/security/ci/docker-publish，tag 与 main 各一轮）。GHCR `0.5.0`=`0.5`=`sha-406785e` 同一 manifest digest **`sha256:01a3afe18faa…`**（amd64+arm64；发布时 `latest` 也是同一 manifest，之后随 `main` 移动）；`docs/releases/v0.5.0.md` 已补 digest；GitHub Release 已发；#7 已公布 tag/digest/平台/「契约变化=无」。
 - **本会话新完成**（`git log origin/main..main`）：
   - HA 控制台逻辑：测试用表单里的一次性 token（不落盘）、保存并重连覆盖新 token、测试后表单不被清空（`6003700`/`7ae83cf`）；
@@ -42,7 +42,7 @@ Phase 2 接线已完成并验证，**不要再改** `src/rui/audio/{protocol,pro
 
 1. **Phase 1b ✅**（P5.3）：`multi_device.*` / `devices[].audio.*` 已进目录（`multi_device` 组 + 每设备 13 个 audio 覆盖字段），体检页有多设备卡片（未启用/逐平面状态/超 cap/启动失败）；`web` 构建绿。
 2. **打磨批 ✅**（P5.4）：healthcheck 根因 + doctor 一致性行、install.sh 升级提示 + prune、0.4.2 占位注释清理、`docs/deploy.md` §7.1 下游升级/兼容矩阵、音量换算 pointer；dot2 docs PR 当前无 open，发布前再查。
-3. **v0.5.0 发布 ✅**（2026-10-25）：tag `v0.5.0`、digest `sha256:01a3afe1…`、CI 全绿、Release 已发、#7 已公布；**剩生产部署与回滚演练（需 9哥 明确点头）**。
+3. **v0.5.0 发布 + 生产部署 ✅**（2026-10-25）：tag `v0.5.0`、digest `sha256:01a3afe1…`、CI 全绿、Release 已发、#7 已公布；生产已切 0.5.0（healthcheck ok、真实回合通过）。**剩真机 LX06+2×Dot2 验收与回滚演练（9哥 安排）**。
 4. **真机验收**（9哥 保留）：LX06 + 2×Dot2 的共存/各自唤醒/同词单 turn/barge 归属/故障隔离/回滚；记录 2/4 平面 RSS/CPU 与唤醒→首字延迟。
 
 ### 0.3 环境与命令（新会话必读）

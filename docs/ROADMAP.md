@@ -125,7 +125,9 @@
 
 生产仍 0.4.2；多平面未经真机验证前 `multi_device.enabled=false`。
 
-**v0.5.0 已发布（2026-10-25 17:4x）**：tag `v0.5.0`；GHCR `0.5.0`=`0.5`=`sha-406785e`，digest `sha256:01a3afe18faa116f318223b8ce6596825fb61e2cd04789bc7c44d37de6184b15`（amd64+arm64）；发布时 `latest` 指向同一 manifest，之后随 `main` 移动。CI secret-scan/security/ci/docker-publish 全绿；GitHub Release 已发，#7 已公布「相对 0.4.2 契约变化=无」。部署与真机验收待 9哥。
+**v0.5.0 已发布（2026-10-25 17:4x）**：tag `v0.5.0`；GHCR `0.5.0`=`0.5`=`sha-406785e`，digest `sha256:01a3afe18faa116f318223b8ce6596825fb61e2cd04789bc7c44d37de6184b15`（amd64+arm64）；发布时 `latest` 指向同一 manifest，之后随 `main` 移动。CI secret-scan/security/ci/docker-publish 全绿；GitHub Release 已发，#7 已公布「相对 0.4.2 契约变化=无」。
+
+**生产已升级（2026-10-25 18:02，9哥 点头）**：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.0`，healthy、uid 1000；`/health` version 0.5.0、config_version 仍 2、`audio_devices` living/客厅 running+connected、healthcheck ok、真实回合 `audio_bytes=120,912`；`multi_device.enabled=false`。备份 `.env.bak.20261025-180259`、`config/config.yaml.bak.20261025-180259`、`/vol1/rui-backups/rui-backup-20261025-180734.tar.gz`（sha256 `17711958…`）。真机 LX06+2×Dot2 验收与回滚演练待 9哥 安排。
 
 **运行形态待定（P2.1 里定）**：音箱端 client/固件跑在音箱上（不在 NAS）；
 RUI 侧 adapter 有两种形态——in-process（可信内置插头，简单）与 sidecar 容器（第三方插头隔离，NAS 上会多一个镜像）。
