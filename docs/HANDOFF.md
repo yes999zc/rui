@@ -38,8 +38,8 @@ phase-close: task-16
 | 控制台 v2 M7–M10 | pending | 设备增删改 + 配置 tab（M3）、音频覆盖编辑（M4）、房间/全屋 + 全局音频（M5）、八步向导 add/edit（M6）、运行类页面（M7–M8）、配置页组（M9a/M9b）、0.7 切默认（M10）。设计文档 §7 有每步验收 |
 | verifier 记录的偏差（非阻断） | pending | ① `led.set` 已修；② disabled 设备的错误码不自洽（`device_not_connected` / `capability_unsupported` / `device_disabled` 并存）需产品裁决；③ C-002 §7.1 启动门禁在浏览器端未成立（`meta.ts:11` 初值 + `App.vue:225` 提前渲染导致资源重复请求） |
 | v2 DELETE 的端口检查口径 | pending | v2 DELETE 仍 `check_ports=True`，与 v1 不一致；建议传 `check_ports=False` |
-| **ack 时长余量变薄** | pending | 最近两次重建后 `ack.wav` 由 520 ms 变 570 ms（`ack.max_ms=600`，余量 30 ms）；改 ack 文案或 TTS 变长会静默降级成提示音。建议调大 `ack.max_ms` 或缩小文案 |
-| **数据目录里的 dot2 manifest 仍是 1.1.2** | pending | `/vol1/rui/data/plugs/dot2-echomuse/` 的 plugin.yaml 是 1.1.2（`rui_compat <0.6.0`、无 audio_defaults）；当前解析走镜像内 1.2.0（`source: builtin`）所以无害，但按 README 应执行 `sh deploy/downstream/install-plug-manifest.sh /vol1/rui/data`。改动会影响 device_wake 策略，建议真机在场时做 |
+| ack 余量 | **已处理** | 生产 `ack.max_ms` 已 600→800（2026-10-26 06:21），`ack.wav` 550 ms 正常生成；若改 ack 文案仍要复看 `/health.ack.note` |
+| data 卷 dot2 manifest | **已处理** | 已用 `install-plug-manifest.sh` 同步为 1.2.0；因镜像自带同字节 builtin，数据卷副本是冗余并会让 `/api/v1/plugs` 多一条失败条目，已移到 `/vol1/rui-backups/plugs-dot2-echomuse-disabled-*`（tar 备份可恢复）。**下游 README 里「data 卷清单必须有」的说法在 0.7 预览版已过时，需改** |
 | AudioPanel 3 条 MINOR（评审） | pending | `saveErrorRaw` 死状态、save 未清 `restoreUnresolved`/`lastRestorePath`、`mapServerPath` 内联 ack 映射（应复用 `audio.ts` helper） |
 | v2 `GET /devices/{id}` 缺「存储值」字段 | pending | 只有 effective `listen_port`，配置页无法区分「显式 8870」与「继承默认 8870」；建议 C-002 addendum 加 `listen_port_stored`（additive） |
 | 控制台 v2 剩余页面 | pending | M7–M10：运行类页面（对话/日志/记忆）、配置页组、0.7 切默认与 `/legacy` |
