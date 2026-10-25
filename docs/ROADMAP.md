@@ -10,8 +10,8 @@
 - 质量：全量 **1142 passed / 18 skipped**；ruff clean；secret-scan 绿；web typecheck/build 绿；CI 原生 runner（PR #10）已合入，publish 不再被 QEMU arm64 卡 40min。
 - 已交付：v1 四门槛；0.1–0.4 发布；Socket/Plug v1；控制台 IA Phase 1–4（两分组、合并页、单一 nav manifest、legacy 退役）；P3.5 安全；CHANGELOG/发布说明工具；Jellyfin/Emby 音源；首次登录 token 文件；dot2 修复；README/first-run 重写；多设备/卫星/唤醒仲裁设计文档 `docs/multi-device-design.md`（设计稿）。
 - 关键文档：`HANDOFF.md`、`docs/socket-plug-v1.md`、`docs/console-ia-audit.md`、`docs/install-flow-audit.md`、`docs/provider-presets.md`、`docs/music-sources.md`、`docs/integrations-mcp.md`、`docs/security.md`、验收工作区 `04_Docs/20261024-house-ear-acceptance/`。
-- 已知问题/欠账：只读 YAML 代码视图；多设备设计文档 §9 的 15 个待定决策（是否强制主音箱、全局单 turn、房间优先级、reminders 路由、每设备 AEC/EQ 字段、per-device plane 模型）；dot2 设备内层 token 轮换契约；socket sidecar/播放 gap；README 截图待刷新。
-- 下一步：只读 YAML 代码视图 → 多设备 Phase 1（config v3，先保持 single-active）→ multi-plane/仲裁 → sidecar/播放 gap；0.4.2 发布后 dot2 在 .34 做受控切换；生产升级固定 `.env` 的 `RUI_IMAGE` + `docker compose pull && up -d`，先备份、失败回上一个 tag。
+- 已知问题/欠账：只读 YAML 代码视图（进行中）；多设备 Phase 1（config v3，§9 决策已冻结）；dot2 设备内层 token 轮换契约；socket sidecar/播放 gap；README 截图待刷新。
+- 下一步：多设备 Phase 1（config v3，先保持 single-active；§9 决策已冻结）与只读 YAML 代码视图并行 → multi-plane/仲裁 → sidecar/播放 gap；dot2 已按 9 哥 安排开始 0.4.2 冷测试（.34 受控切换）；生产升级固定 `.env` 的 `RUI_IMAGE` + `docker compose pull && up -d`，先备份、失败回上一个 tag。
 
 ## 0. 先明确两个词
 

@@ -19,13 +19,14 @@
 ### 0.1 新会话交接（2026-10-25 15:35）
 
 - **当前发布**：v0.4.2（Phase 4 收尾）；GitHub Release 已发，生产已切官方镜像，健康。
-- **下一步顺序**：多设备 Phase 1（等 9 哥确认 `docs/multi-device-design.md` §9 的 6 个关键决策）→ 只读 YAML 代码视图 → sidecar / 播放 gap；README 截图与内容一起刷新。
+- **下一步顺序**：多设备 Phase 1（config v3，仍单 active；`docs/multi-device-design.md` §9 六条关键决策已于 2026-10-25 冻结）+ 只读 YAML 代码视图并行 → multi-plane/仲裁 → sidecar / 播放 gap；README 截图与内容一起刷新。
 - **生产**：`/vol1/rui`，官方 `ghcr.io/yes999zc/rui:0.4.2`（digest `sha256:3791ccfd…`，amd64+arm64），uid 1000、healthy、音箱在线；备份 `.env.bak.20261025-152606`；回滚 `0.4.1` / `0.4.0`。
 - **访问**：Mac 通过 Tailscale `nas-bakey`（100.113.211.110）或 LAN 192.168.5.168；SSH 用户 `yes999zc`，密码在 `01_Code/device-inventory.md` 第 18–32 行（不要写进仓库/聊天）；SSH 必须密码认证、失败后等 40 s；docker 需 sudo（`echo "$PW" | sudo -S …`）。
 - **控制台 token**：`/vol1/rui/console-token.txt`（0600，不打印值）；找回用 `docker compose exec -T rui rui token`。
-- **dot2**：PR #1 已合入；0.4.1 上 `plug-test` 15 PASS / 0 FAIL / 2 WARN / 5 SKIP；9 哥已同意 0.4.2 后在 .34 做受控切换真机验证（停 0.3.4 → 起 0.4.2 → 真机回合 → 回滚）；0.4.2 的 tag/digest 已在 rui #7 公布，等待对方执行。
+- **dot2**：PR #1 已合入；0.4.1 上 `plug-test` 15 PASS / 0 FAIL / 2 WARN / 5 SKIP；9 哥已同意 0.4.2 后在 .34 做受控切换真机验证（停 0.3.4 → 起 0.4.2 → 真机回合 → 回滚），并已安排对方开始 0.4.2 冷测试；0.4.2 的 tag/digest 已在 rui #7 公布。
+- **dot2 #11**（多设备仲裁契约提案，2026-10-25）：已答复，结论以 `docs/multi-device-design.md` §11 为准；0.5 走单实例多 plane，多实例只是过渡部署手法。
 - **媒体测试环境**：NAS 上的 Jellyfin/Emby 测试容器已停；数据在 `/vol1/rui-media-test/`；fnOS 原生 Jellyfin/Emby 和 rsshub/homepage/mihomo 均未动。
-- **未完成**：README 截图刷新；issue #4 可在合适时关闭；multi-device §9 决策待定。
+- **未完成**：README 截图刷新；多设备 Phase 1（config v3）进行中；issue #4 已答复并关闭。
 
 ## 1. 项目与架构契约
 

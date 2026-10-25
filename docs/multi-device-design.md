@@ -1,8 +1,10 @@
 # 多设备 / 卫星音箱设计（rui 0.4.x → 0.5 设计提案）
 
-> 状态：设计提案（2026-10-25），基于 0.4.1 的代码与 Socket/Plug v1 契约；**本文件不含代码改动**。
+> 状态：**设计已冻结（2026-10-25）**。§9 的 6 条关键决策由 9 哥 拍板（§9.1），其余 9 条按 §9.2 默认执行；
+> 外部契约输入见 §11（dot2 桥 issue #11 的 Q1–Q7 已逐条答复）。Phase 1（config v3，仍单 active）已开工。
+> 基于 0.4.1 的代码与 Socket/Plug v1 契约；本文件不含代码改动。
 > 目标读者：9 哥（产品决策）、Lead（排期）、后续实现者。
-> 阅读顺序：§0 是三个问题的直接答案；§1 是当前代码事实；§4/§5/§6 是设计本体；§8 是分阶段计划；§9 是需要拍板的开放项。
+> 阅读顺序：§0 是三个问题的直接答案；§1 是当前代码事实；§4/§5/§6 是设计本体；§8 是分阶段计划；§9 是**已冻结的决策记录**；§11 是外部契约输入与答复。
 
 ## 0. 三个问题的直接答案
 
@@ -197,6 +199,16 @@ dot2 侧的相关诉求与记录：/tmp/rui-dot2-bridge/docs/rui-0.3-requirement
   - 停止/打断：只作用于当前输出 owner 所在设备；“停止”在非 owner 房间只结束该房间的会话，不跨房间停播（第一版）。
   - **不做**“所有房间同时播同一段回答”（多房间回声/延迟问题，非当前产品需求）。
 
+### 4.5 同房间交叉回声（2026-10-25 冻结；dot2 #11 提出）
+
+同一个 room 里有两台设备时，A 播放、B 的麦克风会听到 A（设备侧 AEC 只消自己的回声），B 可能误唤醒抢回合。规则（冻结）：
+
+- A 正在播放时，**同 room 的 B 候选默认抑制**，计 `arbitration_cross_echo_suppressed`；trace 写明"谁在播放、谁被抑制"。
+- 例外：B 候选 `barge=true` 且该设备自身的 barge 门（能力、`voice.barge_in`、设备侧门控）全过，才按"播放中 barge"参与仲裁。
+- `multi_device.enabled=true` 时 `devices[].room` **必填**（同 room 判定依赖它）；缺 room 的设备不参与该规则并给明确 warning。
+- 跨房间（不同 room）只按 §4.3 的空气传播残余风险处理，**不**额外做同房间式抑制。
+- 这条不需要 adapter 上报 `playing`/`room`：播放由 RUI 驱动，room 来自配置（延续 v1 "RUI enriches"）。
+
 ## 5. 配置 v3（提案）
 
 ### 5.1 目标
@@ -245,7 +257,9 @@ multi_device:
   default_output: lx06          # 无来源输出（提醒/通知）的 fallback；可选
   arbitration:
     mode: score                 # score | room_priority | last_active（首版只用 score + 静态 priority）
-    duplicate_window_ms: 2000
+    source_priority: [device_wake, kws]   # 组间优先级（§9.1 K3）：组内比 score，不跨来源比
+    candidate_merge_window_ms: 400        # 同一 utterance 的多设备命中合并窗口（§11 Q3）
+    duplicate_window_ms: 2000             # 同词全局去重窗口（与合并窗口分离）
     room_priority: [lx06, dot2] # 显式优先级；缺省按 devices 顺序
     prefer_playing_room: true   # 播放中房间的 barge 优先
     last_active_window_s: 120
@@ -263,7 +277,9 @@ multi_device:
 | multi_device.enabled | bool | false | true 时才允许多个 enabled inbound 平面 |
 | multi_device.max_planes | int | 4 | 超过上限的 enabled 设备不启动并给明确 warning（不是静默） |
 | multi_device.default_output | device id | 空 | 必须是 enabled、inbound、playback 能力的设备；空 = 用最近活跃房间 |
-| arbitration.duplicate_window_ms | int | 2000 | 50–10000 |
+| arbitration.duplicate_window_ms | int | 2000 | 50–10000；同词全局去重，与合并窗口分离 |
+| arbitration.candidate_merge_window_ms | int | 400 | 100–2000；同一 utterance 跨设备命中的合并窗口（§11 Q3） |
+| arbitration.source_priority | list[str] | `[device_wake, kws]` | 只允许 `device_wake`/`kws`；组间优先级，组内仍比 score 余量 |
 | arbitration.room_priority | list[device id] | 空 | 必须全部存在；未列出的设备按 devices 顺序排后 |
 | arbitration.on_no_speech | end｜retry_next | end | 首版只实现 end，retry_next 留开放项 |
 
@@ -383,23 +399,39 @@ multi_device:
 - 不靠声学定位/距离推断房间；房间来自配置与 user 行为，不猜。
 - 不在没有 device_wake 的设备上假装“设备侧唤醒”；KWS 持续上行的隐私差异必须可见。
 
-## 9. 开放决策（需要 9 哥/Lead 拍板）
+## 9. 决策记录（2026-10-25 冻结）
 
-1. **主音箱**：确认“不需要必须的主音箱，只保留可选 fallback output”？（本设计默认）
-2. **同一时刻一个回合**：全屋只有一个 turn（本设计默认），还是允许每个房间各自独立会话？
-3. **同时听到时谁赢**：房间优先级优先，还是严格按唤醒分数？默认建议“显式房间优先级 → 分数 → 最近活跃”。
-4. **赢家没有后续语音**：直接结束（默认），还是允许一次“换下一个候选”重试？
-5. **提醒/通知默认去哪**：固定 default_output，还是最近活跃房间，还是全屋播报（第一版不做）？
-6. **音乐**：第一版只允许一个房间放歌（全局 owner），A 放歌时 B 的回合是否应该暂停 A？默认不暂停。
-7. **“停止”的作用域**：只停当前房间（默认），还是要支持“全屋停止”口令？
-8. **每设备 AEC/EQ 的 v3 字段名与语义**：devices[].audio.aec / who 是否按 dot2 的 aec-parameter-model.md 采用？EQ 是否维持在插头 params（不进核心）？
-9. **平面模型**：确认“每设备一平面”为第一版（本设计推荐），multi-adapter 单平面只作为后续优化。
-10. **资源上限**：NAS 上最多几台平面（建议先 4 台）；超过上限的行为（拒绝启动并告警，不排队）。
-11. **隐私**：LX06 这类 KWS 持续上行的设备，是否允许在全屋部署？控制台是否要显式提示“此房间持续采集”。
-12. **Dot2 device_wake 前置**：OWW 运行时/模型未就位前，Dot2 仍走 KWS（持续上行）；这会改变“只有唤醒后上行”的隐私预期，需要产品确认。
-13. **房间成为一等对象？** 是否引入 rooms 配置（room -> devices、默认输出、优先级），还是继续用 devices[].room + room_priority 列表？（建议后者，少一层模型。）
-14. **voice identity**：没有声纹/说话人识别时，多用户同时说话无法区分；是否接受“只按房间”的仲裁。
-15. **回滚策略**：阶段 2 起，生产是否保留单设备模式作为灰度默认，直到 LX06+Dot2 验收通过。
+> 9 哥 已拍板：6 条关键决策按 §9.1 冻结，其余 9 条按 §9.2 默认执行。冻结含义：Phase 1/2 按此实现，
+> 后续修改必须在 §9.3 追加带日期的变更记录，不静默改。dot2 桥在 #11 的输入已并入（§4.5、§11）。
+
+### 9.1 关键决策（已冻结，K1–K6）
+
+| # | 决策 | 冻结结论 |
+|---|---|---|
+| K1 | 主音箱 | **不设**必须的主音箱，房间平权。只保留可选 `multi_device.default_output` 作为“无来源输出”的 fallback（定时提醒、无来源通知、音乐续播）；fallback 不参与唤醒归属。 |
+| K2 | 回合模型 | 全屋同一时刻**一个 turn、一个输出 owner**（第一版）。第二个唤醒只记候选，不产生第二个 turn。 |
+| K3 | 同时听到谁赢 | 显式 `room_priority` → 来源组间 `source_priority`（默认 device_wake > KWS）→ 组内 score 与 threshold 余量 → last_active（120 s）→ devices 顺序。**score 不跨来源比较**。 |
+| K4 | 提醒/通知 | 第一版固定走 `multi_device.default_output`；未配置时回落最近活跃房间并记 warning。不做全屋播报。 |
+| K5 | 每设备 AEC/EQ | `devices[].audio.aec {enabled, who: device\|controller\|both\|none}` + `devices[].audio.voice.followup_*` 覆盖；**EQ/limiter/trim 留在插头 `params`，不进核心**。`who=device` 时 RUI 不跑 AEC，配置校验给 warning。 |
+| K6 | 平面模型 | **每设备一个音频面**（方案 A）：一个控制面 + N 个音频面子进程。不是“每设备一个 rui 实例”——后者只是过渡部署手法，两个控制面无法全局仲裁，违反 K2，不作为契约。 |
+
+### 9.2 按文档默认执行（D1–D9）
+
+| # | 决策 | 执行结论 |
+|---|---|---|
+| D1 | 赢家无后续语音 | `on_no_speech: end`，不自动晋升第二名（避免“换房间突然回答”） |
+| D2 | 音乐 | 第一版单房间全局 owner；A 放歌时 B 的回合**不**自动暂停 A |
+| D3 | “停止”作用域 | 只停当前输出 owner 房间；不提供“全屋停止”口令（第一版） |
+| D4 | 资源上限 | `max_planes: 4`，超限明确告警、不排队；每平面独立重启 |
+| D5 | 隐私 | 允许 KWS 持续上行设备全屋部署；控制台设备列表/详情显示 `wake.source` 与“持续采集”标记 |
+| D6 | Dot2 device_wake 前置 | OWW 运行时/模型未就位前 Dot2 走 KWS（持续上行），控制台按 D5 标注 |
+| D7 | 房间模型 | 不引入顶层 `rooms`；用 `devices[].room` + `arbitration.room_priority`；`multi_device.enabled=true` 时 `room` 必填 |
+| D8 | voice identity | 不做声纹；只按房间仲裁（多用户同时说话无法区分，接受） |
+| D9 | 回滚 | Phase 2 起生产默认 `multi_device.enabled=false`；LX06+Dot2 验收通过后才开 |
+
+### 9.3 变更记录
+
+- **2026-10-25**：冻结 K1–K6 + 接受 D1–D9（9 哥 确认，Lead 记录）。同时并入 dot2 #11 的三点补充：同房间交叉回声抑制（§4.5）、来源分层/不跨来源比 score（K3）、可解释 trace 字段（§11 Q6）。
 
 ## 10. 参考（代码/文档路径）
 
@@ -413,3 +445,26 @@ multi_device:
 - docs/architecture.md：不变量、进程模型、播放仲裁、§6 债务（全局 audio 配置、单设备假设）。
 - dot2 桥：/tmp/rui-dot2-bridge/docs/rui-0.3-requirements.md §2、docs/aec-parameter-model.md、docs/cold-start-0.4.2.md、docs/watch-log.md、docs/handoff-2026-10-25-p4.md。
 - 相关 issue：#7（多设备/端口/仲裁问答）、#3（device_wake）。
+
+## 11. 外部契约输入与答复（dot2 桥 issue #11，2026-10-25）
+
+dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲裁契约提案（进程模型、来源分层、同房间交叉回声、可解释仲裁）。逐条答复如下；若 #11 与本文档冲突，**以 §9 冻结结论为准**。
+
+| # | 问题 | RUI 答复 |
+|---|---|---|
+| Q1 | 多实例 vs 单实例多 plane，0.5 先做哪个？ | **单实例多 plane**（K6 / 方案 A）。多实例（每设备一个 rui 实例）只是过渡部署手法，不做契约：两个控制面无法全局仲裁，违反 K2。 |
+| Q2 | 来源分层优先级硬编码还是可配置？ | 可配置 `arbitration.source_priority`，默认 `[device_wake, kws]`；只决定组间先后，组内仍比 score 与 threshold 余量（K3）。 |
+| Q3 | 同一 utterance 合并窗口 | 新增 `arbitration.candidate_merge_window_ms`，默认 **400 ms**（100–2000），与 `duplicate_window_ms`（同词去重 2000 ms）**分开**两个窗口。 |
+| Q4 | 同房间交叉回声抑制是否 RUI 做？room 是否必填？ | RUI 做（§4.5）；`multi_device.enabled=true` 时 `room` 必填（D7）。 |
+| Q5 | barge 是否只允许“正在播放的设备”？ | 是：只有当前输出 owner 设备可接管 barge；其他设备同 utterance 的 barge 丢弃并计数（§4.2/§4.5）。 |
+| Q6 | trace/metrics 字段命名 | 采纳 #11 E 表：`arbitration_candidates`、`arbitration_winner` / `arbitration_reason`、`arbitration_dropped{device}`、`arbitration_ties`、`arbitration_cross_echo_suppressed`、每候选 `wake_source`（Phase 2 实现）。 |
+| Q7 | 单实例多设备的进程/资源上限 | `max_planes: 4`（D4），超限告警不排队；NAS 上实测 RSS/CPU 后再调（§7.3）。 |
+
+其它确认：
+
+- **4412 不再有“默认设备口”语义**：端口一律来自 `devices[].listen_port` / manifest `runtime.listen_port`（0.4.1 的 `effective_listen_port` 已修诊断侧）；LX06 4412、Dot2 8870 并存。
+- **adapter 不上报 `device_id`/`room`/`playing`/`last_active`**：延续 v1 “RUI enriches”，只上报六字段候选；room 来自配置，播放状态来自 RUI。
+- **不做距离/声学推断**：房间来自配置与行为，不猜。
+- **多实例部署（临时）**：允许用户用两个独立 rui 实例分别驱动两台设备，但这不是“多设备支持”，不进入验收矩阵；Phase 2 单实例多 plane 交付后应迁回单实例。
+- 设备侧 OWW 未就位前（D6），Dot2 的 `wake.source` 保持 KWS，双方都按 0.4.x 现状实现，不预留特例。
+
