@@ -3,7 +3,15 @@ from __future__ import annotations
 import types
 
 from rui.config import Config
-from rui.config.schema import AecConfig, AudioConfig, VoiceConfig, WebConfig
+from rui.config.schema import (
+    AecConfig,
+    AudioConfig,
+    ProviderConfig,
+    ProvidersConfig,
+    StageConfig,
+    VoiceConfig,
+    WebConfig,
+)
 from rui.doctor import probes, run_doctor
 from rui.doctor.probes import measure_aec_rtf
 
@@ -150,3 +158,68 @@ def test_capture_layout_is_reported() -> None:
     assert "48000 Hz" in check.value
     assert "8 ch" in check.value
     assert "mic 6 + ref 2" in check.value
+
+
+# ------------------------------------- model readiness (dot2 #14)
+
+def _models_config(tmp_path, *, create: bool) -> Config:
+    asr = tmp_path / "sensevoice"
+    vad = tmp_path / "silero_vad.onnx"
+    kws = tmp_path / "kws"
+    if create:
+        asr.mkdir(parents=True)
+        (asr / "model.int8.onnx").write_bytes(b"model")
+        (asr / "tokens.txt").write_text("tokens", encoding="utf-8")
+        vad.write_bytes(b"vad")
+        kws.mkdir()
+        (kws / "tokens.txt").write_text("tokens", encoding="utf-8")
+    providers = ProvidersConfig(
+        catalog={
+            "local_asr": ProviderConfig(kind="sherpa", model=str(asr)),
+            "tts": ProviderConfig(),
+            "llm": ProviderConfig(),
+        },
+        asr=StageConfig(chain=["local_asr"]),
+        tts=StageConfig(chain=["tts"]),
+        llm=StageConfig(chain=["llm"]),
+    )
+    return Config(
+        providers=providers,
+        audio=AudioConfig(voice=VoiceConfig(
+            vad_model_path=str(vad),
+            kws_enabled=True,
+            kws_model_dir=str(kws),
+        )),
+    )
+
+
+def test_missing_models_are_a_warn_not_a_silent_cloud_fallback(tmp_path) -> None:
+    """No devices means /health is green; this row is where the missing models show."""
+    check = probes._models_check(_models_config(tmp_path, create=False))
+    assert check.name == "models"
+    assert check.status == "warn"
+    assert "missing" in check.value
+    for part in ("ASR", "VAD", "KWS"):
+        assert part in check.value
+    assert "fetch-models" in check.hint
+
+
+def test_present_models_are_reported_ready(tmp_path) -> None:
+    check = probes._models_check(_models_config(tmp_path, create=True))
+    assert check.status == "ok"
+    assert "ASR" in check.value and "VAD" in check.value and "KWS" in check.value
+    assert "present" in check.value
+
+
+def test_a_cloud_only_config_does_not_warn_about_local_models() -> None:
+    check = probes._models_check(Config())
+    assert check.status == "ok"
+    assert "no local models configured" in check.value
+
+
+def test_the_doctor_report_carries_the_models_row(tmp_path) -> None:
+    report = run_doctor(_models_config(tmp_path, create=False))
+    check = next(c for c in report.checks if c.name == "models")
+    assert check.status == "warn"
+    # A warn row degrades the verdict; it must never turn a runnable box "unsupported".
+    assert report.verdict == "degraded"

@@ -244,6 +244,82 @@ def _sherpa_runtime_check(cfg: Config) -> Check:
     )
 
 
+def _models_check(cfg: Config) -> Check:
+    """ASR + VAD + KWS model files that are configured and actually on disk.
+
+    dot2 #14: a fresh install has model paths configured by the production template even
+    when fetch-models has not run. With no devices, /health stays green, so local ASR
+    silently falls back to the cloud and the VAD gate / wake word never start. This row
+    is the degraded signal (warn, not fail: a cloud-only install or a fresh wizard boot
+    is allowed to be incomplete).
+    """
+    from ..providers.sherpa_asr import model_paths
+
+    voice = cfg.audio.voice
+    present: list[str] = []
+    missing: list[str] = []
+    checked: list[str] = []
+    locations: list[str] = []
+
+    for name in cfg.providers.asr.chain:
+        provider = cfg.providers.catalog.get(name)
+        if provider is None or str(provider.kind) != "sherpa":
+            continue
+        checked.append("ASR")
+        if not provider.model:
+            missing.append("ASR (no model path)")
+            break
+        model_dir = Path(str(provider.model)).expanduser()
+        locations.append(f"ASR {model_dir}")
+        onnx, tokens = model_paths(model_dir)
+        if onnx.is_file():
+            present.append("ASR model")
+        else:
+            missing.append("ASR model")
+        if tokens.is_file():
+            present.append("ASR tokens")
+        else:
+            missing.append("ASR tokens")
+        break  # the chain's first local ASR is the one the plane loads
+
+    if voice.vad_model_path:
+        checked.append("VAD")
+        vad = Path(voice.vad_model_path).expanduser()
+        locations.append(f"VAD {vad}")
+        if vad.is_file():
+            present.append("VAD")
+        else:
+            missing.append("VAD")
+
+    if voice.kws_enabled:
+        checked.append("KWS")
+        if not voice.kws_model_dir:
+            missing.append("KWS (no model dir)")
+        else:
+            kws = Path(voice.kws_model_dir).expanduser()
+            locations.append(f"KWS {kws}")
+            if (kws / "tokens.txt").is_file():
+                present.append("KWS")
+            else:
+                missing.append("KWS")
+
+    if not checked:
+        return Check(
+            "models", "ok", "no local models configured",
+            "cloud ASR only; run 'rui fetch-models' to add local ASR, VAD and the wake model",
+        )
+    if missing:
+        return Check(
+            "models", "warn", "missing " + ", ".join(missing),
+            "local model readiness: " + "; ".join(locations)
+            + "; run 'rui fetch-models' (or re-run deploy/install.sh), then restart",
+        )
+    return Check(
+        "models", "ok", " + ".join(present) + " present",
+        "local ASR, the VAD gate and the wake word can start",
+    )
+
+
 def run_doctor(cfg: Config | None = None) -> Report:
     cfg = cfg or Config()
     checks: list[Check] = []
@@ -346,6 +422,9 @@ def run_doctor(cfg: Config | None = None) -> Report:
     else:
         checks.append(Check("wake_path", "ok", f"preroll {audio.voice.wake_preroll_ms} ms",
                             f"ack mode {cfg.ack.mode}"))
+    # dot2 #14: with no devices /health is green even with the models missing, so the
+    # doctor has to name the degradation (cloud ASR, no gate, no wake word).
+    checks.append(_models_check(cfg))
     if cfg.ack.mode == "tts":
         path = ack_wav_path(cfg)
         if not path.is_file():
