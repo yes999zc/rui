@@ -14,7 +14,12 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
-## [Unreleased]
+## [0.5.2] - 2026-10-25
+
+Patch release for the install path and for satellite management in the console. Found
+by dot2's 0.5.1 clean-install retest (#15) and by adding Dot 2 satellites next to the
+LX06 in the device manager (#7). The audio/arbitration code and the plug contract are
+identical to 0.5.1: no config-schema change, no migration.
 
 ### Fixed
 

@@ -1,6 +1,6 @@
 # ROADMAP — rui / 小瑞
 
-> 目标载体：**NAS**。当前：**0.4.2 已发布并部署（非 root）**，控制台 IA 重构 Phase 1–4 完成；下一步多设备 Phase 1（config v3，仍单 active）+ 只读 YAML 代码视图。
+> 目标载体：**NAS**。当前：**0.5.2 已发布**（安装路径 #15 + 卫星就绪/连接测试 #7），生产跑 0.5.0 且健康；多设备 0.5（config v3 + Phase 2 多平面/仲裁）已就绪，`multi_device.enabled=false` 待 LX06+2×Dot2 真机验收。
 > 每条都要有可复现判据；过程数字在 `HANDOFF` 与验收工作区，详细历史在
 > `docs/archive/HANDOFF-history-to-2026-10-24.md`。
 
@@ -110,6 +110,7 @@
 | P5.3 ✅ | Phase 1b：控制台“未启用多设备”状态（体检页多设备卡片）+ `multi_device.*` / `devices[].audio.*` 目录字段（catalog + `设备与音频` 组的 `multi_device` 面板） | 目录契约测试（字段/effect/nullable 空值往返）；面板组断言；`web` typecheck+build 绿；全量 **1269 passed / 18 skipped** |
 | P5.4 ✅ | 打磨批（dot2 #12）：HA 控制台表单/状态（0.4.2 已交付）、install.sh 升级提示（current `RUI_IMAGE` + 显式升级 + prune）、healthcheck 根因（device_errors / fleet / 逐房间）、`doctor` 的 `container_healthcheck` 一致性行、0.4.2 release note 占位注释已清、adapter 音量换算指向 `device/contract.py` helper、`docs/deploy.md` §7.1 下游升级 + `rui_compat` 兼容矩阵 | 随 v0.5.0 一起发，不单独发版；K3（vanilla `DOT2_*` 空转）已在 §7.1 说明；dot2 docs PR 当前 0 open，发布前再查 |
 | P5.5 | Phase 3（v0.5.x）：房间策略与输出体验（room_priority/last_active、房间视图、全局 stop 语义） | 多房间一周误唤醒/抢占统计 |
+| P5.7 ✅ | 安装路径 #15 + 卫星管理 #7：`docker compose exec` 两处 `</dev/null`（+ 端到端管道测试与静态不变量）、`ready`/连接测试按传输方式判定（内拨不再探 SSH，3 s 等待拨入）、`token_managed_by_adapter`、控制台新增设备默认空闲 id / 不适用徽章 | **v0.5.2**（`a26af81` + `fe16846`）；全量 1298/17、ruff/`sh -n`/web 绿；dot2 #15 的复测判据 = 管道安装 exit 0 + token 文件 |
 | P5.6 ✅ | 冷装回归修复（dot2 #13/#14）：`7dbfecb`/`ef2affd` install.sh 引号 heredoc + 不再打印 token；`8433113`/`f032931` fetch-models 429/5xx 重试 + 安装失败非零退出 + `RUI_SKIP_MODELS=1`；`b55dcdb` doctor `models` 就绪行；`907fcd1` 文档 | **v0.5.1 已发布**（tag `v0.5.1`/`c0d7048`，digest `sha256:25d67cf88c62…`）；全量 1293/18、ruff/`sh -n` 干净；生产保持 0.5.0（无需升级） |
 
 **v0.5.0 发布判据（全部满足才 tag）**

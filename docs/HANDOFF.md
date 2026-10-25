@@ -9,12 +9,12 @@
 | 项 | 当前值 |
 |---|---|
 | 项目 | 自托管语音终端：LX06 音箱 + FastAPI 控制面 + 独立音频面 + Vue 控制台；MIT；公开仓 `yes999zc/rui` |
-| 版本 | **v0.5.0**（多设备 0.5：config v3 每设备音频覆盖 + 多平面/中央仲裁 + 逐设备健康 + 控制台多设备状态 + 下游升级/healthcheck 打磨批），2026-10-25 18:02 已部署 NAS |
+| 版本 | **v0.5.2**（安装路径 #15 修复 + 卫星就绪/连接测试口径，dot2 #7）；生产仍 **0.5.0**（0.5.1/0.5.2 无音频运行时变化） |
 | 生产镜像 | `/vol1/rui` 跑 **`ghcr.io/yes999zc/rui:0.5.0`**（digest `sha256:01a3afe18faa…`，amd64+arm64）；回滚 `0.4.2`（digest `sha256:3791ccfdb…`）；非 root uid 1000，healthy、音箱在线、`multi_device.enabled=false` |
 | 生产路径 | `/vol1/rui`（compose 项目 rui）；config/data 已 chown 1000；旧 `/vol1/house-ear` 保留回滚 |
-| 质量 | **1293 passed / 18 skipped**（0.5.0 + dot2 冷装回归修复 #13/#14）；ruff clean；`sh -n deploy/install.sh` 干净；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
+| 质量 | **1298 passed / 17 skipped**（0.5.2；跳过数随平台差 1，总数不变）；ruff clean；`sh -n deploy/install.sh` 干净；web typecheck/build 绿；CI 原生架构 runner（PR #10）已合入 |
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
-| 当前主线 | **v0.5.1 已发布**（冷装回归修复 dot2 #13/#14）；生产仍是 0.5.0（无运行时变化，不必升级）；真机验收 9哥 保留 |
+| 当前主线 | **v0.5.2 已备好**（dot2 #15 管道安装 + #7 卫星就绪/连接测试）；生产仍是 0.5.0；真机验收 9哥 保留 |
 
 ### 0.1 新会话交接（2026-10-25 17:25 更新：Phase 2 接线完成）
 
@@ -31,7 +31,7 @@
 - **本段（17:25 前）完成 Phase 2 接线**：`fce8d8c` 抽取 `_wire_plane`（零行为变化，`git diff -w` 只移动）、`e84fac4` `PlaneFleet` 启动 + 逐设备回调 + `WakeCoordinator` + turn/owner 生命周期 + 单平面端点主平面化、`ec8cf44` 逐设备健康/告警/状态（`/health.audio_devices`、`/api/v1/audio.planes`、设备写 fleet 重建）；新增 `tests/test_app_fleet.py` 7 例（fake `PlaneFleet`，不 spawn），并用 2×mock 真进程 smoke 验证 2 plane 共存与干净退出。
 - **Phase 1b（17:35）**：`multi_device` 目录组（启用/max_planes/default_output/来源优先级/两个窗口/房间优先级/最近活跃窗口）+ 每设备 13 个 `devices[].audio.*` 覆盖字段（AEC 归属/开关、播放后静音、续听、预缓冲、采集布局；空值 = 继承）；体检页多设备卡片（未启用说明 / 逐平面状态 / 超 cap / 启动失败）；`web` typecheck+build 绿。
 - **打磨批（dot2 #12）**：healthcheck 根因（device_errors / fleet / 逐房间）；`doctor` 新增 `container_healthcheck` 一致性行；install.sh 重跑打印当前 `RUI_IMAGE` + 显式升级提示 + prune；0.4.2 release note 占位注释已清；`docs/deploy.md` §7.1 下游升级 + `rui_compat` 兼容矩阵；adapter 音量换算指向 helper。
-- **dot2 干净安装结果（2026-10-25 18:19）+ 冷装回归修复**：0.5.0 vanilla 干净安装通过（约 5 分钟），operator 配置后 `/health`/`plug-test`/`playback_gap=0` 全过，B 路线（`post_playback_mute_ms`）在 0.5.0 单平面也成立（两次长回复 gate 5.0 s、45 s 内 0 条伪造 turn）。他们开了两个 issue：**#13** install.sh 未加引号 heredoc（反引号被执行、console token 打到 stdout）、**#14** fetch-models 429 无重试且安装器 exit 0。修复已落 main：`7dbfecb` #13a、`ef2affd` #13b、`8433113` #14.1、`f032931` #14.2、`b55dcdb` #14.3（doctor `models` 行）、`907fcd1` #14.4 文档；全量 **1293 passed / 18 skipped**、ruff/`sh -n` 干净。**待 9哥 点头发 v0.5.1**（安装路径 bug，影响新用户）。
+- **dot2 干净安装结果（2026-10-25 18:19）+ 冷装回归修复**：0.5.0 vanilla 干净安装通过（约 5 分钟），operator 配置后 `/health`/`plug-test`/`playback_gap=0` 全过，B 路线（`post_playback_mute_ms`）在 0.5.0 单平面也成立（两次长回复 gate 5.0 s、45 s 内 0 条伪造 turn）。他们开了两个 issue：**#13** install.sh 未加引号 heredoc（反引号被执行、console token 打到 stdout）、**#14** fetch-models 429 无重试且安装器 exit 0。修复已落 main：`7dbfecb` #13a、`ef2affd` #13b、`8433113` #14.1、`f032931` #14.2、`b55dcdb` #14.3（doctor `models` 行）、`907fcd1` #14.4 文档；全量 **1293 passed / 18 skipped**、ruff/`sh -n` 干净。**v0.5.1 已发布**（tag `v0.5.1`/`c0d7048`）；随后 dot2 复测发现 `curl | sh` 吃 stdin 的 **#15**，已在 v0.5.2 修复。
 - **质量**：全量 **1293 passed / 18 skipped**；ruff clean；`sh -n deploy/install.sh` 干净；`web` typecheck/build 绿。
 - **下一步**：**生产部署 v0.5.0 需 9哥 点头**（备份 `.env`/config → 改 `RUI_IMAGE` → `up -d` → `/health` devices=2 验收）；真机 LX06+2×Dot2 验收与回滚演练等 9哥 安排；dot2 会在发布后做干净安装验收（卡点单独开 issue）。
 - **dot2**：0.4.2 受控切换完成（回滚 21 s / 前滚 11 s，`plug-test` 与 0.3.4/0.4.0/0.4.1 逐项一致）；实测「撤 adapter 门控失败」→ 已定走 B 路线（上游 `devices[].audio.voice.post_playback_mute_ms`，默认 0，Dot2 建议 2500）；#11 确认 Phase 2 内部 IPC、adapter 零改动；#12 下游原地升级冷启动反馈已答复（docs PR 欢迎、install/healthcheck/release-note 进打磨批）。**他们会在 0.5.0 发布后做一次全新安装验收并反馈**；卡点单独开 issue。发布时需在 #7 公布 tag `v0.5.0` + GHCR digest + 平台 + 「相对 0.4.2 契约变化 = 无」。
@@ -46,7 +46,8 @@ Phase 2 接线已完成并验证，**不要再改** `src/rui/audio/{protocol,pro
 2. **打磨批 ✅**（P5.4）：healthcheck 根因 + doctor 一致性行、install.sh 升级提示 + prune、0.4.2 占位注释清理、`docs/deploy.md` §7.1 下游升级/兼容矩阵、音量换算 pointer；dot2 docs PR 当前无 open，发布前再查。
 3. **v0.5.0 发布 + 生产部署 ✅**（2026-10-25）：tag `v0.5.0`、digest `sha256:01a3afe1…`、CI 全绿、Release 已发、#7 已公布；生产已切 0.5.0（healthcheck ok、真实回合通过）。
 4. **v0.5.1 发布 ✅**（2026-10-25 18:5x，dot2 #13/#14）：tag `v0.5.1`（commit `c0d7048`）、digest `sha256:25d67cf88c62…`（0.5.1=`0.5`=`latest`=`sha-c0d7048` 同一 manifest，amd64+arm64）；CI 全绿；Release 已发；#7/#13/#14 已通知复测。**生产保持 0.5.0**（0.5.1 只改安装器/doctor/文档，无运行时变化）。**剩真机 LX06+2×Dot2 验收与回滚演练（9哥 安排）**。
-4. **真机验收**（9哥 保留）：LX06 + 2×Dot2 的共存/各自唤醒/同词单 turn/barge 归属/故障隔离/回滚；记录 2/4 平面 RSS/CPU 与唤醒→首字延迟。
+5. **v0.5.2 发布**（2026-10-25）：`a26af81` 管道安装 stdin（dot2 #15，端到端管道测试 + 静态不变量）、`fe16846` 卫星就绪/连接测试按传输方式（dot2 #7）+ 控制台新增设备默认 id / 不适用徽章；全量 **1298/17**、ruff/`sh -n`/web 全绿；tag 与 digest 待 9哥 点头后补。**生产保持 0.5.0**。
+6. **真机验收**（9哥 保留）：LX06 + 2×Dot2 的共存/各自唤醒/同词单 turn/barge 归属/故障隔离/回滚；记录 2/4 平面 RSS/CPU 与唤醒→首字延迟。
 
 ### 0.3 环境与命令（新会话必读）
 
