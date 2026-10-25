@@ -137,7 +137,11 @@ async function testHa(): Promise<void> {
   probe.value = null
   error.value = ''
   try {
-    probe.value = await api.testMcp({ base_url: baseUrl.value.trim() })
+    const payload: { base_url: string; token?: string } = { base_url: baseUrl.value.trim() }
+    // A token typed into the form is probed as-is (never saved): the operator can
+    // validate a new token before replacing the stored one.
+    if (token.value.trim()) payload.token = token.value.trim()
+    probe.value = await api.testMcp(payload)
     await load(true)
   } catch (exc) {
     error.value = exc instanceof ApiError ? exc.message : String(exc)

@@ -20,10 +20,12 @@ class FakeBridge:
 
     instances: list[FakeBridge] = []
 
-    def __init__(self, cfg, data_dir, policy=None) -> None:
+    def __init__(self, cfg, data_dir, policy=None, token=None) -> None:
         self.cfg = cfg
         self._data_dir = data_dir
         self.stopped = False
+        # None means "resolve the configured secret"; a str is a one-shot probe token.
+        self.token = token
         self.client = type("C", (), {"last_error": ""})()
         FakeBridge.instances.append(self)
 
@@ -118,6 +120,116 @@ def test_the_test_endpoint_connects_without_saving(console) -> None:
     bad = client.post("/api/v1/mcp/test",
                       json={"base_url": "http://elsewhere:1"}).json()
     assert bad["ok"] is False
+
+
+def test_the_test_endpoint_uses_the_typed_token_without_saving(console) -> None:
+    """Fill in address + token, press test: it must work before saving.
+
+    The old shape only probed the *stored* token, so a first-time setup (or a
+    replacement token) always failed with 401 until the operator saved a token they
+    had no way to validate first.
+    """
+    client, path, tmp = console
+    body = client.post("/api/v1/mcp/test", json={
+        "base_url": "http://ha.local:8123", "token": "typed-just-now",
+    }).json()
+    assert body["ok"] is True
+    assert FakeBridge.instances[-1].token == "typed-just-now"
+    # A probe is not a save: neither the URL nor a secret moves.
+    assert load_config(path).tools.ha.base_url == ""
+    assert not (tmp / "data" / "secrets.yaml").exists()
+
+
+def test_the_test_endpoint_falls_back_to_the_saved_token(console) -> None:
+    client, _path, _tmp = console
+    client.put("/api/v1/mcp", json={
+        "ha": {"base_url": "http://ha.local:8123", "token": "saved-token"},
+    })
+    body = client.post("/api/v1/mcp/test",
+                       json={"base_url": "http://ha.local:8123"}).json()
+    assert body["ok"] is True
+    # No token in the payload: the bridge resolves the stored secret itself.
+    assert FakeBridge.instances[-1].token is None
+
+
+def test_a_probe_does_not_replace_the_stored_token(console) -> None:
+    client, _path, tmp = console
+    client.put("/api/v1/mcp", json={
+        "ha": {"base_url": "http://ha.local:8123", "token": "old-token"},
+    })
+    client.post("/api/v1/mcp/test", json={
+        "base_url": "http://ha.local:8123", "token": "replacement-token",
+    })
+    stored = (tmp / "data" / "secrets.yaml").read_text(encoding="utf-8")
+    assert "old-token" in stored
+    assert "replacement-token" not in stored
+
+
+def test_ha_bridge_prefers_an_explicit_token_over_the_stored_one(tmp_path, monkeypatch) -> None:
+    from rui.tools import ha as ha_module
+
+    class Cfg:
+        base_url = "http://ha.local:8123"
+        token_env = "RUI_HA_TOKEN"
+
+    monkeypatch.setattr(ha_module.secrets, "get", lambda name: "saved-token")
+    typed = ha_module.HaBridge(Cfg(), tmp_path, token="typed-token")
+    assert typed.client._headers["Authorization"] == "Bearer typed-token"
+    stored = ha_module.HaBridge(Cfg(), tmp_path)
+    assert stored.client._headers["Authorization"] == "Bearer saved-token"
+
+
+def test_transport_errors_are_unwrapped_for_the_console() -> None:
+    from rui.tools.mcp_client import _describe
+
+    group = ExceptionGroup("unhandled errors in a TaskGroup (1 sub-exception)",
+                           [RuntimeError("401 Unauthorized")])
+    assert "401 Unauthorized" in _describe(group)
+    assert _describe(RuntimeError("connection refused")) == "RuntimeError: connection refused"
+
+
+def test_save_replaces_a_rotated_token(console) -> None:
+    """Rotating the HA token happens here: save overwrites the stored secret.
+
+    If HA issues a new long-lived token, the operator has exactly one place to put
+    it - this card - and saving must replace the old value and reconnect, not keep
+    the old token or require a restart.
+    """
+    client, _path, tmp = console
+    client.put("/api/v1/mcp", json={
+        "ha": {"base_url": "http://ha.local:8123", "token": "token-v1"},
+    })
+    assert "token-v1" in (tmp / "data" / "secrets.yaml").read_text(encoding="utf-8")
+
+    body = client.put("/api/v1/mcp", json={
+        "ha": {"base_url": "http://ha.local:8123", "token": "token-v2"},
+    }).json()
+
+    stored = (tmp / "data" / "secrets.yaml").read_text(encoding="utf-8")
+    assert "token-v2" in stored and "token-v1" not in stored
+    assert body["ha"]["has_token"] is True
+    assert FakeBridge.instances[-2].stopped is True   # previous session closed
+
+
+def test_save_without_a_token_keeps_the_stored_one(console) -> None:
+    client, _path, tmp = console
+    client.put("/api/v1/mcp", json={
+        "ha": {"base_url": "http://ha.local:8123", "token": "keep-me"},
+    })
+    client.put("/api/v1/mcp", json={"ha": {"base_url": "http://other.local:8123"}})
+    stored = (tmp / "data" / "secrets.yaml").read_text(encoding="utf-8")
+    assert "keep-me" in stored
+
+
+def test_save_applies_a_new_url_and_token_in_one_step(console) -> None:
+    client, path, _tmp = console
+    body = client.put("/api/v1/mcp", json={
+        "ha": {"base_url": "http://ha2.local:8123", "token": "fresh-token"},
+    }).json()
+    assert load_config(path).tools.ha.base_url == "http://ha2.local:8123"
+    assert body["ha"]["has_token"] is True
+    assert body["ha"]["connected"] is True
+    assert FakeBridge.instances[-1].cfg.base_url == "http://ha2.local:8123"
 
 
 def test_save_needs_a_config_file_on_disk(tmp_path, monkeypatch) -> None:

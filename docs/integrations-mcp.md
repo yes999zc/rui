@@ -133,3 +133,15 @@ Home Assistant 的卡片由后端 `GET /api/v1/mcp` 的 `first_party[]` 驱动�
 5. 补契约测试：白名单/危险域/工具名与旧版本一致，API 不回显 token。
 
 普通第三方 MCP 服务不需要第 1–5 步：只走本文第 1 节即可。
+
+### HA 卡片的「测试连接」也接受表单里的一次性令牌
+
+填 `家庭助理地址` + `家庭助理访问令牌` 后可以直接点「测试连接」：
+
+- 表单里填的 token 只用于这一次探测（`POST /api/v1/mcp/test {"base_url", "token"}`），
+  **不落盘、不替换已保存的令牌**，测试通过后再点「保存」才写入 `data_dir/secrets.yaml`；
+- 不填 token 时回落到已保存的 `RUI_HA_TOKEN`（旧行为），所以「先保存再测试」仍然可用；
+- 想换令牌：在令牌框粘贴新的，可先测试再保存；保存后旧值被覆盖，输入框清空；
+- 失败信息现在会给出真实原因（例如 `ClientError: 401 Unauthorized`），而不是
+  `unhandled errors in a TaskGroup (1 sub-exception)`。
+

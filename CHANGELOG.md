@@ -45,6 +45,19 @@ canonical per-version record.
   The endpoint is GET-only — there is no write path — and the payload is capped at
   200,000 characters with a valid YAML notice instead of a truncated document.
   `tests/test_config_raw.py`.
+- **Home Assistant "Test connection" accepts the token typed in the form.** The probe
+  used to resolve only the *stored* secret, so a first-time setup — or a replacement
+  token — always failed with 401 until the operator saved a token they could not test.
+  `POST /api/v1/mcp/test {"base_url", "token"}` now probes with the one-shot token and
+  never stores it; an empty token still falls back to `RUI_HA_TOKEN`. The console passes
+  the typed value, so "fill in address + token → Test" works before saving.
+  MCP transport failures are also unwrapped for the UI: `401 Unauthorized` instead of
+  `unhandled errors in a TaskGroup (1 sub-exception)`.
+- **Save-and-reconnect keeps its update semantics.** The HA card's save writes the URL
+  and (when typed) the token, replaces the stored secret, closes the old session and
+  reconnects — that card is the one place to rotate the HA token. New regression tests
+  pin it: a replacement token overwrites the old one, leaving the token field empty
+  keeps the stored value, and a new URL + token apply in a single save.
 
 <!-- Add changes here as they land; move them under the next version at release time. -->
 

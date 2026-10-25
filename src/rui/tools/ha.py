@@ -117,11 +117,19 @@ class HaBridge:
     """One HA MCP server: connection, whitelist, entity context, tool handlers."""
 
     def __init__(self, cfg: HaConfig, data_dir: Path,
-                 policy: OutboundPolicy | None = None) -> None:
+                 policy: OutboundPolicy | None = None,
+                 token: str | None = None) -> None:
+        """`token` is a one-shot credential for a console probe.
+
+        The console must be able to test a token the operator just typed without
+        saving it first (and to test a *replacement* token while the old one is still
+        stored). When the caller passes one it wins; otherwise the configured secret
+        (`cfg.token_env`) is resolved as usual.
+        """
         url = cfg.base_url.rstrip("/")
         if not url.endswith("/api/mcp"):
             url = f"{url}/api/mcp"
-        token = secrets.get(cfg.token_env)
+        token = token if token is not None else secrets.get(cfg.token_env)
         self.cfg = cfg
         self.client = MCPClient(
             _server_cfg(url), headers={"Authorization": f"Bearer {token}"} if token else {},

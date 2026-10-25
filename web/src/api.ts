@@ -838,7 +838,8 @@ export interface McpServerPayload {
 
 /** What `POST /api/v1/mcp/test` accepts: HA `{base_url}` or one generic server. */
 export type McpTestPayload =
-  | { base_url: string }
+  /** HA probe; `token` is used for this probe only and never saved. */
+  | { base_url: string; token?: string }
   | {
       name: string
       transport: 'http' | 'stdio'

@@ -5273,12 +5273,23 @@ def create_app(
             raise HTTPException(status_code=422,
                                 detail="base_url must start with http:// or https://")
         probe_cfg = cfg.tools.ha.model_copy(update={"base_url": base_url})
+        # A token typed into the console form is used for this probe only and is
+        # never stored: "fill in address + token, press test" has to work, and so
+        # does testing a replacement token while the old one stays on disk.
+        one_shot = payload.get("token")
+        if one_shot is not None and not isinstance(one_shot, str):
+            raise HTTPException(status_code=422, detail=[{
+                "loc": ["token"], "msg": "token must be a string",
+            }])
+        one_shot = str(one_shot or "").strip() or None
         bridge = HaBridge(probe_cfg, Path(cfg.system.data_dir),
-                          policy=_outbound_policy(cfg))
+                          policy=_outbound_policy(cfg), token=one_shot)
         try:
             ok = await asyncio.wait_for(bridge.start(), timeout=10.0)
             result = {"ok": ok, **bridge.status,
                       "error": "" if ok else (getattr(bridge.client, "last_error", "") or "")}
+            log.info("mcp test: ha %s ok=%s tools=%d typed_token=%s",
+                     base_url, ok, int(result.get("tools") or 0), one_shot is not None)
             return result
         except TimeoutError:
             return {"ok": False, "connected": False, "tools": 0, "entities": 0,

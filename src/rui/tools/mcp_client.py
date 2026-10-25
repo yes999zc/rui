@@ -25,6 +25,20 @@ log = logging.getLogger(__name__)
 RECONNECT_MAX_S = 15.0
 
 
+def _describe(exc: BaseException) -> str:
+    """A message an operator can act on for a transport failure.
+
+    The MCP SDK runs the handshake inside an anyio task group, so a connection
+    refusal or a 401 arrives as ``ExceptionGroup("unhandled errors in a TaskGroup
+    (1 sub-exception)", [...])``. That string names neither the status nor the
+    host; unwrap the leaf and keep its type and message.
+    """
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
 class MCPUnavailable(RuntimeError):
     """The server could not answer: the tool layer degrades, never raises."""
 
@@ -132,10 +146,11 @@ class MCPClient:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - the session died: drain, wait, retry
-                self.last_error = str(exc)
+                detail = _describe(exc)
+                self.last_error = detail
                 self._connected.clear()
                 log.info("mcp %s: down (%s), reconnect in %.0fs",
-                         self.cfg.name, exc, backoff)
+                         self.cfg.name, detail, backoff)
                 self._drain_queue()
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, RECONNECT_MAX_S)
