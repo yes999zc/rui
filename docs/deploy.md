@@ -87,6 +87,7 @@ RUI_IMAGE=ghcr.io/yes999zc/rui:0.5.0   # 生产建议固定 tag 或 digest
 RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
                         # 可选：raw 不通时换成镜像前缀，例如
                         # https://ghproxy.net/https://raw.githubusercontent.com/yes999zc/rui/main
+RUI_SKIP_MODELS=1       # 可选：明确跳过 [4/5] 的模型检查（纯云端 ASR；VAD/唤醒词不可用）
 ```
 
 ### 2.2 脚本做什么
@@ -98,7 +99,7 @@ RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
 | 1 | 拉 `docker-compose.yml` + `config.example.yaml`（参考件），并拉运维脚本 `backup.sh` / `restore.sh` / `acceptance-v1.py` | `~/rui/`、`~/rui/scripts/` |
 | 2 | `setup` 写**生产模板**（provider 链、模型路径、playback 16k/1ch）+ 生成 `keywords.txt`（默认唤醒词）和**控制台 token**，无设备/无密钥 | `~/rui/config/config.yaml`、`config/keywords.txt` |
 | 3 | 生成 `.env`，含随机 device token | `~/rui/.env`（chmod 600） |
-| 4 | 检查 ASR/VAD/KWS 三件套；任一缺失就 `fetch-models`（先从镜像 seed 复制 VAD/KWS，再下 SenseVoice） | `~/rui/data/models/` |
+| 4 | 检查 ASR/VAD/KWS 三件套；任一缺失就 `fetch-models`（先从镜像 seed 复制 VAD/KWS，再下 SenseVoice；429/5xx 自动重试）。拉取失败会在最后 `exit 1`；纯云端安装用 `RUI_SKIP_MODELS=1` 显式跳过 | `~/rui/data/models/` |
 | 5 | `docker compose up -d` 并等 `/health` 通过；健康后把控制台 token 存到 `console-token.txt`（0600，已存在不覆盖）；120 s 仍不健康则打印探针/日志命令并 `exit 1` | 容器 `rui`、`~/rui/console-token.txt` |
 
 ### 2.3 期望输出与耗时
@@ -106,11 +107,12 @@ RUI_RAW=https://raw.githubusercontent.com/yes999zc/rui/main
 ```text
 [1/5] compose file
 [2/5] config + wake words
-console token: <console-token>          ← 只在这里打印一次；[5/5] 会另存到 console-token.txt
+console token: generated (read it with 'rui token'; install.sh saves it to console-token.txt)
 [3/5] env
       wrote .env with a generated device token (48 hex chars)
 [4/5] local models: ASR + VAD + wake word
       missing: asr-model; running fetch-models (image seed first)
+      models ready (ASR + VAD + KWS)
 [5/5] starting
       waiting for the service to answer /health
       healthy
@@ -124,10 +126,16 @@ done. open http://<nas-lan-ip>:8080/
 `open http://<nas-lan-ip>:8080/` 里的 IP 取自 `hostname -I`；多网卡/容器网桥环境可能不准，
 以你 NAS 的实际 LAN IP 为准。
 
+如果 [4/5] 的 `fetch-models` 失败，脚本**仍会启动服务**（向导照常可用），但会在最后打印
+`ERROR: install finished with ASR/VAD/KWS models missing.` 并 `exit 1`：退出码 0 现在表示模型
+确实就绪。按 [3.3](#33-模型fetch-models-一次装齐) 的重跑命令补齐模型，再
+`docker compose up -d`；纯云端安装用 `RUI_SKIP_MODELS=1` 显式跳过。
+
 ### 2.4 控制台 token
 
-`rui setup` 在 `[2/5]` 生成随机 `web.auth_token` 并打印一次。安装脚本在服务 healthy 后会把
-它存到 **`~/rui/console-token.txt`**（chmod 600），不用再从滚屏日志里找：
+`rui setup` 在 `[2/5]` 生成随机 `web.auth_token`，但**不再把值打到 stdout**（dot2 #13：
+安装日志经常被整段粘贴到 issue 里，token 就是控制台密码）。需要时用 `rui token` 读回。
+安装脚本在服务 healthy 后把它存到 **`~/rui/console-token.txt`**（chmod 600），不用再从滚屏日志里找：
 
 ```bash
 cat ~/rui/console-token.txt                       # 安装时保存的那份
@@ -198,7 +206,7 @@ docker compose up -d
 ## 3. 配置：第一次打开控制台到第一句话
 
 `install.sh` 跑完后，**不需要手改 YAML**。用 NAS 的局域网 IP 打开
-`http://<nas-lan-ip>:8080/`，输入 `[2/5]` 打印的控制台 token，进入 `/setup`：
+`http://<nas-lan-ip>:8080/`，输入安装时保存的 console token（`console-token.txt`），进入 `/setup`：
 
 `keys` → `models` → `prepare` → `params` → `wake` → `connect` → `test` → `verify`
 
@@ -415,6 +423,15 @@ hf-mirror 约 1 MB/s），不再等 GitHub 上那个 33 MB 的 KWS 包。这就�
 （VAD 依次试 hf-mirror / ghproxy / GitHub；KWS 依次试 ghproxy / gh-proxy / GitHub）。
 所以滚动升级期间不需要改 `install.sh`，也不需要额外参数。
 
+**重试与失败语义（dot2 #14）**：`fetch-models` 对同一 URL 的 429/5xx 最多重试 4 次
+（1 s / 2 s / 4 s 退避，封顶 8 s），仍失败才换下一个源；404/401 立即换源。`install.sh` 的
+[4/5] 失败会以 `exit 1` 结束（服务仍启动、向导可用），所以**退出码 0 现在表示模型已就绪**。
+纯云端/离线安装用 `RUI_SKIP_MODELS=1` 显式跳过模型检查。
+
+**模型就绪判据**：`docker compose exec rui rui doctor` 的 `models` 行显示
+`ASR model + ASR tokens + VAD + KWS present`（PASS）；缺失是 WARN、`verdict=degraded`。
+**没有设备时 `/health` 仍然是 green**，所以判断模型是否就绪要看 doctor 的 `models` 行。
+
 compose 把 `./data:/var/lib/rui`，同时把 `./data/models:/data/models` 挂进容器：
 数据卷负责持久化，`/data/models` 是模板和文档使用的路径。两者指向同一个宿主机目录，
 删容器重建都不丢。手动重跑（默认会先复制 seed）：
@@ -500,9 +517,18 @@ docker compose logs --tail=100 rui
 ```
 
 期望：`/health` 的 `status=ok`、`audio_plane=true`（配置了设备时）；`/api/v1/doctor`
-`verdict=ok|degraded`，`wake_path` PASS 表示模型与 `keywords.txt` 已就位。`degraded` 常见但
-可接受的原因：音箱 SSH 22 探测不到（inbound 设备本来就不要求 SSH）、`music.enabled` 关闭。
-非 loopback 且没设 `web.auth_token` 时服务会**拒绝启动**，不属于可接受的 degraded。
+`verdict=ok|degraded`，`wake_path` PASS 表示模型与 `keywords.txt` 已就位，`models` PASS
+表示 ASR + VAD + KWS 三件模型文件齐全。`degraded` 常见但可接受的原因：音箱 SSH 22 探测不到
+（inbound 设备本来就不要求 SSH）、`music.enabled` 关闭。非 loopback 且没设
+`web.auth_token` 时服务会**拒绝启动**，不属于可接受的 degraded。
+
+`models` 行 WARN（没设备时 `/health` 仍是 green，所以以它为准）时重跑模型下载，然后重启：
+
+```bash
+docker run --rm --user 1000:1000 -v ~/rui/data:/data \
+  ghcr.io/yes999zc/rui:<tag> fetch-models \
+  --dest /data/models/sensevoice --vad-dest /data/models/silero_vad.onnx --kws-dest /data/models/kws
+```
 
 ### 3.6 装好之后：密钥、token、升级/回滚
 
@@ -728,6 +754,7 @@ uv run rui serve
 | 重跑 `install.sh` 报容器 `rui` 已存在 | 同一 `RUI_HOME` 重跑是安全的；容器属于另一个 compose project 时脚本拒绝接管 | 按脚本打印的目录去执行 `docker compose down`，或在旧目录停掉旧安装后再重跑。0.1.x 的 `house-ear`：`docker stop house-ear && docker rm house-ear` |
 | `docker pull ghcr.io/...` TLS handshake timeout / 403 | Docker daemon 没有代理/镜像源，或 GHCR 不可达 | 给 daemon 配代理或 registry mirror；或 `docker pull` + `save` 到 NAS `load`。脚本会自动按 `RUI_REF` 从源码构建同一 tag（需 `git`）；`raw` 卡住用 `RUI_RAW` |
 | 灯环不亮 | 0.4.0 新建 LX06 默认 `led.enabled: true`；老配置/手动配置可能仍是关闭 | 到 `params` 的“灯效”打开，或检查 `config.yaml` 的 `devices[].led.enabled`；保存会重启平面 |
-| 控制台 401 / 找不到 console token | `[2/5]` 的 `console token:` 只打印一次，容易被日志刷走 | 先 `cat ~/rui/console-token.txt`（安装时已保存）；文件不在或过期就用 `cd ~/rui && docker compose exec -T rui rui token` 找回。`--rotate` 轮换后重启服务并刷新该文件。它和 `.env` 的 device token 不是同一个 |
+| 控制台 401 / 找不到 console token | `[2/5]` 不再打印 token 值（dot2 #13），安装日志被粘贴也不会泄露 | 先 `cat ~/rui/console-token.txt`（安装时已保存）；文件不在或过期就用 `cd ~/rui && docker compose exec -T rui rui token` 找回。`--rotate` 轮换后重启服务并刷新该文件。它和 `.env` 的 device token 不是同一个 |
+| `install.sh` 最后报 `model fetch failed` / `ASR/VAD/KWS models missing` | `fetch-models` 在网络重试后仍失败；服务已启动但本地 ASR/VAD/唤醒词不可用 | 按 [3.3](#33-模型fetch-models-一次装齐) 的命令重跑 `fetch-models` 再 `docker compose up -d`；确认 `rui doctor` 的 `models` 行 PASS。纯云端安装可重跑 `install.sh` 并加 `RUI_SKIP_MODELS=1` |
 | `install.sh` 最后报 120 s 不健康 | 容器起了但 `/health` 未通过；常见是 token/端口/模型或配置问题 | 按脚本提示跑 `docker compose exec -T rui rui-healthcheck` 和 `docker compose logs --tail=100 rui`；修好后重跑脚本（同目录安全） |
 | 升级后容器反复重启 / 日志 `Permission denied` / healthcheck `cannot read config` | 非 root 镜像（uid 1000）读不了 root 所有的 bind mount | 备份后 `sudo chown -R 1000:1000 config data`，再 `docker compose up -d --force-recreate`；见 [security.md](security.md) |

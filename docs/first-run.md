@@ -75,7 +75,7 @@ curl -4 -fsSL https://raw.githubusercontent.com/yes999zc/rui/v0.4.2/deploy/insta
 ```text
 [1/5] compose file
 [2/5] config + wake words
-console token: <console-token>          ← rui setup 的输出来自 [2/5]；[5/5] 会另存
+console token: generated (read it with 'rui token'; install.sh saves it to console-token.txt)
 [3/5] env
       wrote .env with a generated device token (48 hex chars)
 [4/5] local models: ASR + VAD + wake word
@@ -299,7 +299,7 @@ Expected output (paths/addresses vary):
 ```text
 [1/5] compose file
 [2/5] config + wake words
-console token: <console-token>          ← printed by rui setup at [2/5]; [5/5] saves it
+console token: generated (read it with 'rui token'; install.sh saves it to console-token.txt)
 [3/5] env
       wrote .env with a generated device token (48 hex chars)
 [4/5] local models: ASR + VAD + wake word
