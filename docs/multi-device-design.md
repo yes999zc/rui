@@ -474,7 +474,8 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 
 ## 12. Phase 2 契约草案 v0.1（2026-10-25，供实现与 dot2 对齐）
 
-> 状态：**草案**。9 哥 已确认方向；Phase 2 开工时冻结为 v1（字段若有调整会在 #11 说明）。
+> 状态：**草案 v0.1，已确认**。9 哥 已确认方向；Phase 2 开工时冻结为 v1（字段若有调整会在 #11 说明）。
+> 实现进度（2026-10-25）：音频面候选/准入 + `post_playback_mute_ms`、`fleet.py`、`arbiter.py`、`coordinator.py` 已落地并有测试；**剩 `app.py` 接线与 `devices[]` 健康聚合**。
 > 范围：单实例多 plane 的内部 IPC + 配置字段。**对 adapter/manifest 零改动**。
 
 ### 12.1 不变量（沿用 §2，且是这次实现要守的）

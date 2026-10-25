@@ -16,18 +16,43 @@
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
 | 当前主线 | 多设备 0.5：Phase 1（config v3）与只读 YAML 配置视图已交付 → Phase 1b 控制台多设备状态 → Phase 2 多平面/仲裁；dot2 0.4.2 冷测试进行中；截图与内容一起刷新 |
 
-### 0.1 新会话交接（2026-10-25 15:35）
+### 0.1 新会话交接（2026-10-25 17:30）
 
-- **当前发布**：v0.4.2（Phase 4 收尾）；GitHub Release 已发，生产已切官方镜像，健康。
-- **本会话已完成**：§9 六条关键决策冻结（§11 答复 dot2 #11）；config v3 Phase 1（`devices[].audio` 覆盖 / `multi_device` 块 / `effective_audio()` 继承 / 校验 / v2 保持 v2）；只读 YAML 配置视图（`GET /api/v1/config/raw` + 系统页）。
-- **下一个发布：v0.5.0**（已定，2026-10-25）：Phase 1（config v3）+ Phase 2（多平面/仲裁 + `post_playback_mute_ms`）+ 打磨批一次发布；不切 0.4.3、不公开 alpha/beta tag（真机用 CI `sha-<commit>` 镜像），发布判据见 `docs/ROADMAP.md` P5。Phase 2 契约草案 v0.1 见 `docs/multi-device-design.md` §12（dot2 已在 #11 收到）。
-- **生产**：`/vol1/rui`，官方 `ghcr.io/yes999zc/rui:0.4.2`（digest `sha256:3791ccfd…`，amd64+arm64），uid 1000、healthy、音箱在线；备份 `.env.bak.20261025-152606`；回滚 `0.4.1` / `0.4.0`。
-- **访问**：Mac 通过 Tailscale 主机名 `nas-bakey`（或 LAN 地址；具体 IP 与本机密码见本机凭证文件，0600，不入仓库/聊天）；SSH 用户 `yes999zc`，必须密码认证、失败后等 40 s；docker 需 sudo（`echo "$PW" | sudo -S …`）。
-- **控制台 token**：`/vol1/rui/console-token.txt`（0600，不打印值）；找回用 `docker compose exec -T rui rui token`。
-- **dot2**：PR #1 已合入；0.4.1 上 `plug-test` 15 PASS / 0 FAIL / 2 WARN / 5 SKIP；9 哥已同意 0.4.2 后在 .34 做受控切换真机验证（停 0.3.4 → 起 0.4.2 → 真机回合 → 回滚），并已安排对方开始 0.4.2 冷测试；0.4.2 的 tag/digest 已在 rui #7 公布。
-- **dot2 #11**（多设备仲裁契约提案，2026-10-25）：已答复，结论以 `docs/multi-device-design.md` §11 为准；0.5 走单实例多 plane，多实例只是过渡部署手法。
-- **媒体测试环境**：NAS 上的 Jellyfin/Emby 测试容器已停；数据在 `/vol1/rui-media-test/`；fnOS 原生 Jellyfin/Emby 和 rsshub/homepage/mihomo 均未动。
-- **未完成**：Phase 2（多平面 + WakeArbiter + OutputOwner，草案 §12）；Phase 1b 控制台多设备状态；打磨批（HA 表单/设备状态、install.sh 升级提示、healthcheck 提示、release note 占位注释、音量文档）；README 截图；dot2 0.4.2 冷测试已回报（含门控不能撤的结论）。
+- **当前发布/生产**：v0.4.2 在线（`ghcr.io/yes999zc/rui:0.4.2`，digest `sha256:3791ccfd…`，amd64+arm64；回滚 `0.4.1`/`0.4.0`）；本会话**没有动生产**。
+- **本地仓库**：main 比 origin **领先 9 个提交，未 push**（有意：push 会触发 `latest` 镜像重建，9哥 要求攒批）。最后一次已推送提交 `6003700` 的 CI 全绿（secret-scan/security/ci/docker-publish）。
+- **本会话新完成**（`git log origin/main..main`）：
+  - HA 控制台逻辑：测试用表单里的一次性 token（不落盘）、保存并重连覆盖新 token、测试后表单不被清空（`6003700`/`7ae83cf`）；
+  - §9 决策冻结 + `docs/multi-device-design.md` §11 答复 dot2 #11（`aa0bdb4`），Phase 2 契约草案 v0.1 写入 §12（`f3f0135`）；
+  - 发布版本定为 **v0.5.0** 并写发布判据（`7c66dde`）；
+  - Phase 2 四块：音频面候选/准入 + `post_playback_mute_ms`（`1b71584`）、`src/rui/audio/fleet.py`（`a34cba5`）、`src/rui/audio/arbiter.py`（`c0c2fc9`）、`src/rui/audio/coordinator.py`（`bd7c737`）；
+  - `rui_compat` 上界抬到 `<0.6.0`（内置 LX06 / example / v1 文档 / 测试；`a4740b1`）——不改会让 0.5.0 拒绝加载内置插头；
+  - `PlaneHandle` 重启回调补 `on_wake_idle` 与 Phase 2 的 `on_wake_candidate`（`43a268b`）。
+- **质量**：全量 **1256 passed / 18 skipped**；ruff clean；前端最后一次 typecheck/build 绿（之后无前端改动）。
+- **下一步主线（唯一）**：`app.py` 接线，见 §0.2；再往后是控制台状态、打磨批、v0.5.0 发布流程。真机验收 9哥 要求先保留。
+- **dot2**：0.4.2 受控切换完成（回滚 21 s / 前滚 11 s，`plug-test` 与 0.3.4/0.4.0/0.4.1 逐项一致）；实测「撤 adapter 门控失败」→ 已定走 B 路线（上游 `devices[].audio.voice.post_playback_mute_ms`，默认 0，Dot2 建议 2500）；#11 确认 Phase 2 内部 IPC、adapter 零改动；#12 下游原地升级冷启动反馈已答复（docs PR 欢迎、install/healthcheck/release-note 进打磨批）。**他们会在 0.5.0 发布后做一次全新安装验收并反馈**；卡点单独开 issue。发布时需在 #7 公布 tag `v0.5.0` + GHCR digest + 平台 + 「相对 0.4.2 契约变化 = 无」。
+- **HA（生产待办，需 9 哥 点头）**：生产 `config/config.yaml` 的 `tools.ha.base_url` 为空、`data/secrets.yaml` 无 `RUI_HA_TOKEN`（`.env` 里是空值）。HA 的地址与长期令牌见 9哥 的本机配置（不入库）；`/api/mcp` 已实测 200、86 工具。0.4.2 控制台上正确顺序：填地址+token → **保存并重连** → 再点测试（0.4.2 的测试按钮只用已保存 token；该坑已在本分支修复）。
+- **环境坑（新会话必读）**：见 §0.3。
+
+### 0.2 下一步：`app.py` 接线（Phase 2 最后一块）
+
+改动文件：`src/rui/web/api/app.py`（主要）、可能 `src/rui/config/catalog.py`（控制台字段，后一步）。**不要改** `src/rui/audio/{protocol,process,client,fleet,arbiter,coordinator}.py` 的契约。
+
+1. **启动策略**：`cfg.multi_device.enabled` 为真时用 `PlaneFleet(cfg, config_path)` 拉起全部 enabled inbound 设备（inbound 判定用现有 `is_inbound` + `PlugCatalog`；超过 `max_planes` 由 fleet 抛错，转成 `/health` 警告而不是崩溃）；为假时**保留现有单 supervisor 路径逐字节不变**（回滚路径）。
+2. **回调按设备参数化**：把现有 `if client is not None:` 那一大段（`on_utterance`/`on_wake`/`on_wake_idle`/`on_vendor`/`on_playback_finished`）抽成 `_wire_plane(app, client, device_id)`，对 fleet 的每个 handle 各调一次；闭包里 `client` 即该房间的连接，所以回答天然回到起源房间。
+3. **仲裁接线**：建 `WakeArbiter(MultiDeviceConfig, [ArbiterDevice(...)])` + `WakeCoordinator(arbiter, senders={device_id: client.send})`；`handle.on_wake_candidate = lambda msg, d=id: coordinator.on_candidate(d, msg)`；回合开始 `coordinator.set_turn_open(True)`、结束（`client.reply_finished()` 后）置 False；speak 首块设 owner、结束清空；`on_wake_idle` 时 touch/结束。
+4. **健康/告警**：`_plane_snapshot` 在 fleet 模式下聚合（running=任一、speaker_connected=任一、speaker_device=default_output 或首个在线）；`/health` 增加顶层 `devices: [{id, room, running, speaker_connected, restarts, error, wake_candidates, wake_admitted, ...}]`（保留旧顶层字段向后兼容）；`_device_warnings` 在多设备模式用"平面崩溃/未启动/超 cap"替代 `multiple_enabled_inbound`；`_device_status` 每设备读 fleet 状态。
+5. **测试**：monkeypatch `app_module.PlaneFleet` 为 fake 的 app 级测试（不 spawn 子进程）：fleet 启动 id 集合、`/health.devices`、告警替换、candidate → coordinator → admit/reject 的接线（可用 fake handle 记录 `send`）。
+6. 完成后：全量 pytest + ruff + `web` 不涉及；更新 §12 实现状态、CHANGELOG Unreleased、HANDOFF/ROADMAP 数字。
+
+### 0.3 环境与命令（新会话必读）
+
+- **工作区**：`~/AI_Workspace`；仓库 `01_Code/projects/house-ear`；`.venv`（Python 3.13）；Node 22；`cd web && npm run typecheck && npm run build`。
+- **测试**：`.venv/bin/python -m pytest -o addopts="" -q`；`.venv/bin/python -m ruff check src tests`。全量约 67 s。
+- **SSH（NAS）**：`ssh` 密码认证必须；**本机 expect 无法分配 pty**，请用 paramiko（系统 python3 已装 5.0.0）登录 `yes999zc@<NAS 地址>`（Tailscale 主机名 `nas-bakey`；具体地址见 9哥 的本机凭证文件）。密码位置：`~/AI_Workspace/01_Code/device-inventory.md` 第 18–32 行（0600，**不要打印/入库**）。docker 需 sudo：远端命令前缀 `sudo -S -p ''`，把密码写进 stdin。短间隔重连会被拒，失败等 40 s。
+- **GitHub**：bash 里 `curl https://github.com` 可能 SSL 失败，但 `api.github.com` 可用；token 用 `printf 'protocol=https\nhost=github.com\n\n' | git credential fill` 取（不打印）。`web_fetch` 可读 GitHub API/页面。
+- **推送策略**：**不要每步 push**。push main 会触发 `docker-publish` 重建 `latest`。攒到需要真机镜像/发布时一次推；推后 CI 产出 `sha-<commit>` 可用于测试。
+- **发布**：v0.5.0（不发 0.4.3、无公开 alpha/beta tag）；流程见 `docs/releases/README.md` + `Makefile` 的 `changelog`/`release`；发布判据见 `docs/ROADMAP.md` P5。
+- **仓库硬约束**：不写内网 IP / 家目录绝对路径 / 明文密码（`secret-scan` workflow 会红）；生产变更需 9 哥 明确点头；一步一提交、英文 conventional commits；数字/判据才算完成。
 
 ## 1. 项目与架构契约
 
