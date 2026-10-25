@@ -806,10 +806,22 @@ function defaultPlugId(): string {
   return availablePlugs.value[0]?.id ?? ''
 }
 
+/** First free id: adding a satellite must not prefill an id that already exists. */
+function defaultDeviceId(): string {
+  const used = new Set(devices.value.map((device) => device.id))
+  if (!used.has('living')) return 'living'
+  if (!used.has('satellite')) return 'satellite'
+  for (let index = 2; index < 20; index += 1) {
+    const candidate = `satellite${index}`
+    if (!used.has(candidate)) return candidate
+  }
+  return 'satellite'
+}
+
 function openCreate(): void {
   clearFieldErrors()
   formError.value = ''
-  form.id = 'living'
+  form.id = defaultDeviceId()
   form.room = ''
   form.host = ''
   form.adapterId = ''
@@ -1571,8 +1583,14 @@ onMounted(() => {
             >
               <div class="dm-check-head">
                 <span class="dm-check-name">{{ checkLabel(check.name) }}</span>
-                <span :class="check.ok ? 'badge badge-ok' : 'badge badge-fail'">
-                  {{ check.ok ? t('dm.test.pass') : t('dm.test.failShort') }}
+                <span
+                  :class="check.ok
+                    ? (check.status === 'not_applicable' ? 'badge badge-warn' : 'badge badge-ok')
+                    : 'badge badge-fail'"
+                >
+                  {{ check.status === 'not_applicable'
+                    ? t('dm.test.skip')
+                    : (check.ok ? t('dm.test.pass') : t('dm.test.failShort')) }}
                 </span>
                 <button type="button" class="btn btn-sm actions-end" @click="copyCheck(check)">
                   {{ copied === `check:${check.name}` ? t('common.copied') : t('dm.test.copyDetail') }}

@@ -238,7 +238,13 @@ def test_connection_test_reports_failed_checks(console, monkeypatch) -> None:
     body = client.post("/api/v1/devices/living/test").json()
     assert body["ok"] is False
     failed = {check["name"] for check in body["checks"] if not check["ok"]}
-    assert {"host", "plane", "token"} <= failed
+    # The built-in speaker is inbound: it dials us, so an SSH probe on :22 is not the
+    # gate (a Dot 2 runs no SSH at all). The live link and the token are.
+    assert {"plane", "token"} <= failed
+    by_name = {check["name"]: check for check in body["checks"]}
+    assert by_name["host"]["status"] == "not_applicable"
+    assert by_name["host"]["ok"] is True
+    assert by_name["host"]["detail"]["transport"] == "inbound"
     assert "failed checks" in body["error"]
     assert client.post("/api/v1/devices/missing/test").status_code == 404
 

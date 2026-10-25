@@ -14,6 +14,37 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [Unreleased]
+
+### Fixed
+
+- **The documented `curl … | sh` install no longer dies halfway (dot2 #15).**
+  `docker compose exec -T` attaches stdin, and with a piped installer stdin *is* the
+  rest of the script, so the health probe ate the remaining bytes: the run printed
+  `healthy`, then `Syntax error: Unterminated quoted string`, exit 2, and no
+  `console-token.txt`. Both exec sites (the probe and the `rui token` read) now
+  redirect `</dev/null`. A regression test runs the shipped `install.sh` from a pipe
+  against a fake docker that drains stdin and asserts exit 0, the closing block and a
+  0600 token file; a second test fails if any future `docker compose exec` forgets the
+  redirect. The one-liner is unchanged, because it now works.
+- **A connected satellite is `ready` even when its token lives outside rui (dot2 #7).**
+  `GET /api/v1/devices/{id}/status` used to report `ready=false` + `token_missing` for
+  a device whose adapter owns the credential (the dot2 plug reads a 0600 file). A live
+  link is proof that authentication succeeded, so the row now carries
+  `token_managed_by_adapter: true` instead of a blocking error.
+
+### Added
+
+- **The connection test follows the transport.** An inbound speaker (LX06, Dot 2)
+  dials us and runs no SSH on the Dot 2, so probing `:22` used to fail a perfectly
+  healthy satellite. The host row is now `not_applicable` for inbound devices (the
+  port and the live link are the evidence), the test waits up to 3 s for a device that
+  is still dialling in after a save/restart, and the response reports `transport`,
+  `listen_port` and `waited_ms`. Outbound adapters keep the TCP + SSH-banner probe.
+- **Adding a second speaker prefills a free id.** The console used to start every new
+  device at `living`, which collides with the main speaker; it now picks `living`, then
+  `satellite`, then `satelliteN`.
+
 ## [0.5.1] - 2026-10-25
 
 Patch release for the install path, found by dot2's clean 0.5.0 install. There is no

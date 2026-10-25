@@ -726,11 +726,18 @@ export interface DeviceTokenRotation {
 export interface DeviceTestCheck {
   name: string
   ok: boolean
+  /** ok | fail | not_applicable (the host row on an inbound speaker). */
+  status?: string
   detail: Record<string, unknown>
 }
 
 export interface DeviceTestResult {
   ok: boolean
+  /** inbound | outbound: which evidence the test gates on. */
+  transport?: string
+  listen_port?: number | null
+  /** How long the test waited for an inbound speaker to dial in. */
+  waited_ms?: number
   checks: DeviceTestCheck[]
   error: string
 }

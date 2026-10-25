@@ -1535,13 +1535,57 @@ def _device_warnings(app: FastAPI, config: Config) -> list[dict]:
     return warnings
 
 
+# How long a connection test waits for an inbound device that was just added or
+# restarted to dial in. Long enough to cover a device reconnect, short enough that the
+# console button still feels immediate.
+DEVICE_TEST_WAIT_S = 3.0
+
+
+def _inbound_message(plane: dict, plane_ok: bool, token_ok: bool) -> str:
+    """Why an inbound speaker is or is not on the wire (stable codes for the console)."""
+    if plane_ok:
+        return "connected"
+    if int(plane.get("speaker_rejected") or 0) > 0:
+        return "token_mismatch"
+    if not token_ok:
+        return "token_mismatch"
+    if not plane["running"]:
+        return "port_blocked"
+    return "waiting_for_client"
+
+
+async def _wait_for_device_link(app: FastAPI, device_id: str, seconds: float,
+                                poll_s: float = 0.25) -> int:
+    """Block up to ``seconds`` for an inbound device, returning the wait in ms.
+
+    A satellite that was just saved (or just rebooted) needs a moment to dial in; a
+    test that answers instantly would show a red row for a speaker that is fine.
+    """
+    if seconds <= 0:
+        return 0
+    started = time.perf_counter()
+    while True:
+        plane = _device_plane(app, device_id)
+        if plane["speaker_connected"] or not plane["running"]:
+            break
+        if time.perf_counter() - started >= seconds:
+            break
+        await asyncio.sleep(poll_s)
+    return int((time.perf_counter() - started) * 1000)
+
+
 async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
                          warnings: list[dict] | None = None) -> dict:
     """One device's management status: evidence only, and never a secret value.
 
-    ``ready`` is not "configured": it means enabled, authenticated, and the plane's
-    live link says connected. Every reason it is false is listed in ``errors`` as a
-    stable code so the console can translate it.
+    ``ready`` is not "configured": it means enabled and the plane's live link says
+    connected. Every reason it is false is listed in ``errors`` as a stable code so
+    the console can translate it.
+
+    An out-of-tree adapter may own its device token outside rui's env/secrets store
+    (the dot2 plug reads a 0600 file). A connected link is proof that whatever
+    authentication the adapter uses succeeded, so a token rui cannot see is reported
+    as ``token_managed_by_adapter`` instead of a blocking ``token_missing`` (dot2 #7).
     """
     catalog = PlugCatalog(config.system.data_dir)
     resolved = catalog.resolve(
@@ -1575,7 +1619,9 @@ async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
         errors.append("adapter_unavailable")
     if not device.enabled:
         errors.append("device_disabled")
-    if not token_ok:
+    connected = bool(link.get("connected"))
+    token_managed_by_adapter = bool(connected and not token_ok)
+    if not token_ok and not token_managed_by_adapter:
         errors.append("token_missing")
     if resolved is None:
         errors.append("plug_unresolved")
@@ -1590,12 +1636,14 @@ async def _device_status(app: FastAPI, device: DeviceConfig, config: Config,
     stored_test = setup.get("test", {}).get("device", {}).get("test", {})
     if not isinstance(stored_test, dict):
         stored_test = {}
-    ready = bool(device.enabled and token_ok and link["status"] == "ready")
+    ready = bool(device.enabled and link["status"] == "ready")
     return {
         "id": device.id,
         "enabled": bool(device.enabled),
         "ready": ready,
         "token_configured": token_ok,
+        # True when the device is connected but its token lives outside rui (adapter-managed).
+        "token_managed_by_adapter": token_managed_by_adapter,
         "token_env": token_env,
         "listen_port": listen_port,
         "plane": {
@@ -5566,64 +5614,78 @@ def create_app(
     async def device_test(device_id: str) -> dict:
         """Connection test for one device: evidence only, no config write, no playback.
 
-        TCP/banner is the physical check (the same probe the wizard uses), the plane's
-        ``speaker_connected`` is the live link, the token is reported as configured or
-        not (never its value), and the manifest summarizes declared capabilities.
+        The gate follows the transport. An outbound speaker (open-xiaoai / LX06) is
+        reachable on its host, so TCP + SSH banner is the physical check. An inbound
+        speaker dials us: probing :22 would fail a working Dot 2, which runs no SSH at
+        all, so its gate is the plane's live link and the listening port. A device that
+        was just added or just restarted gets a short bounded wait before the verdict.
         """
         cfg_now = getattr(app.state, "cfg", cfg)
         device = _device_or_404(device_id, cfg_now)
         catalog = PlugCatalog(cfg_now.system.data_dir)
         resolved = catalog.resolve(
             plug_id=_device_plug_id(device, None), adapter=device.adapter)
-        probe = await _probe_host(device.host)
+        outbound = bool(resolved is not None and str(resolved.device.transport) == "outbound")
+        listen_port = effective_listen_port(device, resolved)
+        waited_ms = 0
+        if not outbound:
+            waited_ms = await _wait_for_device_link(app, device.id, DEVICE_TEST_WAIT_S)
         plane = _device_plane(app, device.id)
         plane_ok = bool(plane["speaker_connected"]) and plane["speaker_device"] in ("", device.id)
         token_env = _token_env(device, resolved)
         token_ok = bool(token_env and secrets.get(token_env)) or bool(
             device.allow_no_token)
-        outbound = bool(resolved is not None and str(resolved.device.transport) == "outbound")
+        # A live link proves that whatever credential the adapter uses was accepted;
+        # the token may live outside rui's env/secrets store (dot2 #7).
+        token_managed = bool(plane_ok and not token_ok)
+        token_pass = bool(token_ok or token_managed)
         capabilities = resolved.capabilities if resolved is not None else []
         missing = [name for name in ("reference", "playback") if name not in capabilities]
         if outbound:
+            probe = await _probe_host(device.host)
             connection_message = "not_applicable"
-        elif plane_ok:
-            connection_message = "connected"
-        elif int(plane.get("speaker_rejected") or 0) > 0:
-            connection_message = "token_mismatch"
-        elif not token_ok:
-            connection_message = "token_mismatch"
-        elif not plane["running"]:
-            connection_message = "port_blocked"
+            host_check = {"name": "host", "ok": bool(probe.get("usable")),
+                          "status": "ok" if probe.get("usable") else "fail",
+                          "detail": {"ssh": probe.get("ssh") or {},
+                                     "hint": probe.get("hint") or ""}}
         else:
-            connection_message = "waiting_for_client"
+            connection_message = _inbound_message(plane, plane_ok, token_ok)
+            host_check = {"name": "host", "ok": True, "status": "not_applicable",
+                          "detail": {"transport": "inbound",
+                                     "host": device.host,
+                                     "listen_port": listen_port,
+                                     "hint": "the speaker dials in to this port; "
+                                             "there is no host to probe"}}
         checks = [
-            {"name": "host", "ok": bool(probe.get("usable")),
-             "status": "ok" if probe.get("usable") else "fail",
-             "detail": {"ssh": probe.get("ssh") or {}, "hint": probe.get("hint") or ""}},
+            host_check,
             {"name": "plane", "ok": plane_ok,
              "status": ("ok" if plane_ok else
                         "not_applicable" if outbound else "fail"),
              "detail": {"speaker_connected": bool(plane["speaker_connected"]),
                         "running": bool(plane["running"]),
+                        "listen_port": listen_port,
                         "device_id": plane["speaker_device"],
                         "error": plane["error"]}},
-            {"name": "token", "ok": token_ok,
-             "status": "ok" if token_ok else "fail",
+            {"name": "token", "ok": token_pass,
+             "status": "ok" if token_pass else "fail",
              "detail": {"configured": token_ok, "token_env": token_env,
-                        "allow_no_token": bool(device.allow_no_token)}},
+                        "allow_no_token": bool(device.allow_no_token),
+                        "managed_by_adapter": token_managed}},
             {"name": "capabilities", "ok": resolved is not None,
              "status": "ok" if resolved is not None else "fail",
              "detail": {"plug_id": _device_plug_id(device, resolved),
                         "capabilities": capabilities,
                         "missing_for_barge_in": missing if resolved is not None else []}},
         ]
-        # An inbound speaker is green only on the live link; SSH is diagnostics. An
-        # outbound speaker has no inbound link, so its checks (minus plane) are the test.
+        # An inbound speaker is green on the live link; an outbound speaker has no
+        # inbound link, so its checks (minus plane) are the test.
         gate = [check for check in checks if not (outbound and check["name"] == "plane")]
         ok = all(check["ok"] for check in gate)
         failed = [check["name"] for check in gate if not check["ok"]]
         return {"ok": ok, "connection_message": connection_message,
                 "transport": "outbound" if outbound else "inbound",
+                "listen_port": listen_port,
+                "waited_ms": waited_ms,
                 "checks": checks,
                 "error": "" if ok else f"failed checks: {', '.join(failed)}"}
 

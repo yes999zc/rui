@@ -495,3 +495,60 @@ def test_dot2_style_plug_rotates_the_effective_token_env(
     # The same env is what the next rotation cooldown report and the detail name.
     detail = client.get("/api/v1/devices/dot2").json()
     assert detail["token_env"] == "DOT2_EM_TOKEN"
+
+
+# ------------------------------ satellite connection test (inbound, dot2-style plug)
+
+
+def test_satellite_test_uses_the_live_link_instead_of_ssh(
+    console, tmp_path, monkeypatch
+) -> None:
+    """A Dot 2 runs no SSH: a connected satellite must still test green (dot2 #7)."""
+    _dot2_plug(tmp_path)
+    monkeypatch.setattr(app_module, "DEVICE_TEST_WAIT_S", 0.0)
+    monkeypatch.delenv("DOT2_EM_TOKEN", raising=False)
+    client, _path = console([
+        DeviceConfig(id="dot2", adapter="dot2", host="dot2.local", room="客厅"),
+    ])
+    client.app.state.audio = _Plane(connected=True, device_id="dot2")
+
+    body = client.post("/api/v1/devices/dot2/test").json()
+    assert body["ok"] is True, body
+    assert body["transport"] == "inbound"
+    assert body["listen_port"] == 8870
+    checks = {check["name"]: check for check in body["checks"]}
+    assert checks["host"]["status"] == "not_applicable"
+    assert checks["host"]["detail"]["listen_port"] == 8870
+    # The token is not in rui's env/secrets store; the live link is the proof.
+    assert checks["token"]["ok"] is True
+    assert checks["token"]["detail"]["configured"] is False
+    assert checks["token"]["detail"]["managed_by_adapter"] is True
+
+
+def test_satellite_test_waits_for_a_device_that_is_still_dialling_in(
+    console, tmp_path, monkeypatch
+) -> None:
+    """Saving a satellite restarts the plane; the test must not race the reconnect."""
+    _dot2_plug(tmp_path)
+    monkeypatch.setattr(app_module, "DEVICE_TEST_WAIT_S", 0.5)
+    monkeypatch.delenv("DOT2_EM_TOKEN", raising=False)
+    client, _path = console([
+        DeviceConfig(id="dot2", adapter="dot2", host="dot2.local", room="客厅"),
+    ])
+    plane = _Plane(connected=False, device_id="dot2")
+    base_status = plane.status
+    calls = [0]
+
+    def status_after_one_poll() -> dict:
+        calls[0] += 1
+        if calls[0] >= 2:
+            plane.connected = True
+        return base_status()
+
+    plane.status = status_after_one_poll  # type: ignore[method-assign]
+    client.app.state.audio = plane
+
+    body = client.post("/api/v1/devices/dot2/test").json()
+    assert body["waited_ms"] > 0
+    assert body["ok"] is True, body
+    assert body["connection_message"] == "connected"
