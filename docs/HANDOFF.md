@@ -16,6 +16,17 @@
 | v1 四门槛 | 冷装 423 s；唤醒 19/20；barge 24.2/64.5/205.2 ms；公开仓 ✅（历史基线） |
 | 当前主线 | 只读 YAML 代码视图 → 多设备/sidecar/播放 gap（按用户要求提前）；0.4.2 发布后 dot2 在 .34 做受控切换真机验证（9哥已同意）；截图与内容一起刷新 |
 
+### 0.1 新会话交接（2026-10-25 15:35）
+
+- **当前发布**：v0.4.2（Phase 4 收尾）；GitHub Release 已发，生产已切官方镜像，健康。
+- **下一步顺序**：多设备 Phase 1（等 9 哥确认 `docs/multi-device-design.md` §9 的 6 个关键决策）→ 只读 YAML 代码视图 → sidecar / 播放 gap；README 截图与内容一起刷新。
+- **生产**：`/vol1/rui`，官方 `ghcr.io/yes999zc/rui:0.4.2`（digest `sha256:3791ccfd…`，amd64+arm64），uid 1000、healthy、音箱在线；备份 `.env.bak.20261025-152606`；回滚 `0.4.1` / `0.4.0`。
+- **访问**：Mac 通过 Tailscale `nas-bakey`（100.113.211.110）或 LAN 192.168.5.168；SSH 用户 `yes999zc`，密码在 `01_Code/device-inventory.md` 第 18–32 行（不要写进仓库/聊天）；SSH 必须密码认证、失败后等 40 s；docker 需 sudo（`echo "$PW" | sudo -S …`）。
+- **控制台 token**：`/vol1/rui/console-token.txt`（0600，不打印值）；找回用 `docker compose exec -T rui rui token`。
+- **dot2**：PR #1 已合入；0.4.1 上 `plug-test` 15 PASS / 0 FAIL / 2 WARN / 5 SKIP；9 哥已同意 0.4.2 后在 .34 做受控切换真机验证（停 0.3.4 → 起 0.4.2 → 真机回合 → 回滚）；0.4.2 的 tag/digest 已在 rui #7 公布，等待对方执行。
+- **媒体测试环境**：NAS 上的 Jellyfin/Emby 测试容器已停；数据在 `/vol1/rui-media-test/`；fnOS 原生 Jellyfin/Emby 和 rsshub/homepage/mihomo 均未动。
+- **未完成**：README 截图刷新；issue #4 可在合适时关闭；multi-device §9 决策待定。
+
 ## 1. 项目与架构契约
 
 ```
@@ -132,7 +143,7 @@ docker compose exec -T rui rui config restore --last-good
 
 ## 6. 最近时间线（细节在归档）
 
-- 10-25 下午：0.4.2（Phase 4）发布并部署：单一 nav manifest（PanelSpec nav）、11 面板、7 个 legacy panel/旧路由退役、providers 更名「模型与语音服务」、ConfigCenter/ToolsView 死分支清理、README 512→366 行、多设备设计文档；测试 1142/18，ruff/web 绿；dot2 受控切换已获 9哥同意。
+- 10-25 下午：0.4.2（Phase 4）发布并部署：单一 nav manifest（PanelSpec nav）、11 面板、7 个 legacy panel/旧路由退役、providers 更名「模型与语音服务」、ConfigCenter/ToolsView 死分支清理、README 512→366 行、多设备设计文档；测试 1142/18，ruff/web 绿；GHCR `0.4.2`/`0.4`/`latest` digest `3791ccfd…`，[Release](https://github.com/yes999zc/rui/releases/tag/v0.4.2) 已发；生产切 0.4.2（uid 1000、音箱在线），真实 say `audio_bytes=191,198`；dot2 受控切换已获 9哥同意并在 #7 公布 tag/digest。
 
 - 10-25 中午：0.4.1 发布并部署：Jellyfin/Emby 音源（真实 Jellyfin 12.3.0 / Emby 4.10.2 验收）、首次登录 `console-token.txt`、dot2 生效端口/token_env/冲突 + follow-up 配置 + register 后 wake 重探测、README/first-run 重写；CI/publish 全绿（1141 passed / 18 skipped），GHCR `0.4.1`/`0.4`/`latest` 同一 digest `380327e5…`；生产切 0.4.1（uid 1000、音箱在线），真实 say `audio_bytes=280,312`，`console-token.txt` 0600。
 
