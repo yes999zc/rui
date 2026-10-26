@@ -241,7 +241,8 @@ class Wake(BaseModel):
     voice_rms_db: float | None = None
     ref_rms_db: float | None = None
     # Which acknowledgement actually played ("none" / "earcon" / "tts"): the config asks
-    # for a mode, the plane reports what it could deliver.
+    # for a mode, the plane reports what it could deliver. "none" = no cue this time
+    # (e.g. a barge wake).
     ack_mode: str = ""
     # Socket & Plug v1: "rui" for RUI's own KWS, "device" for a DeviceWake. The score,
     # threshold and barge hint travel so the turn trace can record why it fired; they

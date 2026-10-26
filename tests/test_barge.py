@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import rui.audio.process as process
 from rui.audio.process import AudioPlane
 from rui.config import Config
 
@@ -68,6 +69,126 @@ def run_wake(plane: AudioPlane) -> list[dict]:
     asyncio.run(plane._on_wake(hit, writer, connected))  # type: ignore[arg-type]
     # Frames carry a 5-byte header (type + length); only control frames are JSON here.
     return [json.loads(f[5:].decode("utf-8")) for f in writer.frames if f[0] == 1]  # FrameType.CONTROL
+
+
+def run_wake_and_settle(plane: AudioPlane, settle_s: float = 0.02) -> list[dict]:
+    """`run_wake` that keeps the loop alive for the fire-and-forget cue task."""
+
+    async def run() -> list[dict]:
+        writer, connected = StubWriter(), asyncio.Event()
+        connected.set()
+        hit = type("Hit", (), {"keyword": "你好小瑞", "ts_ms": 1.0})()
+        await plane._on_wake(hit, writer, connected)  # type: ignore[arg-type]
+        await asyncio.sleep(settle_s)
+        return [json.loads(f[5:].decode("utf-8")) for f in writer.frames if f[0] == 1]
+
+    return asyncio.run(run())
+
+
+class RecordingGate:
+    """Records the wake bookkeeping a barge must keep: arm + preroll feed, no cue hold."""
+
+    def __init__(self) -> None:
+        self.armed = False
+        self.arms = 0
+        self.holds: list[float] = []
+        self.fed = 0
+        self.interrupted = 0
+        self.speech_ms = 0.0
+
+    def arm(self, **_kwargs) -> None:
+        self.armed = True
+        self.arms += 1
+
+    def hold(self, ms: float, skip_ms: float = 0.0) -> None:  # noqa: ARG002
+        self.holds.append(ms)
+
+    def feed(self, pcm: bytes, ts_ms: float = 0.0):  # noqa: ARG002
+        self.fed += len(pcm)
+        return None
+
+
+def fake_ack(audio_ms: int = 33) -> tuple[list, object]:
+    """A cue render that records its calls, so "rendered or not" is decisive."""
+    calls: list = []
+
+    def render(cfg):  # noqa: ANN001 - mirrors `render_ack(cfg)`
+        calls.append(cfg)
+        samples = int(48000 * audio_ms / 1000)
+        return np.ones(samples, dtype="<i2"), "earcon", ""
+
+    return calls, render
+
+
+def test_a_barge_wake_does_not_play_the_cue(monkeypatch) -> None:
+    """2026-10-26: the barge cue「在呢」 became the next turn (self-hearing loop).
+
+    Logged on the Dot2: 12:07:03 barge -> cue -> 12:07:05 seg 「在呢。」 -> 12:07:07
+    reply -> 12:07:12 barge again. A barge means the user is already talking, so the
+    cue talks over their first words and its echo feeds ASR. No cue may be rendered,
+    and no cue-length hold or post-playback mute window may be opened for it.
+    """
+    calls, render = fake_ack()
+    monkeypatch.setattr(process, "render_ack", render)
+    plane, adapter = make_plane()
+    queue_seconds(plane, 2.0)
+
+    frames = run_wake_and_settle(plane)
+
+    assert calls == [], "a barge rendered an ack cue"
+    assert adapter.played == 0, "a barge handed cue audio to the speaker"
+    assert plane.ack_attempts == 0
+    assert plane._ack_task is None
+    wake = next(f for f in frames if f.get("type") == "wake")
+    assert wake["barge"] is True
+    assert wake["ack_mode"] == "none", "the wake event must report that no cue played"
+    assert plane._wake_hold_until == 0.0, "the ack hold was opened for a cue-less barge"
+    assert plane._mic_mute_until == 0.0, "the barge opened a post-playback mute window"
+
+
+def test_a_quiet_wake_still_plays_the_cue(monkeypatch) -> None:
+    """Regression: the ordinary wake keeps its cue and the hold that covers it."""
+    calls, render = fake_ack()
+    monkeypatch.setattr(process, "render_ack", render)
+    plane, adapter = make_plane()
+
+    frames = run_wake_and_settle(plane)
+
+    assert len(calls) == 1, "the ordinary wake skipped its cue"
+    assert plane.ack_attempts == 1
+    assert plane.ack_plays == 1, "the cue was started but never played"
+    assert adapter.played > 0, "no cue audio reached the speaker"
+    wake = next(f for f in frames if f.get("type") == "wake")
+    assert wake["barge"] is False
+    assert wake["ack_mode"] == "earcon"
+    assert plane._wake_hold_until > time.monotonic(), "the cue hold is missing"
+
+
+def test_a_barge_does_not_extend_the_cue_hold() -> None:
+    plane, _ = make_plane()
+    before = time.monotonic() - 1.0  # an expired hold, so any extension would show
+    plane._wake_hold_until = before
+    queue_seconds(plane, 1.0)
+
+    run_wake(plane)
+
+    assert plane._wake_hold_until == before, "a cue-less barge moved the ack hold"
+
+
+def test_a_barge_still_arms_the_gate_and_replays_the_preroll() -> None:
+    """Only the cue path changes: gate, preroll and the wake event stay as they were."""
+    plane, _ = make_plane()
+    gate = RecordingGate()
+    plane.gate = gate  # type: ignore[assignment]
+    queue_seconds(plane, 1.0)
+
+    frames = run_wake(plane)
+
+    wake = next(f for f in frames if f.get("type") == "wake")
+    assert wake["action"] == "barge"
+    assert gate.arms == 1, "the barge did not arm the gate"
+    assert plane.preroll_replays == 1, "the barge skipped the pre-wake replay"
+    assert gate.holds == [], "the gate was held over the user's first words"
 
 
 def test_a_wake_during_playback_stops_the_speaker(caplog) -> None:

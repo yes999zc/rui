@@ -1801,7 +1801,8 @@ class AudioPlane:
         The VAD gate is the hard requirement in both paths: the event only opens the
         ears, the person's speech forms the turn. `skip_after_wake_ms=None` keeps the
         KWS path's configured 300 ms; a device wake passes 0 because its phrase tail is
-        not in our stream (the adapter's ts_ms is the alignment).
+        not in our stream (the adapter's ts_ms is the alignment). A `barge=True` wake
+        skips the cue entirely: that person is already talking (see the comment below).
         """
         # §5: our own accepted wake clears the vendor's quiet window (the control plane
         # does the same in VendorWindow.ours_spoke).
@@ -1821,22 +1822,36 @@ class AudioPlane:
             log.info("vendor takeover: pausing the vendor player for our wake")
             asyncio.create_task(adapter.pause_vendor_player("wake takeover"))
 
-        audio, mode, note = render_ack(self.cfg)
-        self.ack_mode_effective = mode
-        # Cleared on success: an error that sticks forever makes the console report a
-        # problem that was fixed an hour ago.
-        self.ack_error = note
-        cue_ms = audio.size * 1000.0 / self.effective.playback.rate if audio.size else 0.0
-        # A spoken cue mutes the device microphone; a tone rings out through the device's
-        # own 300 ms buffer. Both need more than their nominal length, so the hold carries
-        # a floor - the old build used 250 ms for exactly this - and anything arriving
-        # meanwhile is buffered, not dropped.
-        hold_ms = cue_ms + (
-            float(self.ack_echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS
-        )
-        # A device barge hint inside this window is our own cue/echo, not a person;
-        # `_device_wake_barge_allowed` consults this deadline (§5 ACK mute/gate hold).
-        self._wake_hold_until = max(self._wake_hold_until, time.monotonic() + hold_ms / 1000.0)
+        # A cue answers a wake nobody is talking over. A barge is the opposite: the
+        # user is already mid-sentence, so 「在呢」 talks over their first words and its
+        # echo comes back through the microphone as the next turn - measured 2026-10-26:
+        # 12:07:03 barge -> cue -> 12:07:05 seg 「在呢。」 -> 12:07:07 reply -> 12:07:12
+        # barge again. No cue also means no cue-length gate hold and no cue/echo window
+        # below, so the speech the barge interrupted reaches ASR from its first word.
+        if barge:
+            audio = np.zeros(0, dtype="<i2")
+            mode = "none"
+            cue_ms = 0.0
+            hold_ms = 0.0
+        else:
+            audio, mode, note = render_ack(self.cfg)
+            self.ack_mode_effective = mode
+            # Cleared on success: an error that sticks forever makes the console report a
+            # problem that was fixed an hour ago.
+            self.ack_error = note
+            cue_ms = audio.size * 1000.0 / self.effective.playback.rate if audio.size else 0.0
+            # A spoken cue mutes the device microphone; a tone rings out through the device's
+            # own 300 ms buffer. Both need more than their nominal length, so the hold carries
+            # a floor - the old build used 250 ms for exactly this - and anything arriving
+            # meanwhile is buffered, not dropped.
+            hold_ms = cue_ms + (
+                float(self.ack_echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS
+            )
+            # A device barge hint inside this window is our own cue/echo, not a person;
+            # `_device_wake_barge_allowed` consults this deadline (§5 ACK mute/gate hold).
+            self._wake_hold_until = max(
+                self._wake_hold_until, time.monotonic() + hold_ms / 1000.0
+            )
 
         event = Wake(
             ts_ms=ts_ms,
@@ -1896,7 +1911,10 @@ class AudioPlane:
             # after the last frame). What remains is the echo/answer window after the cue:
             # long enough for a request starting right after 「在呢」, short enough that the
             # cue itself never reaches ASR.
-            self.gate.hold(hold_ms, skip_ms=min(hold_ms, cue_ms + ACK_TAIL_MS))
+            # A barge played no cue, so there is nothing to skip: holding here would swallow
+            # the first words of the sentence the barge interrupted.
+            if not barge:
+                self.gate.hold(hold_ms, skip_ms=min(hold_ms, cue_ms + ACK_TAIL_MS))
 
         if audio.size:
             self.ack_attempts += 1
