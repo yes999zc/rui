@@ -272,6 +272,19 @@
 - 三仓 README 已 push（house-ear `d2b2b52`、dot2 `4227654`、xiaoai `7eaba4a`）。
 - **仍待做**：README 四项评审结论回收 → 打 tag（`v0.7.2`/`v1.3.1`/`v0.2.1`）→ `gh release create`（body 用 v0.7.2.md 的英文段 + 中文段）→ 从 **tag commit** 构建镜像并记 digest → 核对 `/api/v2/meta` 与 digest 写回 HANDOFF。
 
+### README 四项评审结论（CHANGES，2026-10-26 21:15）→ 待修清单
+
+评审通过：脱敏（图片实看无 IP/token/序列号/人脸/房间照）、许可（三仓 MIT 一致）、措辞（无 VPN/穿透/代理/翻墙；无刷机/root 教程；无厂商 logo、写明第三方）、资产与文件存在性、未测项标注、EQ 数字与 CHANGELOG 一致。
+
+**待修（按优先级，全部是文档改动）**
+1. **版本真实性**：三份都写「在 0.7.2 上实测」，但那些数字来自 15:01 的 0.7.1/p21 采样。要求：矩阵标题改「0.7.1 / p21 实测（2026-10-26 15:01），0.7.2 未重测」；dot2 README `:70/:164`、house-ear `:72-77` 同改；xiaoai `:58/:147` 与 `:91/:180` 自相矛盾 → 统一为「插件 9 项契约测试通过；LX06 真机指标为 2026-10-24 历史」。
+2. **能力表述与已知限制矛盾**：house-ear `:44/:137`「跨房间互不影响」 vs `:99/:192`（runner 单会话，跨房回复会被中止）→ 改成「跨房间的播放与回合仲裁隔离；对话运行器仍是单会话」；xiaoai `:86/:175` 同改。house-ear `:40`/xiaoai `:21/:110`「核心不含设备专用逻辑/没有小爱专属代码」与 `src/rui/adapter_aliases.py:21`（`"xiaoai": "lx06"`、`LEGACY_DEFAULT_ADAPTER`）不符 → 改「无设备实现，仅保留 0.6→0.7 的临时 adapter 别名」。
+3. **有限样本**：LX06 `19/20`、`205.2 ms` 实为 2026-10-24 三轮（24.2/64.5/205.2，max=205.2）→ 逐格标日期 + `max/n=3`。
+4. **结构一致**：house-ear 用「分层架构 / Layered architecture」，dot2/xiaoai 用「架构 / Architecture」→ 统一；hero 图口径要写明（house-ear 有 console 截图，dot2/xiaoai 无 → 要么补图要么明确「桥仓不设 hero」）。
+5. **tag 不存在**：`v0.7.2`/`v1.3.1`/`v0.2.1` 还没建，README 的 `git clone --branch` 会 404 → **先建并推 tag，再 push README**（README 已 push，因此打完 tag 后再确认链接）；house-ear release badge 仍显示 v0.6.0，tag 后会自更新。
+6. **镜像不存在**：`ghcr.io/yes999zc/rui:0.7.2` 尚未发布（GHCR 只有 latest/sha-7a81ec6）→ 必须先构建并推镜像，或在 quickstart 显式给 `RUI_IMAGE=`；`deploy/install.sh` 默认用的是 `:latest`，需在 README 里写明。
+7. **dot2 命令/CI**：dot2 README 的 CI badge 指向不存在的 workflow（该仓无 `.github/workflows`）→ 删掉或补 workflow；`rui plug-test` 缺必填 `directory` 参数（`src/rui/__main__.py:708`），镜像内应写 `rui plug-test /opt/rui-plugins/rui_dot2_bridge --adapter …`（见 `deploy/downstream/Dockerfile:23`）；xiaoai `:87/:176` 同改。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
