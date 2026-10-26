@@ -311,6 +311,13 @@
 - 过程中的坑：验证者最初用 `bakeyzhang`/`root` 登录 NAS 失败（免密用户是 `yes999zc`）；改用户后一次通过。token 只以 `token_len=32` 出现，未打印值。
 - **已知偏差**：下游镜像 `rui-dot2:1.3.1` 只在 NAS 本地构建（ID `sha256:92ea98f4…`），**未推 registry**（该仓无 docker-publish workflow，环境无 GHCR 写凭据）；可复现性以「tag + base digest」为准。
 
+### 评审判定的收尾（2026-10-26 19:50）
+
+- **release body 已修**：`gh release edit v0.7.2 --notes-file docs/release/v0.7.2.md`，正文不再有 `_待填_`，标题去掉「草稿」字样（`docs/release/v0.7.2.md` 提交 `c4da73c` 之前的 `25870ac`+ 本次）。
+- **tag 不移动**：`v0.7.2` 仍指向 `ad11936`（代码 commit）。理由：tag 已公开，改写已发布 ref 风险大于收益；产物表（digest/meta）在 release body 与 HANDOFF 均已是实测值。代价：`git show v0.7.2:docs/release/v0.7.2.md` 仍是当时的草稿表——**已在这里记录，属已知偏差**；下一个版本（0.7.3）自然修正。
+- **quickstart 已 pin**：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.2 bash deploy/install.sh`（house-ear `c4da73c`），说明默认是 `:latest`。
+- **xiaoai plug-test 已补 `--adapter`**：`rui plug-test <插件目录> --adapter rui_xiaoai_bridge.adapter:build`（`4853bbd`），troubleshooting 同步。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
