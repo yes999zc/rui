@@ -72,7 +72,7 @@ def test_the_repo_ships_the_known_manifests() -> None:
     """A parametrized scan that finds nothing would silently pass."""
     shipped = {path.relative_to(REPO).as_posix() for path in _MANIFESTS}
     assert shipped >= {
-        "plugs/xiaoai/plugin.yaml",
+        "tests/fixtures/legacy_lx06/plugin.yaml",
         "examples/plugin-example/plugin.yaml",
     }, f"manifest discovery lost a shipped plug: {sorted(shipped)}"
 

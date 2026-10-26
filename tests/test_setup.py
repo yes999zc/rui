@@ -353,7 +353,7 @@ def connect(tmp_path, monkeypatch):
     monkeypatch.delenv("RUI_DEVICE_TOKEN", raising=False)
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")
-    cfg.devices = [DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10",
+    cfg.devices = [DeviceConfig(id="living", adapter="lx06", host="192.0.2.10",
                                 room="客厅", listen_port=4412)]
     path = tmp_path / "config.yaml"
     save_config(path, cfg)
@@ -456,7 +456,7 @@ def test_connect_info_needs_auth_when_configured(tmp_path, monkeypatch) -> None:
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")
     cfg.web.auth_token = "console-token"
-    cfg.devices = [DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10")]
+    cfg.devices = [DeviceConfig(id="living", adapter="lx06", host="192.0.2.10")]
     path = tmp_path / "config.yaml"
     save_config(path, cfg)
     client = TestClient(create_app(cfg, config_path=path))

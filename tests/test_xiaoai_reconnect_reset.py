@@ -20,7 +20,7 @@ def _adapter() -> XiaoaiAdapter:
         sock.bind(("127.0.0.1", 0))
         port = int(sock.getsockname()[1])
     return XiaoaiAdapter(
-        DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10",
+        DeviceConfig(id="living", adapter="lx06", host="192.0.2.10",
                      listen_port=port, token_env=TOKEN_ENV),
         CaptureConfig(),
         VoiceConfig(),

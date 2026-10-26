@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from ..adapter_aliases import LEGACY_DEFAULT_ADAPTER
+from .legacy_adapters import DEFAULT_ADAPTER
 
 CONFIG_VERSION = 3
 
@@ -255,10 +255,10 @@ class DeviceConfig(BaseModel):
     id: str = Field(min_length=1, max_length=32)
     # A name, not an enum: a plug manifest declares it as its device id and the
     # registry registers it, so config validation never rejects an adapter a future
-    # build adds. The default is the pre-0.6 spelling kept for one minor by
-    # src/rui/adapter_aliases.py (a config that never stated the key must keep
-    # resolving to the same plug); new configs are written with the manifest id.
-    adapter: str = LEGACY_DEFAULT_ADAPTER
+    # build adds. 0.7.6 removed the in-tree plug; the default is the external
+    # manifest id, and an explicit legacy spelling is rewritten in
+    # config.store.migrate (with a warning).
+    adapter: str = DEFAULT_ADAPTER
     host: str
     room: str = ""
     enabled: bool = True

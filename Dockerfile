@@ -165,23 +165,12 @@ COPY --from=ffmpeg /usr/share/doc/libmp3lame-dev/copyright /usr/share/doc/rui/ff
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-# Image-shipped plugs (0.6 M2, docs/roadmap-0.6.md): the LX06 adapter and its
-# rui-device/v1 manifest live in plugs/xiaoai and the manifest loader discovers them
-# from this directory (/opt/rui-plugins). No in-code adapter table, no data-dir copy;
-# a downstream image adds its own plug under the same root (docs/plug-test-kit.md).
-COPY plugs /opt/rui-plugins
+# No plug ships in the core image since 0.7.6 (B: the LX06 adapter lives in
+# rui-xiaoai-bridge). The empty directory is the mount point for downstream plugs
+# (`/opt/rui-plugins`), so the runtime path stays the same.
+RUN install -d -o rui -g rui -m 0755 /opt/rui-plugins
 # PIP_INDEX_URL is inherited from the build arg when set; empty means PyPI.
 RUN pip install '.[kws,channels]'
-# Build-time smoke test for the image plugs (0.6 M2). The runtime catalog is fail-soft
-# (one broken manifest becomes a warning), but an image that ships a plug it cannot
-# load must fail the build instead of shipping it. The adapter import proves the
-# package next to plugin.yaml is importable with the documented PYTHONPATH recipe.
-RUN python -c "from rui.plugins import builtin_plugins; \
-        plugins = builtin_plugins(); \
-        assert plugins, 'no image plug was loaded from /opt/rui-plugins'; \
-        print('image plugs:', ', '.join(sorted(p.id for p in plugins)))" \
-    && PYTHONPATH=/opt/rui-plugins/xiaoai \
-        python -c "from xiaoai_plug.adapter import build; assert callable(build)"
 COPY --from=web /web/dist /app/web/dist
 # The seed is ~40 MB, all of it the two models the install used to pull from GitHub. It is
 # a single layer; `fetch-models` copies from /opt/seed-models before its first network
@@ -197,16 +186,14 @@ RUN chmod +x /usr/local/bin/rui-healthcheck
 #   * id -u rui is 1000 (also catches a base-image uid collision);
 #   * the ffmpeg binary, the web UI and both seed models are readable;
 #   * the state directory exists and is owned by rui.
-RUN chmod -R a+rX /app /opt/seed-models /opt/rui-plugins /usr/local/bin/rui-healthcheck \
+RUN chmod -R a+rX /app /opt/seed-models /usr/local/bin/rui-healthcheck \
     && id -u rui \
     && test "$(id -u rui)" = 1000 \
     && test "$(id -g rui)" = 1000 \
     && test -x /usr/local/bin/ffmpeg \
     && test -r /app/web/dist/index.html \
     && test -r /app/src/rui/__main__.py \
-    && test -r /opt/rui-plugins/xiaoai/plugin.yaml \
-    && test -r /opt/rui-plugins/xiaoai/devices/lx06.yaml \
-    && test -r /opt/rui-plugins/xiaoai/xiaoai_plug/adapter.py \
+    && setpriv --reuid=1000 --regid=1000 --clear-groups test -w /opt/rui-plugins \
     && test -r /opt/seed-models/silero_vad.onnx \
     && test -n "$(find /opt/seed-models/kws -name tokens.txt -print -quit)" \
     && test -d /var/lib/rui/state \
@@ -221,8 +208,7 @@ ENV HOME=/var/lib/rui \
     RUI_AUDIO_SOCK=/var/lib/rui/state/audio.sock \
     RUI_CHANNEL_DATA=/var/lib/rui/state/channels \
     RUI_WEB_DIR=/app/web/dist \
-    RUI_PLUGINS_DIR=/opt/rui-plugins \
-    PYTHONPATH=/opt/rui-plugins/xiaoai
+    RUI_PLUGINS_DIR=/opt/rui-plugins
 EXPOSE 8080
 VOLUME ["/var/lib/rui"]
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \

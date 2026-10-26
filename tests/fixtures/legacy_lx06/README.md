@@ -20,9 +20,9 @@ the plug appears in `GET /api/v1/plugs` and the wizard without a copy under
 `<data_dir>/plugs`. The adapter is registered from the manifest's
 `runtime.entrypoint`; no core table mentions the device.
 
-Existing installs need no migration: configs that say `adapter: xiaoai` keep working
-for one minor through the alias in `src/rui/adapter_aliases.py`. New configs should
-say `adapter: lx06` (the manifest's canonical device id).
+Existing installs need no migration: configs that say `adapter: xiaoai` are rewritten
+to `adapter: lx06` on load by `src/rui/config/store.py` (deprecation warning; the
+rewrite is removed in 0.8.0). New configs should say `adapter: lx06`.
 
 ## Verify without a speaker
 

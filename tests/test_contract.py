@@ -263,7 +263,7 @@ def test_missing_for_barge_in_accepts_the_device_detected_path() -> None:
     assert device_side.missing_for_barge_in() == []
     reference_side = DeviceInfo(
         id="lx06",
-        adapter="xiaoai",
+        adapter="lx06",
         model="LX06",
         host="127.0.0.1",
         capabilities=frozenset({Capability.REFERENCE, Capability.PLAYBACK}),

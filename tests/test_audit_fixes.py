@@ -90,7 +90,7 @@ def test_health_separates_process_up_from_the_room_hearing(tmp_path) -> None:
 def test_device_status_is_connected_not_hardcoded_ready(tmp_path) -> None:
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")
-    cfg.devices = [_device(adapter="xiaoai")]
+    cfg.devices = [_device(adapter="lx06")]
     path = tmp_path / "config.yaml"
     save_config(path, cfg)
     http = TestClient(create_app(cfg, config_path=path))

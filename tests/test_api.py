@@ -29,7 +29,7 @@ def test_mock_device_is_probed() -> None:
 
 
 def test_xiaoai_device_is_reported_as_an_inbound_speaker() -> None:
-    cfg = Config(devices=[DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10")])
+    cfg = Config(devices=[DeviceConfig(id="living", adapter="lx06", host="192.0.2.10")])
     c = client(cfg)
     assert c.get("/health").json()["device_errors"] == 0
     device = c.get("/api/v1/devices").json()[0]
@@ -52,7 +52,7 @@ def test_an_adapter_that_cannot_be_built_is_reported_not_raised(monkeypatch) -> 
     # The registry is a table of builders now: patching `_builder` fails every name at
     # build time without needing a fake module on disk.
     monkeypatch.setattr(registry, "_builder", lambda name: boom)
-    cfg = Config(devices=[DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10")])
+    cfg = Config(devices=[DeviceConfig(id="living", adapter="lx06", host="192.0.2.10")])
     c = client(cfg)
     assert c.get("/health").json()["device_errors"] == 1
     device = c.get("/api/v1/devices").json()[0]

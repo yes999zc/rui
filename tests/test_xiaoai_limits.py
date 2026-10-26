@@ -29,7 +29,7 @@ def free_port() -> int:
 
 def make_adapter(port: int) -> XiaoaiAdapter:
     dev = DeviceConfig(
-        id="living", adapter="xiaoai", host="192.0.2.10", listen_port=port,
+        id="living", adapter="lx06", host="192.0.2.10", listen_port=port,
         token_env=TOKEN_ENV, allow_no_token=False,
     )
     return XiaoaiAdapter(dev, CaptureConfig(rate=48000), VoiceConfig())

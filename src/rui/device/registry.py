@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..adapter_aliases import ADAPTER_ALIASES, canonical_adapter
+from ..config.legacy_adapters import canonical, is_legacy, unknown_adapter_hint
 from ..config.schema import Config, DeviceConfig
 from .contract import DeviceAdapter
 
@@ -199,23 +199,18 @@ def available() -> list[str]:
     and /health show that the old spelling still works without implying two adapters.
     """
     _ensure_image_adapters()
-    names = set(_BUILDERS)
-    for alias, canonical in ADAPTER_ALIASES.items():
-        if canonical in _BUILDERS:
-            names.add(alias)
-    return sorted(names)
+    return sorted(_BUILDERS)
 
 
 def _builder(name: str) -> Builder:
     _ensure_image_adapters()
     target = _BUILDERS.get(name)
+    if target is None and is_legacy(name):
+        target = _BUILDERS.get(canonical(name))
     if target is None:
-        canonical = canonical_adapter(name)
-        if canonical != name:
-            target = _BUILDERS.get(canonical)
-    if target is None:
+        hint = unknown_adapter_hint(name)
         raise AdapterUnavailable(
-            f"unknown adapter: {name!r} (this build has: {', '.join(available())})"
+            f"unknown adapter: {name!r} (this build has: {', '.join(available())}); {hint}"
         )
     if callable(target):
         return target
@@ -259,7 +254,7 @@ def _apply_manifest_runtime(dev: DeviceConfig, resolved) -> DeviceConfig:
     """
     runtime = getattr(getattr(resolved, "device", None), "runtime", None)
     cached = RUNTIME_DEFAULTS.get(dev.adapter) or RUNTIME_DEFAULTS.get(
-        canonical_adapter(dev.adapter), {}
+        canonical(dev.adapter), {}
     )
     listen_port = (
         int(runtime.listen_port) if runtime is not None and runtime.listen_port

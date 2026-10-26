@@ -88,7 +88,7 @@ def console(tmp_path, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     created: list[TestClient] = []
 
-    def build(*, adapter: str = "xiaoai", params: dict | None = None,
+    def build(*, adapter: str = "lx06", params: dict | None = None,
               auth_token: str | None = None) -> tuple[TestClient, object]:
         options = {"web": {"auth_token": auth_token}} if auth_token else {}
         cfg = Config(

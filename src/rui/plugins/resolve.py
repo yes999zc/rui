@@ -2,7 +2,7 @@
 
 ``devices[].params.plug_id`` is the explicit answer; a device written before that key
 existed is resolved through its adapter (the adapter name is the plug manifest's device
-id). A one-minor alias (src/rui/adapter_aliases.py) maps the pre-0.6 spelling, so an old
+id). 0.7.6 removed the in-tree alias; a legacy spelling is rewritten in config.store.
 config keeps resolving to the same plug. The catalog is read-only and uses the same
 loader/builtin registry as the wizard, so an unknown or broken plug simply resolves to
 ``None`` instead of raising.
@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..adapter_aliases import canonical_adapter
 from .builtin import builtin_plugins
 from .loader import discover_plugins
 from .models import DeviceManifest, Plugin
@@ -80,22 +79,18 @@ class PlugCatalog:
         """
         explicit = (plug_id or "").strip()
         wanted_adapter = (adapter or "").strip()
-        canonical = canonical_adapter(wanted_adapter)
         if explicit:
             entry = self.get(explicit)
             if entry is None or not entry.plugin.devices:
                 return None
             device = next(
                 (item for item in entry.plugin.devices if item.id == wanted_adapter),
-                next(
-                    (item for item in entry.plugin.devices if item.id == canonical),
-                    entry.plugin.devices[0],
-                ),
+                entry.plugin.devices[0],
             )
             return ResolvedPlug(entry.plugin, device, entry.source, entry.plugin.id, "plug_id")
         if not wanted_adapter:
             return None
-        for wanted in (wanted_adapter, canonical):
+        for wanted in (wanted_adapter,):
             if not wanted:
                 continue
             for entry in self.entries.values():

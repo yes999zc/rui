@@ -442,7 +442,7 @@ def test_volume_reconciles_to_the_configured_target(tmp_path: Path) -> None:
     async def run() -> None:
         plane, _ = make_plane(tmp_path)
         from rui.config.schema import DeviceConfig
-        plane.cfg.devices.append(DeviceConfig(id="living", adapter="xiaoai",
+        plane.cfg.devices.append(DeviceConfig(id="living", adapter="lx06",
                                               host="192.0.2.10", volume=86))
         writes: list[int] = []
 

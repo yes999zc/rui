@@ -78,7 +78,7 @@ from ...config.schema import (
     effective_device_ack_echo_ignore_ms,
     effective_device_audio,
 )
-from ...config.store import ConfigError, load_config, redacted, save_config
+from ...config.store import ConfigError, legacy_adapter_rewrites, load_config, redacted, save_config
 from ...device.loader import load_adapter_plugins
 from ...device.registry import build_adapters
 from ...doctor import Check, run_doctor
@@ -1882,6 +1882,18 @@ def _port_conflict_warning(config: Config) -> list[dict]:
     }]
 
 
+def _legacy_adapter_warnings() -> list[dict]:
+    """Device-level deprecation rows for `adapter: xiaoai` rewritten on load."""
+    return [{
+        "code": "legacy_adapter_spelling",
+        "message": (
+            f"device {row['device']!r} says adapter {row['old']!r}; migrated to "
+            f"{row['new']!r}. Mount rui-xiaoai-bridge under /opt/rui-plugins."
+        ),
+        "details": dict(row),
+    } for row in legacy_adapter_rewrites()]
+
+
 def _device_warnings(app: FastAPI, config: Config) -> list[dict]:
     """Per-room warnings a person can act on before blaming the speaker.
 
@@ -3428,7 +3440,8 @@ def create_app(
             # Downstream adapter hook (issue #7 Q1): names and warning count only.
             "adapter_plugins": {
                 "registered": sorted(getattr(app.state, "adapter_plugins", adapter_plugins).registered),
-                "warnings": len(getattr(app.state, "adapter_plugins", adapter_plugins).warnings),
+                "warnings": (len(getattr(app.state, "adapter_plugins", adapter_plugins).warnings)
+                              + len(legacy_adapter_rewrites())),
             },
             "audio_plane": plane["running"],
             # "Up" is not "the room can hear": this is the plane's own link report.
@@ -3446,7 +3459,8 @@ def create_app(
             # `port_conflict` finding for two enabled inbound speakers on one port.
             # Startup still accepts that config on purpose; this is where it surfaces.
             "warnings": [*_device_warnings(app, cfg_now),
-                         *_port_conflict_warning(cfg_now)],
+                         *_port_conflict_warning(cfg_now),
+                         *_legacy_adapter_warnings()],
             "multi_device": {
                 "enabled": bool(cfg_now.multi_device.enabled),
                 "max_planes": cfg_now.multi_device.max_planes,

@@ -38,8 +38,9 @@ from rui.config.schema import (
     VoiceConfig,
     effective_device_audio,
 )
-from rui.trace import now_ms
 from rui.device.contract import AudioFrame, Capability, DeviceAdapter, DeviceInfo, Transport
+from rui.trace import now_ms
+
 from . import protocol
 from .led import LedRing
 

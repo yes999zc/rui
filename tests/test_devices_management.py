@@ -67,7 +67,7 @@ def console(tmp_path, monkeypatch):
         options = {"web": {"auth_token": auth_token}} if auth_token else {}
         cfg = Config(
             devices=devices or [DeviceConfig(
-                id="living", adapter="xiaoai", host="speaker.local", room="客厅")],
+                id="living", adapter="lx06", host="speaker.local", room="客厅")],
             **options,
         )
         cfg.system.data_dir = str(tmp_path / "data")
@@ -216,8 +216,8 @@ def test_token_rotation_refuses_an_environment_override(console, monkeypatch) ->
 
 def test_port_conflict_on_enable_and_put_and_setup_upsert(console) -> None:
     devices = [
-        DeviceConfig(id="living", adapter="xiaoai", host="speaker-a.local"),
-        DeviceConfig(id="kitchen", adapter="xiaoai", host="speaker-b.local",
+        DeviceConfig(id="living", adapter="lx06", host="speaker-a.local"),
+        DeviceConfig(id="kitchen", adapter="lx06", host="speaker-b.local",
                      listen_port=4412, enabled=False),
     ]
     client, path = console(devices)
@@ -262,9 +262,9 @@ def test_port_conflict_on_enable_and_put_and_setup_upsert(console) -> None:
 
 def test_two_enabled_inbound_devices_produce_an_explicit_warning(console) -> None:
     devices = [
-        DeviceConfig(id="living", adapter="xiaoai", host="speaker-a.local",
+        DeviceConfig(id="living", adapter="lx06", host="speaker-a.local",
                      listen_port=4412),
-        DeviceConfig(id="kitchen", adapter="xiaoai", host="speaker-b.local",
+        DeviceConfig(id="kitchen", adapter="lx06", host="speaker-b.local",
                      listen_port=4413),
     ]
     client, _path = console(devices)
@@ -361,7 +361,7 @@ def test_dot2_style_plug_reports_effective_port_and_token_env(
     monkeypatch.setenv("DOT2_EM_TOKEN", token)
     client, _path = console([
         DeviceConfig(id="dot2", adapter="dot2", host="dot2.local", room="客厅"),
-        DeviceConfig(id="lx06", adapter="xiaoai", host="lx06.local", room="卧室"),
+        DeviceConfig(id="lx06", adapter="lx06", host="lx06.local", room="卧室"),
     ])
     client.app.state.audio = _Plane(connected=True)
 
@@ -414,7 +414,7 @@ def test_dot2_and_lx06_do_not_false_conflict_on_the_default_port(
     _dot2_plug(tmp_path)
     data_dir = tmp_path / "data"
     dot2 = DeviceConfig(id="dot2", adapter="dot2", host="dot2.local")
-    lx06 = DeviceConfig(id="lx06", adapter="xiaoai", host="lx06.local")
+    lx06 = DeviceConfig(id="lx06", adapter="lx06", host="lx06.local")
     catalog = PlugCatalog(data_dir)
     resolved_dot2 = catalog.resolve(adapter="dot2")
 
@@ -434,7 +434,7 @@ def test_dot2_and_lx06_do_not_false_conflict_on_the_default_port(
     # And the HTTP enable path accepts dot2 + LX06 together (warning, not 422).
     client, _path = console([
         DeviceConfig(id="dot2", adapter="dot2", host="dot2.local"),
-        DeviceConfig(id="lx06", adapter="xiaoai", host="lx06.local", enabled=False),
+        DeviceConfig(id="lx06", adapter="lx06", host="lx06.local", enabled=False),
     ])
     client.app.state.audio = _Plane(connected=True)
     enabled = client.post("/api/v1/devices/lx06/enabled", json={"enabled": True})

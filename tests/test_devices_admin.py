@@ -20,7 +20,7 @@ def admin(tmp_path):
     cfg = Config()
     cfg.system.data_dir = str(tmp_path / "data")
     cfg.audio.voice.kws_keywords_file = str(tmp_path / "keywords.txt")
-    cfg.devices = [DeviceConfig(id="living", adapter="xiaoai", host="127.0.0.1",
+    cfg.devices = [DeviceConfig(id="living", adapter="lx06", host="127.0.0.1",
                                 room="客厅", wake_words=["你好小瑞"], volume=70)]
     path = tmp_path / "config.yaml"
     save_config(path, cfg)

@@ -24,7 +24,7 @@ TOKEN = "test-token-fake"
 AUTH = {"X-Auth-Token": TOKEN}
 DEVICE = DeviceConfig(
     id="living",
-    adapter="xiaoai",
+    adapter="lx06",
     host="speaker.local",
     room="客厅",
     params={"plug_id": "xiaoai-lx06"},
@@ -263,7 +263,7 @@ def test_device_setup_summary_never_reads_another_devices_test(console):
     The setup store has one house-wide `test/device/test` slot, so a pass recorded
     for the living room must not render as the study's last test result.
     """
-    study = DeviceConfig(id="study", adapter="xiaoai", host="speaker.study",
+    study = DeviceConfig(id="study", adapter="lx06", host="speaker.study",
                          room="书房", params={"plug_id": "xiaoai-lx06"})
     client, config = console(devices=[DEVICE, study])
     _write_setup_record(config, {"test": {"device": {"test": {

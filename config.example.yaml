@@ -26,7 +26,7 @@ security:
     blocked_cidrs: []
 devices:
   - id: living
-    adapter: xiaoai
+    adapter: lx06
     host: speaker.local    # the speaker's LAN name or IP (mDNS is enough here)
     room: 客厅
     wake_words: ["你好小瑞"]

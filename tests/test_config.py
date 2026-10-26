@@ -100,7 +100,7 @@ def test_round_trip_preserves_devices(tmp_path) -> None:
 def test_shipped_example_config_parses() -> None:
     cfg = load_config(REPO / "config.example.yaml")
     assert cfg.version == 2
-    assert cfg.devices[0].adapter == "xiaoai"
+    assert cfg.devices[0].adapter == "lx06"
 
 
 V1_CONFIG = """\

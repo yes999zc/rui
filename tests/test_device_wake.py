@@ -411,7 +411,7 @@ def test_a_manifest_without_device_wake_is_the_upper_bound(tmp_path: Path) -> No
 
     cfg = Config()
     cfg.system.data_dir = str(tmp_path)
-    cfg.devices = [DeviceConfig(id="living", adapter="xiaoai", host="192.0.2.10")]
+    cfg.devices = [DeviceConfig(id="living", adapter="lx06", host="192.0.2.10")]
     plane = AudioPlane(cfg, "living", Path("/tmp/device-wake.sock"))
     adapter = WakeAdapter()
     plane.adapter = adapter  # type: ignore[assignment]

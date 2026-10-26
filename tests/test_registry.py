@@ -23,7 +23,7 @@ def cfg_with(adapter: str, **device) -> Config:
 
 
 def test_the_shipped_adapters_are_registered() -> None:
-    assert {"mock", "xiaoai"} <= set(registry.available())
+    assert {"mock", "lx06"} <= set(registry.available())
 
 
 def test_an_unknown_adapter_is_a_config_that_loads_and_a_device_that_does_not() -> None:

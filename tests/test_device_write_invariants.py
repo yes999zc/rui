@@ -25,7 +25,7 @@ async def _fake_probe(host: str) -> dict:
 
 
 def _device(device_id: str, room: str, port: int) -> DeviceConfig:
-    return DeviceConfig(id=device_id, adapter="xiaoai", host=f"{device_id}.local",
+    return DeviceConfig(id=device_id, adapter="lx06", host=f"{device_id}.local",
                         room=room, listen_port=port,
                         params={"plug_id": "xiaoai-lx06"})
 

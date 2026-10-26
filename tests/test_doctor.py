@@ -168,7 +168,7 @@ def test_capture_layout_reports_the_neutral_core_default_without_a_device() -> N
 
 def test_capture_layout_reports_the_merged_manifest_layout() -> None:
     """The row describes what the plane will run: the device manifest's own layout."""
-    cfg = Config(devices=[DeviceConfig(id="lx06", adapter="xiaoai", host="192.0.2.10",
+    cfg = Config(devices=[DeviceConfig(id="lx06", adapter="lx06", host="192.0.2.10",
                                        room="客厅")])
     check = next(c for c in run_doctor(cfg).checks if c.name == "capture_layout")
     assert "lx06:" in check.value

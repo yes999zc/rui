@@ -5,8 +5,8 @@
 # the manifest must never declare device_wake / barge_via_device. RUI still owns the
 # final turn/barge decision.
 schema: rui-device/v1
-# Canonical adapter name since 0.6. Old configs that say `adapter: xiaoai` keep
-# working for one minor through the alias in src/rui/adapter_aliases.py.
+# Canonical adapter name since 0.6. Old configs that say `adapter: xiaoai` are
+# rewritten by src/rui/config/store.py on load (removed in 0.8.0).
 id: lx06
 model: "LX06"
 name: "Xiaomi AI Speaker Pro (LX06)"

@@ -12,7 +12,7 @@ from rui.device.contract import Capability
 
 def _adapter(**led: object) -> XiaoaiAdapter:
     dev = DeviceConfig(
-        id="living", adapter="xiaoai", host="127.0.0.1",
+        id="living", adapter="lx06", host="127.0.0.1",
         led=LedConfig(enabled=True, **led),
     )
     return XiaoaiAdapter(dev, CaptureConfig(), VoiceConfig())
@@ -52,7 +52,7 @@ def test_a_disabled_ring_keeps_state_but_sends_nothing(monkeypatch) -> None:
 
     monkeypatch.setattr(XiaoaiServices, "shell", fake_shell)
     dev = DeviceConfig(
-        id="living", adapter="xiaoai", host="127.0.0.1", led=LedConfig(enabled=False),
+        id="living", adapter="lx06", host="127.0.0.1", led=LedConfig(enabled=False),
     )
     adapter = XiaoaiAdapter(dev, CaptureConfig(), VoiceConfig())
 

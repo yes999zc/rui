@@ -92,7 +92,7 @@ def test_reset_starts_a_new_player_from_zero() -> None:
 
 def test_adapter_records_the_consumed_report() -> None:
     adapter = XiaoaiAdapter(
-        DeviceConfig(id="living", adapter="xiaoai", host="127.0.0.1"),
+        DeviceConfig(id="living", adapter="lx06", host="127.0.0.1"),
         CaptureConfig(),
         VoiceConfig(),
     )

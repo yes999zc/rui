@@ -21,11 +21,11 @@ from rui.web.api.app import create_app
 TOKEN = "test-token-fake"
 AUTH = {"X-Auth-Token": TOKEN}
 LIVING = DeviceConfig(
-    id="living", adapter="xiaoai", host="speaker.local", room="客厅",
+    id="living", adapter="lx06", host="speaker.local", room="客厅",
     params={"plug_id": "xiaoai-lx06"},
 )
 STUDY = DeviceConfig(
-    id="study", adapter="xiaoai", host="speaker.study", room="书房",
+    id="study", adapter="lx06", host="speaker.study", room="书房",
     params={"plug_id": "xiaoai-lx06"},
 )
 T1 = "2026-10-26T01:00:00+00:00"

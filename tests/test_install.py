@@ -119,7 +119,7 @@ def test_keywords_command_follows_the_config_wake_words(tmp_path) -> None:
     main(["setup", "--config", str(path)])
     cfg = load_config(path)
     cfg = cfg.model_copy(update={"devices": [
-        DeviceConfig(id="living", adapter="xiaoai", host="speaker.local",
+        DeviceConfig(id="living", adapter="lx06", host="speaker.local",
                      room="客厅", wake_words=["嗨小瑞"]),
     ]})
     save_config(path, cfg)

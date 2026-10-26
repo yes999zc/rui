@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from ..env import get as env_get
+from .legacy_adapters import LEGACY_ADAPTER_HINT, canonical, is_legacy
 from .schema import (
     CONFIG_VERSION,
     AckConfig,
@@ -37,6 +38,45 @@ def default_config_path() -> Path:
     return Path.home() / ".config" / "rui" / "config.yaml"
 
 
+#: Device ids rewritten from a pre-0.7.6 adapter spelling by the last load. Read by
+#: /health to count the deprecation warning without changing the config schema.
+_LAST_LEGACY_ADAPTERS: list[tuple[str, str, str]] = []
+
+
+def legacy_adapter_rewrites() -> list[dict[str, str]]:
+    """[{device, old, new}] from the most recent load_config() (empty when clean)."""
+    return [{"device": device, "old": old, "new": new}
+            for device, old, new in _LAST_LEGACY_ADAPTERS]
+
+
+def _rewrite_legacy_adapters(raw: dict) -> dict:
+    devices = raw.get("devices")
+    if not isinstance(devices, list):
+        return raw
+    out = dict(raw)
+    rewritten: list[tuple[str, str, str]] = []
+    new_devices = []
+    for index, device in enumerate(devices):
+        if not isinstance(device, dict):
+            new_devices.append(device)
+            continue
+        old = str(device.get("adapter") or "").strip()
+        if not is_legacy(old):
+            new_devices.append(device)
+            continue
+        new = canonical(old)
+        item = dict(device)
+        item["adapter"] = new
+        new_devices.append(item)
+        rewritten.append((str(item.get("id") or f"devices[{index}]"), old, new))
+    out["devices"] = new_devices
+    _LAST_LEGACY_ADAPTERS[:] = rewritten
+    for device, old, new in rewritten:
+        log.warning("config: %s: %s", device,
+                    LEGACY_ADAPTER_HINT.format(old=old, new=new))
+    return out
+
+
 def migrate(raw: dict) -> dict:
     """Upgrade an older on-disk config in memory. Returns a dict for the current schema.
 
@@ -45,6 +85,7 @@ def migrate(raw: dict) -> dict:
     rewritten by this function; it is only interpreted, so a downgrade keeps working
     until the first write.
     """
+    raw = _rewrite_legacy_adapters(raw)
     version = int(raw.get("version") or 1)
     if version >= CONFIG_VERSION:
         return raw
