@@ -13,7 +13,7 @@
 - **B 剩余两件**：①**双跑对比**（0.7.2 内置 vs 0.7.6 外置，需 LX06 真机 → 白天）；②**删测试夹具** `tests/fixtures/legacy_lx06`（9 个通用测试仍依赖 lx06 注册/4412/params；需把 sample-plug 扩成替代 → **task-15，排 0.7.7**，不阻塞 0.7.6）。
 - **0.7.6 暂不发版**：出口条件里的双跑要真机，按纪律不打 tag；白天补双跑后再发。
 - **0.7.7（C 控制台审计）已开工**（task-16，交付 `docs/audit/console-functional.md`）：无头逐页逐按钮实测，夜间不接真机/不出声；基线清单位于 `docs/audit/console-audit-scope.md`（14 路由 / 7 tab / 24 端点 / ~95 元素）。
-  - 2026-10-27 01:30 进度（Lead 维护，实现者只报事实）：`docs/audit/console-functional.md` 已成稿（3 个实例：主 18099 / 空屋 18101 / 配置恢复 18102，72 张截图）；172 条元素结论 = **159 可用 / 12 未验证 / 1 文案错误行 / 0 不可用 / 0 未处理**（空屋 first-run 的 prepare/params/create 已补测）；72→76 张截图；4 组文案修正（setup 空屋误报、legacy 提示、死 i18n key、7 条中文校验 message）。reviewer-audit 首轮 CHANGES：R1 config tab 的 restart 实为 `ok`（原写 failed）、R2 空屋 first-run 的 params/prepare 可测（原写被 keys/models 阻断），等修完后由 verifier 独立验证。
+  - 2026-10-27 01:30 进度（Lead 维护，实现者只报事实）：`docs/audit/console-functional.md` 已成稿（4 个实例：主 18099 / 空屋 18101、写入 18103 / 配置恢复 18102，76 张截图）；172 条元素结论 = **159 可用 / 12 未验证 / 1 文案错误行 / 0 不可用 / 0 未处理**（空屋 first-run 的 prepare/params/create 已补测）；72→76 张截图；4 组文案修正（setup 空屋误报、legacy 提示、死 i18n key、7 条中文校验 message）。reviewer-audit 首轮 CHANGES：R1 config tab 的 restart 实为 `ok`（原写 failed）、R2 空屋 first-run 的 params/prepare 可测（原写被 keys/models 阻断），等修完后由 verifier 独立验证。
 - 版本重排已写进 `docs/ROADMAP-0.8.md`（`b9a9059`）：0.7.4 = P0 修复、0.7.5 = TLS/Done6、0.7.6 = B、0.7.7 = C、0.7.8 = D。
 
 ## 0.7.5 状态（2026-10-26 23:35，进行中）
