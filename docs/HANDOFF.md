@@ -265,6 +265,13 @@
 - 自检结果：资源引用全部存在；无内网 IP、无 token、无个人路径；无 VPN/穿透/代理/破解/解锁/刷机/root 字样（改成「设备前置条件」表述）；支持矩阵未测项全部显式标「未测」，历史数字带日期。
 - **待办**：按 9 哥 要求「每张卡独立 review + verify」，README 需过「真实性/脱敏/许可/措辞」四项清单；通过后三仓 push + tag + release。
 
+### 发布物料进度（2026-10-26 21:05）
+
+- **CHANGELOG**：house-ear `2f5e5ef`（0.7.2 条目）、dot2 `730d6d6`（1.3.1）、xiaoai `288454e`（新建，含 0.2.0/0.1.0 历史 + 0.2.1）。
+- **release notes 中英双语**：`docs/release/v0.7.2.md`（`07a702f`）——中文正文 + English 摘要段（release body 可直接取这一段）。
+- 三仓 README 已 push（house-ear `d2b2b52`、dot2 `4227654`、xiaoai `7eaba4a`）。
+- **仍待做**：README 四项评审结论回收 → 打 tag（`v0.7.2`/`v1.3.1`/`v0.2.1`）→ `gh release create`（body 用 v0.7.2.md 的英文段 + 中文段）→ 从 **tag commit** 构建镜像并记 digest → 核对 `/api/v2/meta` 与 digest 写回 HANDOFF。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
