@@ -365,6 +365,44 @@
 
 **不做（按 goal 约束）**：4 台联合调试（设备未到）、M10 / console v2 默认切换、任何新功能。
 
+## 交接（给下一个会话，2026-10-26 20:20）
+
+> **任务板不跨会话**：本会话的 `task-*` 在新会话里看不到。所有未完成项都已写进本文件与 `docs/ROADMAP-0.8.md`；开新会话时**先读这两份**，不要凭记忆。
+
+### 现状（已交付）
+
+- 三仓已发布：`rui 0.7.2`（tag `v0.7.2`，镜像 `ghcr.io/yes999zc/rui:0.7.2@sha256:d830a2ca…8018`）、`rui-dot2-bridge 1.3.1`（`v1.3.1`）、`rui-xiaoai-bridge 0.2.1`（`v0.2.1`，仓库已公开）。
+- 生产：NAS 168 跑 `rui-dot2:1.3.1`（核心 0.7.2 + 桥 1.3.1），healthy，2 台设备在线；`/api/v2/meta` = 0.7.2 / `compat 0.6.0..<0.8.0`。
+- CI：`v0.7.2` tag 与 `67db5d8`(main) 上 job 全绿；三仓工作树干净。
+- 新手安装路径：`examples/two-speakers/compose.yaml` + 三仓 README 的「让 AI 帮你装」，实测 `adapter_plugins.registered=["dot2","lx06"]`、`devices=2`、`device_errors=0`。
+
+### 待设备（等 9 哥，不许先动手）
+
+1. 两台新 Dot2 到位后：EQ 耳测（保留 `/loudness`）→ 清 override 的 `DOT2_CONTROL_PORT` → 逐台 `listen_port`（8871/8873）→ v2 添加设备 → 逐台 添加/唤醒/应答/播放/停止/删除 → 4 台联合验收（`docs/release/acceptance-4devices.md`）。
+2. 4 台联调通过后才谈 24h 稳定性满窗与版本验收。
+
+### 已知限制（0.7.2 发布时点）
+
+1. cue 回声在「冷启动 + 不削波 + 设备延迟 >800 ms」或「用户与 cue 重叠 <110 ms」时仍可能进 ASR（AEC-lite 已 park，重开前置见 0.7.5 卡）。
+2. `runner.abort()` 是全局单 flag：一台设备唤醒会中止另一台正在合成的回复（按房隔离只覆盖播放与回合仲裁）。
+3. 已播出的告别尾音追不回，只能阻止后续 chunk。
+4. 唤醒词不按房间隔离；多设备并发未测。
+5. 下游镜像 `rui-dot2:1.3.1` 只在 NAS 本地构建（`sha256:92ea98f4…`），未推 registry；复现靠「tag + base digest」。
+6. tag `v0.7.2` 树内的 `docs/release/v0.7.2.md` 仍是待填草稿表；发布页 body 与 HEAD 已是最新（tag 未移动）。
+7. `uv.lock` 内版本号陈旧（0.2.0），不影响运行。
+8. 生产 NAS 密码 / `RUI_HA_TOKEN` / `web.auth_token` 曾在子代理输出中回显（未落仓库）→ 建议轮换。
+
+### 下一步第一张卡（明确）
+
+**`[impl] 0.7.3 / 跨房中止策略`**：把 `runner.abort()` 从全局单 flag 改为按房作用（或明确文档化并暴露到 `/health`），同时把 `turn_open` 单布尔改成按房结构；出口条件写在新卡的验收标准里，参考 `docs/ROADMAP-0.8.md` 的 0.7.3 段。
+
+### 如何接手（按序）
+
+1. 读本文件 + `docs/ROADMAP-0.8.md`；
+2. `git -C 01_Code/projects/house-ear status --short`、`gh run list --limit 3` 确认基线；
+3. 从「下一步第一张卡」开始建卡（新会话的任务板是空的，需 `team_task_create`）；
+4. 设备到位后按「待设备」段的顺序走，不要跳过 EQ 耳测。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
