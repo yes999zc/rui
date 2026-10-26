@@ -12,6 +12,10 @@ docker inspect --format '{{.State.Health.Status}}' rui            # 期望 healt
 ```
 判据：`healthy` 且重启次数 0。记录：____
 
+## 前置：外置 lx06 插件必须已就位（0.7.8 删了内置实现）
+
+升级前确认 `/vol1/rui/data/plugs/xiaoai-lx06/`（`plugin.yaml` + `devices/lx06.yaml`）已安装、`rui-xiaoai-bridge/src` 已只读挂载、`RUI_ADAPTER_PLUGINS` 含 `lx06=rui_xiaoai_bridge.adapter:build`、`PYTHONPATH` 含该路径——细节见 `docs/deploy-runbook-0.7.8.md` §4。**不做这一步，b 会从 2 台掉到 1 台。**
+
 ## b) 两台设备都被识别
 
 ```bash
