@@ -18,6 +18,9 @@
 - **task-19 已合入 `89a10f1`**（PASS+VERIFIED）：core **0.7.8**（pyproject/`__init__`/uv.lock 一致 + `uv lock --check` 绿）、README 中英 pin 0.7.8（`0.7.4` 只留历史行）、`/api/v2/meta` 实测 `rui_version=0.7.8` + `compat 0.6.0..<0.8.0`；全量 **1642/6**、ruff 绿。README 的 LX06 规则已按 0.7.6 事实重写（外置插件必需、旧拼写读入迁移 + WARNING、无别名无内置回退、0.8.0 删迁移）。
 - **0.7.8 仍未打 tag**：出口条件是 Done 6 c/d/e 真机 + B 双跑 + 升级/回滚 + 人肉手册（白天）。代码与文档已全部就位，白天通过即可 `git tag v0.7.8` + release + 镜像。
 - **下载/部署注意**：0.7.8 镜像默认 v2；生产升级前确认三件事（外置 lx06 插件挂载、TLS 材料、`multi_device`），命令见 `docs/release/v0.7.8.md` 升级四步。
+- **白天要用的两份新文档（已提交）**：
+  - `docs/deploy-runbook-0.7.8.md`（`e89a0c7`）：从 `rui-dot2:1.3.1` 升到 0.7.8 的人肉手册——备份 → 用 0.7.8 底座重建下游镜像 → 三个配置前置 → 切换 → 只读验收 → 回滚；末尾有「实测记录」表待填。
+  - `docs/acceptance-done6-0.7.8.md`（`c68fb75`）：Done 6 的 a–e 验收表——每条给命令、期望值与记录位；**`registered` 的坑已写清**（镜像 catalog 不进 `registered`，以 `planes`/`devices` 为准）。
 - **另记**：`docs/release/`（0.7.x 实际目录）与 `docs/releases/README.md` 的路径口径不一致，留一次 docs 小修。
 - **0.7.8 不发版**：剩余出口 = Done 6 c/d/e 真机 + 双跑对比 + 升级/回滚 + 人肉手册（全在白天）。
 
