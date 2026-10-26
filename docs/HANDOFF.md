@@ -4,6 +4,17 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
+## 0.7.8 状态（2026-10-27 02:20，进行中）
+
+- **D 已合入 `efab571`**（task-17，reviewer-d PASS + verifier-tests VERIFIED）：
+  - `web.console` 默认 **v2**（`legacy` 保留为一版回滚）；`/health.console` 两态实测。
+  - **15 条老链接 302** 到 v2（9 个 panel + `/setup` + `/secrets` + `/diagnostics`；`providers`/`system`/`channels` 三个 v2 没有对应页 → `/v2/?from=<旧路径>`）；`/legacy/**` 永不重定向（无循环）；静态资源与 v2 深链不受影响。
+  - `/legacy` 旧壳 + 中英弃用横幅（`data-testid="legacy-deprecation"`，CTA 到 `/v2/`），v2 不出现；legacy 模式下 `/` 也有横幅。
+  - README hero 换 v2 设备页（`docs/assets/console-v2-devices.png`，无内网 IP/token）；中英「控制台入口」段。
+  - 测试：**1642 passed / 6 skipped**；`test_legacy_links.py` 15 条参数化断言精确 Location；typecheck + build 绿。
+- **待办（发版前）**：task-18 文档收口（`docs/deploy.md` §3.8 仍写「默认 legacy」——reviewer-d 的 F1，必须改；CHANGELOG/release notes 0.7.8；英文 hero；`?from=` 已知限制）。
+- **0.7.8 不发版**：剩余出口 = Done 6 c/d/e 真机 + 双跑对比 + 升级/回滚 + 人肉手册（全在白天）。
+
 ## 明早第一件事（2026-10-27 02:10）
 
 1. **读这一节，然后按顺序**：`docs/audit/hermes-triage.md` §7（24 条分诊待你确认：3 条 P0 降级、#27 否决去均值、#32 不改 pip 语义、版本重排）→ 已发的 0.7.3 / 0.7.4 → 待发的 0.7.5 / 0.7.6。
