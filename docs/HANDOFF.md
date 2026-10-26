@@ -200,7 +200,7 @@
 ## 发布准备进度（2026-10-26 19:50）
 
 - **task-17**：PARKED（见上），不阻塞。
-- **task-20（xiaoai 扫描 + 公开）**：仓库已 `PUBLIC`（`gh repo view --json visibility` 复核）；Lead 自测扫描：4 个 commit，**0 个 token/私钥、0 个内网 IP、0 条个人路径、0 个 MAC**；仅作者邮箱 `yes999zc@163.com` 出现在提交元数据里（非机密，属可接受）。**仍待该卡 reviewer + verifier 走完**。
+- **task-20（xiaoai 扫描 + 公开）✅ DONE（verifier VERIFIED，HEAD `d741876`）**：仓库已 `PUBLIC`（`gh repo view --json visibility` 复核）；Lead 自测扫描：4 个 commit，**0 个 token/私钥、0 个内网 IP、0 条个人路径、0 个 MAC**；仅作者邮箱 `yes999zc@163.com` 出现在提交元数据里（非机密，属可接受）。**仍待该卡 reviewer + verifier 走完**。
 - **task-21（三仓 README）**：已开工，**先做 house-ear 与 rui-dot2-bridge 两份**；xiaoai 那份等 task-20 收口后再做（同仓 README 会打架）。
 - **task-22（CHANGELOG/tag/release + 核对）**：blocked_by task-20/21。
 - CI：`cf05f58` 上 4 个 job 全绿（ci / security / docker-publish / secret-scan）；此后仅文档提交。
