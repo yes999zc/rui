@@ -182,6 +182,9 @@ class ArbiterState:
     last_active_ms: dict[str, float] = field(default_factory=dict)
     #: Admitted keyword -> monotonic ms of the admit (§4.2.6).
     admitted_words: dict[str, float] = field(default_factory=dict)
+    #: The device that owns the open turn. `turn_open` alone is house-wide; this
+    #: names the room it actually blocks, so another room keeps waking (§12.3.4).
+    turn_device: str | None = None
 
     def reset(self) -> None:
         """Forget everything (new session / supervisor restart)."""
@@ -337,6 +340,7 @@ class WakeArbiter:
         self,
         *,
         turn_open: bool | None = None,
+        turn_device: str | None | object = _UNSET,
         owner_device: str | None | object = _UNSET,
         playing: Iterable[str] | None = None,
         last_active_ms: Mapping[str, float] | None = None,
@@ -349,6 +353,8 @@ class WakeArbiter:
         """
         if turn_open is not None:
             self.state.turn_open = turn_open
+        if turn_device is not _UNSET:
+            self.state.turn_device = cast("str | None", turn_device)
         if owner_device is not _UNSET:
             self.state.owner_device = cast("str | None", owner_device)
         if playing is not None:
@@ -402,15 +408,17 @@ class WakeArbiter:
             )
             return
 
-        # §4.2.1 / §12.3.4: an open turn takes no other candidate (K2).
-        if self.state.turn_open:
+        # §4.2.1 / §12.3.4: an open turn takes no other candidate *in its room* (K2).
+        # Another room's wake is a different conversation and must keep working.
+        if self._in_open_turn(candidate):
             self._ready.append(self._reject(candidate, "turn_open"))
             return
 
-        # §4.2.2 / §12.3.2: while a device plays, only its owner barge may pass.
-        if self.state.playing:
-            reason = "cross_echo" if self._same_room_echo(candidate, view) else "lost_playing"
-            self._ready.append(self._reject(candidate, reason))
+        # §4.2.2 / §12.3.2: a playing room rejects only its own wakes; another
+        # room's device is independent and must be admitted (4-device DoD).
+        playing_reason = self._playing_reason(candidate, view)
+        if playing_reason:
+            self._ready.append(self._reject(candidate, playing_reason))
             return
 
         # §4.2.6 / §12.3.5: one admit per word per duplicate window.
@@ -437,29 +445,20 @@ class WakeArbiter:
         self._pending_since = None
 
         # The control plane may have opened a turn or started playback while the
-        # window was open. The batch was collected under idle assumptions, so it
-        # must not produce an admit any more: re-apply the gates (K2 stays true).
-        if self.state.turn_open:
-            self._ready.append(
-                self._decision(
-                    winner=None,
-                    reason="turn_open",
-                    rejected=[(c, "turn_open") for c in batch],
-                    candidates=len(batch),
-                    waited_ms=waited_ms,
-                )
-            )
-            return
-        if self.state.playing:
-            rejected = [
-                (
-                    c,
-                    "cross_echo"
-                    if self._same_room_echo(c, self._active[c.device_id])
-                    else "lost_playing",
-                )
-                for c in batch
-            ]
+        # window was open. Re-apply the gates per candidate: a state that belongs to
+        # one room must not discard another room's wake (K2 stays true within a room).
+        rejected: list[tuple[Candidate, str]] = []
+        eligible: list[Candidate] = []
+        for candidate in batch:
+            if self._in_open_turn(candidate):
+                rejected.append((candidate, "turn_open"))
+                continue
+            reason = self._playing_reason(candidate, self._active[candidate.device_id])
+            if reason:
+                rejected.append((candidate, reason))
+                continue
+            eligible.append(candidate)
+        if not eligible:
             self._ready.append(
                 self._decision(
                     winner=None,
@@ -471,14 +470,14 @@ class WakeArbiter:
             )
             return
 
-        winner, decided_by = self._select(batch, now_ms)
+        winner, decided_by = self._select(eligible, now_ms)
         self._note_admitted(winner, now_ms)
         self._ready.append(
             self._decision(
                 winner=winner,
                 reason=_ADMIT_REASON[decided_by],
                 decided_by=decided_by,
-                rejected=[(c, "lost_same_word") for c in batch if c is not winner],
+                rejected=rejected + [(c, "lost_same_word") for c in eligible if c is not winner],
                 candidates=len(batch),
                 waited_ms=waited_ms,
             )
@@ -531,6 +530,31 @@ class WakeArbiter:
         return (0, -last)  # more recent = larger `last` = smaller key
 
     # -------------------------------------------------------------- evidence
+    def _in_open_turn(self, candidate: Candidate) -> bool:
+        """True when the candidate belongs to the room that already holds the turn.
+
+        `turn_device is None` keeps the historical house-wide latch for callers that
+        open a turn without naming a room.
+        """
+        if not self.state.turn_open:
+            return False
+        owner = self.state.turn_device
+        if owner is None:
+            return True
+        if candidate.device_id == owner:
+            return True
+        owner_view = self._active.get(owner)
+        return bool(owner_view is not None and candidate.room
+                    and owner_view.room == candidate.room)
+
+    def _playing_reason(self, candidate: Candidate, view: _DeviceView) -> str | None:
+        """Only the playing room is blocked; other rooms wake independently."""
+        if not self.state.playing:
+            return None
+        if candidate.device_id in self.state.playing:
+            return "lost_playing"
+        return "cross_echo" if self._same_room_echo(candidate, view) else None
+
     def _same_room_echo(self, candidate: Candidate, view: _DeviceView) -> bool:
         """§4.5: a *different* device in the same room as a playing device."""
         if candidate.device_id in self.state.playing:
@@ -570,14 +594,10 @@ class WakeArbiter:
         rejected: list[tuple[Candidate, str]] = []
         for candidate, _ in self._pending:
             view = self._active[candidate.device_id]
-            if self.state.turn_open:
+            if self._in_open_turn(candidate):
                 reason = "turn_open"
-            elif self._same_room_echo(candidate, view):
-                reason = "cross_echo"
-            elif self.state.playing:
-                reason = "lost_playing"
             else:
-                reason = fallback
+                reason = self._playing_reason(candidate, view) or fallback
             rejected.append((candidate, reason))
         self._pending.clear()
         self._pending_since = None

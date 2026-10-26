@@ -212,7 +212,6 @@ def test_barge_is_allowed_inside_an_open_turn() -> None:
 @pytest.mark.parametrize(
     ("device", "barge", "playing", "owner", "expected"),
     [
-        (DOT2, True, True, LX06, "lost_playing"),  # §4.2.2 / §11 Q5: owner only
         (LX06, False, True, LX06, "lost_playing"),  # no barge suggestion
         (LX06, True, False, LX06, "lost_playing"),  # plane says it is not speaking
         (LX06, True, True, None, "lost_playing"),  # nobody owns the output (§12.4)
@@ -231,10 +230,21 @@ def test_barge_gate_rejects_non_owner_candidates(
     assert decision.rejected[0][1] == expected
 
 
+def test_a_barge_from_another_room_is_not_rejected() -> None:
+    """P1 (task-18): another room's barge is a wake; only its own room is blocked."""
+    arb = make_arbiter()
+    arb.set_state(owner_device=LX06, playing={LX06})
+
+    decision = arb.candidate(cand(DOT2, barge=True, playing=True), T0)
+
+    assert decision is None, "the other room's barge was rejected outright"
+    resolved = arb.resolve(T0 + 1_000.0)
+    assert resolved is not None and resolved.admitted
+
+
 @pytest.mark.parametrize(
     ("rooms", "candidate_room", "expected"),
     [
-        ({LX06: LIVING, DOT2: STUDY}, "", "lost_playing"),  # other room, §12.3.2
         ({LX06: LIVING, DOT2: LIVING}, "", "cross_echo"),  # same room, §4.5
         ({LX06: LIVING, DOT2: STUDY}, LIVING, "cross_echo"),  # candidate's room wins
     ],

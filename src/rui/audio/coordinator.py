@@ -16,7 +16,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 
 from .arbiter import Candidate, Decision, WakeArbiter
 from .protocol import WakeAdmit, WakeReject
@@ -80,7 +80,12 @@ class WakeCoordinator:
         else:
             self._turn_device = None
             self._turn_opened_at = None
-        self.arbiter.set_state(turn_open=open_)
+        # The arbiter needs the room too: `turn_open` is house-wide, but only that
+        # room's wakes may be rejected (`arbiter._in_open_turn`).
+        self.arbiter.set_state(
+            turn_open=open_,
+            turn_device=(device_id if open_ else None),
+        )
 
     @property
     def turn_device(self) -> str | None:
@@ -92,6 +97,10 @@ class WakeCoordinator:
         if not self.arbiter.state.turn_open or self._turn_opened_at is None:
             return None
         return max(0.0, self._clock() - self._turn_opened_at)
+
+    def set_playing(self, device_ids: Iterable[str]) -> None:
+        """Replace the set of rooms currently producing sound (per-room isolation)."""
+        self.arbiter.set_state(playing=set(device_ids))
 
     def set_owner(self, device_id: str | None) -> None:
         """The current output owner: only this device may barge while it plays."""

@@ -247,11 +247,10 @@ def test_wake_opens_the_turn_and_idle_closes_it(tmp_path, monkeypatch) -> None:
         arbiter = app.state.wake_coordinator.arbiter
         client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
         assert arbiter.state.turn_open is True
-        # A different word from another room must not become a second turn (K2).
+        # P1 (task-18): the one-turn latch is per room; another room keeps waking.
         client.portal.call(study.on_wake_candidate, _candidate("w-study", 1.0, keyword="开灯"))
-        time.sleep(0.05)
-        assert study.sent[-1].type == "wake_reject"
-        assert study.sent[-1].reason == "turn_open"  # type: ignore[attr-defined]
+        time.sleep(0.15)
+        assert study.sent[-1].type == "wake_admit"
         # A silent gate ends the turn, or every later wake would be rejected forever.
         client.portal.call(living.on_wake_idle, WakeIdle())
         assert arbiter.state.turn_open is False
@@ -534,8 +533,9 @@ def test_music_starts_in_the_turn_room_and_transport_follows_the_owner(
         assert app.state.output_owner == ""
 
 
-def test_barge_only_the_output_owner_room_can_interrupt(tmp_path, monkeypatch) -> None:
-    """Playing room ownership decides which barge is admitted (section 12.3.2)."""
+def test_a_barge_in_another_room_does_not_steal_the_playing_room(
+        tmp_path, monkeypatch) -> None:
+    """Per-room isolation (task-18): the other room's barge is admitted, not starved."""
     FakeFleet.instances.clear()
     app = _app(tmp_path, monkeypatch)
     with TestClient(app) as client:
@@ -554,12 +554,10 @@ def test_barge_only_the_output_owner_room_can_interrupt(tmp_path, monkeypatch) -
         assert living.sent and living.sent[-1].type == "wake_admit"
 
         client.portal.call(study.on_wake_candidate, WakeCandidate(
-            wake_id="w-study", ts_ms=2.0, source="rui", keyword="\u4f60\u597d\u5c0f\u745e",
+            wake_id="w-study", ts_ms=2.0, source="rui", keyword="\u5f00\u706f",
             barge=True, playing=True))
-        time.sleep(0.05)
-        assert study.sent[-1].type == "wake_reject"
-        assert study.sent[-1].reason == "lost_playing"
-        assert not any(msg.type == "wake_admit" for msg in study.sent)
+        time.sleep(0.15)
+        assert study.sent[-1].type == "wake_admit"
 
 
 def test_device_rows_carry_each_rooms_effective_audio(tmp_path, monkeypatch) -> None:

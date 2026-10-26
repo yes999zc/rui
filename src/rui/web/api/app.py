@@ -1558,6 +1558,8 @@ def _reconcile_owner(app: FastAPI) -> None:
             playing.append(device_id)
     if not playing:
         if coordinator.arbiter.state.turn_open:
+            # Nothing is sounding: there is no playing lock to keep, even mid-turn.
+            coordinator.set_playing(set())
             return
         if owner:
             log.info("output owner released: %s", owner)
@@ -1574,6 +1576,10 @@ def _reconcile_owner(app: FastAPI) -> None:
         app.state.output_owner = playing[0]
         app.state.last_active_room = playing[0]
     coordinator.set_owner(app.state.output_owner or None)
+    # Per-room isolation (task-18): keep every sounding room in the arbiter's playing
+    # set, not just the single output owner, so one room's music cannot reject the
+    # other rooms' wakes.
+    coordinator.set_playing(set(playing))
 
 
 def _adapter_health(adapter: object) -> dict:

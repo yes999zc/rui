@@ -106,18 +106,20 @@ def test_the_owner_barge_is_admitted_immediately() -> None:
     assert sent["living"][0].__class__.__name__ == "WakeAdmit"
 
 
-def test_another_room_cannot_barge_while_someone_plays() -> None:
+def test_another_room_can_wake_while_a_different_room_plays() -> None:
+    """P1 (task-18): one room playing must not starve the other rooms' wakes."""
     coordinator, sent = make_coordinator()
     coordinator.set_owner("living")
+    coordinator.set_playing({"living"})
 
     async def scenario():
         await coordinator.on_candidate("study", candidate(
             "w2", barge=True, playing=True))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
         await coordinator.close()
 
     run(scenario())
-    assert sent["study"][0].__class__.__name__ == "WakeReject"
-    assert sent["study"][0].reason == "lost_playing"
+    assert sent["study"][0].__class__.__name__ == "WakeAdmit"
     assert sent["living"] == []
 
 
@@ -245,3 +247,76 @@ def test_turn_age_starts_at_the_false_to_true_edge() -> None:
     assert coordinator.turn_open_for_s() == 10.0
     coordinator.set_turn_open(False)
     assert coordinator.turn_open_for_s() is None
+
+
+# ------------------------------------------------- per-room isolation (task-18)
+def test_a_wake_in_another_room_is_admitted_while_one_room_plays() -> None:
+    """P1: living playing must not reject dot2's wake (4-device DoD)."""
+    coordinator, sent = make_coordinator()
+    coordinator.set_owner("living")
+    coordinator.set_playing({"living"})
+
+    async def scenario():
+        await coordinator.on_candidate("study", candidate("w-other-room"))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
+        await coordinator.close()
+
+    run(scenario())
+    assert sent["study"][0].__class__.__name__ == "WakeAdmit"
+
+
+def test_its_own_room_still_rejects_a_wake_while_playing() -> None:
+    """Regression: the playing room's own second wake stays lost_playing."""
+    coordinator, sent = make_coordinator()
+    coordinator.set_owner("living")
+    coordinator.set_playing({"living"})
+
+    async def scenario():
+        await coordinator.on_candidate("living", candidate("w-same-room"))
+        await coordinator.close()
+
+    run(scenario())
+    assert sent["living"][0].__class__.__name__ == "WakeReject"
+    assert sent["living"][0].reason == "lost_playing"
+
+
+def test_an_open_turn_does_not_reject_a_wake_in_another_room() -> None:
+    """turn_open is one-turn-per-room, not a house-wide latch (K2 stays per room)."""
+    coordinator, sent = make_coordinator()
+    coordinator.set_turn_open(True, "living")
+
+    async def scenario():
+        await coordinator.on_candidate("study", candidate("w-other-turn"))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
+        await coordinator.close()
+
+    run(scenario())
+    assert sent["study"][0].__class__.__name__ == "WakeAdmit"
+
+
+def test_the_open_turn_still_rejects_its_own_room() -> None:
+    coordinator, sent = make_coordinator()
+    coordinator.set_turn_open(True, "living")
+
+    async def scenario():
+        await coordinator.on_candidate("living", candidate("w-same-turn"))
+        await coordinator.close()
+
+    run(scenario())
+    assert sent["living"][0].__class__.__name__ == "WakeReject"
+    assert sent["living"][0].reason == "turn_open"
+
+
+def test_two_planes_in_the_same_room_still_exclude_each_other() -> None:
+    """Future 4-device case: two planes in one room share the room's playing state."""
+    coordinator, sent = make_coordinator(
+        devices=(("lx1", "客厅"), ("lx2", "客厅")))
+    coordinator.set_playing({"lx1"})
+
+    async def scenario():
+        await coordinator.on_candidate("lx2", candidate("w-same-room-2"))
+        await coordinator.close()
+
+    run(scenario())
+    assert sent["lx2"][0].__class__.__name__ == "WakeReject"
+    assert sent["lx2"][0].reason == "cross_echo"
