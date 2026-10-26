@@ -8,9 +8,9 @@
 
 - 主题按 9 哥 指示改为 **P0/P1 修复**（`docs/audit/hermes-triage.md`）：原「TLS + Done6」顺延到 0.7.5。
 - task-5（P0-A：rui#18 请求体上限 + rui#17 `_greet` 忙等）**review PASS + verify VERIFIED**，已合入 `cf42695`：全量 **1645/17**（连续 3 次），flaky 0/20，三态实测 413/401/422，greet ticker 865/s、冷启动 3.6 ms；反向变异 5 组。
-- task-6（P0-B：rui#28 微信渠道 + rui#25/xiaoai#1 重连复位）待开（避免 tests/ 并发）。
-- 0.7.4 发布材料卡与桥版本（dot2 1.3.2 / xiaoai 0.2.2）待 task-5/6 完成后开。
-- 交付口径偏差（记录，不阻塞）：0.7.4 release notes 归发布材料卡；413 响应缺 `Permissions-Policy`（其余 4 个安全头齐全），记为发布前小项。
+- task-6（P0-B：rui#28 微信渠道 + rui#25/xiaoai#1 重连复位）**review PASS + verify VERIFIED**，已合入：house `4468521`、xiaoai `8f3ac46`。house 全量 **1652/17**、xiaoai **13**、dot2 **145**；两仓 adapter 等价（仅文件头/import 差异）；4 条新重连测试 + 3 条微信测试；变异各 1 组红后还原。
+- **下一张卡（压缩后开）**：0.7.4 发布材料（版本 0.7.4 + CHANGELOG + `docs/release/v0.7.4.md` + README pin + C-002 A-7 已就绪），然后决定桥版本（dot2 1.3.2 / xiaoai 0.2.2）并打 tag。
+- 已知小项（记录，不阻塞）：①`weixin` 的**流式累计超限分支**未被测试直接覆盖（现有测试走 Content-Length 预检）；②`getupdates` JSON 响应本身未设上限（本卡只限语音 CDN 下载）；③413 响应缺 `Permissions-Policy`（其余 4 个安全头齐全）；④xiaoai 仓测试借用 house 解释器。
 
 ## 0.7.3 状态（2026-10-26 22:05）
 
