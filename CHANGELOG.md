@@ -14,6 +14,38 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [0.7.2] - 2026-10-26
+
+### Fixed
+
+- **ack cue no longer reaches ASR.** The gate matches the cue envelope across the skip
+  window *and* the hold buffer, learns the device's playback lag (EMA, updated only on
+  first-pass hits), retries a narrow `EMA±200 ms` window when the first pass misses, and
+  requires silence right after the cue (`_quiet_after`) so a TTS reply is never mistaken
+  for it. Clipped captures fall back to a conservative `cue+1000 ms` excision. Measured on
+  the device: cue leakage 0/10 (previously 13 of 26 turns).
+- **Playback state and turn ownership are scoped per room.** One room playing music used to
+  reject every other room's wake with `lost_playing` (18 rejections in six minutes of
+  two-room sampling). Cross-room wakes are now admitted, `cross_echo` still guards a second
+  plane inside the playing room, and `turn_open` carries the room that owns it.
+- **Our own stale speech is dropped when a wake arrives.** A plain wake that landed while
+  the goodbye TTS was still synthesised left those chunks queued, so the next ASR segment
+  began with our own voice. The plane now flushes queued speech on an accepted wake, blocks
+  further `PLAY_PCM` until that turn's utterance lands, and clears the block on every gate
+  close path (idle, timeout disarm, our-own-audio disarm). Farewell synthesis no longer
+  clears the abort flag, so an aborted goodbye stays aborted.
+
+### Changed
+
+- Release tooling: `rui_compat` window stays `>=0.6.0 <0.8.0`.
+
+### Known limitations
+
+- Cue echo can still reach ASR on a cold start with no clipping and >800 ms device latency,
+  or when the user overlaps the cue by less than 110 ms.
+- The dialogue runner is single-session: a wake on one device aborts a reply being
+  synthesised for another.
+
 ## [0.6.0] - 2026-10-26
 
 The device-agnostic core: rui names no speaker any more. The LX06 adapter became an image
