@@ -14,6 +14,59 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [0.7.4] - 2026-10-26
+
+**Theme: P0/P1 fixes. One new status code (413); no other contract change.**
+
+### Fixed
+
+- **rui#18 - request bodies are bounded before parsing.** A pure ASGI middleware
+  rejects a declared `Content-Length` over the cap (1 MiB default,
+  `RUI_MAX_REQUEST_BYTES`) with **413**, and counts streamed bodies as they arrive
+  so a chunked upload cannot grow memory past the cap either. Small bodies still
+  reach auth first: missing/bad token stays **401**, invalid JSON with a valid token
+  stays **422**. The 31 v1 handlers were not moved or rewritten.
+- **rui#17 - `_greet` no longer blocks the event loop.** The wait for the plane's
+  socket now yields every 10 ms, and the handshake `read_frame()` takes the remaining
+  greet deadline as one absolute timeout (header + payload share it). A child that
+  accepts the socket and then drops it (Errno 57 / reset / short read) is retried
+  within the budget; if it exited, the error keeps its exit code and the last stderr
+  lines. Measured: ticker 875 turns/s while waiting; cold-start overhead stays within
+  the <=50 ms budget (repeated runs 1.5-3.6 ms).
+- **rui#28 - the WeChat channel survives one bad message.** The getupdates cursor is
+  saved in `finally` (a bad message no longer replays forever), voice downloads are
+  capped at 10 MiB with a warning, and `pilk`/`ffmpeg` decoding runs in
+  `asyncio.to_thread` instead of blocking the channel loop.
+- **rui#25 / xiaoai#1 - reconnecting resets the player.** Replacing the speaker
+  socket now resets `_playing` / `consumed` / `sink_generation`; a `play()` that was
+  suspended in `start_play` cannot resurrect the old generation, and events from the
+  replaced socket cannot advance the new player. Mirrored in
+  `rui-xiaoai-bridge` **0.2.2** (version bumped; code only, no contract change).
+
+### Changed
+
+- `docs/contracts/C-002-console-v2-api.md` A-7 documents the 413/401/422 boundary.
+- `rui-xiaoai-bridge` is **0.2.2** (reconnect reset, mirrored); `rui-dot2-bridge` stays **1.3.1** (no code change).
+- No contract/window change. 413 is the only new status code; the runtime
+  behaviour changes are the four fixes above. `rui_compat` stays
+  `>=0.6.0 <0.8.0`.
+
+### Evidence
+
+- house-ear **1652 passed / 17 skipped**; rui-xiaoai-bridge **13 passed**;
+  rui-dot2-bridge **145 passed**; `ruff` green in all three.
+- Reverse mutations: removing any guard makes its targeted test fail (413 cap,
+  cursor `finally`, `to_thread`, reconnect reset, suspended-play generation,
+  replaced-socket events).
+
+### Known limitations
+
+Unchanged from 0.7.3: cue-echo edges, single-session dialogue runner, non-recallable
+spoken goodbye, per-room wake-word isolation, untested concurrent multi-device
+behaviour. New in 0.7.4: the WeChat **streamed** over-limit path is not covered by a
+test (only `Content-Length` is); `getupdates` responses have no size cap; the 413
+response carries the usual security headers except `Permissions-Policy`.
+
 ## [0.7.3] - 2026-10-26
 
 **Theme: test baseline and reproducibility. No behaviour change.**
