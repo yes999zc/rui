@@ -21,6 +21,7 @@
 - **白天要用的两份新文档（已提交）**：
   - `docs/deploy-runbook-0.7.8.md`（`e89a0c7`）：从 `rui-dot2:1.3.1` 升到 0.7.8 的人肉手册——备份 → 用 0.7.8 底座重建下游镜像 → 三个配置前置 → 切换 → 只读验收 → 回滚；末尾有「实测记录」表待填。
   - `docs/acceptance-done6-0.7.8.md`（`c68fb75`）：Done 6 的 a–e 验收表——每条给命令、期望值与记录位；**`registered` 的坑已写清**（镜像 catalog 不进 `registered`，以 `planes`/`devices` 为准）。
+  - **runbook 已用真实构建校验过**（`868db10`）：`ghcr.io/yes999zc/rui:0.7.8` 要打 tag 后才存在，所以验收前用本地候选 `rui:0.7.8-rc1`（实测 `sha256:fe65d3a2…`）；下游镜像必须用 `deploy/downstream/Dockerfile`（仓库根没有 Dockerfile）；`rui` 没有 `--version`，要用 `python -c "import rui"`。本地链路已验证：下游镜像 `sha256:b4b40a88…`、`rui 0.7.8`、`/opt/rui-plugins` 含 `rui_dot2_bridge`。
 - **另记**：`docs/release/`（0.7.x 实际目录）与 `docs/releases/README.md` 的路径口径不一致，留一次 docs 小修。
 - **0.7.8 不发版**：剩余出口 = Done 6 c/d/e 真机 + 双跑对比 + 升级/回滚 + 人肉手册（全在白天）。
 
