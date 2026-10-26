@@ -123,7 +123,7 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 {'status': 'ok', 'version': '0.7.2', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
 ```
 
-如实说明：`adapter_plugins.registered`、`devices`、`device_errors` 三项在实测环境成立；**`audio_plane` 取决于前置条件**——缺 `RUI_DEVICE_TOKEN`（日志 `RUI_DEVICE_TOKEN is empty`）或缺 TLS 材料（日志 `missing TLS material: secrets/server.pem / secrets/server.key`）时为 `false`，控制台与 `/health` 不受影响。不同机器先撞到哪一条不一样，以日志里第一条报错为准。
+如实说明：`adapter_plugins.registered`、`devices`、`device_errors` 在任何情况下都成立。**`audio_plane` 取决于设备令牌**：设了 `RUI_DEVICE_TOKEN` 后（未提供 TLS）实测为 `true`；不设时为 `false`，日志是 `RUI_DEVICE_TOKEN is empty`。上面这行 `False` 来自**没有设置设备令牌**的那次启动。TLS 材料（`secrets/server.pem|key`）只影响加密连接，缺它时日志可能出现 `missing TLS material`，但**不是** audio plane 启动的必要条件。
 
 ## 故障排查
 
@@ -260,7 +260,7 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 {'status': 'ok', 'version': '0.7.2', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
 ```
 
-To be precise: `adapter_plugins.registered`, `devices` and `device_errors` hold in the measured environment; **`audio_plane` depends on prerequisites** — without `RUI_DEVICE_TOKEN` (log: `RUI_DEVICE_TOKEN is empty`) or without TLS material (log: `missing TLS material: secrets/server.pem / secrets/server.key`) it is `false`, while the console and `/health` keep working. Which one you hit first differs per host; trust the first error in your log.
+To be precise: `adapter_plugins.registered`, `devices` and `device_errors` always hold. **`audio_plane` depends on the device token**: with `RUI_DEVICE_TOKEN` set (and no TLS) it measured `true`; without it, `false` with the log line `RUI_DEVICE_TOKEN is empty`. The `False` above comes from the run **without** a device token. TLS material (`secrets/server.pem|key`) only affects encrypted connections — its absence may log `missing TLS material` but is **not** required to start the audio plane.
 
 ## Troubleshooting
 
