@@ -4,6 +4,12 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
+## 0.7.6 状态（2026-10-27 00:10，进行中）
+
+- **B1a 已合入 `c713916`**（task-12，PASS+VERIFIED）：仓内 `plugs/xiaoai/` 删除（移到 `tests/fixtures/legacy_lx06` 测试夹具，不进镜像）、`src/rui/adapter_aliases.py` 删除；`adapter: xiaoai` 改为配置迁移（`config/store.py` 重写为 `lx06` + 弃用 WARNING + `.bak` 备份 + `/health.adapter_plugins.warnings` + 设备级 `legacy_adapter_spelling`）；默认 `adapter` 改 `lx06`（与旧行为等价、不告警）；Dockerfile 去掉 `COPY plugs`，`/opt/rui-plugins` 归 `rui:rui` 且构建期降权验证可写。全量 **1654/17**、`docker build` 绿。
+- **B1b（task-13）在途**：lx06 测试移植到桥仓、删夹具、`src/rui/web` 剩余 10 处设备字符串改中性、查清 `registered` 口径、镜像挂外置插件实测。完成后 B 只剩「双跑对比」（需 LX06 真机，白天）。
+- 版本重排已写进 `docs/ROADMAP-0.8.md`（`b9a9059`）：0.7.4 = P0 修复、0.7.5 = TLS/Done6、0.7.6 = B、0.7.7 = C、0.7.8 = D。
+
 ## 0.7.5 状态（2026-10-26 23:35，进行中）
 
 - task-9（TLS 安装路径）PASS+VERIFIED，提交 `43d18df`（house）/`1826e87`（dot2）/`1c1aa35`（xiaoai）：compose 挂 `./secrets`、自签脚本 `scripts/make_dev_tls.sh`、三仓 AI 提示词加 TLS 步。
