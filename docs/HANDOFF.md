@@ -17,7 +17,13 @@ phase-close: task-16
 | 契约 C-002 | 控制台 v2 `/api/v2/*` 24 端点，1300 行（含 A-6），**冻结 PASS** | `docs/contracts/C-002-console-v2-api.md`；task-6 记录 |
 | 兼容边界 | rui `>=0.6.0, <0.7.0`；0.6.x v1 唯一新增字段仍是 `/api/v1/turns` 每条可选 `device_id`；另有两处已记录修正：`POST /api/v1/memory` 非法输入改 422（不再 500/静默截断）、`/turns` 的 `stages.*.elapsed_ms`/`attempts` 改为真实值（既有字段不变，`attempts[]` 新增 `elapsed_ms`），见 C-002 A-6 | 契约 §10.1 / A-6 |
 
-## 已完成（含证据）
+## 已完成
+
+### 2026-10-26 09:05 9 哥 真机验收（0.6.0 收尾）
+- LX06 / Dot2 各说一句：**都在呢、告别只从说话房间出** → 「按房间告别」由 *unverified* 转为 **verified**。
+- 并发播放/打断/音乐音质的体验问题转入新里程碑「双音箱打磨」（见 `docs/plan/speaker-tuning.md`）。
+- v2 风格已获确认（"是我要的效果"），要求迁移旧 logo；切默认仍等下一步。
+（含证据）
 - **0.6.0 发布**：内核去厂商命名（74 处文案/注释中性化 + 守卫测试 + scripts P0 修）→ tag → CI 多架构镜像绿 → digest 入 release notes → Release 建立。tag 内不含 v2：`git ls-tree -r --name-only v0.6.0 | grep -cE 'web/src/v2|api/v2'` → 0。
 - **内核彻底剥离小爱**：`docs/audit/xiaoai-decoupling.md`（分类 575 命中、web 27 条转交表、独立建库 topic 结论「0.7 再议」）；守卫 `tests/test_kernel_decoupling.py`；门禁 1349/17（当时口径）+ ruff clean。
 - **控制台 v2 M1+M2 合并**（`d550d95`）：设计 `docs/design/console-ia-v2.md`（708 行，PASS）、契约 C-002（1193 行，PASS）、后端 `src/rui/web/api/v2_api.py`（24 端点）、前端 `web/v2.html` + `web/src/v2/**`（三段导航、`/run` 全屋、`/devices` 按房间、设备详情四 tab：概览/测试与动作/活动/连接）。旧控制台文件零改动；`npm run build` 双 dist。独立 verifier 用真实进程 + 两设备 + headless Chrome 验到 POST /test、activity type 过滤、reveal/rotate 429 冷却、`/v2` 深链、旧 `/` 不变；全量 1434 passed / 17 skipped。
