@@ -4,6 +4,15 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
+## 0.7.7 状态（2026-10-27 02:00，进行中）
+
+- **C 上半（控制台功能审计）已合入 `db179f8`**（task-16，reviewer-audit 独立评审 2 轮 + verifier 独立验证）：
+  - `docs/audit/console-functional.md`：**172 行元素结论 = 159 可用 / 12 未验证 / 1 文案错误行 / 0 不可用 / 0 未处理**；14 v2 路由 + 24 端点 + 异常态（401/409/422/429/500）+ v1→v2 差异 + 已知限制 + 复现命令。
+  - 证据：4 个本地实例（主 18099 / 空屋 18101、写入 18103 / 配置恢复 18102），**76 张全页截图** `docs/audit/console-shots/`（25 MB，已入库）。
+  - 4 组修正：setup 未加载 plan 不再误报「全屋无设备」、legacy 提示改「0.8.0 移除」、删 2 个死 i18n key、7 条中文校验 message 改英文（C-002 §4.4）。
+  - 12 条「未验证」全部有原因与替代证据（真出声/真机拨入 = 夜间红线；keys/models = 无真实凭据）。
+- **C 剩余（0.7.7 下半，未开工）**：①老链接 302 映射（`/panel/*`、`/setup`、`/secrets`、`/diagnostics`、`/channels` 15 条现在仍 200 旧壳）——**已决定挪到 0.7.8 D 第 5 项**；②`PUT /music/credentials` 在不可写路径返回 500 → 应转 4xx；③v1 未迁移清单（§7）逐条处置（本版只登记，不补功能）；④task-15（删 `legacy_lx06` 夹具）。
+
 ## 0.7.6 状态（2026-10-27 00:10，进行中）
 
 - **B1a 已合入 `c713916`**（task-12，PASS+VERIFIED）：仓内 `plugs/xiaoai/` 删除（移到 `tests/fixtures/legacy_lx06` 测试夹具，不进镜像）、`src/rui/adapter_aliases.py` 删除；`adapter: xiaoai` 改为配置迁移（`config/store.py` 重写为 `lx06` + 弃用 WARNING + `.bak` 备份 + `/health.adapter_plugins.warnings` + 设备级 `legacy_adapter_spelling`）；默认 `adapter` 改 `lx06`（与旧行为等价、不告警）；Dockerfile 去掉 `COPY plugs`，`/opt/rui-plugins` 归 `rui:rui` 且构建期降权验证可写。全量 **1654/17**、`docker build` 绿。
