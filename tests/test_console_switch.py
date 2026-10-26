@@ -13,8 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
+from ruamel.yaml import YAML
 from pydantic import ValidationError
 
 from rui.config import Config, load_config, save_config
@@ -126,7 +126,7 @@ def test_a_pre_078_config_without_the_key_loads_as_v2(tmp_path, monkeypatch) -> 
 def test_the_shipped_config_examples_name_v2() -> None:
     """`config.example.yaml` and the setup template must not lag behind the schema."""
     for name in ("config.example.yaml", "src/rui/config/template.yaml"):
-        data = yaml.safe_load((REPO_ROOT / name).read_text(encoding="utf-8"))
+        data = YAML(typ="safe").load((REPO_ROOT / name).read_text(encoding="utf-8"))
         assert data["web"]["console"] == "v2", name
 
 
