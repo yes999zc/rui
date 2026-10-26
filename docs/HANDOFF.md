@@ -228,6 +228,18 @@
 
 - **release notes 草稿**：`docs/release/v0.7.2.md`（commit `e69b9c9`）——变更/门禁/已知限制/合规已写实；**digest 与 tag 链接待 task-22 构建后补**。
 
+## README 截图与稿件的当前状态（2026-10-26 20:10，压缩前）
+
+- **版本已落库并提交**（未 push）：house-ear `dee693f` = 0.7.2、dot2 `72a97c0` = 1.3.1、xiaoai `39d9273` = 0.2.1；三仓测试 1626/17、143、9 全绿，ruff 绿。
+- **release notes 草稿**：`docs/release/v0.7.2.md`（`e69b9c9`），digest 待 task-22 补。
+- **截图候选**（本地 demo 实例 `rui serve --no-audio` @ 127.0.0.1:18080，示例房间 `Living Room`、设备 `living-room-speaker`，页脚 `rui 0.7.2`）：
+  - `docs/assets/console-v2-devices.png`（**不要用**：设备卡片含 `Xiaomi · 设备接入` 且状态为「状态未知/音频面已停止/从未上报」，既触红线也不像产品图）
+  - `/tmp/rui-demo/v2-run.png`（运行页，含「需要处理：设备离线/配置未完成」两条告警 → 不适合 hero）
+  - `/tmp/rui-demo/v2-voice-assistant.png`、`/tmp/rui-demo/v2-tools.png`、`/tmp/rui-demo/v2-config.png`（**未查看**，下轮先看这三张挑一张干净的作为 hero）
+- **v2 真实路由**：`/devices`、`/devices/add`、`/rooms`、`/setup`、`/run`、`/conversation`、`/logs`、`/memory`、`/config`、`/voice-assistant`、`/tools`、`/music`、`/credentials`、`/health`（`web/src/v2/router.ts`）。
+- **抓图命令模板**：`"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=6000 --screenshot=<out.png> "http://127.0.0.1:18080/v2/<route>"`。
+- **尚未开始**：`docs/assets/architecture.mmd`（mermaid-cli 在 `/tmp/mmdc`）、README 重写、dot2/xiaoai 两份 README。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
