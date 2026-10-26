@@ -5,14 +5,14 @@ phase-close: task-16
 ## 会话身份
 - 模式：A（双仓库：rui 上游 + rui-dot2-bridge 下游），单会话单任务板
 - 仓库：`$HOME/AI_Workspace/01_Code/projects/house-ear`（rui）、`$HOME/AI_Workspace/01_Code/projects/rui-dot2-bridge`（dot2）
-- 分支/commit：rui `main` @ `7bc342d`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
+- 分支/commit：rui `main` @ `615e682`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
 
 ## 版本与契约
 | 项 | 值 | 证据 |
 |---|---|---|
 | 上游 rui 发布 | tag `v0.6.0` @ `adc4c2b`；镜像 `ghcr.io/yes999zc/rui@sha256:abef1f276c3c21e9155d97c98913ee6c2e98fdfe842e43b90f64a5db6c12b241`（tags `0.6.0`/`0.6`/`sha-adc4c2b`/`latest`，amd64+arm64）；Release <https://github.com/yes999zc/rui/releases/tag/v0.6.0> | `docker-publish` run 40209595988 success；`gh release view v0.6.0` |
 | 下游 pin | dot2 的 `deploy/downstream/Dockerfile` 与 compose 默认值 pin 上述 digest；`docs/canary-0.6.0-official-image.md` 记录 arm64 + x86_64 金丝雀；`docs/contract-report-0.6.0.json` 增 `upstream_pin` 块 | commit `9c696cd` |
-| 生产（NAS 168） | **v2 预览（M1–M8）** `rui-dot2:0.7.0-pre5-7bc342d`（底座 `ghcr.io/yes999zc/rui@sha256:e9889d2a…42a7`，main @ 7bc342d）；`/`、`/v2`、`/v2/{conversation,logs,memory,run,rooms,devices/add,setup}` 均 200；`/health` 0.6.0 / cv3 / devices 2 / errors 0 / 双 plane connected / `ack.wav_exists=true`；`/api/v1/memory` 空文本 422 生效；回滚：`pre4-642d40b`、`pre3-825b9e7`、`pre2-9e094e7`、`pre1-4ebf104`、`0.6.0-adc4c2b` 全在 | 构建需 `DOCKER_BUILDKIT=0`；备份 `/vol1/rui/backup/20261026-0726-v2m78/` |
+| 生产（NAS 168） | **v2 预览（M1–M9）** `rui-dot2:0.7.0-pre6-615e682`（底座 `ghcr.io/yes999zc/rui@sha256:fffb6d12…f9f6`，main @ 615e682）；`/`、`/v2`、`/v2/{conversation,logs,memory,run,rooms,voice-assistant,music,credentials,health,devices/add,setup}` 深链均 200；`/health` 0.6.0 / cv3 / devices 2 / errors 0 / 双 plane connected / `ack.wav_exists=true`；`/api/v1/secrets` 无 value 字段；回滚：`pre5-7bc342d`、`pre4-642d40b`、`pre3-825b9e7`、`pre2-9e094e7`、`pre1-4ebf104`、`0.6.0-adc4c2b` 全在 | 构建需 `DOCKER_BUILDKIT=0`；备份 `/vol1/rui/backup/20261026-0830-v2m9/` |
 | 契约 C-001 | `rui-device/v1`（manifest `audio_defaults` + `ack_echo_ignore_ms`） | `docs/socket-plug-v1.md` §3.2；`src/rui/config/schema.py` |
 | 契约 C-002 | 控制台 v2 `/api/v2/*` 24 端点，1300 行（含 A-6），**冻结 PASS** | `docs/contracts/C-002-console-v2-api.md`；task-6 记录 |
 | 兼容边界 | rui `>=0.6.0, <0.7.0`；0.6.x v1 唯一新增字段仍是 `/api/v1/turns` 每条可选 `device_id`；另有两处已记录修正：`POST /api/v1/memory` 非法输入改 422（不再 500/静默截断）、`/turns` 的 `stages.*.elapsed_ms`/`attempts` 改为真实值（既有字段不变，`attempts[]` 新增 `elapsed_ms`），见 C-002 A-6 | 契约 §10.1 / A-6 |
@@ -36,7 +36,7 @@ phase-close: task-16
 ## 未完成任务
 | 项 | 状态 | 卡点 / 下一步 |
 |---|---|---|
-| 控制台 v2 M9a/M9b + M10 | pending | 设备增删改 + 配置 tab（M3）、音频覆盖编辑（M4）、房间/全屋 + 全局音频（M5）、八步向导 add/edit（M6）、运行类页面（M7–M8）、配置页组（M9a/M9b）、0.7 切默认（M10）。设计文档 §7 有每步验收 |
+| 控制台 v2 M10（0.7 切默认） | pending | 机制：`/` → `/v2`、旧壳挂 `/legacy`、开关可回滚；需要 9 哥 先试过 `/v2` 再切 | 设备增删改 + 配置 tab（M3）、音频覆盖编辑（M4）、房间/全屋 + 全局音频（M5）、八步向导 add/edit（M6）、运行类页面（M7–M8）、配置页组（M9a/M9b）、0.7 切默认（M10）。设计文档 §7 有每步验收 |
 | verifier 记录的偏差（非阻断） | pending | ① `led.set` 已修；② disabled 设备的错误码不自洽（`device_not_connected` / `capability_unsupported` / `device_disabled` 并存）需产品裁决；③ C-002 §7.1 启动门禁在浏览器端未成立（`meta.ts:11` 初值 + `App.vue:225` 提前渲染导致资源重复请求） |
 | v2 DELETE 的端口检查口径 | pending | v2 DELETE 仍 `check_ports=True`，与 v1 不一致；建议传 `check_ports=False` |
 | ack 余量 | **已处理** | 生产 `ack.max_ms` 已 600→800（2026-10-26 06:21），`ack.wav` 550 ms 正常生成；若改 ack 文案仍要复看 `/health.ack.note` |
@@ -77,6 +77,7 @@ phase-close: task-16
 - **v2 未切默认**：旧控制台仍是 `/`，v2 在 `/v2`；0.7 才切。
 - **`/health` 离线即 unhealthy**：`rui-healthcheck` 在无音箱连上时 exit 1，属上游既有语义（切换后等设备回连约 12–60s）。
 - **第二台 Dot2 行为** *(unverified)*：无硬件。
+- **需要轮换的凭证**：2026-10-26 两次运维子代理的输出里分别出现过 NAS 密码与 `RUI_HA_TOKEN`（JWT）明文（仅会话日志，未落仓库/文件），建议轮换 NAS 密码与 HA 长期令牌，并更新 `01_Code/device-inventory.md`。
 - **NAS 密码建议轮换**：2026-10-26 一次运维子代理的 `sudo -S` 曾把密码回显到本机会话日志（未写入仓库/未外传），建议轮换 `yes999zc` 的 NAS 密码并更新 `01_Code/device-inventory.md`。
 
 ## 关键文件
