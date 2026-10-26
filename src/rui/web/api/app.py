@@ -22,7 +22,13 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -3196,6 +3202,9 @@ def create_app(
             "version": __version__,
             "config_version": cfg.version,
             "config_version_supported": CONFIG_VERSION,
+            # M10: which shell `/` opens. Additive top-level field, same style as the
+            # rest of this body; the probe and older consoles ignore it.
+            "console": cfg_now.web.console,
             "uptime_s": round(time.time() - START, 1),
             "devices": len(getattr(app.state, "adapters", adapters).adapters),
             # The probe's two counts must come from the same place the console reads:
@@ -6602,6 +6611,39 @@ def create_app(
         assets = WEB_DIST / "assets"
         if assets.is_dir():
             app.mount("/assets", StaticFiles(directory=assets), name="assets")
+
+    # M10 (0.7): `web.console` picks the root entry point. The old shell is built from
+    # the same dist (only `v2.html` belongs to v2), so both mounts share one bundle.
+    # Default is still "legacy": v2 is reachable at /v2 but nobody lands on it until
+    # 9哥 signs it off. Flipping the value is additive and needs only a restart.
+    def _legacy_shell() -> Response:
+        if WEB_DIST.is_dir():
+            index = WEB_DIST.resolve() / "index.html"
+            if index.is_file():
+                return FileResponse(index)
+        return HTMLResponse(FALLBACK)
+
+    @app.get("/", response_class=HTMLResponse)
+    async def console_root(request: Request) -> Response:
+        """`/` is the entry point; in v2 mode it redirects and keeps the query."""
+        if getattr(app.state, "cfg", cfg).web.console == "v2":
+            query = request.url.query
+            return RedirectResponse(url=f"/v2/?{query}" if query else "/v2/",
+                                    status_code=302)
+        return _legacy_shell()
+
+    @app.get("/legacy", response_class=HTMLResponse)
+    @app.get("/legacy/{full_path:path}", response_class=HTMLResponse)
+    async def legacy_console(full_path: str = "") -> Response:
+        """The old SPA keeps its own mount, so bookmarks survive the switch.
+
+        History deep links (`/legacy/panel/music`, `/legacy/setup`) answer index.html;
+        the bundle's router base follows the mount point (web/src/router.ts). API
+        paths stay JSON 404s, exactly like the root catch-all below.
+        """
+        if full_path.startswith(("api/", "ws")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return _legacy_shell()
 
     @app.get("/{full_path:path}", response_class=HTMLResponse)
     async def console(full_path: str) -> HTMLResponse:

@@ -30,13 +30,14 @@ phase-close: task-16
 - **控制台 v2 M5**（`825b9e7`）：`/v2/rooms` 房间与全屋视图；多设备策略（enabled/max_planes/default_output/room_priority）字段级 PATCH + 明确「house 写入是 service 范围、不自动重启」并给音频面重启按钮；全局音频编辑（37 leaf、explicit 标记、null 清除、覆盖计数 N 台、插头 manifest 覆盖警告）；422 dotted path 行内标红、409/429 可读；脏稿离开确认 + `beforeunload`。E2E 抓包验证 `{"multi_device":{"max_planes":5}}`、`{"audio":{"capture":{"rate":48000}}}`、`null` 清除、422 标红、`POST /house/audio/restart` 恰好一次。
 - **控制台 v2 M6**（`642d40b`）：八步向导（keys/models/prepare/params/wake/connect/test/verify），步骤/动作/完成度全部服务端驱动；create 前后续步骤禁用且不发请求；create 只用返回 id；draft 冲突可改 id 继续（真实 E2E 抓出的阻塞缺陷已修）；verify.say 出声前二次确认；逻辑失败不再显示绿色完成。`/v2/setup` 首装入口 + 设备列表空态链过去。
 - **控制台 v2 M7+M8**（`7bc342d`）：M7 全屋概览“异常优先”（设备离线/未启用/配置问题集中列出并可点入）+ 房间行 + 设备页活动 tab；M8 `/v2/conversation`、`/v2/logs`、`/v2/memory` 三页 v2 重写（过滤/复制/空态/错误，过渡期复用 v1 `/turns`、`/logs`、`/memory`，不 import 旧 views）。同轮后端修正两项 v1 缺陷并写入契约 C-002 A-6：`POST /api/v1/memory` 的 `add` 空/纯空白文本与 `add`/`confirm` 超长文本改 422 且不落库（修前 500 或静默截断）、`/api/v1/turns` 的 `stages.*.elapsed_ms`/`attempts` 改为真实计时（ASR 完整转写、LLM TTFT、TTS 多句累计）；代码评审已 PASS，commit 后补。
+- **控制台 v2 M10 机制（默认未切）**：`web.console: "legacy" | "v2"` 新增字段（additive，`CONFIG_VERSION` 仍 3；旧 config 没有该键时按 `legacy`，旧镜像读到 `console: v2` 只忽略该键）。`legacy`：`/` 行为与 0.6 完全一致；`v2`：`GET /` 302 → `/v2/`（保留 query），旧壳始终挂在 `/legacy`（`/legacy/panel/...` history 深链可用，bundle 的 router base 跟随挂载点）。`/health.console` 暴露线上实际入口；v2 内「旧控制台」链接统一改指 `/legacy`；切换/回滚一行见 `docs/deploy.md §3.8`。**默认仍是 legacy，等 9 哥 验收 `/v2` 后再切默认。**
 - **生产 v2 预览（M3+M4）**：`rui-dot2:0.7.0-pre2-9e094e7`，healthy、双 plane connected、无 Traceback。
 - **生产 v2 预览**：为让 9 哥 早上能评测新后台，生产临时切到 main 构建 `rui-dot2:0.7.0-pre1-4ebf104`（`/v2` 可用，旧 `/` 不变；`/health` 逐字段一致、无 Traceback、设备 25s 回连）。**这是可控的预览切换，不是正式发布版本**；回滚一行见 §下一步。
 
 ## 未完成任务
 | 项 | 状态 | 卡点 / 下一步 |
 |---|---|---|
-| 控制台 v2 M10（0.7 切默认） | pending | 机制：`/` → `/v2`、旧壳挂 `/legacy`、开关可回滚；需要 9 哥 先试过 `/v2` 再切 | 设备增删改 + 配置 tab（M3）、音频覆盖编辑（M4）、房间/全屋 + 全局音频（M5）、八步向导 add/edit（M6）、运行类页面（M7–M8）、配置页组（M9a/M9b）、0.7 切默认（M10）。设计文档 §7 有每步验收 |
+| 控制台 v2 M10（0.7 切默认） | **机制已实现，默认未切** | `web.console` + `/legacy` + `/health.console` + 文档/测试已就绪；**等 9 哥 先试过 `/v2` 再切**（切换/回滚一行见 `docs/deploy.md §3.8`） | 设备增删改 + 配置 tab（M3）、音频覆盖编辑（M4）、房间/全屋 + 全局音频（M5）、八步向导 add/edit（M6）、运行类页面（M7–M8）、配置页组（M9a/M9b）、0.7 切默认（M10）。设计文档 §7 有每步验收 |
 | verifier 记录的偏差（非阻断） | pending | ① `led.set` 已修；② disabled 设备的错误码不自洽（`device_not_connected` / `capability_unsupported` / `device_disabled` 并存）需产品裁决；③ C-002 §7.1 启动门禁在浏览器端未成立（`meta.ts:11` 初值 + `App.vue:225` 提前渲染导致资源重复请求） |
 | v2 DELETE 的端口检查口径 | pending | v2 DELETE 仍 `check_ports=True`，与 v1 不一致；建议传 `check_ports=False` |
 | ack 余量 | **已处理** | 生产 `ack.max_ms` 已 600→800（2026-10-26 06:21），`ack.wav` 550 ms 正常生成；若改 ack 文案仍要复看 `/health.ack.note` |

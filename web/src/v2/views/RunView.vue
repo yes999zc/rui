@@ -244,7 +244,7 @@ onMounted(() => {
         :title="t('v2.run.empty')"
         :hint="t('v2.run.emptyHint')"
       >
-        <a class="btn btn-primary" href="/">{{ t('v2.run.emptyAction') }}</a>
+        <a class="btn btn-primary" href="/legacy">{{ t('v2.run.emptyAction') }}</a>
       </StateBlock>
 
       <template v-else>

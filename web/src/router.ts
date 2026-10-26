@@ -29,4 +29,12 @@ const routes = [
   { path: '/:pathMatch(.*)*', redirect: '/panel/overview' },
 ]
 
-export const router = createRouter({ history: createWebHistory(), routes })
+// M10: this one bundle is served at `/` (default) and at `/legacy/` after
+// `web.console: v2`. The history base follows the mount point, otherwise a
+// `/legacy/panel/music` bookmark would match no route and fall into the redirect.
+const base =
+  window.location.pathname === '/legacy' || window.location.pathname.startsWith('/legacy/')
+    ? '/legacy/'
+    : '/'
+
+export const router = createRouter({ history: createWebHistory(base), routes })

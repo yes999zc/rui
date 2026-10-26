@@ -633,6 +633,43 @@ doctor 里的三行（`docker compose exec -T rui rui doctor`，或控制台「�
   命令，**不打印 token 值**。容器里通常看不到宿主机的 `console-token.txt`（它不是挂载卷），
   可设 `RUI_CONSOLE_TOKEN_FILE=/path/to/console-token.txt` 指向一份可读副本。
 
+### 3.8 切换控制台（legacy / v2）
+
+`web.console` 决定打开服务器根地址 `/` 时进入哪套控制台。默认 **`legacy`**（旧控制台），
+v2 仍在 `/v2` 上并行可访问。
+
+| 取值 | `/` | 旧控制台 | v2 控制台 | `/health.console` |
+|---|---|---|---|---|
+| `legacy`（默认） | 旧控制台 | `/`（以及 `/legacy`） | `/v2` | `legacy` |
+| `v2` | **302 → `/v2/`**（保留 query） | **只在 `/legacy`**（`/legacy/panel/...` 深链可用） | `/v2` | `v2` |
+
+```yaml
+web:
+  console: v2        # legacy（默认）| v2
+```
+
+切换是配置 + 重启，不需要新镜像（先在 NAS 安装目录备份配置）：
+
+```bash
+cp ~/rui/config/config.yaml ~/rui/config/config.yaml.bak.$(date +%Y%m%d-%H%M%S)
+sed -i 's/^  console: .*/  console: v2/' ~/rui/config/config.yaml   # 没有该行就手动加到 web: 块
+docker compose up -d --force-recreate
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8080/  # v2: 302 /v2/
+curl -s http://127.0.0.1:8080/health | jq -r .console             # 线上实际入口，不会撒谎
+```
+
+回滚一行（旧壳一直挂在 `/legacy`，`legacy` 下 `/` 行为与 0.6 完全一致）：
+
+```bash
+sed -i 's/^  console: .*/  console: legacy/' ~/rui/config/config.yaml && docker compose up -d --force-recreate
+```
+
+> **v2 未验收前不要切默认。** 等 9 哥 本人试过 `/v2` 的全部页面（设备增删改、音频覆盖、
+> 向导、运行/配置页）并确认后，再把 `web.console` 改成 `v2`。
+> `console` 是 0.7 新增字段，`CONFIG_VERSION` 不变；旧镜像读到 `console: v2` 会忽略该键
+> （按 legacy 运行），所以回滚到 0.6.x 也不用改配置文件。判断线上入口只认
+> `/health.console`，不要凭浏览器缓存或书签推断。
+
 ## 4. 音乐：Navidrome
 
 音乐默认 **关闭**（`music.enabled: false`）：NAS 不可达时工具只会反复说「曲库里没找到」，

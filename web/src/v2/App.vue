@@ -242,7 +242,7 @@ onUnmounted(() => {
             <span v-if="hasToken" class="v2-token-dot" aria-hidden="true" />
           </button>
 
-          <a class="v2-legacy" href="/" :title="t('v2.nav.legacyHint')">
+          <a class="v2-legacy" href="/legacy" :title="t('v2.nav.legacyHint')">
             <AppIcon name="external" :size="14" />
             <span>{{ t('v2.nav.legacy') }}</span>
           </a>
