@@ -58,6 +58,11 @@ phase-close: task-24
 | 第二台 Dot2 共存 | pending | 硬件未到货 |
 | 生产磁盘 ~11.3GB 可回收 | pending | 0.1.x–0.4.x 老镜像 + 3 个未挂载 volume；要不要清由 9 哥 定 |
 
+## 待办：9 哥 2026-10-26 10:35 的两个新要求
+
+1. **v2 缺「工具」栏目**（天气 / 新闻 / MCP「含 HA」）：v2 的配置页组只有语音助手/音乐/凭据/体检，把 `config/catalog` 的 `tools.*` 组单独做成一页（含 MCP 服务列表与启用状态），或并进 `/v2/voice-assistant` 的 tools 分区。验收：catalog 里 tools 组的所有字段都能在 v2 编辑；MCP/HA 的连接状态可见（数据来自 `/api/v1/config` + `/api/v1/doctor` + 现有 MCP 端点）。
+2. **打断方案取舍**：9 哥 原则「哪个效果好就用哪个」，但**不接受刷固件**；如果是「更新 dot2 桥的项目配置/模型」且效果最好，可以做。→ 需要在方案里明确区分：A2（ref 通道 + 服务端 AEC，纯桥接配置+代码，不碰固件）vs B1（把中文 OWW 模型推到设备侧，属模型/配置下发，不是刷固件）。建议先做 A2（可测、可回滚），B1 作为第二步并先做小范围验证。
+
 ## 下一步（按顺序，接手方可直接执行）
 0. **生产回滚一行**（若要放弃 v2 预览）：`sed -i 's#image: rui-dot2:0.7.0-pre1-4ebf104#image: rui-dot2:0.6.0-adc4c2b#' /vol1/rui/rui-dot2-override.yml && cd /vol1/rui && docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d --force-recreate`
    **v2 入口**：`http://<NAS>:8080/v2`，首次打开要输入与旧后台相同的 console token（`/vol1/rui/console-token.txt` = config `web.auth_token`）。
