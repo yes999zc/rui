@@ -2838,7 +2838,14 @@ def create_app(
                     # refilling it.
                     log.info("barge-in: %.1f s of queued speech dropped",
                              getattr(msg, "barged_s", 0.0))
-                    runner.abort()
+                # P2-2 (task-19): ANY wake starts a new turn, so an answer or an idle
+                # goodbye still being synthesised belongs to the previous one. The
+                # 2026-10-26 07:12 sequence proves it: the farewell was decided at
+                # 30.080, the wake landed at 30.489 while TTS was still being produced,
+                # and the goodbye's own words were captured as the user's turn
+                # (`没事的话，我先下啦` + `下一首`). Abort unconditionally; `say()`
+                # clears the flag for the new turn.
+                runner.abort()
 
             def on_wake_idle(msg: object) -> None:
                 if coordinator is not None:

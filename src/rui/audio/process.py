@@ -501,6 +501,11 @@ class AudioPlane:
         # Set by ReplyFinished: the turn is over, not merely between TTS chunks.
         self._reply_finished = False
         self._speak_queued_s = 0.0
+        # Set by an accepted wake: PLAY_PCM arriving before this turn's own utterance
+        # belongs to the previous turn (e.g. an idle goodbye still being streamed).
+        # It is dropped instead of played, so its echo cannot reach the gate/ASR
+        # (2026-10-26 07:12: the farewell's own words became the user's turn).
+        self._stale_speech_blocked = False
         self.frames_in = 0
         self.frames_out = 0
         self.frames_dropped = 0
@@ -1807,6 +1812,13 @@ class AudioPlane:
         # §5: our own accepted wake clears the vendor's quiet window (the control plane
         # does the same in VendorWindow.ours_spoke).
         self._vendor_quiet_until = 0.0
+        # P2-2 (task-19): a wake starts a new turn. Whatever the previous turn had
+        # queued (a goodbye/answer still being streamed) is dropped now, and anything
+        # that arrives before this turn's own utterance is ignored (see
+        # `_stale_speech_blocked`). The ack cue is local and unaffected.
+        self._flush_speech()
+        # Nothing will clear this if the gate is absent: there is no turn to form.
+        self._stale_speech_blocked = self.gate is not None
         # Takeover: our wake outranks a running vendor dialog. The old build stayed
         # deaf while the vendor player ran (mic gated, assistant_v3.py:3115), so its
         # wake never had to stop the vendor assistant; ours hears 你好小瑞 mid-answer, and taking the
@@ -1944,9 +1956,21 @@ class AudioPlane:
         if gate is None:
             return
         before_idle = getattr(gate, "idle_events", 0)
+        was_armed = bool(getattr(gate, "armed", False))
         finished = gate.feed(pcm, ts_ms=ts_ms)
         idle_events = getattr(gate, "idle_events", 0)
+        if was_armed and not getattr(gate, "armed", False):
+            # armed -> disarmed covers the task-15 silent timeout: when a cue was
+            # excised the gate disarms without incrementing `idle_events`, so the
+            # idle branch below never runs. Same assignment, so the two paths are
+            # idempotent (this runs on the event loop, single-writer).
+            self._stale_speech_blocked = False
         if idle_events != before_idle:
+            # The listening window closed without speech (`wake without speech` /
+            # WakeIdle / disarm after the timeout). Nothing of this wake is waiting for
+            # a reply any more, so stop suppressing playback: a later reminder or a
+            # console/debug `say` PLAY_PCM must sound (2026-10-26 review).
+            self._stale_speech_blocked = False
             # A wake over a song pauses it. If the wake then hears nothing, the song must
             # come back - a parked song waiting for a reply that will never come is the
             # "music stopped after I woke it" symptom. An explicit 「暂停」 stays paused.
@@ -1968,6 +1992,8 @@ class AudioPlane:
         # The duck now belongs to this turn: the reply (or its failure) ends it.
         self._turn_pending = True
         self._turn_pending_ts = time.monotonic()
+        # This turn's own speech has begun; replies from here are legitimate.
+        self._stale_speech_blocked = False
         try:
             writer.write(encode_pcm(FrameType.UTTERANCE_PCM, self.utterances, ts, utt))
             await writer.drain()
@@ -2615,10 +2641,27 @@ class AudioPlane:
         than hold: a held gate replays its buffer when it lifts, and the newest 600 ms of
         a two-second goodbye is still our voice.
         """
-        gate = self.gate
-        if gate is not None and gate.armed:
-            gate.disarm()
+        if self._disarm_gate("our own audio is about to sound"):
             log.info("gate: disarmed, our own audio is about to sound")
+
+    def _disarm_gate(self, reason: str = "") -> bool:
+        """Close the listening gate through one choke point.
+
+        Every disarm also ends a wake's stale-audio block: a reminder or a console
+        announcement reaching an armed gate disarms it without an utterance or an
+        `idle_events` change, and the previous turn's queued speech must not stay
+        suppressed afterwards (2026-10-26 review, fourth/fifth paths). Repeated calls
+        and the `_feed_gate` armed->disarmed check all assign the same boolean on the
+        event loop, so they are idempotent and cannot race.
+        """
+        gate = self.gate
+        if gate is None:
+            return False
+        if gate.armed:
+            gate.disarm()
+            self._stale_speech_blocked = False
+            return True
+        return False
 
     async def _apply_led(self, effect: str, repaint: bool = False) -> None:
         adapter = self.adapter
@@ -2917,6 +2960,32 @@ class AudioPlane:
                 connected.clear()
                 return
 
+    def _accept_play_pcm(self, payload: bytes) -> None:
+        """Queue one reply chunk; ignore it while the wake's own turn is not formed.
+
+        `_stale_speech_blocked` is set by an accepted wake and cleared when that turn's
+        utterance is captured: chunks arriving in between are the previous turn's audio
+        (an idle goodbye still streaming) and must not be played - their echo would be
+        captured as the user's words (2026-10-26 07:12).
+        """
+        _seq, _ts, pcm = decode_pcm(payload)
+        if not pcm or self._stale_speech_blocked:
+            return
+        seconds = len(pcm) / 2 / self.cfg.audio.voice.rate
+        if self._speak_queued_s + seconds > MAX_SPEAK_QUEUE_S:
+            # Only reachable if a producer ignores SpeakFinished and keeps pushing: a
+            # leak guard, not pacing.
+            log.warning("speak queue over %.0f s, dropping a chunk", MAX_SPEAK_QUEUE_S)
+            return
+        self._speak_queued_s += seconds
+        # More audio is expected: an empty queue from here until SpeakFinished is a
+        # producer stall, not the end of the reply.
+        self._speak_finished = False
+        # The ramp belongs only where the control plane declares a sentence start
+        # (SpeakStart); everything else is a slice of one continuous synthesis.
+        self._speak_queue.put_nowait((pcm, self._segment_pending))
+        self._segment_pending = False
+
     # ---------------------------------------------------------------- server
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         connected = asyncio.Event()
@@ -2960,25 +3029,7 @@ class AudioPlane:
             while not self._stop.is_set():
                 kind, payload = await read_frame(reader)
                 if kind is FrameType.PLAY_PCM:
-                    seq, _ts, pcm = decode_pcm(payload)
-                    if pcm:
-                        seconds = len(pcm) / 2 / self.cfg.audio.voice.rate
-                        if self._speak_queued_s + seconds > MAX_SPEAK_QUEUE_S:
-                            # Only reachable if a producer ignores SpeakFinished and keeps
-                            # pushing: a leak guard, not pacing.
-                            log.warning(
-                                "speak queue over %.0f s, dropping a chunk", MAX_SPEAK_QUEUE_S
-                            )
-                        else:
-                            self._speak_queued_s += seconds
-                            # More audio is expected: an empty queue from here until
-                            # SpeakFinished is a producer stall, not the end of the reply.
-                            self._speak_finished = False
-                            # The ramp belongs only where the control plane declares a
-                            # sentence start (SpeakStart); everything else is a slice of
-                            # one continuous synthesis and must join untouched.
-                            self._speak_queue.put_nowait((pcm, self._segment_pending))
-                            self._segment_pending = False
+                    self._accept_play_pcm(payload)
                     continue
                 if kind is not FrameType.CONTROL:
                     continue
@@ -3053,11 +3104,14 @@ class AudioPlane:
                     # of seconds and this loop also carries PLAY_PCM.
                     asyncio.create_task(self._apply_led(msg.effect, msg.repaint), name="led")
                 elif isinstance(msg, SpeakStart):
-                    self._segment_pending = True
+                    if not self._stale_speech_blocked:
+                        self._segment_pending = True
                 elif isinstance(msg, ReplyFinished):
                     self._reply_finished = True
                     self._reply_hold = msg.hold_music_s
                 elif isinstance(msg, SpeakFinished):
+                    if self._stale_speech_blocked:
+                        continue
                     # No more PLAY_PCM is expected for this burst. An empty queue is now
                     # the normal end of the reply, not an underrun.
                     self._speak_finished = True

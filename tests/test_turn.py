@@ -763,3 +763,32 @@ def test_a_barge_marks_barge_in_and_silence_on_the_turn_trace(monkeypatch) -> No
     assert 0.0 <= trace.silence_after_ms <= 300.0, trace.silence_after_ms
     # The sentence after the abort is never spoken or reported.
     assert result.reply == "第一句话。"
+
+
+def test_a_farewell_stopped_by_a_wake_does_not_speak(monkeypatch) -> None:
+    """P2-2 (07:12): the goodbye must respect an abort that landed before its say().
+
+    `say()` used to clear `_abort` unconditionally, so a farewell that started just
+    after the wake played in full and its own words became the user's turn.
+    """
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("  "), llms=[FakeLlm(["不会用到"])], ttss=[tts])
+    runner = TurnRunner(Config().providers)
+    spoken: list[bytes] = []
+
+    async def speak(pcm: bytes, **kwargs: object) -> None:
+        spoken.append(pcm)
+
+    runner._tts = [("t0", tts)]
+    spoken_sentences: list[str] = []
+
+    async def fake_sentence(*_args: object, **_kwargs: object):
+        spoken_sentences.append("spoken")
+        return ("t0", 10, None, "")
+
+    runner._speak_sentence = fake_sentence  # type: ignore[method-assign]
+    runner._abort.set()  # what the wake does before the farewell's say() starts
+    line = asyncio.run(runner.farewell(speak, TurnTrace(device_id="living")))
+
+    assert line  # the session still closes
+    assert spoken == [] and spoken_sentences == [], "the aborted goodbye still played"

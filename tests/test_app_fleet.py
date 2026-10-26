@@ -708,3 +708,25 @@ def test_the_idle_watch_runs_the_turn_watchdog(tmp_path, monkeypatch) -> None:
         client.portal.call(living.on_wake_candidate, _candidate("w-after-idle-watch"))
         time.sleep(0.25)
         assert living.sent[-1].type == "wake_admit"
+
+
+def test_a_plain_wake_aborts_the_goodbye_still_being_synthesised(
+        tmp_path, monkeypatch) -> None:
+    """P2-2 (07:12 sequence): the wake lands mid-goodbye, before any barge is seen.
+
+    `/tmp/rui-fleet3.log:1110-1147`: farewell decided at 30.080, wake at 30.489 while
+    the TTS was still being produced (barge=false), then the goodbye's own words
+    (`没事的话，我先下啦`) reached ASR with the user's `下一首`. Every wake must abort
+    the previous turn's TTS, not only a barge.
+    """
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        calls: list[str] = []
+        monkeypatch.setattr(app.state.runner, "abort", lambda: calls.append("abort"))
+
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+
+        assert calls == ["abort"], "a plain wake left the previous TTS running"

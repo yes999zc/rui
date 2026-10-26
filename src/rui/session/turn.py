@@ -1124,7 +1124,7 @@ class TurnRunner:
                                  "content": direct.text[:DIRECT_HISTORY_LIMIT]})
 
     async def say(self, text: str, speak: SpeakFn,
-                  trace: TurnTrace) -> int:
+                  trace: TurnTrace, *, keep_abort: bool = False) -> int:
         """Speak one canned line. No model, no round trip: session actions are decided.
 
         The abort flag is cleared first: a wake that barged over a song sets it, and
@@ -1132,7 +1132,14 @@ class TurnRunner:
         canned reply rendered as pure silence - measured 08:24:52, 「暂停」 was heard,
         the session ended, and nothing was said.
         """
-        self._abort.clear()
+        if keep_abort:
+            # A goodbye must respect a wake that already aborted it: clearing the flag
+            # here let a farewell that started just after the wake play in full
+            # (2026-10-26 07:12).
+            if self._abort.is_set():
+                return 0
+        else:
+            self._abort.clear()
         if not self._tts:
             return 0
         chain = list(self._tts)
@@ -1152,11 +1159,13 @@ class TurnRunner:
         or an idle timeout would leave the window open and the next tick would try again.
         """
         line = farewell_line(self.session)
-        try:
-            if line:
-                await self.say(line, speak, trace)
-        finally:
-            self.idle.stop()
+        # Close the session before speaking. The goodbye can be aborted by a wake that
+        # arrives mid-synthesis (2026-10-26 07:12); stopping the idle clock afterwards
+        # would then clobber the new wake's session and the next goodbye would never
+        # fire. The session is over either way.
+        self.idle.stop()
+        if line:
+            await self.say(line, speak, trace, keep_abort=True)
         return line
 
     async def dismiss(self, speak: SpeakFn,
