@@ -1,0 +1,29 @@
+# 两台音箱、一套 rui —— 新手安装路径的最小示例 / two speakers, one rui.
+#
+# 用法 / Usage:
+#   1. 把两个桥仓的插件源码放到 ./plugins/ 下（见下方 volumes 的注释）
+#   2. 准备 ./config/config.yaml（至少 web.auth_token + devices[]，见 README）
+#   3. docker compose -f examples/two-speakers/compose.yaml up -d
+#   4. curl -s localhost:8080/health | python3 -m json.tool
+#
+# 实测（2026-10-26，rui:0.7.2）：`adapter_plugins.registered=["dot2","lx06"]`、
+# `devices=2`、`enabled_devices=2`、`device_errors=0`。
+services:
+  rui:
+    image: ghcr.io/yes999zc/rui:0.7.2      # 官方镜像已内置 ffmpeg/opus，无需自行编译
+    container_name: rui
+    restart: unless-stopped
+    ports:
+      - "8080:8080"                        # 控制台 /v2 与 API
+    volumes:
+      - ./config:/config:ro                # config.yaml：唯一事实来源（web.auth_token 必须在这里）
+      - ./data:/var/lib/rui                # 状态、secrets.yaml、日志、音乐缓存
+      # 两个桥的插件源码：git clone 两个桥仓后，把 src 下的包放到这里
+      - ./plugins/rui_dot2_bridge:/opt/rui-plugins/rui_dot2_bridge:ro
+      - ./plugins/rui_xiaoai_bridge:/opt/rui-plugins/rui_xiaoai_bridge:ro
+    environment:
+      RUI_CONFIG: /config/config.yaml       # 核心默认在 /var/lib/rui，这里显式指到挂载点
+      RUI_WEB_DIR: /app/web/dist            # 镜像内的控制台构建产物
+      PYTHONPATH: /opt/rui-plugins          # 让两个插件包可 import
+      # adapter id -> 入口；右侧必须与 plugins/ 下的包名一致
+      RUI_ADAPTER_PLUGINS: "dot2=rui_dot2_bridge.adapter:build,lx06=rui_xiaoai_bridge.adapter:build"

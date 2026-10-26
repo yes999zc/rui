@@ -39,6 +39,42 @@
 | **音频平面** | 每台设备一个独立进程：拾音、KWS/VAD 门限、预录缓冲、回声切除、送 ASR、播放队列 | 门限在本地做，服务端只做决策；播放与唤醒的自回声有专门的剔除路径 |
 | **设备（插件）** | 每种音箱一个 `rui-device/v1` 桥接插件：设备长连接、上下行音频、指示灯与按键 | 核心不含设备实现（仅保留 0.6→0.7 的临时 adapter 别名）；加一种音箱 = 加一个插件仓库 |
 
+## 三个仓库是什么关系
+
+| 仓库 | 角色 | 版本与发布 |
+|---|---|---|
+| **rui**（本仓） | 服务端 + 控制台：会话/回合、供应商、唤醒仲裁、音频门限、`/v2` 控制台 | 独立发布 |
+| **[rui-dot2-bridge](https://github.com/yes999zc/rui-dot2-bridge)** | Dot2（RS03QR）的 `rui-device/v1` 插件 + 下游薄层镜像 | 独立版本、独立发布 |
+| **[rui-xiaoai-bridge](https://github.com/yes999zc/rui-xiaoai-bridge)** | LX06 的 `rui-device/v1` 插件 | 独立版本、独立发布 |
+
+约束有两条，缺一不可：设备清单里的 `compatibility.rui_min`（这台设备至少要哪个 rui）与插件清单里的 `rui_compat`（这个插件支持哪一段 rui）。两者不满足时，加载器会**拒绝**这个插件，而不是带着半截功能跑。
+
+| rui 核心 | rui-dot2-bridge | rui-xiaoai-bridge |
+|---|---|---|
+| **0.7.2** | **1.3.1**（`rui_compat >=0.6.0 <0.8.0`） | **0.2.1**（`rui_compat >=0.6.0 <0.8.0`） |
+
+> 小爱这条目前仍由核心内置的 legacy 适配器接管（`adapter_aliases: xiaoai→lx06`），外置插件是 Phase 2 的目标；0.7.2 上同名 id 可能被内置实现遮蔽，见 `deploy/install-plug-manifest.sh` 的注释。
+
+## 让 AI 帮你装
+
+把下面这段直接贴给任意 AI 助手（Claude / ChatGPT / DeepSeek 都行）：
+
+```text
+目标：用 Docker 在一台 Linux/Mac 上跑起 rui 0.7.2，接一台 Dot2 和一台 LX06。
+前置检查：docker compose version；8080 端口空闲；至少 5 GB 磁盘。
+步骤：
+1) git clone --branch v0.7.2 https://github.com/yes999zc/rui.git && cd rui
+2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git
+   git clone --branch v0.2.1 https://github.com/yes999zc/rui-xiaoai-bridge.git
+3) 按 examples/two-speakers/compose.yaml 放插件目录、写 ./config/config.yaml（web.auth_token + devices[]）
+4) RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.2 bash deploy/install.sh   # 或直接用上面的 compose
+5) docker compose -f examples/two-speakers/compose.yaml up -d
+验收：curl -s localhost:8080/health 里 devices=2、device_errors=0、adapter_plugins.registered=["dot2","lx06"]。
+失败时先看：docker compose logs --tail=80 rui 里的 "config error"、"adapter"、"missing TLS material" 三类行。
+回滚：docker compose down，把 image 换回上一版 tag 再 up -d。
+不需要自己编译 ffmpeg：官方镜像已内置。
+```
+
 ## 特性
 
 - **多设备、按房间隔离**：设备按房间分组，唤醒与播放的互斥只在本房间生效，跨房间的播放与回合仲裁互不影响。
@@ -80,6 +116,19 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 | 指示灯 | 未测 | 未测 |
 | 多设备并发 | 未测 | 未测 |
 | 音乐中短指令（下一首 / 停止播放） | 10/10（2026-10-26，人声，1 m） | 未测 |
+
+### 安装路径实测（2026-10-26）
+
+按 `examples/two-speakers/compose.yaml` 起容器（`ghcr.io/yes999zc/rui:0.7.2`，两个插件目录 bind mount）：
+
+```console
+$ curl -s localhost:8080/health | python3 -m json.tool | head -8
+{"status":"ok","version":"0.7.2","config_version":2,"console":"legacy",
+ "devices":2,"enabled_devices":2,"device_errors":0,
+ "adapter_plugins":{"registered":["dot2","lx06"],"warnings":0}}
+```
+
+注意两点（如实记录）：① 首次启动需要 `web.auth_token` 与 TLS 材料（`secrets/server.pem`/`server.key`），否则**音频平面不会启动**（控制台与 `/health` 正常，日志里是 `missing TLS material`）；② 小爱这条仍由核心内置 legacy 适配器服务，见上一节的说明。
 
 ## 故障排查
 
@@ -132,6 +181,43 @@ Source: [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd); exports 
 | **Audio plane** | One process per device: capture, KWS/VAD gate, preroll buffer, echo excision, ASR feed, playback queue | Gating stays local, decisions stay on the server; self-echo has a dedicated excision path |
 | **Devices (plugs)** | One `rui-device/v1` bridge per speaker model: device link, uplink/downlink audio, LED and buttons | The core carries no device implementation (only a temporary 0.6→0.7 adapter alias); a new speaker is a new plug repository |
 
+## How the three repositories fit together
+
+| Repo | Role | Versioning |
+|---|---|---|
+| **rui** (this repo) | Server + console: sessions/turns, providers, wake arbitration, audio gate, `/v2` console | released on its own |
+| **[rui-dot2-bridge](https://github.com/yes999zc/rui-dot2-bridge)** | `rui-device/v1` plug for Dot2 (RS03QR) plus a thin downstream image | own version, own release |
+| **[rui-xiaoai-bridge](https://github.com/yes999zc/rui-xiaoai-bridge)** | `rui-device/v1` plug for LX06 | own version, own release |
+
+Two constraints must both hold: `compatibility.rui_min` in the device manifest (the minimum core this device needs) and `rui_compat` in the plug manifest (the core range the plug supports). If either fails, the loader **refuses** the plug instead of running it half-working.
+
+| rui core | rui-dot2-bridge | rui-xiaoai-bridge |
+|---|---|---|
+| **0.7.2** | **1.3.1** (`rui_compat >=0.6.0 <0.8.0`) | **0.2.1** (`rui_compat >=0.6.0 <0.8.0`) |
+
+> The Xiaoai path is still served by the core's legacy adapter (`adapter_aliases: xiaoai→lx06`); the external plug is a Phase 2 goal, and on 0.7.2 the built-in id can shadow it — see the comment in `deploy/install-plug-manifest.sh`.
+
+## Let an AI install it
+
+Paste this into any assistant (Claude / ChatGPT / DeepSeek):
+
+```text
+Goal: run rui 0.7.2 with Docker on Linux/macOS and connect one Dot2 and one LX06.
+Preflight: docker compose version; port 8080 free; 5 GB disk.
+Steps:
+1) git clone --branch v0.7.2 https://github.com/yes999zc/rui.git && cd rui
+2) clone the two bridges at v1.3.1 and v0.2.1 into ./plugins (see examples/two-speakers/compose.yaml)
+3) write ./config/config.yaml (web.auth_token + devices[])
+4) RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.2 bash deploy/install.sh   # or use the compose example
+5) docker compose -f examples/two-speakers/compose.yaml up -d
+Verify: curl -s localhost:8080/health shows devices=2, device_errors=0,
+adapter_plugins.registered=["dot2","lx06"].
+On failure read: docker compose logs --tail=80 rui, looking for "config error",
+"adapter", or "missing TLS material".
+Rollback: docker compose down, switch image back to the previous tag, up -d.
+No ffmpeg build needed: the official image already ships it.
+```
+
 ## Features
 
 - **Per-room isolation**: devices are grouped by room; wake, playback and turn arbitration are scoped to a room (the dialogue runner itself is still single-session).
@@ -173,6 +259,19 @@ Open `http://127.0.0.1:8080/v2/`, log in with that token, and add your first spe
 | LED | untested | untested |
 | Concurrent multi-device | untested | untested |
 | Short commands during music (next / stop) | 10/10 (2026-10-26, human voice, 1 m) | untested |
+
+### Install-path proof (2026-10-26)
+
+Started from `examples/two-speakers/compose.yaml` (image `ghcr.io/yes999zc/rui:0.7.2`, both plug dirs bind-mounted):
+
+```console
+$ curl -s localhost:8080/health | python3 -m json.tool | head -8
+{"status":"ok","version":"0.7.2","config_version":2,"console":"legacy",
+ "devices":2,"enabled_devices":2,"device_errors":0,
+ "adapter_plugins":{"registered":["dot2","lx06"],"warnings":0}}
+```
+
+Two honest caveats: (1) the first boot needs `web.auth_token` **and** TLS material (`secrets/server.pem` / `server.key`), otherwise the audio plane does not start (console and `/health` still work; the log says `missing TLS material`); (2) the Xiaoai path is still served by the core's legacy adapter, as noted above.
 
 ## Troubleshooting
 
