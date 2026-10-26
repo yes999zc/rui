@@ -10,7 +10,7 @@
 | rui 核心 | tag `v0.7.1` @ `44cff05`（`v0.7.0` = `e9db990`）；HEAD `c825091`；镜像 `rui:0.7.1-a1p` = `sha256:f446e348e871e11404cb7d081952b458750a6f4a6d6d45512f64551cfdd5285c` |
 | rui-dot2-bridge | tag `v1.3.0` @ `c71deb6`；plug `dot2-echomuse 1.3.0`（`ladder_correct=true`） |
 | rui-xiaoai-bridge | tag `v0.2.0` @ `fcff8eb`；plug `xiaoai-lx06 0.2.0` |
-| 生产 NAS 168（`/vol1/rui`） | **测试镜像 `rui-dot2:1.3.0-p21`**（= r071 + P2-1 vad.py，未打 tag）；上一个稳定组合 `rui-dot2:1.3.0-r071` = `sha256:252f568ca6b1d88aa2990e79856b7d8b143a7810bac452d294e9e5fcfbe7ecba`；底座 `ghcr.io/yes999zc/rui:sha-615e682`；2026-10-26 13:36 部署、healthy |
+| 生产 NAS 168（`/vol1/rui`） | **测试镜像 `rui-dot2:1.3.0-p22`**（= r071 + P2-1 vad.py + task-18 按房间隔离，未打 tag）；上一个稳定组合 `rui-dot2:1.3.0-r071` = `sha256:252f568ca6b1d88aa2990e79856b7d8b143a7810bac452d294e9e5fcfbe7ecba`；底座 `ghcr.io/yes999zc/rui:sha-615e682`；2026-10-26 13:36 部署、healthy |
 | 生产配置 | `/health.console=legacy`（M10 未切）；override：`DOT2_PLAYBACK_GATE_MS=0`、`DOT2_OWW_ON_DEVICE=off`、`DOT2_BARGE_IN_ENABLED=0`、`DOT2_CONTROL_PORT=8872`；config：`post_playback_mute_ms=2500`、`ack_echo_ignore_ms=2500`；备份 `rui-dot2-override.yml.bak.20261026-*` |
 | 设备固件 | Dot2 client `fw 20261024-1911-dev`；二进制 `echomuse-dot2-ref/artifacts/server` sha256 `65f93891…` |
 | 契约 | C-001 `rui-device/v1`；C-002/1（含 A-1..A-6）；兼容窗口 `>=0.6.0, <0.8.0`（三仓 manifest 已同步） |
@@ -36,6 +36,7 @@
 15. task-6 P0 采样自动化 + 矩阵：`scripts/fleet_say.py`（唤醒词 + 1.5 s 后说指令、自动写 marks）+ `fleet_matrix --log-tz/--window/--wake-only-phrase`（commit `3c249f9`）
 16. task-6 P1 归因：`docs/analysis/dot2-vs-xiaoai.md`（Dot2 30 句：唤醒 30/30 admitted、指令 26/30；两条掉分线索落到日志行；commit `850d19e`）
 17. P2-1（task-15）：ack cue 回声不再进 ASR；真机 A/B **0/10 泄漏**（修复前 13/26）；commit `87bb704`，部署测试镜像 `rui-dot2:1.3.0-p21`（未打 tag）
+19. task-18（P1）播放态按房间隔离：一屋放歌不再饿死另一屋唤醒；提交 `3bbf93f`，reviewer PASS + verifier VERIFIED（1617/17），生产 `rui-dot2:1.3.0-p22`
 18. 采样编排打通：Dot2 用 Mac Studio 播、LX06（`device_id=living`）用荣耀服务器 192.168.5.34 播，同一份 48k WAV、各自写 UTC 毫秒 marks，`fleet_matrix --log-tz UTC` 出两设备矩阵；设备接入索引见 `docs/device-access.md`（不含口令）
 
 ## 未提交
@@ -45,6 +46,8 @@
 仅 `docs/HANDOFF.md`（本次整理 + task-13 收口记录，未提交）。2026-10-26 14:20 `git status --short` → `M docs/HANDOFF.md`；采样工具已单独提交为 `9d0083b`，三仓代码均已 commit + push。
 
 **task-15（P2-1 ack cue 回声，第四轮返工完成待复评，文件已冻结未提交）**：窄匹配增加 `_quiet_after`（`vad.py:367`，cue 结束后 100 ms 必须安静，±20 ms 容差）：把「教过 EMA 后 mute 场景回复被误丢」挡住（回复比 cue 长、不会安静）；窄命中不再 `_learn_lag`（EMA 只由首轮高质量命中更新，`vad.py:381`）；日志 `kept` 区间改为 `min(skip+drop, hold)` 并新增 `match_offset`（`vad.py:493`）；`CUE_POST_SILENCE_MS=100`（:69）。新增测试：`tests/test_cue_echo_excision.py:450` 教 EMA(760/820) 后跑 mute 几何（cue 700/hold 1690/skip 950）→ captured **1.31 s**、`dropped=[0,950]ms`、fallback=false；`:482` 窄命中后 EMA 不变。无削波 850/950 仍 corr_full 0.030 / tail 0.353 / retained 0.91/1.00。全量 **1613 passed / 17 skipped**，ruff 绿；冻结 md5：vad.py `cf8e558c2d11b7be3041ebb16e0cd7ae`，test `412ecfb749d8488d9951fe0320b31f14`；process.py 未改（`176e8508…`）。
+
+**task-18（P1 播放态按房间隔离，实现完成待门禁，未提交）**：arbiter 的 `turn_open` 增加 `turn_device`（`arbiter.py:187/343`），拒绝改为 `_in_open_turn`（:533，仅同房/同设备）；`_playing_reason`（:550）只在候选属于正在播放的房间时回 `lost_playing`/`cross_echo`，其它房间放行；pending 批量按候选逐条过滤（:480 保留 rejected 列表）。coordinator `set_turn_open` 同步房间、新增 `set_playing`（`coordinator.py:87/101`）；`_reconcile_owner` 把**所有**出声房间写入 playing（`app.py:1582`，无播放时清空 :1562）。旧全局单槽行为在测试中已更新（arbiter/app_fleet 各 1 处），新增 6 个隔离用例（`test_wake_coordinator.py:253/268/283/297/310`、`test_arbiter.py:233`）。反向：旧代码上 A 放歌→B wake `WakeReject`（应 admit）、A turn_open→B `turn_open`。全量 **1617 passed / 17 skipped**，ruff 绿。真机 A/B 由 Lead 执行。
 
 ## 已批 / 待批（2026-10-26 16:58 9 哥 全部按建议批准）
 
@@ -84,6 +87,13 @@
 - 机制：一屋在放音乐（`living` 侧 `barge: N wake during playback`）+ 一屋有未结束的 turn 时，另一台设备的唤醒会被拒（`turn_open` 由协调器全局持有）。所以「Dot2 卡住」不是设备问题，是**串行仲裁**。
 - 结论：**采样必须串行**（一次只开一台音源）；同时这是 4 台「互不串台」的 P1 候选（`lost_playing` 让另一台完全无法工作，需要按房间隔离播放态）。
 - 采样脚本改为：单台、顺序、去掉 `放首歌/下一首`（避免自己把 mic 压住），只用 `hello/time/stop/bye` × 5 个电平 × 2 轮。
+
+## 最近状态（2026-10-26 17:25）
+
+- **已上线测试镜像** `rui-dot2:1.3.0-p22`（r071 + P2-1 + task-18）；回滚 = override 改回 `rui-dot2:1.3.0-r071` + `compose up -d`。
+- **task-18 真机回归待跑**：两屋同时放歌 → 各自唤醒各 5 次，期望两屋都能应答、`lost_playing` 只在同屋出现。
+- **task-16 分析稿已写**：`docs/analysis/wake-vs-command-range.md`（等 reviewer）；核心发现：电平曲线两台同量级 → 瓶颈更可能在核心 VAD/`post_playback_mute_ms`，不是设备唤醒能力；「afplay -v 2 → 3/5」证明更响更差（削波）。
+- **task-19（P2-2）未开工**；P2 上限 2 项已满。
 
 ## 风险与未决
 
