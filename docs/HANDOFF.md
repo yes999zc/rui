@@ -5,14 +5,14 @@ phase-close: task-24
 ## 会话身份
 - 模式：A（双仓库：rui 上游 + rui-dot2-bridge 下游），单会话单任务板
 - 仓库：`$HOME/AI_Workspace/01_Code/projects/house-ear`（rui）、`$HOME/AI_Workspace/01_Code/projects/rui-dot2-bridge`（dot2）
-- 分支/commit：rui `main` @ `1685d81`，tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
+- 分支/commit：rui `main` @ `8bb5ea0`（下游 rui-dot2-bridge @ `1971fc5`），tag `v0.6.0` @ `adc4c2b`；dot2 `main` @ `9c696cd`
 
 ## 版本与契约
 | 项 | 值 | 证据 |
 |---|---|---|
 | 上游 rui 发布 | tag `v0.6.0` @ `adc4c2b`；镜像 `ghcr.io/yes999zc/rui@sha256:abef1f276c3c21e9155d97c98913ee6c2e98fdfe842e43b90f64a5db6c12b241`（tags `0.6.0`/`0.6`/`sha-adc4c2b`/`latest`，amd64+arm64）；Release <https://github.com/yes999zc/rui/releases/tag/v0.6.0> | `docker-publish` run 40209595988 success；`gh release view v0.6.0` |
 | 下游 pin | dot2 的 `deploy/downstream/Dockerfile` 与 compose 默认值 pin 上述 digest；`docs/canary-0.6.0-official-image.md` 记录 arm64 + x86_64 金丝雀；`docs/contract-report-0.6.0.json` 增 `upstream_pin` 块 | commit `9c696cd` |
-| 生产（NAS 168） | **v2 预览（M1–M10）** `rui-dot2:0.7.0-pre7-1685d81`（底座 `ghcr.io/yes999zc/rui@sha256:7a758853…a373db`，main @ 1685d81）；`/health.console` = legacy（**默认未切**）；`/` 旧壳、`/legacy*` 旧壳、`/v2` 已换成旧 logo；`/health` 0.6.0 / devices 2 / errors 0 / 双 plane connected / ack true；回滚：pre6/pre5/pre4/pre3/pre2/pre1/0.6.0-adc4c2b 全在 | 构建需 `DOCKER_BUILDKIT=0`；备份 `/vol1/rui/backup/20261026-0924-v2m10/` |
+| 生产（NAS 168） | `rui-dot2:0.7.0-pre8-eq`（底座 `rui@sha256:7a758853…a373db`，main @ 8bb5ea0；含 Dot2 新 EQ/限幅）；`/health.console=legacy`；双 plane connected / errors 0 / ack true；`/loudness`：corrected=true, lowcut=0, highshelf=0 | 回滚：override 改回 `pre7-1685d81` + recreate；备份 `/vol1/rui/backup/20261026-1018-eq/`；A/B：`PUT 127.0.0.1:8872/loudness {"ladder_correct":false}` |
 | 契约 C-001 | `rui-device/v1`（manifest `audio_defaults` + `ack_echo_ignore_ms`） | `docs/socket-plug-v1.md` §3.2；`src/rui/config/schema.py` |
 | 契约 C-002 | 控制台 v2 `/api/v2/*` 24 端点，1300 行（含 A-6），**冻结 PASS** | `docs/contracts/C-002-console-v2-api.md`；task-6 记录 |
 | 兼容边界 | rui `>=0.6.0, <0.7.0`；0.6.x v1 唯一新增字段仍是 `/api/v1/turns` 每条可选 `device_id`；另有两处已记录修正：`POST /api/v1/memory` 非法输入改 422（不再 500/静默截断）、`/turns` 的 `stages.*.elapsed_ms`/`attempts` 改为真实值（既有字段不变，`attempts[]` 新增 `elapsed_ms`），见 C-002 A-6 | 契约 §10.1 / A-6 |
