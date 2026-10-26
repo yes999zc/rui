@@ -13,7 +13,7 @@
 
 </div>
 
-![控制台 v2 · 语音助手配置](docs/assets/console-v2-config.png)
+![控制台 v2 · 设备页（本地演示实例，示例数据）](docs/assets/console-v2-devices.png)
 
 ---
 
@@ -27,7 +27,7 @@
 说「你好小瑞」→ 它答「在呢」→ 说「放首歌」→ 播放中再说「下一首」→ 说「退下吧」→ 结束这一轮
 ```
 
-## 分层架构
+## 架构
 
 ![架构](docs/assets/architecture.png)
 
@@ -37,13 +37,13 @@
 |---|---|---|
 | **服务端（控制面）** | 会话与回合、工具调用、LLM/TTS/ASR 供应商、唤醒仲裁、v2 控制台 API、配置与密钥 | 一轮对话只由一台设备承担；播放态与回合按**房间**隔离，一屋放歌不会让另一屋变聋 |
 | **音频平面** | 每台设备一个独立进程：拾音、KWS/VAD 门限、预录缓冲、回声切除、送 ASR、播放队列 | 门限在本地做，服务端只做决策；播放与唤醒的自回声有专门的剔除路径 |
-| **设备（插件）** | 每种音箱一个 `rui-device/v1` 桥接插件：设备长连接、上下行音频、指示灯与按键 | 核心不含设备专用逻辑；加一种音箱 = 加一个插件仓库 |
+| **设备（插件）** | 每种音箱一个 `rui-device/v1` 桥接插件：设备长连接、上下行音频、指示灯与按键 | 核心不含设备实现（仅保留 0.6→0.7 的临时 adapter 别名）；加一种音箱 = 加一个插件仓库 |
 
 ## 特性
 
-- **多设备、按房间隔离**：设备按房间分组，唤醒与播放的互斥只在本房间生效，跨房间互不影响。
+- **多设备、按房间隔离**：设备按房间分组，唤醒与播放的互斥只在本房间生效，跨房间的播放与回合仲裁互不影响。
 - **播放中打断（barge-in）**：播放时唤醒立即停播并进入对话，服务端停播延迟以毫秒计。
-- **自回声抑制**：唤醒提示音（「在呢」）不会变成一次用户输入；普通唤醒撞上进行中的告别语时，会丢弃已排队的我方语音。
+- **自回声抑制**：唤醒提示音（「在呢」）实测 0/10 泄漏；普通唤醒撞上进行中的告别语时，会丢弃已排队的我方语音。冷启动/重叠 <110 ms 的边界仍可能漏（见已知限制）。
 - **可插拔设备**：`dot2` / `xiaoai` 两个桥接插件遵循同一份 `rui-device/v1` 契约，桥与核心可独立升级。
 - **控制台 v2**：设备、房间、配置分组、日志、轨迹、音乐、凭据、体检；中英双语，字段说明来自服务端目录。
 - **本地优先**：模型与密钥都在你自己的机器上；配置文件是唯一事实来源，控制台只提交你改过的字段。
@@ -69,13 +69,13 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 
 ## 支持矩阵
 
-> 数字来自 2026-10-26 的实测；**未测项一律标「未测」**，不要当作已支持。
+> 数字来自 **0.7.1 / p21** 的实测（2026-10-26 15:01）；**0.7.2 未重测**，未测项一律标「未测」。
 
 | 能力 | Dot2（EchoMuse RS03QR） | LX06（第三方设备） |
 |---|---|---|
-| 唤醒 | 30/30 admitted（2026-10-26，6 句 × 5 轮，校准后 TTS 音源） | 19/20（历史实测） |
+| 唤醒 | 30/30 admitted（2026-10-26，6 句 × 5 轮，校准后 TTS 音源） | 19/20（2026-10-24，n=20） |
 | 语音指令 | 26/30（同上，含音乐占据扬声器的场景） | 未测 |
-| 播放中打断 | 8/8（2026-10-26，真机人声） | 205.2 ms 停播延迟（历史实测） |
+| 播放中打断 | 8/8（2026-10-26，真机人声） | 停播 205.2 ms（2026-10-24 三轮 24.2/64.5/205.2，max n=3） |
 | 音量控制 | 未测 | 未测 |
 | 指示灯 | 未测 | 未测 |
 | 多设备并发 | 未测 | 未测 |
@@ -86,7 +86,7 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 | 现象 | 原因 | 处置 |
 |---|---|---|
 | 喊了唤醒词没反应 | 设备未连接，或被同房间的另一轮对话占住 | 看「运行」页的告警项；确认该房间没有未结束的回合 |
-| 唤醒后它自问自答 | 唤醒提示音被当成用户输入 | 0.7.2 已修；仍出现请附 `cue_gate` 日志行提 issue |
+| 唤醒后它自问自答 | 唤醒提示音被当成用户输入 | 真机 A/B 已 0/10 泄漏；若仍出现（尤以冷启动/紧接说话），附 `cue_gate` 日志行提 issue |
 | 播放中说什么都不理 | 音乐占着扬声器时部分回答会被设计性跳过 | 属预期行为：换歌 / 停播仍会执行，只是不回话 |
 | 放歌后要靠近才听得清 | 早期是测试音源电平太低造成的假象 | 先按 `docs/analysis/wake-vs-command-range.md` §7 校准音源，再判断是否设备问题 |
 | 加第二台 Dot2 后第一台失效 | `DOT2_CONTROL_PORT` 是全局环境变量 | 加设备前清掉该变量，按设备分配 `listen_port` |
@@ -120,7 +120,7 @@ Your existing speakers keep their own microphones and speakers, but wake words, 
 "Hey Rui" → "I'm here" → "play some music" → "next" (while playing) → "stand down" → turn ends
 ```
 
-## Layered architecture
+## Architecture
 
 ![architecture](docs/assets/architecture.png)
 
@@ -130,13 +130,13 @@ Source: [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd); exports 
 |---|---|---|
 | **Server (control plane)** | Sessions and turns, tool calls, LLM/TTS/ASR providers, wake arbitration, the v2 console API, configuration and secrets | Exactly one device owns a turn; playing state and turns are scoped **per room**, so music in one room never deafens another |
 | **Audio plane** | One process per device: capture, KWS/VAD gate, preroll buffer, echo excision, ASR feed, playback queue | Gating stays local, decisions stay on the server; self-echo has a dedicated excision path |
-| **Devices (plugs)** | One `rui-device/v1` bridge per speaker model: device link, uplink/downlink audio, LED and buttons | The core has no device-specific logic; a new speaker is a new plug repository |
+| **Devices (plugs)** | One `rui-device/v1` bridge per speaker model: device link, uplink/downlink audio, LED and buttons | The core carries no device implementation (only a temporary 0.6→0.7 adapter alias); a new speaker is a new plug repository |
 
 ## Features
 
-- **Per-room isolation**: devices are grouped by room; wake and playback exclusion applies only inside a room.
+- **Per-room isolation**: devices are grouped by room; wake, playback and turn arbitration are scoped to a room (the dialogue runner itself is still single-session).
 - **Barge-in**: a wake during playback stops the audio immediately and starts a turn, with millisecond-scale stop latency on the server side.
-- **Self-echo suppression**: the acknowledgement cue never becomes user input, and a stale goodbye still queued is dropped when a wake arrives.
+- **Self-echo suppression**: the acknowledgement cue leaked 0/10 on the device; a stale goodbye still queued is dropped when a wake arrives. Cold-start or <110 ms overlap can still leak (see Known limitations).
 - **Pluggable devices**: the `dot2` and `xiaoai` bridges share one `rui-device/v1` contract and version independently.
 - **Console v2**: devices, rooms, grouped configuration, logs, traces, music, credentials and health checks; bilingual UI fed by a server-side catalog.
 - **Local first**: models and keys stay on your machine; the config file is the source of truth and the console submits only changed fields.
@@ -162,13 +162,13 @@ Open `http://127.0.0.1:8080/v2/`, log in with that token, and add your first spe
 
 ## Support matrix
 
-> Measured on 2026-10-26. Anything untested is marked **untested** — do not read it as supported.
+> Measured on **0.7.1 / p21** on 2026-10-26 15:01 (0.7.2 not re-measured). Anything untested is marked **untested**.
 
 | Capability | Dot2 (EchoMuse RS03QR) | LX06 (third-party) |
 |---|---|---|
-| Wake | 30/30 admitted (2026-10-26, 6 phrases × 5 rounds, calibrated TTS source) | 19/20 (historical) |
+| Wake | 30/30 admitted (2026-10-26, 6 phrases × 5 rounds, calibrated TTS source) | 19/20 (2026-10-24, n=20) |
 | Voice commands | 26/30 (same run, including music-owns-speaker cases) | untested |
-| Barge-in during playback | 8/8 (2026-10-26, real voice) | 205.2 ms stop latency (historical) |
+| Barge-in during playback | 8/8 (2026-10-26, real voice) | 205.2 ms stop (2026-10-24, three runs 24.2/64.5/205.2, max n=3) |
 | Volume control | untested | untested |
 | LED | untested | untested |
 | Concurrent multi-device | untested | untested |
@@ -179,7 +179,7 @@ Open `http://127.0.0.1:8080/v2/`, log in with that token, and add your first spe
 | Symptom | Cause | Fix |
 |---|---|---|
 | Wake word does nothing | Device offline, or another turn owns the room | Check the alerts on the Run page; make sure no turn is left open in that room |
-| It answers itself | The acknowledgement cue was transcribed as user speech | Fixed in 0.7.2; if it still happens, attach the `cue_gate` log lines to an issue |
+| It answers itself | The acknowledgement cue was transcribed as user speech | Device A/B is now 0/10 leaks; if it still happens (cold start or immediate speech), attach the `cue_gate` log lines |
 | No response while music plays | When music owns the speaker, some replies are skipped by design | Expected: track changes and stop still execute, they just do not speak |
 | Commands only work up close | Earlier runs used a test source that was too quiet | Calibrate the source first (`docs/analysis/wake-vs-command-range.md` §7) before blaming the device |
 | A second Dot2 breaks the first | `DOT2_CONTROL_PORT` is a global environment variable | Unset it, then assign a `listen_port` per device |

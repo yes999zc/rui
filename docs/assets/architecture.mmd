@@ -1,44 +1,37 @@
-%% rui — layered architecture (source for docs/assets/architecture.svg / .png)
+%% rui — layered architecture, vertical (source for docs/assets/architecture.svg / .png)
 %% palette: ink #1f2a2e, teal #2f6f6a, sand #e8e2d6, accent #b4744a
+%%{init: {'themeVariables': {'fontSize': '16px', 'fontFamily': 'Helvetica Neue, Arial, sans-serif'}, 'flowchart': {'htmlLabels': false, 'curve': 'basis', 'nodeSpacing': 40, 'rankSpacing': 60}}}%%
 flowchart LR
-  classDef svc fill:#e8e2d6,stroke:#2f6f6a,stroke-width:1.5px,color:#1f2a2e
-  classDef plane fill:#f4efe6,stroke:#b4744a,stroke-width:1.5px,color:#1f2a2e
-  classDef dev fill:#ffffff,stroke:#1f2a2e,stroke-width:1.5px,color:#1f2a2e
-  classDef store fill:#f7f5f0,stroke:#8a8580,stroke-dasharray:4 3,color:#1f2a2e
+  classDef svc fill:#e8e2d6,stroke:#2f6f6a,stroke-width:2px,color:#1f2a2e
+  classDef plane fill:#f4efe6,stroke:#b4744a,stroke-width:2px,color:#1f2a2e
+  classDef dev fill:#ffffff,stroke:#1f2a2e,stroke-width:2px,color:#1f2a2e
+  classDef store fill:#f7f5f0,stroke:#8a8580,stroke-dasharray:5 4,color:#1f2a2e
 
-  subgraph S["Server · control plane (FastAPI)"]
-    direction TB
-    T["session / turn<br/>dialog + tools"]:::svc
-    P["providers<br/>LLM · TTS · ASR"]:::svc
-    A["wake arbiter<br/>one turn per room"]:::svc
-    W["console v2 API<br/>/api/v2 · /v2"]:::svc
-    M[("config.yaml<br/>+ secrets.yaml")]:::store
+  subgraph SERVER["1 · Server"]
+    direction LR
+    S1["Session / turn"]:::svc
+    S2["Providers<br/>LLM TTS ASR"]:::svc
+    S3["Wake arbiter"]:::svc
+    S4["Console API"]:::svc
   end
 
-  subgraph B["Audio plane · one process per device"]
-    direction TB
-    K["KWS / VAD gate<br/>preroll · echo excision"]:::plane
-    F["ASR feed<br/>16 kHz mono"]:::plane
-    O["playback queue<br/>music · replies · ack cue"]:::plane
+  subgraph PLANE["2 · Audio plane"]
+    direction LR
+    P1["KWS/VAD gate"]:::plane
+    P2["ASR feed"]:::plane
+    P3["Playback queue"]:::plane
   end
 
-  subgraph D["Devices · plug adapters"]
-    direction TB
-    X["dot2 bridge<br/>rui-device/v1"]:::dev
-    Y["xiaoai bridge<br/>rui-device/v1"]:::dev
-    Z["speaker<br/>mic + playback + LED"]:::dev
+  subgraph DEV["3 · Devices"]
+    direction LR
+    D1["dot2 bridge"]:::dev
+    D2["xiaoai bridge"]:::dev
+    D3["speaker<br/>mic playback LED"]:::dev
   end
 
-  Z -->|"audio uplink"| X
-  Z -->|"audio uplink"| Y
-  X -->|"wake candidate / utterance"| K
-  Y -->|"wake candidate / utterance"| K
-  K --> F --> P
-  A -->|"admit / reject"| K
-  T --> P
-  P -->|"reply pcm"| O
-  O -->|"downlink"| X
-  O -->|"downlink"| Y
-  M --- T
-  W --- A
-  W --- M
+  CFG[("config<br/>secrets")]:::store
+
+  CFG -.-> SERVER
+  SERVER -->|"admit · speak · stop"| PLANE
+  PLANE -->|"downlink"| DEV
+  DEV -->|"uplink"| PLANE
