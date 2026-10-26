@@ -340,6 +340,13 @@
 - verifier-tools-2 已对**修复前**版本给出 VERIFIED（自建容器：`devices=2`、`device_errors=0`、`registered=["dot2","lx06"]`；反向：无 token → `Exited(2)`、不挂 xiaoai → `registered=["dot2"]`）。
 - **当前状态**：等 reviewer 对修复后的 delta 复评；PASS 后把 task-23 置 complete，并重跑一次 verifier（验证 token/TLS 前置条件的表述）。
 
+### task-23 收尾（2026-10-26 20:15）
+
+- reviewer-fleet-auto-2：**PASS**（TLS/token 表述、桥仓提示词路径、compose 可解析、三仓 clean）。
+- verifier-tools-2：**NOT VERIFIED → 已修**——他按提示词字面执行 `git clone --branch v0.7.2 … && cd rui/examples/two-speakers` 失败，因为 `examples/two-speakers/` 是 tag `v0.7.2`（`ad11936`）**之后**才加的。修法：三份 README 的安装提示词改为 `git clone --branch main …`，并注明「main 才有本示例；**镜像仍 pin 在 `ghcr.io/yes999zc/rui:0.7.2`**」。commit：house-ear `0029097`→ 本次、dot2、xiaoai 各一条。
+- **教训**：README 里 `git clone --branch <tag>` 的目录结构必须与该 tag 实际内容一致；这次是「README 在 main 写、tag 在旧 commit」的典型错配。以后凡是新增 `examples/`，要么先合再打 tag，要么在 README 明确「示例在 main」。
+- 待办：verifier 复跑一次字面步骤（clone main → `cd examples/two-speakers` → `cp -r … plugins/` → `ls`）。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
