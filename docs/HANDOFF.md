@@ -305,6 +305,12 @@
 | 回滚 | override 改回 `rui-dot2:1.3.0-p23`（上一状态）或稳定基线 `rui-dot2:1.3.0-r071`，`docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d --pull never`；备份 `rui-dot2-override.yml.bak.20261026-*` |
 | CI | `v0.7.2` 上 security / secret-scan / docker-publish 全 success |
 
+### 发布验证（2026-10-26 19:40）
+
+- **verifier-tools-2：VERIFIED**（独立复跑）——三仓 tag `v0.7.2`/`v1.3.1`/`v0.2.1` 存在；三条 release 均非 draft/pre-release；GHCR `rui:0.7.2` digest `sha256:d830a2ca…8018` 与 `docs/release/v0.7.2.md` 一致、`docker manifest inspect` rc 0；生产 `rui Up (healthy) rui-dot2:1.3.1`；`/api/v2/meta` → `contract=C-002/1`、`api_version=2.0`、`rui_version=0.7.2`、`compat={min:0.6.0,max_exclusive:0.8.0}`；`/health` version 0.7.2、devices 2；三仓 `git status` 空；tag CI（security/docker-publish/secret-scan）success；`git clone --branch v0.7.2` 成功。
+- 过程中的坑：验证者最初用 `bakeyzhang`/`root` 登录 NAS 失败（免密用户是 `yes999zc`）；改用户后一次通过。token 只以 `token_len=32` 出现，未打印值。
+- **已知偏差**：下游镜像 `rui-dot2:1.3.1` 只在 NAS 本地构建（ID `sha256:92ea98f4…`），**未推 registry**（该仓无 docker-publish workflow，环境无 GHCR 写凭据）；可复现性以「tag + base digest」为准。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
