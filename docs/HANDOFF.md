@@ -293,6 +293,18 @@
 
 **执行顺序（不变）**：修 1–5、7 文本 → 建 tag `v0.7.2`/`v1.3.1`/`v0.2.1` → 从 tag commit 构建并推镜像 → 回改 README 里的 tag/镜像引用 → 核对 `/api/v2/meta` 与 digest → 停下等验收。视觉两项插在「修文本」之后、打 tag 之前做（因为要重新提交 README 与 assets）。
 
+### 发布完成（2026-10-26 19:31）
+
+| 项 | 结果 |
+|---|---|
+| tag | house-ear `v0.7.2`（commit `ad11936`）、dot2 `v1.3.1`（`620426a`）、xiaoai `v0.2.1`（`9479988`），均已 push |
+| GitHub release | 三条已建：`rui/releases/tag/v0.7.2`、`rui-dot2-bridge/releases/tag/v1.3.1`、`rui-xiaoai-bridge/releases/tag/v0.2.1`（中英双语 + Known limitations） |
+| 镜像 | **`ghcr.io/yes999zc/rui:0.7.2` = `sha256:d830a2ca029b27f5c25115680746ae533c7e0093e0fe61f1541bd5a0a4dd8018`**（docker-publish 从 tag 构建，含 `0.7`/`latest`/`sha-ad11936`） |
+| 下游镜像 | `rui-dot2:1.3.1` 本地 ID `sha256:92ea98f4…`，`FROM` 上面的 0.7.2 digest + dot2 plug 1.3.1；**未推 registry**（无 GHCR 写凭据），发布复现靠 tag + 上面的 base digest |
+| 生产 | NAS 168 override → `rui-dot2:1.3.1`，19:31 起 healthy；`/api/v2/meta`：`rui_version=0.7.2`、`compat.min=0.6.0`、`compat.max_exclusive=0.8.0`、`contract=C-002/1`、`api_version=2.0` |
+| 回滚 | override 改回 `rui-dot2:1.3.0-p23`（上一状态）或稳定基线 `rui-dot2:1.3.0-r071`，`docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d --pull never`；备份 `rui-dot2-override.yml.bak.20261026-*` |
+| CI | `v0.7.2` 上 security / secret-scan / docker-publish 全 success |
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
