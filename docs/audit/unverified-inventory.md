@@ -19,16 +19,16 @@
 
 | ID | 声明 | 位置 | 现状 | 现有测试 | 变成什么测试 | 批次 |
 |---|---|---|---|---|---|---|
-| HE-03 | `first_response_ms` 常为 null，「证据不足」 | `docs/analysis/dot2-vs-xiaoai.md:45` | 证据不足 | `test_trace.py`、`test_fleet_matrix.py`（只验证工具不填空） | 回放固定 trace fixture，断言工具**拒绝**把 null 填 0；再修生产端（`play_start` 上报）后重测 | 1 |
+| HE-03 | `first_response_ms` 常为 null，「证据不足」 | `docs/analysis/dot2-vs-xiaoai.md:45` | CI 测试 | `tests/test_he03_first_response_null.py`（5 条；`pytest -q tests/test_he03_first_response_null.py`） | 固定 trace fixture 回放：null 只计 skipped、不补 0；生产端 `play_start` 上报已正确（filler 不计），无需改代码 | 1 |
 | HE-09 | 源码全量镜像构建 + 镜像体积（431 MB）未验证 | `docs/release/v0.7.0.md:40,55`、`HANDOFF:415` | 待补 | 无（`docker-publish` 只走薄层） | CI 干净 checkout `docker build` → 断言构建成功 + `docker image inspect` 体积记录 | 流水线 |
 | HE-10 | 每台设备 RSS/CPU（1 vs 2 plane）未测，「线性增长」是断言 | `audit/2026-10-code-health.md:40,250` | RSS 未测 | 无 | fake-plane soak + `docker stats` 采样，断言斜率阈值 | 环境协议 |
 | HE-11 | boot → healthy 秒数未验证（只有文档 85 s） | `code-health:415,479`、`runbook:406` | 未验证 | 无 | CI：限时启动容器 → `/health` 200，3 次取中位 | 环境协议 |
-| HE-12 | 源码运行路径（`plugs/` fallback，无镜像插件）未验证 | `code-health:487` | 未验证 | 仅测「builtin 被拒」 | pytest 用 fake adapter 从 `plugs/` 加载一个最小 plug | 1 |
+| HE-12 | 源码运行路径（`plugs/` fallback，无镜像插件）未验证 | `code-health:487` | CI 测试 | `tests/test_he12_source_plug_fallback.py`（2 条；`pytest -q tests/test_he12_source_plug_fallback.py`） | 合成 `plugs/` 源树 + fake adapter：fallback manifest 授权 in-process 注册，且同名 user plug 不能覆盖 builtin 来源 | 1 |
 | D2-02 | canary：amd64 未验证；`read_only`/`user 1000:1000`/`host` 组合未验证 | `dot2 docs/canary-0.6.0-official-image.md:252,254` | 未验 | 无 | `--platform linux/amd64` smoke + compose 组合矩阵 job | 流水线 |
 | HE-13 | `RUI_ADAPTER_PLUGINS` 语法：`attr` 未校验、告警无上限、env 可替换 builtin、旧拼写未测 | `docs/socket-plug-impl-audit.md:615-633` | untested | `test_adapter_plugins.py`（部分；legacy 用例被删） | 表驱动 `_parse`：非法 attr / 100 条 / override 告警 / `HOUSE_EAR_*` fallback | 2 |
 | HE-14 | 并发、非法值 fuzz、多设备、sidecar、下游进程路径未测；`test_audio_plane.py:67` 有 jitter flake | `socket-plug-impl-audit.md:709-729` | untested | `test_plug_contract.py`、`test_device_wake.py`（部分） | frame/text fuzz 表；可注入时钟；放宽 jitter 断言 | 2 |
 | HE-17 | 「配置加载 + 恢复 未测」 | `code-health:406` | 未测（实为**耗时**） | `test_config_recovery.py`、`test_config.py` **已存在** | 测 `load_with_recovery` 耗时预算（不是重写功能测试）；同步改文档措辞 | 2 |
-| D2-06 | `stop_playback` 在活跃流上 flush 可能吞掉下一条回复 | `dot2 docs/stutter-adapter-options.md:391` | untested | 无 | play → flush → 立即 speak，断言首个 PCM 送达 + 检查 `eosPending` | 2 |
+| D2-06 | `stop_playback` 在活跃流上 flush 可能吞掉下一条回复 | `dot2 docs/stutter-adapter-options.md:391` | CI 测试 | `rui-dot2-bridge/tests/test_d2_06_stop_playback_flush.py`（2 条；`cd rui-dot2-bridge && .venv/bin/python -m pytest -q tests/test_d2_06_stop_playback_flush.py`） | fake 设备建模 `discarding`/`eosPending`：play → stop（flush+EOS）→ 立即 play，断言首个 4096 B PCM 送达、0 丢帧 | 1 |
 
 ## 2. 真机 / 人工协议（26 条）
 

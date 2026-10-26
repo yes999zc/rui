@@ -1,0 +1,18 @@
+# Fixed replay for HE-03: a 0.7.1-era sample where most turns carry no
+# play_start stage (first_response_ms = null) and one turn does. The tool must
+# report the nulls as "证据不足" and never fold them into 0 ms.
+#
+# lx06: 3 turns without play_start + 1 measured turn
+# dot2: 2 turns without play_start (whole device stays evidence-insufficient)
+2026-10-26 20:00:00,000 INFO rui.audio.process: wake candidate lx06-100 admitted after 5 ms
+2026-10-26 20:00:01,000 INFO rui.trace: turn {"turn_id": "lx06-null-1", "device_id": "lx06", "first_response_ms": null, "stages_ms": {"wake": 0.0, "asr_done": 800.0}, "meta": {}}
+2026-10-26 20:00:02,000 INFO rui.audio.process: wake candidate lx06-101 admitted after 6 ms
+2026-10-26 20:00:03,000 INFO rui.trace: turn {"turn_id": "lx06-null-2", "device_id": "lx06", "first_response_ms": null, "stages_ms": {"wake": 0.0, "asr_done": 910.0}, "meta": {}}
+2026-10-26 20:00:04,000 INFO rui.audio.process: wake candidate lx06-102 admitted after 7 ms
+2026-10-26 20:00:05,000 INFO rui.trace: turn {"turn_id": "lx06-null-3", "device_id": "lx06", "first_response_ms": null, "stages_ms": {"wake": 0.0}, "meta": {}}
+2026-10-26 20:00:06,000 INFO rui.audio.process: wake candidate lx06-103 admitted after 8 ms
+2026-10-26 20:00:07,000 INFO rui.trace: turn {"turn_id": "lx06-measured", "device_id": "lx06", "first_response_ms": 2610.4, "stages_ms": {"wake": 0.0, "asr_done": 940.0, "llm_first": 1200.0, "tts_first": 2100.0, "play_start": 2610.4}, "meta": {}}
+2026-10-26 20:00:08,000 INFO rui.audio.process: wake candidate dot2-200 admitted after 5 ms
+2026-10-26 20:00:09,000 INFO rui.trace: turn {"turn_id": "dot2-null-1", "device_id": "dot2", "first_response_ms": null, "stages_ms": {"wake": 0.0, "asr_done": 1000.0}, "meta": {}}
+2026-10-26 20:00:10,000 INFO rui.audio.process: wake candidate dot2-201 admitted after 5 ms
+2026-10-26 20:00:11,000 INFO rui.trace: turn {"turn_id": "dot2-null-2", "device_id": "dot2", "first_response_ms": null, "stages_ms": {"wake": 0.0}, "meta": {}}
