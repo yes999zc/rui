@@ -37,6 +37,9 @@ ILINK = "https://ilinkai.weixin.qq.com"
 CDN = "https://novac2c.cdn.weixin.qq.com/c2c"
 CHANNEL_VERSION = "1.0.0"
 MAX_TEXT = 2000
+# rui#28: a callback/CDN response is buffered before decrypt; cap it so a hostile
+# or broken peer cannot grow the process memory without bound.
+MAX_VOICE_BYTES = 10 * 1024 * 1024
 ITEM_TEXT, ITEM_IMAGE, ITEM_VOICE, ITEM_FILE, ITEM_VIDEO = 1, 2, 3, 4, 5
 
 
@@ -122,6 +125,37 @@ def _decrypt(data: bytes, key: bytes) -> bytes:
     if 1 <= pad <= 16 and plain.endswith(bytes([pad]) * pad):
         plain = plain[:-pad]
     return plain
+
+
+def _decode_voice_sync(plain: bytes) -> bytes | None:
+    """Decode a .silk voice note to 16 kHz mono PCM.
+
+    Synchronous by design: called through ``asyncio.to_thread`` so pilk/ffmpeg never
+    block the channel's event loop (rui#28).
+    """
+    with tempfile.TemporaryDirectory(prefix="rui-wx-") as td:
+        ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+        silk = Path(td) / "voice.silk"
+        wav = Path(td) / "voice.wav"
+        pcm = Path(td) / "voice.pcm"
+        silk.write_bytes(plain)
+        try:
+            import pilk  # optional channel extra
+        except ImportError:
+            log.warning("weixin: pilk is not installed; cannot decode .silk voice")
+            return None
+        try:
+            pilk.silk_to_wav(str(silk), str(wav))
+            subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(wav),
+                 "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000",
+                 str(pcm)],
+                check=True, timeout=30,
+            )
+            return pcm.read_bytes()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("weixin: silk conversion failed: %s", exc)
+            return None
 
 
 class AccountStore:
@@ -293,12 +327,16 @@ class WeixinAdapter:
                 data = await self._post("/ilink/bot/getupdates", {
                     "get_updates_buf": self.sync_buf,
                 }, timeout=45.0)
-                for msg in data.get("msgs") or []:
-                    await self._handle_message(msg)
-                buf = data.get("get_updates_buf")
-                if buf:
-                    self.sync_buf = str(buf)
-                    self.store.save_sync(self.sync_buf)
+                try:
+                    for msg in data.get("msgs") or []:
+                        await self._handle_message(msg)
+                finally:
+                    # rui#28: persist the cursor even when one message raises. Saving
+                    # after the loop meant a bad message was replayed forever.
+                    buf = data.get("get_updates_buf")
+                    if buf:
+                        self.sync_buf = str(buf)
+                        self.store.save_sync(self.sync_buf)
                 # Same as Telegram: an instantly-returning poll must not starve the loop.
                 await asyncio.sleep(0.05)
                 backoff = 2.0
@@ -354,39 +392,35 @@ class WeixinAdapter:
         if not param or not key_b64:
             log.warning("weixin: voice item has no downloadable media")
             return None
-        response = await self._client.get(
-            f"{self.cdn_base}/download", params={"encrypted_query_param": param},
-            timeout=httpx.Timeout(60.0, connect=10.0),
-        )
-        response.raise_for_status()
         try:
-            plain = _decrypt(response.content, parse_aes_key(key_b64))
+            async with self._client.stream(
+                "GET", f"{self.cdn_base}/download",
+                params={"encrypted_query_param": param},
+                timeout=httpx.Timeout(60.0, connect=10.0),
+            ) as response:
+                response.raise_for_status()
+                declared = response.headers.get("content-length")
+                if declared and declared.isdigit() and int(declared) > MAX_VOICE_BYTES:
+                    log.warning(
+                        "weixin: voice download too large (%s bytes > %s); dropping",
+                        declared, MAX_VOICE_BYTES,
+                    )
+                    return None
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > MAX_VOICE_BYTES:
+                        log.warning(
+                            "weixin: voice download exceeded %s bytes; dropping",
+                            MAX_VOICE_BYTES,
+                        )
+                        return None
+                plain = _decrypt(bytes(body), parse_aes_key(key_b64))
         except Exception as exc:  # noqa: BLE001
-            log.warning("weixin: voice decrypt failed: %s", exc)
+            log.warning("weixin: voice download/decrypt failed: %s", exc)
             return None
-        with tempfile.TemporaryDirectory(prefix="rui-wx-") as td:
-            ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
-            silk = Path(td) / "voice.silk"
-            wav = Path(td) / "voice.wav"
-            pcm = Path(td) / "voice.pcm"
-            silk.write_bytes(plain)
-            try:
-                import pilk  # optional channel extra
-            except ImportError:
-                log.warning("weixin: pilk is not installed; cannot decode .silk voice")
-                return None
-            try:
-                pilk.silk_to_wav(str(silk), str(wav))
-                subprocess.run(
-                    [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(wav),
-                     "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "16000",
-                     str(pcm)],
-                    check=True, timeout=30,
-                )
-                return pcm.read_bytes()
-            except Exception as exc:  # noqa: BLE001
-                log.warning("weixin: silk conversion failed: %s", exc)
-                return None
+        # rui#28: pilk and ffmpeg are blocking; keep the event loop free.
+        return await asyncio.to_thread(_decode_voice_sync, plain)
 
     # ---------------------------------------------------------------- send
     async def send_text(self, peer_id: str, text: str) -> None:

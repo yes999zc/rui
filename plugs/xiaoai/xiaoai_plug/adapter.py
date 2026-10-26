@@ -226,6 +226,7 @@ class XiaoaiAdapter(DeviceAdapter):
         conn = self._conn
         if conn is None:
             raise RuntimeError("speaker is not connected")
+        generation = self.sink_generation
         if not self._playing:
             # Wait for the acknowledgement, not just for the send. The client's start_play
             # kills the previous aplay and spawns a new one, and until that returns its
@@ -243,15 +244,30 @@ class XiaoaiAdapter(DeviceAdapter):
             # word. The old build slept the same 80 ms here: "let aplay open before
             # the first chunk" (xiaoai-voice-entry server/session.py Sink.open).
             await asyncio.sleep(0.08)
+            # rui#25: the socket/player was replaced while we were starting aplay.
+            # Do not resurrect the old generation on the new connection.
+            if self._conn is not conn or self.sink_generation != generation:
+                return
             # A fresh player restarts the device's chunk numbering at 1; the plane's
             # credit resets on this generation change, so the two counts agree.
             self.consumed = 0
             self._consumed_event.clear()
             self.sink_generation += 1
             self._playing = True
+        if self._conn is not conn:
+            return
         bytes_per_chunk = max(2, sample_rate * PLAY_CHUNK_MS // 1000 * 2)
         for start in range(0, len(pcm), bytes_per_chunk):
+            if self._conn is not conn:
+                return
             await conn.send(protocol.stream("play", pcm[start:start + bytes_per_chunk]))
+
+    def _reset_media_state(self) -> None:
+        """Forget the old player: new socket, new aplay, new chunk generation."""
+        self._playing = False
+        self.consumed = 0
+        self._consumed_event.clear()
+        self.sink_generation += 1
 
     def forget_player(self) -> None:
         """The device's player is gone (idle): the next play() must say start_play again.
@@ -378,6 +394,10 @@ class XiaoaiAdapter(DeviceAdapter):
         if self._conn is not None:
             log.warning("xiaoai: replacing existing connection from %s", peer)
             with_previous, self._conn = self._conn, conn
+            # rui#25 / xiaoai#1: the old player is gone with the old socket. Without
+            # this reset the new connection's first play() skipped start_play (the
+            # device had no aplay yet), so the first word of the answer was dropped.
+            self._reset_media_state()
             await with_previous.close(code=1012, reason="replaced")
         self._conn = conn
         self.connected_at = time.time()
@@ -392,6 +412,10 @@ class XiaoaiAdapter(DeviceAdapter):
         await conn.send(protocol.request("start_recording", payload))
         try:
             async for message in conn:
+                # rui#25: a replaced socket must not advance the new player's
+                # consumed counter or inject PlayFinished into its queue.
+                if self._conn is not conn:
+                    break
                 if isinstance(message, str):
                     try:
                         self._on_text(message)
