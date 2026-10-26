@@ -240,6 +240,13 @@
 - **抓图命令模板**：`"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu --hide-scrollbars --window-size=1600,1000 --virtual-time-budget=6000 --screenshot=<out.png> "http://127.0.0.1:18080/v2/<route>"`。
 - **尚未开始**：`docs/assets/architecture.mmd`（mermaid-cli 在 `/tmp/mmdc`）、README 重写、dot2/xiaoai 两份 README。
 
+### README 素材已就绪（2026-10-26 20:20）
+
+- **hero 截图定稿**：`docs/assets/console-v2-config.png`（本地 demo 实例 `/v2/voice-assistant`，中文界面、无 Xiaomi 字样、无离线告警、页脚 `rui 0.7.2`；旧 `console-v2-devices.png` 已删，因为它含 `Xiaomi · 设备接入` 且状态为「音频面已停止/从未上报」）。
+- **架构图已导出**：源文件 `docs/assets/architecture.mmd`（Mermaid，三层：Server control plane / Audio plane per device / Devices plug adapters；配色 ink `#1f2a2e`、teal `#2f6f6a`、sand `#e8e2d6`、accent `#b4744a`），导出 `architecture.svg` + `architecture.png`。
+  - 渲染命令（Chrome 而非 chrome-headless-shell）：`printf '{"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome","args":["--no-sandbox","--disable-gpu"]}' > /tmp/mmdc/pptr.json && /tmp/mmdc/node_modules/.bin/mmdc -p /tmp/mmdc/pptr.json -i docs/assets/architecture.mmd -o docs/assets/architecture.svg -b '#ffffff'`
+- **README 正文尚未写**（house-ear / dot2 / xiaoai 三份都未动）；quickstart 事实已核：`deploy/install.sh` 存在、Python `>=3.11`、`config.example.yaml` + `docker-compose.yml` 在根目录、LICENSE MIT。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
