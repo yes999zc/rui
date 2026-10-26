@@ -23,7 +23,7 @@ import {
   metaSettled,
 } from './meta'
 import { locale, setLocale, t, themeLabel, type MsgKey } from './i18n'
-import { setThemePref, themePref } from '../theme'
+import { resolvedTheme, setThemePref, themePref } from '../theme'
 
 const route = useRoute()
 
@@ -117,6 +117,13 @@ const themeIcon = computed(() =>
 )
 const themeTitle = computed(() => `${t('v2.nav.theme')} · ${themeLabel(themePref.value)}`)
 
+/**
+ * The legacy console mark is a two-tone pixel SVG. An `<img>` cannot inherit
+ * the page's CSS variables, so the asset ships in one palette per theme
+ * (`public/logo.svg` / `public/logo-dark.svg`); switch the file, never filter it.
+ */
+const logoSrc = computed(() => (resolvedTheme.value === 'dark' ? '/logo-dark.svg' : '/logo.svg'))
+
 function cycleTheme(): void {
   const order = ['auto', 'light', 'dark'] as const
   const index = order.indexOf(themePref.value)
@@ -178,7 +185,14 @@ onUnmounted(() => {
     <header class="v2-header">
       <div class="v2-header-inner">
         <RouterLink class="v2-brand" to="/devices" :aria-label="t('v2.app.brand')">
-          <span class="v2-brand-mark" aria-hidden="true"><span />rui</span>
+          <img
+            class="v2-brand-logo"
+            :src="logoSrc"
+            :alt="t('v2.app.logoAlt')"
+            width="26"
+            height="26"
+            decoding="async"
+          />
           <span class="v2-brand-copy">
             <strong>{{ t('v2.app.brand') }}</strong>
             <span class="kicker">{{ t('v2.app.kicker') }}</span>

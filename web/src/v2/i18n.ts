@@ -20,6 +20,7 @@ const zh = {
   // — app shell ————————————————————————————————————————————————
   'v2.app.title': '小瑞 Rui · 控制台 v2',
   'v2.app.brand': '小瑞 Rui',
+  'v2.app.logoAlt': '小瑞 Rui 标志',
   'v2.app.kicker': '控制台 v2',
   'v2.app.skip': '跳到主要内容',
   'v2.nav.label': '主导航',
@@ -1517,6 +1518,7 @@ const en: Record<MsgKey, string> = {
   // — app shell ————————————————————————————————————————————————
   'v2.app.title': 'Rui · Console v2',
   'v2.app.brand': 'Rui',
+  'v2.app.logoAlt': 'Rui logo',
   'v2.app.kicker': 'Console v2',
   'v2.app.skip': 'Skip to main content',
   'v2.nav.label': 'Main navigation',

@@ -41,25 +41,11 @@
   flex: none;
 }
 
-.v2-brand-mark {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 9px;
-  border-radius: 999px;
-  background: var(--ink);
-  color: var(--bg);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-
-.v2-brand-mark span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--live);
+.v2-brand-logo {
+  display: block;
+  flex: none;
+  width: 26px;
+  height: 26px;
 }
 
 .v2-brand-copy {
