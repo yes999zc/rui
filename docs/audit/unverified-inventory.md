@@ -10,7 +10,8 @@
 
 | 分类 | 条数 | 归属版本 |
 |---|---|---|
-| CI 可测（不需要真机） | 10 | 0.7.3 batch-1（6 条）/ 0.7.7 batch-2（4 条） |
+| CI 可测（pytest，不需要设备/镜像） | 6 | 0.7.3 batch-1（3 条：HE-03 / HE-12 / D2-06）、0.7.7 batch-2（3 条：HE-13 / HE-14 / HE-17） |
+| 环境/流水线协议（docker 构建、计时、soak；不是 pytest） | 4 | 0.7.3 记录基线、0.7.7 补协议 |
 | 真机/人工协议（需要设备或耳朵） | 26 | 0.7.4 的 Done 6、0.7.8 手册与 release notes |
 | 其中已有部分 CI 夹具、只缺真机腿 | 9 | 0.7.3 补夹具，真机腿进 0.7.8 |
 
@@ -19,11 +20,11 @@
 | ID | 声明 | 位置 | 现状 | 现有测试 | 变成什么测试 | 批次 |
 |---|---|---|---|---|---|---|
 | HE-03 | `first_response_ms` 常为 null，「证据不足」 | `docs/analysis/dot2-vs-xiaoai.md:45` | 证据不足 | `test_trace.py`、`test_fleet_matrix.py`（只验证工具不填空） | 回放固定 trace fixture，断言工具**拒绝**把 null 填 0；再修生产端（`play_start` 上报）后重测 | 1 |
-| HE-09 | 源码全量镜像构建 + 镜像体积（431 MB）未验证 | `docs/release/v0.7.0.md:40,55`、`HANDOFF:415` | 待补 | 无（`docker-publish` 只走薄层） | CI 干净 checkout `docker build` → 断言构建成功 + `docker image inspect` 体积记录 | 1 |
-| HE-10 | 每台设备 RSS/CPU（1 vs 2 plane）未测，「线性增长」是断言 | `audit/2026-10-code-health.md:40,250` | RSS 未测 | 无 | fake-plane soak + `docker stats` 采样，断言斜率阈值 | 1 |
-| HE-11 | boot → healthy 秒数未验证（只有文档 85 s） | `code-health:415,479`、`runbook:406` | 未验证 | 无 | CI：限时启动容器 → `/health` 200，3 次取中位 | 1 |
+| HE-09 | 源码全量镜像构建 + 镜像体积（431 MB）未验证 | `docs/release/v0.7.0.md:40,55`、`HANDOFF:415` | 待补 | 无（`docker-publish` 只走薄层） | CI 干净 checkout `docker build` → 断言构建成功 + `docker image inspect` 体积记录 | 流水线 |
+| HE-10 | 每台设备 RSS/CPU（1 vs 2 plane）未测，「线性增长」是断言 | `audit/2026-10-code-health.md:40,250` | RSS 未测 | 无 | fake-plane soak + `docker stats` 采样，断言斜率阈值 | 环境协议 |
+| HE-11 | boot → healthy 秒数未验证（只有文档 85 s） | `code-health:415,479`、`runbook:406` | 未验证 | 无 | CI：限时启动容器 → `/health` 200，3 次取中位 | 环境协议 |
 | HE-12 | 源码运行路径（`plugs/` fallback，无镜像插件）未验证 | `code-health:487` | 未验证 | 仅测「builtin 被拒」 | pytest 用 fake adapter 从 `plugs/` 加载一个最小 plug | 1 |
-| D2-02 | canary：amd64 未验证；`read_only`/`user 1000:1000`/`host` 组合未验证 | `dot2 docs/canary-0.6.0-official-image.md:252,254` | 未验 | 无 | `--platform linux/amd64` smoke + compose 组合矩阵 job | 1 |
+| D2-02 | canary：amd64 未验证；`read_only`/`user 1000:1000`/`host` 组合未验证 | `dot2 docs/canary-0.6.0-official-image.md:252,254` | 未验 | 无 | `--platform linux/amd64` smoke + compose 组合矩阵 job | 流水线 |
 | HE-13 | `RUI_ADAPTER_PLUGINS` 语法：`attr` 未校验、告警无上限、env 可替换 builtin、旧拼写未测 | `docs/socket-plug-impl-audit.md:615-633` | untested | `test_adapter_plugins.py`（部分；legacy 用例被删） | 表驱动 `_parse`：非法 attr / 100 条 / override 告警 / `HOUSE_EAR_*` fallback | 2 |
 | HE-14 | 并发、非法值 fuzz、多设备、sidecar、下游进程路径未测；`test_audio_plane.py:67` 有 jitter flake | `socket-plug-impl-audit.md:709-729` | untested | `test_plug_contract.py`、`test_device_wake.py`（部分） | frame/text fuzz 表；可注入时钟；放宽 jitter 断言 | 2 |
 | HE-17 | 「配置加载 + 恢复 未测」 | `code-health:406` | 未测（实为**耗时**） | `test_config_recovery.py`、`test_config.py` **已存在** | 测 `load_with_recovery` 耗时预算（不是重写功能测试）；同步改文档措辞 | 2 |

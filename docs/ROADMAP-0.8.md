@@ -46,7 +46,7 @@
 | **0.7.4** | 安装路径 TLS 与 Done 第 6 条重开 | 3 | ①`examples/two-speakers/compose.yaml` 挂 `./secrets:/opt/rui-secrets:ro` + `DOT2_SECRETS_DIR`，并给自签命令（`SAN=echomuse-controller`）；②「无 TLS / 有 TLS」两次冷启动实测输出贴出，README 与 HANDOFF 关于「TLS 是否必需」的表述**按实测统一**（两处引用同一次实测）；③Done 第 6 条 a–e 五条判据全过并留证（a healthy、b devices=2/device_errors=0/registered=["dot2","lx06"]、c audio_plane=true×2、d 真机唤醒→指令→播放、e 升级+回滚各一次） | 否 |
 | **0.7.5** | 小爱真正摘出（B） | 3 | ①仓内 `plugs/xiaoai/` 删除、镜像不再内置 lx06；`adapter_aliases` 删除；②外置挂载后 `/health adapter_plugins.registered` 含 `["dot2","lx06"]`；③`adapter: xiaoai` 配置仍可用但**必须**打一条弃用告警（含迁移到 `lx06` 的提示）；④核心 grep 门禁白名单为空并通过（`src/rui` 无 `xiaoai|lx06|小爱` 设备专用代码）；⑤新旧双跑对比表（同一配置、同一设备，字段级 diff）；⑥三仓测试绿 + 契约窗口不变 | 否（配置层弃用告警；`rui_compat` 与 C-001/C-002 字段不动） |
 | **0.7.6** | 控制台功能审计（C 上半） | 3 | ①`docs/audit/console-functional.md` 覆盖 v2 全部 14 条真实路由 + 全部交互元素（按钮/表单/保存/开关/危险操作/对话框/跳转），逐项结论 ∈ {可用, 不可用, 文案错误}，每项有截图 + 复现步骤；②不可用项 0 个「未处理」：要么修，要么标「实验性」并写进已知限制；③`docs/audit/console-v1-v2-parity.md`：v1 有而 v2 没有的逐条列明「补 / 在 v2 明确说明」的处置 | 否（只读 + 前端；若需新增 API 字段，按 C-002 additive 记录） |
-| **0.7.7** | v2 收口与测试补齐 | 3 | ①v1→v2 矩阵每一行都有终态（已补 / 已说明 + 链接），无「待定」；②`/legacy` 可开且顶部有「已弃用，0.8.0 移除」横幅（**此时不切默认**）；③老链接 302 映射表逐条实测（v1 路径 → v2 对应页，含 404 兜底）；④未验证清单 batch-2 全部转成测试或「真机协议」；⑤覆盖率不低于 0.7.3 基线 | 否 |
+| **0.7.7** | v2 收口与测试补齐 | 3 | ①v1→v2 矩阵每一行都有终态（补 4 项 / 未迁移清单 / 有意删除），无「待定」；②**只补 4 项**（音乐播放控制、设备探测、服务商编辑/试听、系统·Web·安全设置），其余进 v2「未迁移清单」且 UI 可见；③`/legacy` 可开且顶部有「已弃用，0.8.0 移除」横幅（**此时不切默认**）；④老链接 302 映射表逐条实测（含 404 兜底）；⑤未验证清单 batch-2 全部转成测试或「真机协议」；⑥覆盖率不低于 0.7.3 基线 | 否 |
 | **0.7.8** | 默认切 v2 + 验收节点 | 3（含 `[phase]`） | ①全新部署 `/` 落 v2；②`/health console=v2`；③`/legacy` 200 + 弃用提示；④v2 每页可开、每个保存动作生效（实测明细见审计文档，0.7.6/0.7.7 结论 + 0.7.8 复跑）；⑤老链接 302 正确；⑥README hero = v2 主界面、文档内 `/v1` 链接全部改 `/v2`；⑦A 的最终报告（覆盖率 + 未覆盖清单 + 每条「未验证」→ 测试）；⑧CI 四绿；⑨人肉部署手册由 Lead 亲手跑通并贴输出 | 否（API 不变；默认 URL 入口变化，用 302 兼容） |
 | **0.8.0**（不在本轮） | 删 `/legacy` + 契约窗口调整 | — | 见 §5 | **是** |
 
@@ -125,12 +125,13 @@
   - d) 真机一条完整链路：唤醒 → 指令 → 播放（贴日志行号），证明不是「起来了但不工作」；
   - e) 升级一次 + 回滚一次（记录镜像、digest、耗时、恢复后 health）。
 - 说明：c/d/e 需要 NAS + 两台真机；执行者按 `docs/device-access.md` 接入（不含口令），Lead 复核原始输出。
+- **9 哥 2026-10-26 已授权**：允许在生产 NAS 上做升级/回滚演练（0.7.4 与 0.7.8 各一次）。每次必须先备份 `rui-dot2-override.yml` + 记录当前镜像 digest，失败即自动回滚，演练后立刻核对 `/health` 与两台设备在线。
 
 ### 3.3 0.7.5 小爱真正摘出（B）
 
 **K-0.7.5-1 `[impl] 删除仓内 lx06 与 adapter_aliases，改纯外置加载`**
 - 现状（已核）：仓内仍有 `plugs/xiaoai/`（`plugin.yaml: trust: builtin`、`xiaoai_plug/`、`devices/lx06.yaml`），`Dockerfile:168-209` 把它烤进镜像并硬编码冒烟测试，`pyproject.toml:61` 把 `plugs/xiaoai` 写进 pytest `pythonpath`，`src/rui/adapter_aliases.py` 保留 `xiaoai→lx06` 与 `LEGACY_DEFAULT_ADAPTER`。外置版本在 `rui-xiaoai-bridge`（`0.2.1`，`trust: trusted`）已存在且功能等价。
-- **Lead 已定决策（解决「删掉映射又要映射」的措辞矛盾）**：`adapter_aliases.py` **模块删除**；`adapter: xiaoai` 的一次性改名搬进既有配置迁移链路 `src/rui/config/store.py`（v1→v2 migrate 已在此），读取时重写为 `lx06` 并记一条弃用告警；告警经 `config_warnings()`（`config/schema.py:1167`）→ 日志 WARNING + `/health.adapter_plugins.warnings` + 设备级 `legacy_adapter_spelling` 三个出口。0.8.0 删的正是这段迁移改写（与「删 adapter_aliases + 契约窗口调整」对应）。
+- **Lead 已定决策（解决「删掉映射又要映射」的措辞矛盾；9 哥 2026-10-26 已批准，不再讨论）**：`adapter_aliases.py` **模块删除**；`adapter: xiaoai` 的一次性改名搬进既有配置迁移链路 `src/rui/config/store.py`（v1→v2 migrate 已在此），读取时重写为 `lx06` 并记一条弃用告警；告警经 `config_warnings()`（`config/schema.py:1167`）→ 日志 WARNING + `/health.adapter_plugins.warnings` + 设备级 `legacy_adapter_spelling` 三个出口。**0.8.0 删的正是这段迁移改写**（与「删 adapter_aliases + 契约窗口调整」对应）。任何人不得再把 B 理解成「保留 `adapter_aliases.py` 到 0.8.0」。
 - **发布顺序（硬约束）**：先发 `rui-xiaoai-bridge`（tag + GHCR digest 记录），确认外置 plug 在 0.7.4 镜像里能作为 image root 加载、`GET /api/v1/plugs` 只看到外置 `xiaoai-lx06`、`/health.device_errors=0`，**再**发 core `0.7.5`。禁止反序（core 先发会让现有生产配置哑掉）。
 - 写范围：`[house-ear] plugs/xiaoai/**`（删除）、`src/rui/adapter_aliases.py`（删除）、`src/rui/config/**`、`src/rui/plugins/**`、`src/rui/device/**`、`Dockerfile`、`pyproject.toml`、`config.example.yaml`、`tests/**`、`docs/**`
 - 验收标准：
@@ -188,18 +189,21 @@
 - 写范围：`[house-ear] docs/audit/console-v1-v2-parity.md`（新增）
 - 验收标准：
   1. v1 每个页面/功能一行：v1 路径/入口、v2 对应路由或元素、状态 ∈ {有, 部分, 无}、差异说明；
-  2. 「无」的项给出处置 ∈ {0.7.7 补, v2 明确说明（位置）, 有意删除（原因）}——**不允许空白**；
-  3. 结论段列出「v1 有而 v2 真缺」的清单（0.7.7 的实现输入）。
+  2. 「无」的项的处置**已由 9 哥 2026-10-26 定稿**，只有三种：①0.7.7 补（仅 4 项：音乐播放控制、设备探测、服务商编辑/试听、系统/Web/安全设置）；②写进 v2「未迁移清单」并在 UI 标注（话术编辑器、MCP 写入、渠道、工具注册表、billing）；③有意删除（写明原因）。**不允许空白，也不允许扩大第 4 项之外的补齐范围**；
+  3. 结论段列出「v1 有而 v2 真缺」的清单，并与 4 项补齐范围逐条对应（未列入 4 项的一律归入「未迁移清单」）。
 
 ### 3.5 0.7.7 v2 收口与测试补齐
 
-**K-0.7.7-1 `[impl] v2 补齐 v1 缺口或明确说明`**
+**K-0.7.7-1 `[impl] v2 补齐 4 项（9 哥 定的范围，不许扩大）`**
+- **9 哥 2026-10-26 定稿**：只补「默认切换必需 + 高频」四项——①**音乐播放控制**（play/pause/resume/next/stop，端点 `POST /api/v1/music` 现成）；②**设备探测**（`POST /api/v1/devices/probe`）；③**服务商编辑/试听**（providers 的创建、编辑、试听、音色）；④**系统 / Web / 安全设置**（system/web/security 三组 13 个字段）。
+- **其余一律不补**，写进 v2 的「未迁移清单」并在 UI 标注（页面内提示 + 帮助入口），排到 0.7.8 之后：话术编辑器（49 模板）、MCP 写入管理、渠道（Telegram/微信）、工具注册表页、billing 配额。
 - 写范围：`[house-ear] web/src/v2/**`、`src/rui/web/api/**`（必要时，C-002 只做 additive 注记）、`tests/**`、`docs/audit/console-v1-v2-parity.md`
 - 验收标准：
-  1. 0.7.6 矩阵里每个「补」项实现并复测；每个「说明」项在 v2 界面有可见入口（帮助/提示/空状态文案）；
-  2. 矩阵每一行状态为终态，无「待定」；
-  3. 新增 API 字段（若有）在 C-002 有 additive 记录并保持 `api_version=2.0`。
-- 验证：审计文档 + 逐页截图 + typecheck/build。
+  1. 四项逐项实现并有端到端证据（UI 操作 → 端点 2xx → 重载后状态仍在）；音乐播放控制必须真出声（真机或本地 plane）；
+  2. 「未迁移清单」在 v2 有一个固定可见入口（如 `/voice-assistant` 或 `/tools` 页脚的「未迁移功能」卡片），列出 5 项 + 现状 + 计划；
+  3. 对齐矩阵每一行终态，无「待定」；不做全量补齐，不新增第 5 项；
+  4. 新增 API 字段（若有）在 C-002 有 additive 记录并保持 `api_version=2.0`。
+- 验证：审计文档 + 逐页截图 + 对应端点 curl + `npm run typecheck && npm run build`。
 
 **K-0.7.7-2 `[impl] /legacy 弃用页与老链接 302 映射（预演，不切默认）`**
 - 写范围：`[house-ear] src/rui/web/**`、`web/src/**`、`tests/test_console_default.py`（新增）、`docs/audit/console-redirects.md`（新增）
@@ -237,7 +241,8 @@
   1. 从生产 `rui-dot2:1.3.1`（核心 0.7.2）**真实升级到 0.7.8**，逐步贴 expected 输出与实际输出；
   2. 每条命令的 expected 与实际一致；不一致处必须解释并修正手册；
   3. 末尾附「回滚演练」实测（真回滚一次再升回去，或至少在生产机跑一遍回滚后核对）；
-  4. 手册由 Lead 本人执行，不接受「按文档推断」。
+  4. 手册由 Lead 本人执行，不接受「按文档推断」；
+  5. 生产操作已获 9 哥 授权（2026-10-26）：先备份 override + 记录 digest，失败自动回滚，演练后核对 `/health` 与两台设备在线。
 
 **K-0.7.8-3 `[phase] 0.7.8 验收收口`**
 - 写范围：`[house-ear] docs/HANDOFF.md`、`docs/ROADMAP-0.8.md`、`docs/audit/coverage-0.7.8.md`（新增）、`docs/release/v0.7.8.md`（新增）
@@ -273,9 +278,7 @@
 3. 契约窗口调整（三仓 `rui_compat` 上界抬到 `0.9.0` / 或按 C-003 重定）；
 4. 迁移文档 + breaking notes（桥先发双窗口版本，core 后发；禁止反序）。
 
-> **需 9 哥 确认这一读法**：要求里「删内置 lx06 与 adapter_aliases」放在 0.8.0，但同一段又要求
-> 0.7.8 之前完成小爱摘出且保留兼容映射。本路线图按「0.7.5 删实现与别名模块 + 保留一次性改名告警；
-> 0.8.0 删改名告警」执行——这是唯一能同时满足两条的读法，已写进 §3.3 决策。
+> **9 哥 2026-10-26 已批准这一读法**（原话：0.7.5 删插件目录 + 删 `adapter_aliases.py`，把改名搬进配置迁移 + 告警，0.8.0 再删告警）。因此 0.8.0 的「删 adapter_aliases」= 删这段迁移改写与告警，不是删一个已不存在的文件。
 
 **禁止提前动**：0.8.0 的任何一项都不许在 0.7.8 之前顺手做。
 
