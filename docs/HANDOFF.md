@@ -33,6 +33,8 @@
 12. 代码健康审计 Top 10，2 条阻塞已修 → `docs/audit/2026-10-code-health.md`
 13. 4 台接入 runbook（添设备 / listen_port / 验收字段）→ `docs/release/acceptance-4devices.md`
 14. task-6 采样工具 `scripts/fleet_matrix.py`（日志 + 人工标记 → 矩阵，每个数字带 `--log` 行号证据，证明不了标「证据不足」；reviewer PASS + verifier VERIFIED，commit `9d0083b`）
+15. task-6 P0 采样自动化 + 矩阵：`scripts/fleet_say.py`（唤醒词 + 1.5 s 后说指令、自动写 marks）+ `fleet_matrix --log-tz/--window/--wake-only-phrase`（commit `3c249f9`）
+16. task-6 P1 归因：`docs/analysis/dot2-vs-xiaoai.md`（Dot2 30 句：唤醒 30/30 admitted、指令 26/30；两条掉分线索落到日志行；commit `850d19e`）
 
 ## 未提交
 
@@ -40,8 +42,10 @@
 
 ## 下一步（按序）
 
-1. **task-6（阻塞发布）**：P0 采样（6 句 × 5 轮 × 两台，音量 40）→ P1 归因（硬件/固件/adapter/核心 + file:line）→ 9 哥 选 ≤2 项 P2 → 改进过门禁 + 9 哥 A/B → 发布验收。
-   - 采样工具已就绪：`docker logs --since 48h rui > /tmp/rui-fleet.log` 后在仓库根跑 `python scripts/fleet_matrix.py --log /tmp/rui-fleet.log --marks /tmp/fleet-marks.csv`（marks 表头 `phrase_id,device_id,round,ts,heard_ok,notes`，phrase_id ∈ hello/time/play/next/stop/bye；`--marks` 可省）。逐句「日志侧」列恒为「证据不足」（日志无 phrase_id），句级数字来自人工 marks。
+1. **task-6（阻塞发布）**：P0 矩阵 + P1 归因**已交付**（`docs/analysis/dot2-vs-xiaoai.md`，commit `850d19e`；Dot2 唤醒 30/30、指令 26/30）。**当前卡在 9 哥 选 P2（≤2 项）**，选定后各开独立 `[impl]` 卡，过门禁 + 9 哥 A/B，再回来 1 条收口。
+   - P2 候选两条（详见分析文档 §6）：**P2-1** ack cue 回声抑制加强（`vad.py`+`process.py`，消除「唤醒后立刻说指令被『在呢』抢答」，13/26 次污染）；**P2-2** 播放中短指令拾音（dot2 bridge AEC + `post_playback_mute_ms`，音乐里「下一首」2/5）。
+   - 采样工具已就绪：`python scripts/fleet_say.py --rounds 5 --rate 190 --gap 12`（默认已带唤醒词 + 1.5 s 停顿），矩阵：`python scripts/fleet_matrix.py --log /tmp/rui-fleet.log --marks <marks.csv> --log-tz UTC --window 12`（日志时区是 UTC，必须带）。
+   - **LX06 那一路仍未采**（不同屋、Mac 音源覆盖不到）：需用同一份 `say -o` 音频在它房间放一遍，或 9 哥 人声复测。
    - **P1 收口时必须做的事（易忘）**：task-6 写范围只有 `docs/analysis`，P2 的代码改动**不得**塞进 task-6；P1 归因一 PASS，就把选定的 P2 拆成 1–2 张独立 `[impl]` 卡（带各自代码 write_scopes + 门禁 + A/B），并把 `task-12.blocked_by` 更新为 `task-6 + 全部 P2 卡`。
 2. **4 台联合验收**：两台新 Dot2 到位 → EQ 耳测（保留 `/loudness`）→ 清 override 的 `DOT2_CONTROL_PORT=8872` → 逐台 `listen_port`（8871/8873）→ v2 添加设备 → 逐台 添加/唤醒/应答/播放/停止/删除。步骤见 `docs/release/acceptance-4devices.md`。
 3. **M10 默认切换**：等 9 哥 点头；验收 `/health.console=v2`、`/` 302 `/v2/`、`/legacy` 200，回滚一行。
@@ -50,6 +54,7 @@
 
 ## 风险与未决
 
+- **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
 - **B1 中文唤醒（task-3，BLOCKED）**：V0 英文 stock 模型对产品无效（中文「你好小瑞」只走 RUI KWS，英文零事件、`wake_candidates=0`）。真前置不是固件：① 中文 OWW 模型需 `oww_forge` 自训（25GB/数小时，效果待测）；② bridge 无 `/shell` 通道（`adapter.py:81`），最小验证需一次性 adb 推 ~1MB 分类器。待 9 哥 决定：是否再跑 V0 / 是否接受自训成本 / 生产机是否允许一次性 adb / barge 门槛是否 0.25。
 - **EQ 耳测未做**：测量指标改善已证，但 9 哥 尚未 A/B；`trim_db=-2.0` 未重调（A 计权响 4.1 dB）。
 - **cue 回声残留**：envelope 匹配对设备延迟 >~950 ms 或与用户语音完全重叠时回退旧行为，可能切掉 ~300 ms。
