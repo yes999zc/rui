@@ -95,6 +95,17 @@
 - **task-16 分析稿已写**：`docs/analysis/wake-vs-command-range.md`（等 reviewer）；核心发现：电平曲线两台同量级 → 瓶颈更可能在核心 VAD/`post_playback_mute_ms`，不是设备唤醒能力；「afplay -v 2 → 3/5」证明更响更差（削波）。
 - **task-19（P2-2）未开工**；P2 上限 2 项已满。
 
+## 当前状态（2026-10-26 17:30，压缩前快照）
+
+- **生产镜像**：`rui-dot2:1.3.0-p22`（r071 + P2-1 vad.py + task-18 按房间隔离），17:15 部署、`/health` 正常、2 台设备在线。**未打 tag**；回滚 = override 改回 `rui-dot2:1.3.0-r071` + `compose up -d`。
+- **已提交**：`87bb704`（P2-1）、`3bbf93f`（task-18）、`3b3b0d1` / `8ee75a1` / `c3eba68`（文档）。全部已 push。
+- **已过门禁**：task-15（PASS + VERIFIED）、task-18（PASS + VERIFIED + 真机回归）。
+- **task-16 分析稿**：`docs/analysis/wake-vs-command-range.md`（**未提交**），已按 reviewer 的 6 条 CHANGES 修正，等复评；采样镜像锁定 p21，数字全部重算（Dot2 0.15 = cand 5/adm 4；LX06 0.15 = cand 6/adm 4），H2 已被代码否证（`post_playback_mute_ms` 只作用于有 TTS 回复的 follow-up）。
+- **未开工**：task-19（P2-2 音乐中短指令拾音）、task-17（AEC-lite）。P2 上限 2 项已满（P2-1 完成、P2-2 待做）。
+- **task-18 真机回归结果**：客厅放歌时卧室 Dot2 连续 4 次 admitted、`lost_playing` 0 次（修复前 6 分钟 18 次）；但音乐中 ASR 只剩碎片（`'了。'`）——归 task-19。
+- **采样环境**：Mac（Dot2 房间）用 `afplay`，荣耀服务器 `192.168.5.34`（客厅）用 `aplay -plughw:2,0`；两台 NTP 同步，跨机对齐不确定度 ≤150 ms；**采样必须串行**（两屋同时说同一唤醒词会互相饿死）。
+- **待批**：4 台新设备到位后手动添加；打 tag 前的版本号确认；24h 稳定性结果。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
