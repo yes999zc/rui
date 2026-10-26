@@ -318,6 +318,14 @@
 - **quickstart 已 pin**：`RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.2 bash deploy/install.sh`（house-ear `c4da73c`），说明默认是 `:latest`。
 - **xiaoai plug-test 已补 `--adapter`**：`rui plug-test <插件目录> --adapter rui_xiaoai_bridge.adapter:build`（`4853bbd`），troubleshooting 同步。
 
+### 新手安装路径实测（2026-10-26 20:05，Done 第 6 条）
+
+- 新增 `examples/two-speakers/compose.yaml`（house-ear `64c9f34`），env 全部来自实测：`RUI_CONFIG=/config/config.yaml`、`RUI_WEB_DIR=/app/web/dist`、`PYTHONPATH=/opt/rui-plugins`、`RUI_ADAPTER_PLUGINS="dot2=rui_dot2_bridge.adapter:build,lx06=rui_xiaoai_bridge.adapter:build"`，两个插件目录 bind mount 到 `/opt/rui-plugins/`。
+- NAS 实测（`ghcr.io/yes999zc/rui:0.7.2`）：`/health` → `status=ok`、`version=0.7.2`、`devices=2`、`enabled_devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`。
+- **如实记录的两个坑**：① `web.auth_token` 必须在 **config.yaml**（不是 secrets.yaml），否则容器直接 `config error` 退出；② 没有 TLS 材料（`secrets/server.pem|key`）时音频平面拒绝启动（控制台与 health 正常，日志 `missing TLS material`）；③ `devices[].host` 对 lx06 是必填，缺了会 `config recovery … devices.1.host` 回落到默认值。
+- 文档已写：house-ear README 加「三个仓库是什么关系 + 兼容表 + 让 AI 帮你装 + 安装路径实测输出」；两个桥仓 README 加同一段「让 AI 帮你装」。
+- README 里已标注：小爱仍走核心内置 legacy 适配器（`adapter_aliases: xiaoai→lx06`），Phase 2 才转外置插件；0.7.2 上同名 id 可能被内置实现遮蔽。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
