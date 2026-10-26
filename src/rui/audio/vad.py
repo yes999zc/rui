@@ -20,6 +20,59 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+# The cue is handed to the device at `hold()`, but the device's own player opens
+# later: the old build measured aplay pipe + one ALSA buffer as PLAY_LAG_SECONDS =
+# 0.55 s, and a device that also waits for its buffer threshold starts even later.
+# The gate therefore searches the whole hold window for the cue (not just the nominal
+# skip window), but only up to this start. A later start is far more likely to be the
+# person's reply than the cue: `test_a_device_that_mutes_during_the_cue_is_unaffected`
+# feeds the reply at the skip boundary (950 ms) and a 900 ms search matched it (that
+# fixture reuses the cue audio). Cues later than this are handled by the conservative
+# overlap guard below, not by a match that could delete the person's reply.
+CUE_MATCH_START_MAX_MS = 800.0
+# If the cue is clipped/overlapped/late it cannot be located (the envelope is no longer
+# the cue's rhythm, or its onset is past the search bound). The person is talking over
+# our cue, so the only safe choice is to drop the cue's worst-case window and keep what
+# follows. 1000 ms covers the measured worst case (2026-10-26: the Dot2 makes a 540 ms
+# cue audible ~740-850 ms after the handover) *and* the 950 ms boundary: the whole cue
+# is removed even when it never reaches the skip window, while a reply starting after
+# the cue still survives. A reply inside this window is lost with it (fallback=true).
+CUE_OVERLAP_GUARD_MS = 1000.0
+# A matched cue ends on its last frame; room reverb and the device's buffer keep it
+# ringing a little longer. Small enough that a reply started right after the cue
+# keeps its first syllable.
+CUE_REVERB_GUARD_MS = 40.0
+# Full-scale samples: the person talking over the cue clipped the microphone (measured
+# 2026-10-26 07:01:44, peak=1.0000). Together with a failed cue match this is the
+# evidence that the cue window is contaminated and must be excised conservatively.
+CUE_CLIP_LEVEL = 0.99
+# The search now covers the whole hold window, so a marginal envelope match is far more
+# likely to be the person's reply than the cue: require a clear match before treating a
+# window as cue. `GateConfig.echo_match_min` stays the floor for a stricter caller.
+CUE_MATCH_MIN = 0.75
+# Learned device cue latency: milliseconds from the handover (hold start) to the cue's
+# first audible block. The Dot2's prior is the measured 740 ms; a per-process EMA
+# tracks a unit that is slower or faster. The first-pass match is bounded at 800 ms so
+# the person's reply is never matched; a late cue that the bound misses is re-searched
+# only in a narrow window around the learned latency, with a stricter match and a
+# silent run before its onset. A device that muted its microphone has no cue there, so
+# nothing matches and its reply is kept.
+CUE_LAG_INITIAL_MS = 740.0
+CUE_LAG_ALPHA = 0.3
+CUE_LAG_MIN_MS = 300.0
+CUE_LAG_MAX_MS = 1400.0
+CUE_LAG_WINDOW_MS = 200.0
+CUE_LAG_REMATCH_MIN = 0.90
+CUE_ONSET_SILENCE_MS = 100.0
+# A cue echo is followed by the device going quiet until the person speaks; a reply
+# that the narrow match mistook for the cue keeps sounding past the cue's length.
+CUE_POST_SILENCE_MS = 100.0
+# A cue starts with sound. The first 100 ms of a match must carry at least this share
+# of the reference's loudest block, or the "match" is the silence before the person's
+# reply lining up with the cue's tail (a false positive that would cut the reply).
+CUE_ONSET_MS = 100.0
+CUE_ONSET_RATIO = 0.1
+
 
 class VadUnavailable(RuntimeError):
     """sherpa-onnx or silero_vad.onnx is missing: no turn segmentation."""
@@ -98,6 +151,11 @@ class UtteranceGate:
         # so it is counted here instead of vanishing without a trace.
         self.interrupted = 0
         self._reset_state()
+        # Learned across arms: the device's cue latency and whether a match has ever
+        # confirmed it (until then the narrow re-search is disabled and logged unknown).
+        self._cue_lag_ms = CUE_LAG_INITIAL_MS
+        self._cue_lag_seen = False
+        self._last_match_offset_ms: float | None = None
         # Counts silent wakes across arms: disarm() resets the per-arm state, and the
         # plane compares this counter before/after each block to send WakeIdle.
         self.idle_events = 0
@@ -110,9 +168,18 @@ class UtteranceGate:
         # as a request (measured 2026-10-23 15:49/15:53/15:55).
         self._hold_skip_ms = 0.0
         # The loudness envelope of the skipped (cue) samples, matched against the cue's
-        # own envelope when the hold lifts; see `_cue_tail_ms`.
+        # own envelope when the hold lifts; see `_cue_echo`.
         self._hold_skip_samples: list[np.ndarray] = []
         self._echo_env = None
+        # Cue duration and the nominal skip/hold windows: the fallback below needs them
+        # after the skip counter has been spent.
+        self._cue_ms = 0.0
+        self._hold_skip_total_ms = 0.0
+        self._hold_total_ms = 0.0
+        # True once any part of the cue/echo window was discarded: a wake that then
+        # hears nothing disarms silently (pre-P2-1 behaviour), instead of reporting a
+        # wake-without-speech event the old code only emitted for a truly silent wake.
+        self._cue_excised = False
         self._hold_buf: deque[np.ndarray] = deque()
         self._preroll: deque[np.ndarray] = deque()
         self._preroll_samples = 0
@@ -197,6 +264,8 @@ class UtteranceGate:
         """
         self._hold_ms = max(0.0, ms)
         self._hold_skip_ms = max(0.0, min(skip_ms, ms))
+        self._hold_total_ms = self._hold_ms
+        self._hold_skip_total_ms = self._hold_skip_ms
         self._hold_skip_samples.clear()
 
     def set_echo_reference(self, samples: np.ndarray, rate: int) -> None:
@@ -208,10 +277,14 @@ class UtteranceGate:
         that tail into ASR as a user turn (2026-10-26: cue 「在呢」 -> turn 「在呢。」 ->
         reply 「怎么了？」). Matching loudness envelopes rather than waveforms survives the
         device AEC's attenuation and phase shift, and needs no per-device latency
-        constant: the cue's own syllable rhythm says where the skip window ended.
+        constant: the cue's own syllable rhythm says where the cue sits.
         """
         envelope = self._envelope(np.asarray(samples, dtype=np.float32).reshape(-1), rate)
-        self._echo_env = envelope if envelope.size else None
+        # Relative levels only: the caller may hand the cue as float PCM [-1, 1] or as
+        # raw int16 (tests, a plug's WAV), and the microphone's echo is attenuated.
+        peak = float(np.max(envelope)) if envelope.size else 0.0
+        self._echo_env = envelope / peak if peak > 0.0 else None
+        self._cue_ms = envelope.size * self.cfg.echo_block_ms
 
     def _envelope(self, samples: np.ndarray, rate: int) -> np.ndarray:
         """RMS per `echo_block_ms` block: the rhythm of a sound, not its waveform."""
@@ -222,28 +295,126 @@ class UtteranceGate:
         frames = samples[:usable].reshape(-1, block)
         return np.sqrt(np.mean(np.square(frames), axis=1)).astype(np.float32)
 
-    def _cue_tail_ms(self) -> float:
-        """How much of the cue was still unplayed when the skip window ended.
+    def _cue_echo(
+        self, buffered: list[np.ndarray]
+    ) -> tuple[float, float, float, bool, bool]:
+        """Locate the cue in the skipped + buffered audio of this hold.
 
-        The skipped samples are the cue as the microphone heard it (AEC-residual, so
-        quieter and phase-shifted, but the same rhythm). Sliding the cue's envelope over
-        them finds the cue's start; from there and the window length the played part is
-        known, and the rest is the echo that must not reach the VAD. `0` means the cue
-        was over (or the match is not trustworthy) and the old replay path applies.
+        Returns ``(cue_start_ms, cue_end_ms, match_score, matched, contaminated)`` where
+        the times are relative to the hold start and ``contaminated`` means the cue may
+        be present but could not be located (clipped capture, or cue energy in the skip
+        window). The whole held window is searched, not
+        just the nominal skip window: a slow device can put the entire cue inside the
+        echo buffer, where the old skip-only search saw nothing and replayed all of it
+        (2026-10-26 07:01: cue 540 ms -> turn 「在呢。」 -> 「我在，你说。」).
+
+        A clipped or overlapped window cannot be matched (the envelope is no longer the
+        cue's rhythm) and reports ``matched=False, contaminated=True``; the caller then
+        applies the conservative overlap window instead of replaying unknown audio.
         """
-        if self._echo_env is None or not self._hold_skip_samples:
-            return 0.0
-        observed = self._envelope(np.concatenate(self._hold_skip_samples), self.rate)
+        self._last_match_offset_ms = None
+        if self._echo_env is None:
+            return 0.0, 0.0, 0.0, False, False
+        blocks = list(self._hold_skip_samples) + list(buffered)
+        if not blocks:
+            return 0.0, 0.0, 0.0, False, False
+        raw = np.concatenate(blocks)
+        observed = self._envelope(raw, self.rate)
         reference = self._echo_env
         if observed.size == 0 or reference.size == 0:
-            return 0.0
+            return 0.0, 0.0, 0.0, False, False
+        # Same relative scale as the stored reference: the echo is attenuated by the
+        # device AEC and the capture gain is arbitrary.
+        observed_peak = float(np.max(observed))
+        if observed_peak > 0.0:
+            observed = observed / observed_peak
+        clipped = float(np.max(np.abs(raw))) >= CUE_CLIP_LEVEL
+        skip_env = self._envelope(
+            np.concatenate(self._hold_skip_samples), self.rate
+        ) if self._hold_skip_samples else np.zeros(0, dtype=np.float32)
+        skip_peak = float(np.max(skip_env)) if skip_env.size else 0.0
+        heard_any = bool(
+            skip_peak > 0.0
+            and skip_peak >= CUE_ONSET_RATIO * float(np.max(observed))
+        )
+        best_score, best_offset = self._match_cue(
+            observed, reference, 0.0, CUE_MATCH_START_MAX_MS)
+        if best_score < max(self.cfg.echo_match_min, CUE_MATCH_MIN):
+            # The bounded first pass missed. A late cue lives just past that bound: look
+            # only in a narrow window around the learned latency, with a stricter match
+            # and a silent run before its onset. A muted device has no cue there, so
+            # nothing matches and the person's reply is kept.
+            if self._cue_lag_seen:
+                low = max(0.0, self._cue_lag_ms - CUE_LAG_WINDOW_MS)
+                high = self._cue_lag_ms + CUE_LAG_WINDOW_MS
+                narrow, narrow_offset = self._match_cue(
+                    observed, reference, low, high, silent_before=True)
+                if (narrow >= CUE_LAG_REMATCH_MIN
+                        and self._quiet_after(observed, reference, narrow_offset)):
+                    # A narrow hit must be a cue, not the person's reply: the cue echo
+                    # is followed by the device going quiet, while a reply keeps
+                    # sounding past the cue's length. It does NOT teach the latency -
+                    # a mistaken narrow hit would reinforce its own error.
+                    self._last_match_offset_ms = narrow_offset * self.cfg.echo_block_ms
+                    return 0.0, 0.0, narrow, False, True
+            return 0.0, 0.0, best_score, False, clipped or heard_any
+        cue_start_ms = best_offset * self.cfg.echo_block_ms
+        self._last_match_offset_ms = cue_start_ms
+        cue_end_ms = cue_start_ms + reference.size * self.cfg.echo_block_ms
+        self._learn_lag(cue_start_ms)
+        return cue_start_ms, cue_end_ms, best_score, True, clipped
+
+    def _quiet_after(
+        self, observed: np.ndarray, reference: np.ndarray, offset: int,
+    ) -> bool:
+        """True when the audio right after the matched cue goes quiet."""
+        quiet_blocks = max(1, int(CUE_POST_SILENCE_MS / self.cfg.echo_block_ms))
+        # One block of tolerance: a 10 ms alignment error would otherwise overlap the
+        # real cue tail and make every late cue look like it keeps sounding.
+        start = offset + reference.size + 1
+        tail = observed[start : start + quiet_blocks]
+        if tail.size < quiet_blocks:
+            return False
+        onset_floor = CUE_ONSET_RATIO * float(np.max(reference))
+        return float(np.max(tail)) <= onset_floor
+
+    def _learn_lag(self, lag_ms: float) -> None:
+        """Bounded EMA of the observed cue onset delay (prior: the Dot2's 740 ms)."""
+        self._cue_lag_ms = min(
+            CUE_LAG_MAX_MS,
+            max(CUE_LAG_MIN_MS,
+                (1.0 - CUE_LAG_ALPHA) * self._cue_lag_ms + CUE_LAG_ALPHA * lag_ms),
+        )
+        self._cue_lag_seen = True
+
+    def _match_cue(
+        self, observed: np.ndarray, reference: np.ndarray,
+        low_ms: float, high_ms: float, *, silent_before: bool = False,
+    ) -> tuple[float, int]:
+        """Best envelope match whose start lies in [low_ms, high_ms]."""
+        onset_blocks = max(1, int(CUE_ONSET_MS / self.cfg.echo_block_ms))
+        onset_floor = CUE_ONSET_RATIO * float(np.max(reference))
+        quiet_blocks = max(1, int(CUE_ONSET_SILENCE_MS / self.cfg.echo_block_ms))
         best_score = 0.0
         best_offset = 0
         for offset in range(observed.size):
+            start_ms = offset * self.cfg.echo_block_ms
+            if start_ms < low_ms:
+                continue
+            if start_ms > high_ms:
+                break
             overlap = min(reference.size, observed.size - offset)
             if overlap < 3:  # under 60 ms cannot distinguish a match from noise
                 break
             window = observed[offset : offset + overlap]
+            if float(np.max(window[:onset_blocks])) < onset_floor:
+                # The window starts in silence: not a cue onset, just the cue's rhythm
+                # correlating with whatever follows the silence.
+                continue
+            if silent_before:
+                pre = observed[max(0, offset - quiet_blocks) : offset]
+                if pre.size and float(np.max(pre)) > onset_floor:
+                    continue
             head = reference[:overlap]
             denom = float(np.linalg.norm(window) * np.linalg.norm(head))
             if denom <= 0.0:
@@ -251,11 +422,7 @@ class UtteranceGate:
             score = float(np.dot(window, head) / denom)
             if score > best_score:
                 best_score, best_offset = score, offset
-        if best_score < self.cfg.echo_match_min:
-            return 0.0
-        played_ms = (observed.size - best_offset) * self.cfg.echo_block_ms
-        cue_ms = reference.size * self.cfg.echo_block_ms
-        return max(0.0, cue_ms - played_ms)
+        return best_score, best_offset
 
     # ------------------------------------------------------------------ input
     def feed(self, pcm: bytes, ts_ms: float = 0.0) -> tuple[bytes, float] | None:
@@ -286,13 +453,61 @@ class UtteranceGate:
             # that starts after the cue is untouched and buffered as before.
             pending = list(self._hold_buf)
             self._hold_buf.clear()
-            tail_ms = self._cue_tail_ms()
+            cue_start, cue_end, match, matched, contaminated = self._cue_echo(pending)
+            if matched:
+                # The cue's end is measured; remove it (plus reverb) and keep the
+                # person's reply from that point on, including its first syllable.
+                drop_ms = max(
+                    0.0, cue_end + CUE_REVERB_GUARD_MS - self._hold_skip_total_ms
+                )
+                fallback = False
+            elif contaminated:
+                # Cue and person overlap and the microphone clipped, or cue energy was
+                # seen in the skip window but not locatable (2026-10-26
+                # 07:01:44: peak=1.0000 -> turn 「在呢。」). The cue cannot be located
+                # in that audio, so give the deterministic answer: drop its worst-case
+                # window and keep everything after it. The cue never becomes a turn;
+                # words spoken underneath it are lost with it (the alternative is the
+                # assistant answering its own voice).
+                drop_ms = max(
+                    0.0,
+                    self._cue_ms + CUE_OVERLAP_GUARD_MS - self._hold_skip_total_ms,
+                )
+                fallback = True
+            else:
+                # No cue heard at all (a device that mutes its microphone while it
+                # cues): nothing is removed, so the reply keeps its first word.
+                drop_ms = 0.0
+                fallback = False
+            buffered_ms = sum(b.size for b in pending) * 1000.0 / self.rate
+            drop_ms = min(drop_ms, buffered_ms)
+            if drop_ms > 0.0:
+                self._cue_excised = True
+            if self._echo_env is not None:
+                # One line per cue so the next sampling run can check every wake:
+                # when the cue was heard, what was dropped, and what reached the VAD.
+                dropped_end = min(
+                    self._hold_skip_total_ms + drop_ms, self._hold_total_ms)
+                log.info(
+                    "cue_gate: cue=[%.0f,%.0f]ms dropped=[0,%.0f]ms kept=[%.0f,%.0f]ms "
+                    "match=%.2f fallback=%s lag_hint=%s match_offset=%s",
+                    cue_start if matched else 0.0,
+                    cue_end if matched else self._cue_ms,
+                    dropped_end,
+                    dropped_end,
+                    self._hold_total_ms,
+                    match,
+                    "true" if fallback else "false",
+                    f"{self._cue_lag_ms:.0f}" if self._cue_lag_seen else "unknown",
+                    "none" if self._last_match_offset_ms is None
+                    else f"{self._last_match_offset_ms:.0f}",
+                )
             out = None
             dropped_ms = 0.0
             for buffered in pending:
-                if dropped_ms < tail_ms:
+                if dropped_ms < drop_ms:
                     block_ms = buffered.size * 1000.0 / self.rate
-                    take_ms = min(block_ms, tail_ms - dropped_ms)
+                    take_ms = min(block_ms, drop_ms - dropped_ms)
                     take = min(buffered.size, int(round(take_ms * self.rate / 1000.0)))
                     buffered = buffered[take:]
                     dropped_ms += take * 1000.0 / self.rate
@@ -330,7 +545,10 @@ class UtteranceGate:
                 if self._waited_ms >= self._max_wait_ms:
                     log.info("wake with no speech after %.0f ms; disarming", self._waited_ms)
                     self.discarded += 1
-                    self.idle_events += 1
+                    if not self._cue_excised:
+                        # A cue-heavy wake disarms silently, as it did before P2-1 (the
+                        # old code also emitted WakeIdle only for a truly silent wake).
+                        self.idle_events += 1
                     self.disarm()
                 return None
             # First speech: include the preroll so the onset is not chopped.
