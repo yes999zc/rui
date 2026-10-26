@@ -55,6 +55,8 @@
 
 **task-19（P2-2，第五轮返工待门禁，未提交）**：把 disarm 出口统一收口到 `process.py::_disarm_gate(reason)`（约 :2663）——`gate.armed` 时 disarm 并清 `_stale_speech_blocked`；`_disarm_gate_for_our_audio` 改走它（消除第四条漏清：reminder/console 语音 disarm 不经 `_feed_gate`）；`_feed_gate` 的 `armed -> disarmed` 转换也清位（约 :1959，覆盖 task-15 的 `_cue_excised` 静默超时，无 `idle_events`）；`idle_events` 变化清位保留。三处同一布尔赋值、均在事件循环单写者上，幂等无竞态。新测试 `tests/test_stale_speech_after_wake.py:170`（真实 vad 的 `_cue_excised` 超时 disarm → 后续 PLAY_PCM 入队）、`:214`（唤醒在听时我方 reminder disarm → 音频正常入队）；反向变异（去掉 helper 清位/armed 转换清位）→ 两用例分别 `AssertionError`。三仓：house-ear **1626 passed/17 skipped**、dot2 **143**、xiaoai **9**；ruff 绿。
 
+**task-17（P2-1b ack cue AEC-lite，实现完成待门禁，未提交）**：已知参考（cue PCM）的分块逐频点 NLMS，`vad.py:451 _aec_lite`（`GateConfig` :121 起：frame=512/hop=256/taps=4/mu=0.5/passes=2/erle_min_db=12/residual_max=0.25/lag_max_ms=1500）；`:477 _aec_lag` 归一化互相关找延迟（分数<0.55 视为无 cue，音频不动）；`:496 _aec_filter` 逐 bin 4-tap 频域 NLMS + overlap-add；`:538 _aec_corr` 残差相关；`:704` 在 `_consume` 段末调用，残差 ≥0.25 时不产生 turn（降级），绝不把 cue 送 ASR；`set_echo_reference` 把 s16 cue 归一化为 float（:310）。四象限（lag 740/950 × clip × gap 30/300）实测 corr `-0.01…-0.001`、retained `1.000`；冷启动不依赖 EMA；mute 回归 pass。CPU 1.7 s hold 中位 **8.2 ms**（单核约 0.5%）。变异：关 AEC → 8 个四象限用例 corr=0.394 失败；关 `_consume` 集成 → segment never reached AEC-lite。全量 **1639 passed/17 skipped**、dot2 143、xiaoai 9，ruff 绿。风险：真实房间混响 >64 ms 时残差可能超限 → 保守丢 turn；真机 A/B 归 Lead。
+
 **task-19（P2-2 音乐中短指令，第四轮返工待门禁，未提交）**：清位时机补齐——`_stale_speech_blocked` 现在在 `process.py:1962-1967`（`_feed_gate` 里 `idle_events` 变化，即 `wake without speech`/`WakeIdle`/超时 disarm）清除，也在本 turn utterance 落地时清除（:1988）；`_begin_wake_turn:1823` 在无 gate 时不置位。这样安静唤醒后 reminder/console debug say 的 PLAY_PCM 能正常播出。新用例 `tests/test_stale_speech_after_wake.py:117`（silent wake → 后续 PLAY_PCM 必须入队）；反向变异（注释掉 idle 清位）→ `AssertionError` at `assert plane._stale_speech_blocked is False`。已修好项保持：goodbye 已入队 chunk 仍被 flush/drop、farewell `say(keep_abort)` 早退、cue 正常。三仓：house-ear **1624 passed/17 skipped**、dot2 **143**、xiaoai **9**；ruff 绿。单会话限制已记：`runner.abort()` 全局 flag，A/B 两房共用 runner，跨房隔离仅 arbiter 层（task-18），不在本卡改。
 
 **task-19（P2-2 音乐中短指令，第三轮返工待门禁，未提交）**：阻塞 1——plain wake 只 abort flag，已入队 goodbye 音频仍播放（07:12 30.65–30.97 已有 1.4–2.0 s 入 plane）。修法：`process.py` 新增 `_stale_speech_blocked`（唤醒置位、本 turn utterance 落地时清除，`_accept_play_pcm` 丢弃此间 PLAY_PCM，SpeakStart/SpeakFinished 同步忽略），`_begin_wake_turn` 开头 `_flush_speech()` 清空已入队；不用 StopAudio 因为会连 wake cue「在呢」一起停。阻塞 2——`turn.say()` 无条件 `_abort.clear()`：新增 `keep_abort=True`，farewell 用它并在 abort 已置位时直接不播；`farewell` 仍先 `idle.stop()`。app 侧保留「任何 wake 都 `runner.abort()`」。新测试 `tests/test_stale_speech_after_wake.py`（预置/迟到 chunk 均不进 gate，utterance 后恢复）、`tests/test_turn.py:780`（abort 后 farewell 零播放）。反向变异：丢弃 guard 后 `assert 0.10015625 == 0.0`；turn 移除 abort 早退后 `the aborted goodbye still played`。三仓：house-ear **1623 passed/17 skipped**、dot2 **143**、xiaoai **9**；ruff 绿。真机 A/B 归 Lead。
@@ -186,6 +188,14 @@
 
 - 两台新 Dot2 到位后：EQ 耳测（保留 `/loudness`）→ 清 override 的 `DOT2_CONTROL_PORT` → 逐台 `listen_port`（8871/8873）→ v2 添加设备 → 逐台 添加/唤醒/应答/播放/停止/删除 → 4 台联合验收（`docs/release/acceptance-4devices.md`）。
 - 依赖 9 哥 手动添加设备；设备未到期间不阻塞 README/发布准备。
+
+## task-17 已 PARK（2026-10-26 19:35，按 goal 熔断）
+
+- 第一轮门禁 reviewer-barge = **CHANGES**，按新 goal「task-17 一轮不过即 park」**不返工**。
+- 代码已回滚：`src/rui/audio/vad.py` 还原、`tests/test_aec_lite.py` 删除，工作树干净。
+- 实现留档：**`/tmp/parked/task-17/{vad.py,test_aec_lite.py}`**（临时目录，重启前需转存到仓库外持久位置）。
+- park 原因（reviewer）：① `_aec_filter` 前 taps 帧 `clean` 恒 0 → cleaned 段首 ~32 ms 被置零，可能切用户首字；② `aec_lite=True` 默认开启且残差 ≥0.25 就**静默丢 turn**，真实混响 >64 ms 时可能频繁丢正常指令；③ `aec_lag_max_ms=1500` 与 task-15 的 800 ms 上界冲突，同源回复可能被当 cue 相减；④ 阈值/混响需真机 A/B。
+- **不阻塞发布**：0.7.1/0.7.2 内的包络 + EMA + `quiet_after` 已覆盖真机观测类（削波 + lag≈740 ms）；剩余边界（冷启动不削波、用户与 cue 重叠 <110 ms）写进 0.7.2 release notes 的 Known limitations。
 
 ## 风险与未决
 
