@@ -70,11 +70,37 @@ def parse_header(header: bytes) -> tuple[FrameType, int]:
     return kind, length
 
 
-async def read_frame(reader: asyncio.StreamReader) -> tuple[FrameType, bytes]:
-    """Read exactly one frame: header first, then the declared payload length."""
-    header = await reader.readexactly(HEADER.size)
+async def _read_exactly(
+    reader: asyncio.StreamReader, size: int, timeout: float | None
+) -> bytes:
+    if timeout is None:
+        return await reader.readexactly(size)
+    return await asyncio.wait_for(reader.readexactly(size), timeout)
+
+
+async def read_frame(
+    reader: asyncio.StreamReader, timeout: float | None = None
+) -> tuple[FrameType, bytes]:
+    """Read exactly one frame: header first, then the declared payload length.
+
+    ``timeout`` bounds the whole frame (both reads). The default ``None`` keeps the
+    streaming readers unbounded - an idle plane sends no frames, so a wall-clock
+    timeout there would tear down a healthy session. Handshakes pass their remaining
+    greet deadline instead, so a child that never answers cannot hang forever.
+    """
+    deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
+
+    def remaining() -> float | None:
+        if deadline is None:
+            return None
+        left = deadline - asyncio.get_running_loop().time()
+        if left <= 0:
+            raise TimeoutError
+        return left
+
+    header = await _read_exactly(reader, HEADER.size, remaining())
     kind, length = parse_header(header)
-    payload = await reader.readexactly(length) if length else b""
+    payload = await _read_exactly(reader, length, remaining()) if length else b""
     return kind, payload
 
 

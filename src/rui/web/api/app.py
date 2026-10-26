@@ -117,6 +117,7 @@ from ...tools.mcp_manifest import first_party_instances
 from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...trace import TraceLog, TurnTrace
+from .body_limit import BodySizeLimitMiddleware
 from .config_view import config_raw_document
 from .device_rules import (
     DEFAULT_LISTEN_PORT,
@@ -3271,6 +3272,10 @@ def create_app(
 
     app = FastAPI(title="rui", version=__version__, lifespan=lifespan)
     install_security_headers(app)
+    # rui#18: bound the request body before FastAPI parses it, so an unauthenticated
+    # caller cannot make the process buffer a large payload. Small bodies still reach
+    # the auth dependency, so 401/422 keep their semantics; the cap is a 413.
+    app.add_middleware(BodySizeLimitMiddleware)
     # The live config and the file it came from: voice commands that edit a
     # setting (「关闭上下文」) persist through the same file the console writes.
     app.state.cfg = cfg

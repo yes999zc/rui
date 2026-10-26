@@ -111,8 +111,8 @@ class AudioPlaneClient:
         self.writer.write(encode_json(msg))
         await self.writer.drain()
 
-    async def read_frame(self) -> tuple[FrameType, bytes]:
-        return await read_frame(self.reader)
+    async def read_frame(self, timeout: float | None = None) -> tuple[FrameType, bytes]:
+        return await read_frame(self.reader, timeout=timeout)
 
     async def pump(self) -> None:
         """Consume everything the plane sends; latest metrics wins.
@@ -392,6 +392,7 @@ class AudioPlaneSupervisor:
         self.client: AudioPlaneClient | None = None
         self.handle = PlaneHandle()
         self._stderr_task: asyncio.Task[None] | None = None
+        self._stderr_tail: list[str] = []
         self._watch_task: asyncio.Task[None] | None = None
         self._stopping = False
         self.restarts = 0
@@ -526,26 +527,25 @@ class AudioPlaneSupervisor:
                 line = await stderr.readline()
                 if not line:
                     return
-                log.info("plane: %s", line.decode(errors="replace").rstrip())
+                text = line.decode(errors="replace").rstrip()
+                self._stderr_tail = (self._stderr_tail + [text])[-20:]
+                log.info("plane: %s", text)
         except (asyncio.CancelledError, OSError, ValueError):
             return
 
     async def _greet(self, device: str, timeout_s: float) -> None:
         assert self.proc is not None
-        deadline = asyncio.get_running_loop().time() + timeout_s
-        while asyncio.get_running_loop().time() < deadline:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while loop.time() < deadline:
             if self.proc.returncode is not None:
-                # The stderr pump already printed whatever the child said; reading the pipe
-                # here would race with it.
-                raise AudioPlaneError(
-                    f"audio plane exited with {self.proc.returncode}"
-                )
+                raise AudioPlaneError(self._exit_reason())
             if self.socket_path.exists():
+                writer: asyncio.StreamWriter | None = None
                 try:
-                    reader, writer = await asyncio.open_unix_connection(str(self.socket_path))
-                except (FileNotFoundError, ConnectionRefusedError):
-                    pass
-                else:
+                    reader, writer = await asyncio.open_unix_connection(
+                        str(self.socket_path)
+                    )
                     self.client = AudioPlaneClient(reader, writer)
                     await self.client.send(
                         Hello(
@@ -554,7 +554,8 @@ class AudioPlaneSupervisor:
                             frame_ms=self.cfg.audio.voice.frame_ms,
                         )
                     )
-                    kind, payload = await self.client.read_frame()
+                    remaining = max(0.001, deadline - loop.time())
+                    kind, payload = await self.client.read_frame(timeout=remaining)
                     if kind is not FrameType.CONTROL:
                         raise AudioPlaneError("audio plane did not greet us")
                     msg = CONTROL.validate_json(payload)
@@ -569,7 +570,29 @@ class AudioPlaneSupervisor:
                     self.client.start_pump()
                     self.error = ""
                     return
+                except (OSError, EOFError) as exc:
+                    # A child that is exiting can accept the connection and then drop it
+                    # before/between our frames (Errno 57, reset, short read). Retry
+                    # within the greet budget instead of surfacing a transient socket
+                    # error as the start failure; if the child is gone, keep its reason.
+                    self.client = None
+                    if writer is not None:
+                        with contextlib.suppress(Exception):
+                            writer.close()
+                            await writer.wait_closed()
+                    if self.proc.returncode is not None:
+                        raise AudioPlaneError(self._exit_reason()) from exc
+                    log.debug("audio plane greet transient socket error: %s", exc)
+            # rui#17: this used to be a busy loop. A missing socket or a child that
+            # is still starting blocked the whole event loop for the greet timeout,
+            # freezing every room. 10 ms keeps cold-start overhead <= 50 ms.
+            await asyncio.sleep(0.01)
         raise AudioPlaneError(f"audio plane did not accept a connection in {timeout_s:.0f}s")
+
+    def _exit_reason(self) -> str:
+        code = self.proc.returncode if self.proc is not None else "?"
+        tail = " / ".join(self._stderr_tail[-3:])
+        return f"audio plane exited with {code}" + (f": {tail}" if tail else "")
 
     def _client_died(self, reason: str) -> None:
         """The plane's reader stopped: mark the plane down and make sure it is rebuilt.

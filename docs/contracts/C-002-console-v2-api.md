@@ -1299,3 +1299,18 @@ store 层 `MemoryStore.add/confirm` 仍保留 `[:MAX_TEXT]` 截断，这是语�
 | `tts` | 整轮**多句累计**：每句从链探测前开始计时，覆盖失败 provider/retry、合成与逐块下发，直到该句结束；`say` 把每句耗时累加为一个 `tts` 条目。没有可播文本的句子不产生 report | 跨句、跨 attempt 合并（前句 attempts + 后句 attempts）；长度 = 整轮实际 provider 尝试次数，**不等于 fallback 次数** |
 
 `attempts[]` 元素形状：`{provider: string, error: string, elapsed_ms: number}`；`error=""` 表示该次尝试成功，否则为 `"TypeName: message"`。跳过的 stage（如 `audio=false` 时没有 TTS）与失败 stage 的呈现不变，本轮只改数值来源。
+
+#### A-7 请求体上限（0.7.4，rui#18，additive）
+
+所有带 body 的写请求（POST/PUT/PATCH/DELETE；实现上**不按路径过滤**，`/api/**` 与 `/v2/**` 都生效）现在有 **1 MiB** 的请求体上限（`RUI_MAX_REQUEST_BYTES` 可覆盖，legacy `HOUSE_EAR_` 前缀同样生效）。GET/HEAD 不受影响。`Content-Length` 超限直接 `413 {"detail":"request body too large"}`；无 `Content-Length` 的流式 body 按累计字节数判定，超限同样 413。
+
+边界不变（这是 additive 防护，不是行为回归）：
+
+| 场景 | 状态 |
+|---|---|
+| 无 token + body > 上限 | **413**（在鉴权前拒绝，不解析 body） |
+| 无 token + 小 body | **401**（`bad or missing X-Auth-Token`） |
+| 有效 token + 非法 JSON | **422**（FastAPI 原有解析错误语义） |
+| 有效 token + 合法 JSON | 原有状态码不变 |
+
+31 个 v1 handler 的解析位置未改；handler 内解析重构留到 0.8。
