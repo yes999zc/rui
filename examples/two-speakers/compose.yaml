@@ -4,7 +4,7 @@
 #   cd examples/two-speakers
 #   1. 把两个桥仓的插件源码放到 ./plugins/ 下：
 #        git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git
-#        git clone --branch v0.2.1 https://github.com/yes999zc/rui-xiaoai-bridge.git
+#        git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 #        mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge plugins/
 #        cp -r rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 #   2. 准备 ./config/config.yaml（web.auth_token + devices[]，lx06 必填 host）
@@ -25,6 +25,10 @@ services:
     volumes:
       - ./config:/config:ro                # config.yaml：唯一事实来源（web.auth_token 必须在这里）
       - ./data:/var/lib/rui                # 状态、secrets.yaml、日志、音乐缓存
+      # TLS 材料（dot2 的 tls_port 开启时必需）：有原 controller 证书就拷贝到 ./secrets/；
+      # 没有就运行 `bash ../../scripts/make_dev_tls.sh` 自签。自签只保证平面能起，
+      # 真机是否接受取决于设备信任的 CA（见 README「TLS 材料」与 docs/audit/tls-required-2026-10.md）。
+      - ./secrets:/opt/rui-secrets:ro
       # 两个桥的插件源码：git clone 两个桥仓后，把 src 下的包放到这里
       - ./plugins/rui_dot2_bridge:/opt/rui-plugins/rui_dot2_bridge:ro
       - ./plugins/rui_xiaoai_bridge:/opt/rui-plugins/rui_xiaoai_bridge:ro
@@ -36,5 +40,6 @@ services:
       # 留空时音频平面不会启动（/health 里 audio_plane=false，日志 "RUI_DEVICE_TOKEN is empty"）
       RUI_DEVICE_TOKEN: ${RUI_DEVICE_TOKEN:-}
       DOT2_EM_TOKEN: ${DOT2_EM_TOKEN:-}
+      DOT2_SECRETS_DIR: /opt/rui-secrets    # 与上面的 ./secrets 挂载对应
       # adapter id -> 入口；右侧必须与 plugins/ 下的包名一致
       RUI_ADAPTER_PLUGINS: "dot2=rui_dot2_bridge.adapter:build,lx06=rui_xiaoai_bridge.adapter:build"

@@ -67,9 +67,10 @@
 2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) 写 ./config/config.yaml：web.auth_token、devices[]（id/adapter/room/host/listen_port；lx06 的 host 必填）
-5) export RUI_DEVICE_TOKEN=<设备令牌>; docker compose up -d
-6) 验收：/health 里 devices=2、device_errors=0、adapter_plugins.registered=["dot2","lx06"]；audio_plane=false 时看日志的 RUI_DEVICE_TOKEN / missing TLS material
-失败看：docker compose logs --tail=80 rui 的 config error / adapter / TLS；回滚：down 后把 image 换回上一版 tag
+5) TLS（dot2 的 tls_port 开启时必需）：把原 controller 证书放到 ./secrets/（server.pem + server.key）；没有就运行 `bash ../../scripts/make_dev_tls.sh` 自签。自签只保证音频平面能起，真机是否接受取决于设备信任的 CA（详见 `docs/audit/tls-required-2026-10.md`）
+6) export RUI_DEVICE_TOKEN=<设备令牌>; docker compose up -d
+7) 验收：/health 里 devices=2、device_errors=0、adapter_plugins.registered=["dot2","lx06"]；audio_plane=false 时看日志的 RUI_DEVICE_TOKEN / missing TLS material
+失败看：docker compose logs --tail=80 rui 的 config error / adapter / TLS；回滚：down 后把 image 换回上一版 tag；TLS 失败可先移走 ./secrets/ 确认是否 TLS 引起
 不需要自己编译 ffmpeg（镜像已内置）
 ```
 
@@ -124,7 +125,7 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 {'status': 'ok', 'version': '0.7.2', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
 ```
 
-如实说明：`adapter_plugins.registered`、`devices`、`device_errors` 在任何情况下都成立。**`audio_plane` 取决于设备令牌**：设了 `RUI_DEVICE_TOKEN` 后（未提供 TLS）实测为 `true`；不设时为 `false`，日志是 `RUI_DEVICE_TOKEN is empty`。上面这行 `False` 来自**没有设置设备令牌**的那次启动。TLS 材料（`secrets/server.pem|key`）只影响加密连接，缺它时日志可能出现 `missing TLS material`，但**不是** audio plane 启动的必要条件。
+如实说明：`adapter_plugins.registered`、`devices`、`device_errors` 在任何情况下都成立。**`audio_plane` 取决于设备令牌**：设了 `RUI_DEVICE_TOKEN` 后实测为 `true`；不设时为 `false`，日志是 `RUI_DEVICE_TOKEN is empty`。TLS 材料（`secrets/server.pem|key`）与音频平面启动的关系**以实测为准**：见 `docs/audit/tls-required-2026-10.md` 的三组矩阵（①只挂 dot2 无 secrets、②两桥无 secrets、③两桥有自签 secrets）。自签只解决「平面能起」，真机是否接受取决于设备信任的 CA；原 controller 证书丢失时设备需重新配网。
 
 ## 故障排查
 
@@ -205,9 +206,10 @@ Preflight: docker compose version; port 8080 free; 5 GB disk.
 2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) write ./config/config.yaml: web.auth_token and devices[] (id/adapter/room/host/listen_port; host required for lx06)
-5) export RUI_DEVICE_TOKEN=<device token>; docker compose up -d
-6) verify: /health shows devices=2, device_errors=0, adapter_plugins.registered=["dot2","lx06"]; if audio_plane=false read the log for RUI_DEVICE_TOKEN / missing TLS material
-On failure: docker compose logs --tail=80 rui (config error / adapter / TLS); rollback: down, switch image back
+5) TLS (required when dot2's tls_port is on): put the original controller cert into ./secrets/ (server.pem + server.key); if you do not have it, run `bash ../../scripts/make_dev_tls.sh`. Self-signed only proves the audio plane starts; whether the device accepts it depends on its trusted CA (see `docs/audit/tls-required-2026-10.md`)
+6) export RUI_DEVICE_TOKEN=<device token>; docker compose up -d
+7) verify: /health shows devices=2, device_errors=0, adapter_plugins.registered=["dot2","lx06"]; if audio_plane=false read the log for RUI_DEVICE_TOKEN / missing TLS material
+On failure: docker compose logs --tail=80 rui (config error / adapter / TLS); rollback: down, switch image back; for TLS failures move ./secrets/ away first to isolate
 No ffmpeg build needed (the image ships it)
 ```
 
@@ -262,7 +264,7 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 {'status': 'ok', 'version': '0.7.2', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
 ```
 
-To be precise: `adapter_plugins.registered`, `devices` and `device_errors` always hold. **`audio_plane` depends on the device token**: with `RUI_DEVICE_TOKEN` set (and no TLS) it measured `true`; without it, `false` with the log line `RUI_DEVICE_TOKEN is empty`. The `False` above comes from the run **without** a device token. TLS material (`secrets/server.pem|key`) only affects encrypted connections — its absence may log `missing TLS material` but is **not** required to start the audio plane.
+To be precise: `adapter_plugins.registered`, `devices` and `device_errors` always hold. **`audio_plane` depends on the device token**: with `RUI_DEVICE_TOKEN` set it measured `true`; without it, `false` with `RUI_DEVICE_TOKEN is empty`. The relation between TLS material (`secrets/server.pem|key`) and plane startup is **decided by measurement**: see the three matrices in `docs/audit/tls-required-2026-10.md` (① dot2 only, no secrets; ② both bridges, no secrets; ③ both bridges with self-signed secrets). Self-signed only makes the plane start; real-device acceptance depends on the device's trusted CA, and a lost original controller certificate means the device must be re-provisioned.
 
 ## Troubleshooting
 
