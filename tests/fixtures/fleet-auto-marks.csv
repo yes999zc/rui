@@ -1,0 +1,7 @@
+phrase_id,device_id,round,ts,heard_ok,notes
+hello,speaker,1,2026-10-26T14:17:00.000+08:00,,voice=Tingting rate=180 cmd=say -v Tingting -r 180 '你好小瑞'
+time,speaker,1,2026-10-26T14:17:12.000+08:00,,voice=Tingting rate=180 cmd=say -v Tingting -r 180 '几点了'
+play,speaker,1,2026-10-26T14:17:24.000+08:00,,voice=Tingting rate=180 cmd=say -v Tingting -r 180 '放首歌'
+next,speaker,1,2026-10-26T14:17:36.000+08:00,,voice=Tingting rate=180 cmd=say -v Tingting -r 180 '下一首'
+stop,speaker,1,2026-10-26T14:17:48.000+08:00,,voice=Tingting rate=180 cmd=say -v Tingting -r 180 '停止播放'
+bye,speaker,1,2026-10-26T14:18:00.000+08:00,,voice=Tingting rate=180 cmd=say -v Tingting -r 180 '退下吧'

@@ -25,14 +25,48 @@ Hand-marked rounds are optional (CSV, header row required)::
     next  ④下一首     stop ⑤停止播放  bye  ⑥退下吧
 
 ``heard_ok`` is the human verdict for that one round (1/0/true/false/yes/no/ok/对/
-是/… ; empty = not judged, which is reported as such, never guessed). ``ts`` is the
-wall-clock time the round started, used only to prove the round happened and to show
-the cell's time span - it is *not* used to join log lines to a phrase (the log has no
-phrase id, see the TODO section of the output).
+是/… ; empty = not judged). When it is empty the verdict is derived from the log by
+**time window** (see below); when it is present it is kept and reported as
+``human``. Nothing is guessed.
+
+Time windows
+------------
+The log has no phrase_id, so the join key is time. Marks rows are sorted by ``ts``
+and the i-th window is ``[ts_i, ts_{i+1})``; the last window is closed with
+``--window`` (default 15 s). Inside a window the only filters are time and the
+device id - never "the n-th wake line":
+
+  * ``success`` - the device has a ``wake candidate ... admitted`` line in the window
+    *and* one of its turn traces in the window carries ``asr_done`` or ``play_start``
+    (trace.py:27-39; the task card calls ``play_start`` "tts_play_start").
+  * ``fail``   - there is a wake line but no admission (reason from the rejection:
+    ``turn_open`` / ``cross_echo`` / ``admit_timeout`` / ...), or an admission with
+    no turn result in the window.
+  * ``unknown`` - the device has **no wake line at all** in the window (log gap, log
+    not covering that period, or a complete miss). This is never counted as fail and
+    never enters the success denominator.
+
+``--wake-only-phrase`` (default ``hello``) marks pure wake tests: the user speaks only
+the wake word and the plane answers "wake without speech", so success needs admitted
+and **no turn**; candidate-but-all-rejected is fail; no candidate is unknown. Pass
+``--wake-only-phrase ''`` to judge those phrases with the turn rule instead.
+
+If a mark's ``device_id`` is not a device in the log (the usual case: ``fleet_say``
+writes the *playback source*, e.g. ``speaker``), every online device is judged in
+that window separately ("single source, multiple devices"); ``--source-device``
+declares such an id explicitly.
+
+Timezone: the log's ``asctime`` has no offset (production rui runs in a UTC
+container), while marks ``ts`` are local with ``+08:00``. ``--log-tz`` (default
+``UTC``) is the zone the log lines are interpreted in; tz-aware marks are converted,
+tz-naive marks are interpreted in the same zone. Comparing the two literally would
+put every window 8 h away from its log lines and turn all 30 cells into ``unknown``.
 
 Usage::
 
     python scripts/fleet_matrix.py --log /tmp/rui-fleet.log --marks /tmp/fleet-marks.csv
+    python scripts/fleet_matrix.py --log /tmp/rui-fleet.log --marks /tmp/fleet-marks.csv \\
+        --log-tz UTC --window 15
     python scripts/fleet_matrix.py --log /tmp/rui-fleet.log --json
 
 Output goes to stdout only; the tool never writes into docs/ (redirect it yourself).
@@ -74,8 +108,9 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PHRASES: tuple[tuple[str, str], ...] = (
     ("hello", "①你好小瑞"),
@@ -91,6 +126,17 @@ PHRASE_INDEX = {pid: i for i, pid in enumerate(PHRASE_IDS)}
 
 MARK_COLUMNS = ("phrase_id", "device_id", "round", "ts", "heard_ok", "notes")
 
+# Stages that prove the turn produced a result, in trace.py:27-39 order. The task card
+# calls `play_start` "tts_play_start": play_start is the first PCM written (trace.py:38),
+# which is exactly the "TTS started playing" evidence. `wake` alone is not a result.
+WINDOW_RESULT_STAGES = ("asr_done", "play_start")
+DEFAULT_WINDOW_S = 15.0
+DEFAULT_LOG_TZ = "UTC"
+# hello is a pure wake test: the user speaks only the wake word and the plane answers
+# "wake without speech (5.0 s)" by design, so no turn is expected. Judging it with the
+# turn-based rule printed 0/5 for a run where all five wakes were admitted.
+DEFAULT_WAKE_ONLY_PHRASES = ("hello",)
+
 # "%(asctime)s %(levelname)s %(name)s: %(message)s" - src/rui/log_setup.py:18.
 LOG_PREFIX = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[,.]\d{1,6})?)\s+"
@@ -99,6 +145,10 @@ LOG_PREFIX = re.compile(
 # `docker logs -t` prepends an RFC3339 stamp; `docker compose logs` prepends "svc-1  | ".
 DOCKER_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\s+")
 COMPOSE_PREFIX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*\s*\|\s?")
+# A manually numbered paste ("L42 2026-10-26 06:17:24,053 INFO ..."). The numbers are
+# dropped; every `L<n>` in the report still means the physical `--log` line, never the
+# number somebody typed into their snippet.
+LINE_NO_PREFIX = re.compile(r"^L\d+\s+")
 # wake_id = f"{self.device_id}-{time.monotonic_ns()}" - audio/process.py:769.
 WAKE_ID = re.compile(r"^(?P<device>.+)-(?P<ns>\d+)$")
 ADMITTED = re.compile(r"^wake candidate (?P<id>\S+) admitted after (?P<ms>\d+) ms$")
@@ -126,6 +176,18 @@ PLANE_DEGRADED = re.compile(r"^audio plane degraded: (?P<detail>.+?); stopping.*
 CAPTURE_RECOVERED = re.compile(r"^capture recovered after (?P<n>\d+) failure\(s\)$")
 CAPTURE_RETRY = re.compile(r"^capture: (?P<detail>.*); retry (?P<streak>\d+)/(?P<budget>\d+)$")
 WAKE_NO_SPEECH = re.compile(r"^wake without speech \((?P<s>[\d.]+) s\).*$")
+# Rui's own KWS hit line (audio/kws.py), relayed from the plane process. A keyword hit
+# is not an arbitration candidate and never adds to wake candidate / admitted.
+KWS_WAKE = re.compile(r"^wake: (?P<keyword>.+)$")
+# The control plane forwards every plane stderr line through this prefix
+# (audio/client.py:529 `log.info("plane: %s", ...)`); the payload is a complete app
+# log line of its own ("2026-10-26 06:21:06,060 INFO __main__: ...").
+PLANE_RELAY_PREFIX = "plane: "
+# The plane is launched as `python -m ...` (audio/client.py:419-421), so every
+# `getLogger(__name__)` inside it is "__main__". Inside a `plane:` relay that name is
+# the audio plane entrypoint, audio/process.py; imported submodule loggers
+# (rui.audio.vad / rui.audio.kws) keep their own names.
+PLANE_ENTRY_LOGGER = "rui.audio.process"
 
 TRUE_WORDS = {"1", "true", "yes", "y", "ok", "o", "t", "对", "是", "成功", "听到了"}
 FALSE_WORDS = {"0", "false", "no", "n", "f", "x", "否", "没", "失败", "没听到"}
@@ -157,6 +219,8 @@ class TraceRec:
     silence_after_ms: float | None
     stages: dict
     meta: dict
+    ts: str | None = None  # wall clock of the log line, used only by time windows
+    turn_id: str | None = None  # dedupe key when the same turn is also relayed
 
 
 @dataclass
@@ -179,10 +243,15 @@ class LogScan:
     lines_total: int = 0
     blank: int = 0
     prefixed: int = 0
+    relayed: int = 0  # lines the control plane forwarded as `plane: <app line>`
+    relay_lines: list[int] = field(default_factory=list)
+    relay_loggers: Counter = field(default_factory=Counter)  # inner logger names
     unparsed: list[int] = field(default_factory=list)
     device_order: list[str] = field(default_factory=list)
     wake: list[WakeRec] = field(default_factory=list)
     traces: list[TraceRec] = field(default_factory=list)
+    duplicate_traces: list[tuple[int, int]] = field(default_factory=list)  # line, first_line
+    kws_wake: list[tuple[int, str]] = field(default_factory=list)  # line, keyword
     malformed_trace: list[int] = field(default_factory=list)
     malformed_result: list[int] = field(default_factory=list)
     barges: list[BargeRec] = field(default_factory=list)
@@ -214,7 +283,7 @@ class LogScan:
             + len(self.stage_failures) + len(self.turn_failed) + len(self.plane_degraded)
             + len(self.capture_recovered) + len(self.capture_retry) + len(self.result_turns)
             + len(self.wake_no_speech) + len(self.barge_control) + len(self.malformed_trace)
-            + len(self.malformed_result)
+            + len(self.malformed_result) + len(self.kws_wake) + len(self.duplicate_traces)
         )
 
 
@@ -245,6 +314,17 @@ class MarksScan:
 
 
 # ------------------------------------------------------------------------ parsing
+def _kws_keywords(scan: LogScan) -> list[tuple[str, int, list[int]]]:
+    """keyword -> (count, lines), most frequent first. Never summed into candidates."""
+    counts: Counter = Counter()
+    lines: dict[str, list[int]] = defaultdict(list)
+    for lineno, keyword in scan.kws_wake:
+        counts[keyword] += 1
+        lines[keyword].append(lineno)
+    return [(keyword, counts[keyword], lines[keyword])
+            for keyword in sorted(counts, key=lambda name: (-counts[name], name))]
+
+
 def _clean(text: str) -> str:
     return text.strip().strip("`'\" \t")
 
@@ -263,6 +343,54 @@ def parse_ts(text: str) -> datetime | None:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(UTC).replace(tzinfo=None)
     return parsed
+
+
+
+def parse_ts_aware(text: str) -> datetime | None:
+    """Like parse_ts but keeps the offset (needed to align log and marks windows)."""
+    raw = _clean(text).replace(",", ".")
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def log_tzinfo(name: str) -> tzinfo:
+    """--log-tz -> tzinfo. Accepts ``UTC``, an IANA name, or ``+08:00`` / ``-0530``.
+
+    ``UTC`` is the default on purpose: production rui runs in a UTC container, so a
+    log line ``2026-10-26 06:17:24,053`` is 06:17 UTC while the marks written on the
+    Mac say ``2026-10-26T14:17:24.053+08:00``. Comparing the two literally would put
+    every window 8 hours away from its own log lines.
+    """
+    token = (name or "").strip()
+    if not token:
+        return UTC
+    offset = re.fullmatch(r"(?P<sign>[+-])(?P<h>\d{2}):?(?P<m>\d{2})", token)
+    if offset:
+        delta = timedelta(hours=int(offset.group("h")), minutes=int(offset.group("m")))
+        if offset.group("sign") == "-":
+            delta = -delta
+        return timezone(delta)
+    if token.upper() == "UTC":
+        return UTC
+    return ZoneInfo(token)
+
+
+def to_utc_naive(value: datetime, zone: tzinfo) -> datetime:
+    """One comparable frame (naive UTC). A naive input is read as wall clock in `zone`."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=zone)
+    return value.astimezone(UTC).replace(tzinfo=None)
+
+
+def format_wall(moment: datetime, zone: tzinfo) -> str:
+    """Naive-UTC moment -> ``HH:MM:SS.mmm`` in `zone`, i.e. the log's own wall clock."""
+    return moment.replace(tzinfo=UTC).astimezone(zone).strftime("%H:%M:%S.%f")[:-3]
 
 
 def heard_ok(text: str) -> bool | None:
@@ -310,13 +438,72 @@ def parse_log(path: Path) -> LogScan:
             if match:
                 scan.prefixed += 1
                 ts, logger, msg = match.group("ts"), match.group("logger"), match.group("msg")
+                inner_ts, inner_logger, inner_msg = _unwrap_plane_relay(msg)
+                if inner_logger is not None:
+                    scan.relayed += 1
+                    scan.relay_lines.append(lineno)
+                    scan.relay_loggers[inner_logger] += 1
+                    logger = (PLANE_ENTRY_LOGGER if inner_logger == "__main__"
+                              else inner_logger)
+                    msg = inner_msg
+                    # The inner stamp is the real event time; the outer one is only a
+                    # fallback (they can differ by 1 ms and a window boundary is exact).
+                    ts = inner_ts or ts
             else:
                 ts = logger = None
                 msg = body.strip()
             if not _dispatch(scan, lineno, ts, logger, msg):
                 scan.unparsed.append(lineno)
     _pair_barges(scan)
+    _dedupe_traces(scan)
     return scan
+
+
+def _unwrap_plane_relay(msg: str) -> tuple[str | None, str | None, str]:
+    """Peel ``plane: <app line>`` layers -> (inner ts, inner logger, inner message).
+
+    The control plane forwards every plane stderr line as
+    ``<outer stamp> INFO rui.audio.client: plane: <inner app line>``
+    (audio/client.py:529). Without this step the whole payload looks like one
+    unknown ``rui.audio.client`` message and every plane-side wake/VAD line is lost.
+    Returns ``(None, None, msg)`` when no well-formed payload is present, so the
+    caller falls back to the outer line. Up to 3 nested layers are peeled; the
+    innermost logger/message win.
+    """
+    ts: str | None = None
+    logger: str | None = None
+    text = msg
+    for _ in range(3):
+        stripped = text.lstrip()
+        if not stripped.startswith(PLANE_RELAY_PREFIX):
+            break
+        inner = LOG_PREFIX.match(stripped[len(PLANE_RELAY_PREFIX):])
+        if inner is None:
+            break
+        ts, logger = inner.group("ts"), inner.group("logger")
+        text = inner.group("msg")
+    return ts, logger, text
+
+
+def _dedupe_traces(scan: LogScan) -> None:
+    """Count one turn once when the same turn_id arrives twice (direct + relayed).
+
+    ``turn_id`` is generated per turn (trace.py), so a duplicate means the same
+    event was logged twice, not two turns. The first line is kept and every dropped
+    line is reported - never silently swallowed.
+    """
+    seen: dict[tuple[str, str], int] = {}
+    kept: list[TraceRec] = []
+    for rec in scan.traces:
+        if rec.turn_id:
+            key = (rec.device, rec.turn_id)
+            first = seen.get(key)
+            if first is not None:
+                scan.duplicate_traces.append((rec.lineno, first))
+                continue
+            seen[key] = rec.lineno
+        kept.append(rec)
+    scan.traces = kept
 
 
 def _strip_transport_prefixes(line: str) -> str:
@@ -328,10 +515,12 @@ def _strip_transport_prefixes(line: str) -> str:
     the reverse order; anything else is left untouched for the normal parser.
     """
     text = line
-    for _ in range(2):
+    for _ in range(3):
         stripped = DOCKER_STAMP.sub("", text, count=1)
         if stripped == text:
             stripped = COMPOSE_PREFIX.sub("", text, count=1)
+        if stripped == text:
+            stripped = LINE_NO_PREFIX.sub("", text, count=1)
         if stripped == text:
             break
         text = stripped
@@ -352,6 +541,7 @@ def _dispatch(scan: LogScan, lineno: int, ts: str | None, logger: str | None, ms
             return True
         stages = entry.get("stages_ms")
         meta = entry.get("meta")
+        turn_id = entry.get("turn_id")
         scan.note_device(device)
         scan.traces.append(
             TraceRec(
@@ -361,6 +551,8 @@ def _dispatch(scan: LogScan, lineno: int, ts: str | None, logger: str | None, ms
                 silence_after_ms=_float_or_none(entry.get("silence_after_ms")),
                 stages=stages if isinstance(stages, dict) else {},
                 meta=meta if isinstance(meta, dict) else {},
+                ts=ts,
+                turn_id=turn_id if isinstance(turn_id, str) and turn_id else None,
             )
         )
         return True
@@ -467,6 +659,14 @@ def _dispatch(scan: LogScan, lineno: int, ts: str | None, logger: str | None, ms
             scan.stage_failures.append(
                 (lineno, match.group("stage"), match.group("detail").strip())
             )
+            return True
+
+    if _is(logger, "rui.audio.kws"):
+        # A KWS hit proves the keyword matched; it is not a candidate and not a
+        # success. Reported separately so it can never inflate admitted/success.
+        match = KWS_WAKE.match(msg)
+        if match:
+            scan.kws_wake.append((lineno, match.group("keyword").strip()))
             return True
 
     return False
@@ -586,6 +786,349 @@ def _mark_row(cells: list[str], index: dict[str, int], lineno: int,
     )
 
 
+# ------------------------------------------------------------------- time windows
+def tz_label(zone: tzinfo) -> str:
+    """A stable, human-checkable label: IANA key when present, else UTC+HH:MM."""
+    key = getattr(zone, "key", None)
+    if isinstance(key, str):
+        return key
+    offset = zone.utcoffset(datetime.now(UTC))
+    if not offset:
+        return "UTC"
+    seconds = int(offset.total_seconds())
+    sign = "+" if seconds >= 0 else "-"
+    hours, minutes = divmod(abs(seconds) // 60, 60)
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+def _index_log_times(scan: LogScan, zone: tzinfo) -> tuple[dict, dict, dict[str, list[int]]]:
+    """Device -> [(utc-naive moment, record)] for wake and trace lines.
+
+    Only lines that carry a parseable timestamp can be placed in a window. The rest
+    are kept as device -> physical line numbers (not just a count): the report prints
+    "dot2×1（L9）" and §6 carries the full evidence list, so a reader can always open
+    the exact line - they are never assigned to the nearest window.
+    """
+    wake: dict[str, list[tuple[datetime, WakeRec]]] = defaultdict(list)
+    trace: dict[str, list[tuple[datetime, TraceRec]]] = defaultdict(list)
+    untimed: dict[str, list[int]] = defaultdict(list)
+    for rec in scan.wake:
+        if rec.device is None:
+            continue
+        parsed = parse_ts_aware(rec.ts) if rec.ts else None
+        if parsed is None:
+            untimed[rec.device].append(rec.lineno)
+            continue
+        wake[rec.device].append((to_utc_naive(parsed, zone), rec))
+    for rec in scan.traces:
+        parsed = parse_ts_aware(rec.ts) if rec.ts else None
+        if parsed is None:
+            untimed[rec.device].append(rec.lineno)
+            continue
+        trace[rec.device].append((to_utc_naive(parsed, zone), rec))
+    return wake, trace, untimed
+
+
+def _untimed_lines(scan: LogScan) -> dict[str, list[int]]:
+    """Device -> physical lines whose wake/turn record has no parseable timestamp."""
+    untimed: dict[str, list[int]] = defaultdict(list)
+    for rec in scan.wake:
+        if rec.device is None:
+            continue
+        if not rec.ts or parse_ts_aware(rec.ts) is None:
+            untimed[rec.device].append(rec.lineno)
+    for rec in scan.traces:
+        if not rec.ts or parse_ts_aware(rec.ts) is None:
+            untimed[rec.device].append(rec.lineno)
+    return untimed
+
+
+def _window_targets(row: MarkRow, devices: list[str],
+                    source_device: str | None) -> tuple[list[str], bool]:
+    """Which devices a marks row is judged for, and whether that is multi-device mode.
+
+    A marks row usually names the playback source (``fleet_say`` writes ``speaker``),
+    which is not a device in the log; then every online device is judged separately
+    in that window. A row naming a logged device judges that device only - unless
+    ``--source-device`` declares that id to be the source rather than the device.
+    """
+    if source_device and row.device_id == source_device:
+        return list(devices), True
+    if row.device_id in devices:
+        return [row.device_id], False
+    return list(devices), True
+
+
+def _judge_window(device: str, start: datetime, end: datetime, wake_index: dict,
+                  trace_index: dict, untimed: dict[str, list[int]],
+                  wake_only: bool = False) -> tuple[str, str, dict]:
+    """Verdict for one device inside ``[start, end)``. Only time and device filter."""
+    wakes = [(moment, rec) for moment, rec in wake_index.get(device, [])
+             if start <= moment < end]
+    turns = [(moment, rec) for moment, rec in trace_index.get(device, [])
+             if start <= moment < end]
+    admitted = [rec for _moment, rec in wakes if rec.verdict == "admitted"]
+    rejected = [rec for _moment, rec in wakes
+                if rec.verdict in ("rejected", "timeout")]
+    result_turns = [rec for _moment, rec in turns
+                    if any(stage in rec.stages for stage in WINDOW_RESULT_STAGES)]
+    stages_present = [stage for stage in WINDOW_RESULT_STAGES
+                      if any(stage in rec.stages for _moment, rec in turns)]
+    reasons = Counter(rec.reason for rec in rejected if rec.reason)
+    detail = {
+        "wake": [rec.lineno for _moment, rec in wakes],
+        "admitted": [rec.lineno for rec in admitted],
+        "rejected": [rec.lineno for rec in rejected],
+        "turn": [rec.lineno for _moment, rec in turns],
+        "turn_result": [rec.lineno for rec in result_turns],
+        "rejected_reasons": dict(reasons),
+    }
+    if not wakes:
+        extra = ""
+        if untimed.get(device):
+            lines = untimed[device]
+            extra = (f"；该设备另有 {len(lines)} 条没有时间戳的 wake/turn 行"
+                     f"（{ranges(lines)}），无法归属（见 §6）")
+        prefix = "仅测唤醒（wake-only）：" if wake_only else ""
+        if result_turns:
+            # A follow-up turn can be handled without a new wake candidate (the plane's
+            # follow-up gate stays open). The turn is real evidence, but the log still
+            # has no phrase id: it cannot prove *this* phrase caused it, so it stays
+            # unknown - never a silent success and never a fail.
+            lines = "、".join(f"L{rec.lineno}" for rec in result_turns)
+            return ("unknown",
+                    f"{prefix}窗口内没有该设备的 wake 行，但有 turn 结果（{lines}）：可能是唤醒门控/"
+                    f"跟随时段，日志无 phrase_id，无法证明是本句 → unknown，不判 fail{extra}",
+                    detail)
+        return ("unknown",
+                f"{prefix}窗口内该设备没有任何 wake 行（日志断档/未覆盖/未命中）{extra}",
+                detail)
+    if wake_only:
+        # A wake-only phrase is answered by the plane itself (wake without speech), so
+        # admitted is the whole success criterion; asking for a turn here is wrong.
+        if admitted:
+            return ("success", "仅测唤醒（wake-only）：窗口内有 admitted，不要求 turn", detail)
+        reason_text = "、".join(f"{name}×{count}" for name, count in sorted(reasons.items()))
+        return ("fail",
+                f"仅测唤醒（wake-only）：candidate 全被拒（{reason_text or 'reason 未记录'}）",
+                detail)
+    if admitted:
+        if result_turns:
+            return ("success",
+                    f"admitted + turn 结果（{'/'.join(stages_present)}）", detail)
+        return ("fail", "admitted 后窗口内没有 turn 结果（无 asr_done/play_start）", detail)
+    reason_text = "、".join(f"{name}×{count}" for name, count in sorted(reasons.items()))
+    return ("fail", f"有 wake 行但无 admitted（{reason_text or 'reason 未记录'}）", detail)
+
+
+def _window_block(scan: LogScan, marks: MarksScan, *, window_s: float,
+                  source_device: str | None, log_tz: tzinfo,
+                  wake_only_phrases: frozenset[str] = frozenset()) -> dict:
+    """Build every time-window judgement. Empty when marks carry no usable ``ts``."""
+    block: dict = {
+        "window_s": window_s,
+        "source_device": source_device,
+        "log_tz": tz_label(log_tz),
+        "wake_only_phrases": sorted(wake_only_phrases),
+        "multi_device": False,
+        "rows": [],
+        "summary": [],
+        "judged_devices": [],
+        "totals": {},
+        "notes": [],
+        "untimed": {},
+        "max_window_s": None,
+    }
+    untimed_lines = _untimed_lines(scan)
+    block["untimed"] = {device: lines for device, lines in untimed_lines.items()}
+    timed = [row for row in marks.rows if row.ts is not None]
+    if not marks.usable or not timed:
+        block["notes"].append(
+            "未提供带 ts 的 marks → 不做时间窗对齐（证据不足，不是 fail）。"
+        )
+        return block
+
+    wake_index, trace_index, untimed = _index_log_times(scan, log_tz)
+    ordered = sorted(timed, key=lambda row: (row.ts, row.lineno))
+    groups: list[tuple[datetime, list[MarkRow]]] = []
+    for row in ordered:
+        parsed = parse_ts_aware(row.ts_text)
+        if parsed is None:  # defensive: _mark_row already parsed the same text
+            block["notes"].append(f"marks L{row.lineno} 的 ts 无法解析，未参与窗口对齐。")
+            continue
+        moment = to_utc_naive(parsed, log_tz)
+        if groups and groups[-1][0] == moment:
+            groups[-1][1].append(row)
+        else:
+            groups.append((moment, [row]))
+    if not groups:
+        block["notes"].append("marks 里有 ts 的行都解析失败，无法建立窗口。")
+        return block
+
+    devices = list(scan.device_order)
+    human_rows = 0
+    index = 0
+    for position, (start, rows) in enumerate(groups):
+        if position + 1 < len(groups):
+            end, end_kind = groups[position + 1][0], "next"
+        else:
+            end, end_kind = start + timedelta(seconds=window_s), "window"
+        gap_s = (end - start).total_seconds()
+        if block["max_window_s"] is None or gap_s > block["max_window_s"]:
+            block["max_window_s"] = gap_s
+        for row in rows:
+            index += 1
+            if row.heard_ok is not None:
+                human_rows += 1
+            targets, multi = _window_targets(row, devices, source_device)
+            block["multi_device"] = block["multi_device"] or multi
+            if not targets:
+                block["rows"].append({
+                    "index": index,
+                    "mark_line": row.lineno,
+                    "phrase_id": row.phrase_id,
+                    "round": row.round,
+                    "mark_device": row.device_id,
+                    "mark_ts": row.ts_text,
+                    "window_start": format_wall(start, log_tz),
+                    "window_end": format_wall(end, log_tz),
+                    "window_end_kind": end_kind,
+                    "device": "",
+                    "wake_only": row.phrase_id in wake_only_phrases,
+                    "mode": "none",
+                    "verdict": "unknown",
+                    "reason": "日志里没有任何设备行，无法判定（证据不足，不是 fail）",
+                    "source": "none",
+                    "heard_ok": row.heard_ok,
+                    "wake_lines": [], "admitted_lines": [], "rejected_lines": [],
+                    "turn_lines": [], "turn_result_lines": [],
+                    "rejected_reasons": {},
+                })
+                continue
+            wake_only = row.phrase_id in wake_only_phrases
+            for device in targets:
+                verdict, reason, detail = _judge_window(
+                    device, start, end, wake_index, trace_index, untimed,
+                    wake_only=wake_only,
+                )
+                official = {"success": True, "fail": False}.get(verdict)
+                block["rows"].append({
+                    "index": index,
+                    "mark_line": row.lineno,
+                    "phrase_id": row.phrase_id,
+                    "round": row.round,
+                    "mark_device": row.device_id,
+                    "mark_ts": row.ts_text,
+                    "window_start": format_wall(start, log_tz),
+                    "window_end": format_wall(end, log_tz),
+                    "window_end_kind": end_kind,
+                    "device": device,
+                    "wake_only": wake_only,
+                    "mode": "multi" if multi else "device",
+                    "verdict": verdict,
+                    "reason": reason,
+                    "source": "human" if row.heard_ok is not None else "log",
+                    "heard_ok": row.heard_ok if row.heard_ok is not None else official,
+                    "wake_lines": detail["wake"],
+                    "admitted_lines": detail["admitted"],
+                    "rejected_lines": detail["rejected"],
+                    "turn_lines": detail["turn"],
+                    "turn_result_lines": detail["turn_result"],
+                    "rejected_reasons": detail["rejected_reasons"],
+                })
+
+    counts = Counter(row["verdict"] for row in block["rows"])
+    # Keep all three keys even at 0: "unknown 0" is information, a missing key
+    # makes JSON consumers guess.
+    block["totals"] = {key: counts.get(key, 0)
+                       for key in ("success", "fail", "unknown")}
+    summary_devices = list(devices)
+    for row in block["rows"]:
+        device = row["device"]
+        if device and device not in summary_devices:
+            summary_devices.append(device)
+    for device in summary_devices:
+        rows = [row for row in block["rows"] if row["device"] == device]
+        block["summary"].append({
+            "device": device,
+            "windows": len(rows),
+            "success": sum(1 for row in rows if row["verdict"] == "success"),
+            "fail": sum(1 for row in rows if row["verdict"] == "fail"),
+            "unknown": sum(1 for row in rows if row["verdict"] == "unknown"),
+            "human": sum(1 for row in rows if row["source"] == "human"),
+            "trace_only": sum(1 for row in rows if row["verdict"] == "unknown"
+                              and row["turn_result_lines"]),
+            "lines": [row["mark_line"] for row in rows],
+        })
+    # The phrase matrix has one column per device that was actually judged; a marks
+    # id that is only the playback source is not a device and does not get a column.
+    block["judged_devices"] = [item["device"] for item in block["summary"]]
+
+    block["notes"].append(
+        f"日志时间按 --log-tz={block['log_tz']} 解释：日志 asctime 不带时区，"
+        "容器与本机时区不同时必须显式指定，否则窗口会整体偏移。"
+    )
+    if block["wake_only_phrases"]:
+        block["notes"].append(
+            "仅测唤醒（wake-only）句：`"
+            + "`, `".join(block["wake_only_phrases"])
+            + "` —— success 只要求窗口内有 admitted（不要求 turn）；"
+            "candidate 全被拒 = fail；没有 candidate = unknown。可用 --wake-only-phrase '' 关闭。"
+        )
+    unknown_wake_only = sorted(set(block["wake_only_phrases"]) - set(PHRASE_IDS))
+    if unknown_wake_only:
+        block["notes"].append(
+            "--wake-only-phrase 含未知 phrase_id："
+            + "、".join(unknown_wake_only) + "（不生效，见 phrase_order）。"
+        )
+    if block["multi_device"]:
+        block["notes"].append(
+            "单音源多设备模式：marks 的 device_id 不是日志里的设备（或 --source-device 声明了它），"
+            "窗口内每台在线设备分别判定；窗口内没有 wake 行的设备记 unknown，不是 fail。"
+        )
+    if source_device and not any(row.device_id == source_device for row in marks.rows):
+        block["notes"].append(
+            f"--source-device {source_device} 在 marks 里没有匹配行，该参数未生效。"
+        )
+    if untimed:
+        detail = "、".join(f"{device}×{len(lines)}（{ranges(lines)}）"
+                           for device, lines in sorted(untimed.items()))
+        block["notes"].append(
+            f"日志里有 {sum(len(lines) for lines in untimed.values())} 条 wake/turn 行"
+            f"没有时间戳（无前缀或被截断），无法归属到任何窗口：{detail}（行号见 §6）。"
+        )
+    if block["max_window_s"] is not None and block["max_window_s"] > max(window_s, 1e-9):
+        block["notes"].append(
+            f"最长的相邻窗口 {block['max_window_s']:.1f} s 大于 --window={window_s:g} s"
+            "（通常是跨 round 的间隙）：按 [ts_i, ts_{i+1}) 的规则仍然整段归给前一句。"
+        )
+    if human_rows:
+        block["notes"].append(
+            f"marks 里有 {human_rows} 行带人工 heard_ok：heard_ok 列原样保留并标 human，"
+            "日志判定仍并列在表里。"
+        )
+    return block
+
+
+def _derived_cell_stats(windows: dict) -> dict[tuple[str, str], dict]:
+    """(phrase_id, device) -> window tally, consumed by the phrase matrix."""
+    stats: dict[tuple[str, str], dict] = {}
+    for row in windows["rows"]:
+        key = (row["phrase_id"], row["device"])
+        cell = stats.setdefault(
+            key,
+            {"success": 0, "fail": 0, "unknown": 0, "human": 0, "trace_only": 0,
+             "windows": []},
+        )
+        cell[row["verdict"]] += 1
+        if row["source"] == "human":
+            cell["human"] += 1
+        if row["verdict"] == "unknown" and row["turn_result_lines"]:
+            cell["trace_only"] += 1
+        cell["windows"].append(row["index"])
+    return stats
+
+
 # ---------------------------------------------------------------------- statistics
 def p90(values: list[float]) -> float:
     """Nearest-rank p90: no interpolation, no invented value between two samples."""
@@ -649,18 +1192,25 @@ def _fmt_count(block: dict) -> str:
 
 
 # ------------------------------------------------------------------------- report
-def build_report(scan: LogScan, marks: MarksScan) -> dict:
+def build_report(scan: LogScan, marks: MarksScan, *, window_s: float = DEFAULT_WINDOW_S,
+                 source_device: str | None = None, log_tz: tzinfo = UTC,
+                 wake_only_phrases: tuple[str, ...] | frozenset[str] | None
+                 = DEFAULT_WAKE_ONLY_PHRASES) -> dict:
     device_order = list(scan.device_order)
     if marks.usable:
         for row in marks.rows:
             if row.device_id not in device_order:
                 device_order.append(row.device_id)
     devices = {device: _device_block(scan, device) for device in device_order}
-    cells = _cell_block(marks, device_order)
+    windows = _window_block(scan, marks, window_s=window_s,
+                            source_device=source_device, log_tz=log_tz,
+                            wake_only_phrases=frozenset(wake_only_phrases or ()))
+    derived = _derived_cell_stats(windows)
+    cells = _cell_block(marks, device_order, derived)
     unattributed = _unattributed_block(scan)
     reconcile = _reconcile(devices, cells, device_order)
-    todo = _todo_block(scan, marks, cells, devices, device_order)
-    evidence = _evidence_block(devices, cells, unattributed)
+    todo = _todo_block(scan, marks, cells, devices, device_order, windows)
+    evidence = _evidence_block(devices, cells, unattributed, windows, scan)
     return {
         "log": {
             "path": scan.path,
@@ -668,6 +1218,21 @@ def build_report(scan: LogScan, marks: MarksScan) -> dict:
             "blank": scan.blank,
             "prefixed": scan.prefixed,
             "recognised": scan.parsed,
+            "relay": {
+                "value": scan.relayed,
+                "by_inner_logger": dict(sorted(scan.relay_loggers.items())),
+                "lines": scan.relay_lines,
+            },
+            "trace_duplicates": {
+                "value": len(scan.duplicate_traces),
+                "lines": [{"line": line, "first_line": first}
+                          for line, first in scan.duplicate_traces],
+            },
+            "untimed": {
+                "value": sum(len(lines) for lines in windows.get("untimed", {}).values()),
+                "devices": {device: lines
+                            for device, lines in windows.get("untimed", {}).items()},
+            },
             "unparsed": {"value": len(scan.unparsed),
                          "lines": scan.unparsed[:UNPARSED_SAMPLE]},
         },
@@ -688,6 +1253,7 @@ def build_report(scan: LogScan, marks: MarksScan) -> dict:
         "device_order": device_order,
         "devices": devices,
         "cells": cells,
+        "windows": windows,
         "unattributed": unattributed,
         "reconcile": reconcile,
         "todo": todo,
@@ -809,8 +1375,20 @@ def _device_block(scan: LogScan, device: str) -> dict:
     }
 
 
-def _cell_block(marks: MarksScan, device_order: list[str]) -> dict:
-    """phrase_id -> {device -> attempts / heard_ok / unknown / lines / span}."""
+def _empty_cell() -> dict:
+    return {"attempts": 0, "heard_ok": 0, "unknown_ok": 0, "lines": [],
+            "untimed": 0, "first_ts": None, "last_ts": None, "notes": []}
+
+
+def _cell_block(marks: MarksScan, device_order: list[str],
+                derived: dict[tuple[str, str], dict] | None = None) -> dict:
+    """phrase_id -> {device -> attempts / heard_ok / unknown / lines / span}.
+
+    ``heard_ok`` / ``unknown_ok`` still count the *human* column, exactly as before.
+    ``derived`` (from time windows) is attached per cell so the matrix can print the
+    log verdict when the whole run left heard_ok empty. The two are never mixed: the
+    report states which mode it is in (``verdict_mode``).
+    """
     cells: dict[str, dict[str, dict]] = {
         phrase: {} for phrase in PHRASE_IDS
     }
@@ -819,11 +1397,7 @@ def _cell_block(marks: MarksScan, device_order: list[str]) -> dict:
         if row.phrase_id not in cells:
             unknown_phrases[row.phrase_id].append(row.lineno)
             continue
-        cell = cells[row.phrase_id].setdefault(
-            row.device_id,
-            {"attempts": 0, "heard_ok": 0, "unknown_ok": 0, "lines": [],
-             "untimed": 0, "first_ts": None, "last_ts": None, "notes": []},
-        )
+        cell = cells[row.phrase_id].setdefault(row.device_id, _empty_cell())
         cell["attempts"] += 1
         cell["lines"].append(row.lineno)
         if row.heard_ok is True:
@@ -845,14 +1419,20 @@ def _cell_block(marks: MarksScan, device_order: list[str]) -> dict:
     else:
         for per_device in cells.values():
             for device in device_order:
-                per_device.setdefault(
-                    device,
-                    {"attempts": 0, "heard_ok": 0, "unknown_ok": 0, "lines": [],
-                     "untimed": 0, "first_ts": None, "last_ts": None, "notes": []},
-                )
+                per_device.setdefault(device, _empty_cell())
+    empty_derived = {"success": 0, "fail": 0, "unknown": 0, "human": 0,
+                     "trace_only": 0, "windows": []}
+    derived = derived or {}
+    for phrase in cells:
+        for device, cell in cells[phrase].items():
+            cell["derived"] = dict(derived.get((phrase, device), empty_derived))
+            cell["derived"]["windows"] = list(cell["derived"]["windows"])
+    no_human = not any(row.heard_ok is not None for row in marks.rows)
+    verdict_mode = "log" if no_human and derived else "human"
     return {
         "usable": marks.usable,
         "heard_ok_column": "heard_ok" not in marks.missing_columns if marks.usable else None,
+        "verdict_mode": verdict_mode,
         "cells": cells,
         "unknown_phrases": {phrase: {"value": len(lines), "lines": lines}
                             for phrase, lines in sorted(unknown_phrases.items())},
@@ -934,6 +1514,12 @@ def _unattributed_block(scan: LogScan) -> dict:
             "lines": [line for line, _streak, _budget in scan.capture_retry],
         },
         "wake_no_speech": scalar(len(scan.wake_no_speech), list(scan.wake_no_speech)),
+        "kws_wake": {
+            "value": len(scan.kws_wake),
+            "keywords": [{"count": count, "keyword": keyword, "lines": lines}
+                         for keyword, count, lines in _kws_keywords(scan)],
+            "lines": [line for line, _keyword in scan.kws_wake],
+        },
         "result_turns": {
             "value": len(scan.result_turns),
             "with_transcript": len(scan.result_transcripts),
@@ -987,19 +1573,27 @@ def _reconcile(devices: dict, cells: dict, device_order: list[str]) -> list[dict
 
 
 def _todo_block(scan: LogScan, marks: MarksScan, cells: dict, devices: dict,
-                device_order: list[str]) -> list[str]:
+                device_order: list[str], windows: dict | None = None) -> list[str]:
     todo: list[str] = []
-    todo.append(
-        "句级日志指标（唤醒成功率/首字延迟/打断/停播/gap/ASR 错误）无法从日志归属到某一句："
-        "日志行只带 device_id（wake candidate / rui.trace turn），没有 phrase_id，"
-        "marks 也只有人工 heard_ok —— 逐句日志数字需要 rui 输出句标签或有人逐回合抄 ms。"
-    )
+    windows = windows or {"rows": [], "notes": []}
+    if windows["rows"]:
+        todo.append(
+            "句级归属只靠 marks.ts 时间窗 + device（窗口定义 `[ts_i, ts_{i+1})`）：日志没有 "
+            "phrase_id，同一窗口内若该设备还响应了别的句子，无法区分；"
+            "每个窗口的判定与行号见 §2b / §6。"
+        )
+    else:
+        todo.append(
+            "句级日志指标（唤醒成功率/首字延迟/打断/停播/gap/ASR 错误）无法从日志归属到某一句："
+            "日志行只带 device_id（wake candidate / rui.trace turn），没有 phrase_id；"
+            "提供带 ts 的 marks（fleet_say 自动生成）后才能做时间窗对齐。"
+        )
     todo.append(
         "误唤醒：日志区分不了「没人说话却触发」与真唤醒，本工具不生成该数字，只能人工标记。"
     )
     todo.append(
         "admitted/candidates 的分母只含「已产生候选」的尝试；一次候选都没有的漏唤醒不在日志里，"
-        "真实唤醒率请用 §2 的人工尝试数。"
+        "真实唤醒率请用 §2 的尝试数（人工标记或时间窗判定，报告会注明是哪一种）。"
     )
     todo.append(
         "ASR/LLM/TTS 失败计数按 provider 链 60 s 窗口去重（providers/chain.py:139），是下限不是总数。"
@@ -1038,9 +1632,11 @@ def _todo_block(scan: LogScan, marks: MarksScan, cells: dict, devices: dict,
             untimed += cell.get("untimed", 0)
     if untimed:
         todo.append(
-            f"marks 有 {untimed} 行 ts 为空或无法解析：这些回合只有人工判定、没有时间点，"
+            f"marks 有 {untimed} 行 ts 为空或无法解析：这些回合没有时间点，"
             "无法与日志窗口对齐（行号见 §6 的 `marks L…`）。"
         )
+    for note in windows.get("notes") or []:
+        todo.append(note)
     for device, block in devices.items():
         gaps = block["gaps"]
         if gaps["turns"] is None and gaps["unknown"]:
@@ -1058,10 +1654,30 @@ def _todo_block(scan: LogScan, marks: MarksScan, cells: dict, devices: dict,
             f"日志有 {len(scan.malformed_trace)} 行 turn trace JSON 无法解析、"
             f"{len(scan.malformed_result)} 行 turn JSON 无法解析（行号见 §3）。"
         )
+    if scan.relayed:
+        inner = "、".join(f"{name}×{count}"
+                          for name, count in sorted(scan.relay_loggers.items()))
+        todo.append(
+            f"`plane:` 转发行 {scan.relayed} 行已按内层 app 行解析（内层 ts/logger 优先，"
+            f"外层 ts 仅兜底；内层 logger：{inner}）。内层 `__main__` 是 plane 入口"
+            f"（audio/process.py 以 `-m` 启动），已映射为 rui.audio.process。"
+        )
+    if scan.kws_wake:
+        todo.append(
+            f"KWS `wake:` 行 {len(scan.kws_wake)} 条只证明关键词命中，不是 wake candidate，"
+            "没有 device_id，未计入任何格子，也不与 admitted/成功数相加。"
+        )
+    if scan.duplicate_traces:
+        todo.append(
+            f"有 {len(scan.duplicate_traces)} 行 turn trace 与前面同 (device, turn_id)，"
+            "已按首行去重（行号见 §6），同一 turn 不会被计两次。"
+        )
     return todo
 
 
-def _evidence_block(devices: dict, cells: dict, unattributed: dict) -> list[dict]:
+def _evidence_block(devices: dict, cells: dict, unattributed: dict,
+                    windows: dict | None = None,
+                    scan: LogScan | None = None) -> list[dict]:
     """One row per printed number, with the *full* line list.
 
     JSON consumers get every line; the markdown renderer compresses the list into
@@ -1088,6 +1704,18 @@ def _evidence_block(devices: dict, cells: dict, unattributed: dict) -> list[dict
         add(device, "播放 gap（字段已知的 turn，0 与非 0 的判定依据）", evidence["gap_known"])
         add(device, "有 gap 的 turn", evidence["gap_positive"])
         add(device, "wake 无 asr_done", evidence["asr_missing_turns"])
+    for row in (windows or {}).get("rows", []):
+        label = PHRASE_LABEL.get(row["phrase_id"], row["phrase_id"])
+        if row["wake_only"]:
+            label += "（wake-only）"
+        scope = f"{label}×{row['device'] or '—'}（R{row['round'] or '?'} #{row['index']}）"
+        log_lines = sorted(set(row["wake_lines"]) | set(row["rejected_lines"])
+                           | set(row["turn_lines"]))
+        add(scope, f"窗口 {row['window_start']}–{row['window_end']}"
+                   f"（{row['window_end_kind']}）判定 {row['verdict']}：{row['reason']}",
+            log_lines)
+        add(scope, f"窗口起点 marks L{row['mark_line']}（ts={row['mark_ts']}）",
+            [row["mark_line"]], file="marks")
     for phrase in PHRASE_IDS:
         for device, cell in cells["cells"].get(phrase, {}).items():
             if cell["attempts"]:
@@ -1132,6 +1760,14 @@ def _evidence_block(devices: dict, cells: dict, unattributed: dict) -> list[dict
     add("fleet", "wake without speech", unattributed["wake_no_speech"]["lines"])
     add("fleet", "turn 结果行（transcript/error）", unattributed["result_turns"]["lines"])
     add("fleet", "wake candidate 无控制面被丢弃", unattributed["no_control_plane"]["lines"])
+    add("fleet", "plane: 转发内层行", (scan.relay_lines if scan else []))
+    add("fleet", "KWS wake 行（关键词命中，不是候选）", unattributed["kws_wake"]["lines"])
+    if scan is not None:
+        untimed = _untimed_lines(scan)
+        add("fleet", "无时间戳的 wake/turn 行（无法归属窗口）",
+            sorted(line for lines in untimed.values() for line in lines))
+    add("fleet", "重复 turn trace（同 device+turn_id，已去重）",
+        [line for line, _first in (scan.duplicate_traces if scan else [])])
     add("fleet", "turn trace JSON 无法解析", unattributed["malformed_trace"]["lines"])
     add("fleet", "turn 结果 JSON 无法解析", unattributed["malformed_result"]["lines"])
     add("fleet", f"未识别行（只列前 {UNPARSED_SAMPLE} 行）", unattributed["unparsed"]["lines"])
@@ -1139,6 +1775,81 @@ def _evidence_block(devices: dict, cells: dict, unattributed: dict) -> list[dict
 
 
 # ------------------------------------------------------------------------- render
+def _render_windows(add, report: dict) -> None:
+    """§2b: every window, its rule, its verdict and the lines behind it."""
+    windows = report["windows"]
+    add("## 2b. 时间窗对齐（heard_ok 由日志判定）")
+    add("")
+    add(f"日志时区：{windows['log_tz']}（--log-tz）；窗口边界按该时区显示。")
+    add("")
+    add("窗口定义：同一 marks 文件按 ts 排序，第 i 个窗口 = `[ts_i, ts_{i+1})`；"
+        f"最后一个窗口用 `--window={windows['window_s']:g} s` 封口。"
+        "窗口内只按时间与 device 过滤，不按「第几条 wake 行」猜；相邻窗口不重叠。")
+    add("")
+    add("判定规则（表头口径）：")
+    add("")
+    add(f"- `success`：窗口内有该设备 `wake candidate … admitted`，且窗口内该设备有 turn 行带 "
+        f"`{WINDOW_RESULT_STAGES[0]}` 或 `{WINDOW_RESULT_STAGES[1]}`"
+        "（trace.py:27-39 的阶段名；任务卡里的 `tts_play_start` 对应 trace 的 `play_start`）。")
+    add("- `fail`：有 wake 行但没有 admitted（按 rejected reason 归因，含 `admit_timeout`），"
+        "或 admitted 后窗口内没有 turn 结果。")
+    add("- `unknown`：窗口内该设备**没有任何 wake 行**（日志断档/未覆盖/未命中）"
+        "——不判 fail，也不进入成功分母。")
+    add("- `heard_ok`：marks 里人工值非空时原样保留并标 `human`；否则取日志判定"
+        "（success→1 / fail→0 / unknown→—）。")
+    if windows["wake_only_phrases"]:
+        add(f"- 仅测唤醒（wake-only）句：`{'`, `'.join(windows['wake_only_phrases'])}` "
+            "—— success = 窗口内有 `wake candidate … admitted`（**不要求 turn**）；"
+            "fail = 有 candidate 但全被拒（按 reason 归因）；unknown = 没有 candidate。")
+    add("")
+    if not windows["rows"]:
+        add("没有可比对的窗口 → 不做时间窗判定（证据不足，不是 fail）。")
+        add("")
+        return
+    if windows["multi_device"]:
+        add("模式：单音源多设备（同一窗口对每台在线设备分别判定）。")
+        add("")
+    for note in windows.get("notes") or []:
+        add(f"> {note}")
+    add("")
+    add("| # | 句 | 轮 | marks ts | 窗口（" + windows["log_tz"] + "） | 设备 | 日志判定 | "
+        "归因 | heard_ok | 来源 | 证据 |")
+    add("|---|---|---|---|---|---|---|---|---|---|---|")
+    for row in windows["rows"]:
+        log_lines = sorted(set(row["wake_lines"]) | set(row["rejected_lines"])
+                           | set(row["turn_lines"]))
+        ref = ranges(log_lines) if log_lines else "—"
+        ref += f" / marks L{row['mark_line']}"
+        heard = "—" if row["heard_ok"] is None else ("1" if row["heard_ok"] else "0")
+        label = PHRASE_LABEL.get(row["phrase_id"], row["phrase_id"])
+        if row["wake_only"]:
+            label += "（wake-only）"
+        add(f"| {row['index']} | {label} | {row['round'] or '—'} | {row['mark_ts']} | "
+            f"{row['window_start']}–{row['window_end']} | {row['device'] or '—'} | "
+            f"{row['verdict']} | {row['reason']} | {heard} | {row['source']} | {ref} |")
+    add("")
+    add("按设备汇总：")
+    add("")
+    add("| 设备 | 窗口 | success | fail | unknown | 有 turn 无 wake | 人工 heard_ok | 证据 |")
+    add("|---|---|---|---|---|---|---|---|")
+    for item in windows["summary"]:
+        ref = ranges(item["lines"]) if item["lines"] else "—"
+        add(f"| {item['device'] or '—'} | {item['windows']} | {item['success']} | "
+            f"{item['fail']} | {item['unknown']} | {item['trace_only']} | "
+            f"{item['human']} | marks {ref} |")
+    trace_only = sum(item["trace_only"] for item in windows["summary"])
+    if trace_only:
+        add("")
+        add(f"> 有 {trace_only} 个窗口「有该设备的 turn 结果但没有 wake 行」"
+            "（跟随时段/唤醒门控）：按规则记 unknown，不判 fail，也不计入成功分母。")
+    totals = windows["totals"]
+    add("")
+    add(f"合计：success {totals.get('success', 0)} / fail {totals.get('fail', 0)} / "
+        f"unknown {totals.get('unknown', 0)}。unknown = 窗口内没有该设备的 wake 行"
+        "（日志断档，或跟随时段只有 turn 结果）；它不是「设备没响应」，也不判 fail。")
+    add("")
+
+
 def render_markdown(report: dict) -> str:
     log = report["log"]
     marks = report["marks"]
@@ -1152,6 +1863,19 @@ def render_markdown(report: dict) -> str:
     add(f"- 日志：`{log['path']}`（共 {log['lines']} 行 = 标准前缀 {log['prefixed']} "
         f"+ 无前缀 {prefixless} + 空行 {log['blank']}；识别 {log['recognised']} 行；"
         f"未识别 {log['unparsed']['value']} 行）")
+    relay = log["relay"]
+    if relay["value"]:
+        inner = "、".join(f"{name}×{count}"
+                          for name, count in relay["by_inner_logger"].items())
+        add(f"- `plane:` 转发行：{relay['value']} 行（内层 logger：{inner}；"
+            "按内层 ts/logger 解析，外层 ts 仅兜底）")
+    duplicates = log["trace_duplicates"]
+    if duplicates["value"]:
+        add(f"- 重复 turn trace：{duplicates['value']} 行（同 device+turn_id，已去重）")
+    windows = report["windows"]
+    add(f"- 日志时区：{windows['log_tz']}（--log-tz）")
+    add(f"- 时间窗：{windows['window_s']:g} s（--window；最后一个窗口的封口长度，"
+        "判定规则见 §2b）")
     if marks["present"]:
         state = "可用" if marks["usable"] else f"不可用（{marks['why'] or '表头不完整'}）"
         add(f"- 人工标记：`{marks['path']}`（{marks['rows']} 行，{state}）")
@@ -1213,32 +1937,50 @@ def render_markdown(report: dict) -> str:
         "数量写在格子里，全部缺字段时整格写「证据不足」。")
     add("")
 
-    add("## 2. 逐句矩阵（人工 heard_ok / 尝试数）")
+    mode = report["cells"].get("verdict_mode", "human")
+    if mode == "log":
+        add("## 2. 逐句矩阵（heard_ok 由日志时间窗判定）")
+    else:
+        add("## 2. 逐句矩阵（人工 heard_ok / 尝试数）")
     add("")
-    if not report["device_order"]:
-        add("日志和 marks 里都没有设备 → 矩阵没有列可填（证据不足）。")
+    columns = report["device_order"]
+    if mode == "log" and windows.get("judged_devices"):
+        # A playback-source id (e.g. `speaker` from fleet_say) is not a device under
+        # test: it appears in §1/reconcile as a log-less row, never as a matrix column.
+        columns = list(windows["judged_devices"])
+    if not columns:
+        add("日志和 marks 里都没有可判定的设备 → 矩阵没有列可填（证据不足）。")
         add("")
     elif not marks["usable"]:
         add("人工标记不可用 → 整张表 TODO（`--marks` 缺文件或表头不全，见 §4）。")
         add("")
-        add("| 句 | phrase_id | " + " | ".join(report["device_order"]) + " | 日志侧句级 |")
-        add("|---|---|" + "---|" * len(report["device_order"]) + "---|")
+        add("| 句 | phrase_id | " + " | ".join(columns) + " | 日志侧句级 |")
+        add("|---|---|" + "---|" * len(columns) + "---|")
         for phrase in PHRASE_IDS:
             add(f"| {PHRASE_LABEL[phrase]} | `{phrase}` | "
-                + " | ".join(["TODO"] * len(report["device_order"]))
+                + " | ".join(["TODO"] * len(columns))
                 + " | 证据不足 |")
     else:
-        add("| 句 | phrase_id | " + " | ".join(report["device_order"]) + " | 日志侧句级 |")
-        add("|---|---|" + "---|" * len(report["device_order"]) + "---|")
+        tail = "见 §2b" if mode == "log" else "证据不足"
+        add("| 句 | phrase_id | " + " | ".join(columns) + " | 日志侧句级 |")
+        add("|---|---|" + "---|" * len(columns) + "---|")
         for phrase in PHRASE_IDS:
-            cells = cells_line(report, phrase)
-            add(f"| {PHRASE_LABEL[phrase]} | `{phrase}` | {cells} | 证据不足 |")
-        totals = cells_totals(report)
+            cells = cells_line(report, phrase, columns)
+            add(f"| {PHRASE_LABEL[phrase]} | `{phrase}` | {cells} | {tail} |")
+        totals = cells_totals(report, columns)
         add("| **合计** | — | " + " | ".join(totals) + " | — |")
         add("")
-        add("> 格子 = `heard_ok成功数/标记尝试数`；`（?n）` = n 行 heard_ok 为空/无法判定，"
-            "不计入成功数。人工格子的行号见 §6；日志无法归属到句，右列一律「证据不足」。")
+        if mode == "log":
+            add("> 本表 `heard_ok` 由日志时间窗判定（`verdict_mode=log`）：格子 = "
+                "`success/（success+fail）`；`unknown` 是窗口内没有该设备 wake 行的句数"
+                "（日志断档/未覆盖），不计入分母、不算失败。wake-only 句（默认 hello）"
+                "只要求 admitted、不要求 turn，规则与逐行证据见 §2b。")
+        else:
+            add("> 格子 = `heard_ok成功数/标记尝试数`；`（?n）` = n 行 heard_ok 为空/无法判定，"
+                "不计入成功数。人工格子的行号见 §6；日志侧句级归属见 §2b。")
     add("")
+
+    _render_windows(add, report)
 
     add("## 3. 未归属到设备的 fleet 级指标")
     add("")
@@ -1272,6 +2014,14 @@ def render_markdown(report: dict) -> str:
         f"{_fmt_count(unattributed['capture_recovered'])} |")
     add(f"| `capture: ... retry n/N` | {_fmt_count(unattributed['capture_retry'])} |")
     add(f"| `wake without speech` | {_fmt_count(unattributed['wake_no_speech'])} |")
+    add(f"| `plane:` 转发行（按内层 app 行解析） | {relay['value']} |")
+    kws = unattributed["kws_wake"]
+    kws_text = _fmt_count(kws)
+    if kws["value"]:
+        top = "、".join(f"{item['keyword']}×{item['count']}" for item in kws["keywords"])
+        kws_text += f"（{top}；关键词命中，不是候选，也不与 admitted 相加）"
+    add(f"| KWS `wake:` 行 | {kws_text} |")
+    add(f"| 重复 turn trace（已去重） | {_fmt_count(duplicates)} |")
     results = unattributed["result_turns"]
     result_text = _fmt_count(results)
     if results["value"]:
@@ -1362,18 +2112,22 @@ def render_markdown(report: dict) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def cells_line(report: dict, phrase: str) -> str:
+def cells_line(report: dict, phrase: str, devices: list[str] | None = None) -> str:
     parts: list[str] = []
-    for device in report["device_order"]:
+    mode = report["cells"].get("verdict_mode", "human")
+    for device in (report["device_order"] if devices is None else devices):
         cell = report["cells"]["cells"].get(phrase, {}).get(device)
-        parts.append(_cell_text(cell, report["cells"]["heard_ok_column"]))
+        parts.append(_cell_text(cell, report["cells"]["heard_ok_column"], mode))
     return " | ".join(parts)
 
 
-def cells_totals(report: dict) -> list[str]:
+def cells_totals(report: dict, devices: list[str] | None = None) -> list[str]:
     parts: list[str] = []
-    for device in report["device_order"]:
+    mode = report["cells"].get("verdict_mode", "human")
+    for device in (report["device_order"] if devices is None else devices):
         attempts = ok = unknown = 0
+        derived = {"success": 0, "fail": 0, "unknown": 0, "human": 0,
+                   "trace_only": 0, "windows": 0}
         for phrase in PHRASE_IDS:
             cell = report["cells"]["cells"].get(phrase, {}).get(device)
             if not cell:
@@ -1381,10 +2135,31 @@ def cells_totals(report: dict) -> list[str]:
             attempts += cell["attempts"]
             ok += cell["heard_ok"]
             unknown += cell["unknown_ok"]
-        if not attempts:
-            parts.append("无标记")
-        elif report["cells"]["heard_ok_column"] is False:
+            for key in derived:
+                if key == "windows":
+                    derived[key] += len(cell.get("derived", {}).get("windows", []))
+                else:
+                    derived[key] += cell.get("derived", {}).get(key, 0)
+        if report["cells"]["heard_ok_column"] is False:
             parts.append(f"证据不足（{attempts} 行标记）")
+        elif mode == "log":
+            # In multi-device mode the mark rows are attributed to the *source* id, so
+            # `attempts` can be 0 while the window judgements for this device exist.
+            judged = derived["success"] + derived["fail"]
+            if not derived["windows"]:
+                parts.append("无标记" if not attempts
+                             else f"证据不足（{attempts} 行标记没有可对齐的窗口）")
+            elif not judged:
+                extra = (f"；其中 {derived['trace_only']} 个有 turn 结果"
+                         if derived.get("trace_only") else "")
+                parts.append(f"证据不足（{derived['windows']} 个窗口内无 wake 行{extra}）")
+            else:
+                text = f"{derived['success']}/{judged}"
+                if derived["unknown"]:
+                    text += f"（unknown {derived['unknown']} 不计失败）"
+                parts.append(text)
+        elif not attempts:
+            parts.append("无标记")
         elif unknown == attempts:
             parts.append(f"证据不足（heard_ok 全空；{attempts} 行标记）")
         else:
@@ -1395,10 +2170,33 @@ def cells_totals(report: dict) -> list[str]:
     return parts
 
 
-def _cell_text(cell: dict | None, heard_ok_column: bool | None) -> str:
-    if not cell or not cell["attempts"]:
+def _cell_text(cell: dict | None, heard_ok_column: bool | None,
+               verdict_mode: str = "human") -> str:
+    if cell is None:
         return "无标记"
-    attempts = cell["attempts"]
+    attempts = cell.get("attempts", 0)
+    if verdict_mode == "log":
+        if heard_ok_column is False:
+            return f"证据不足（heard_ok 列缺失；{attempts} 行标记）"
+        derived = cell.get("derived") or {}
+        windows = len(derived.get("windows", []))
+        judged = derived.get("success", 0) + derived.get("fail", 0)
+        if windows and judged:
+            text = f"{derived['success']}/{judged}"
+            if derived.get("unknown"):
+                text += f"（unknown {derived['unknown']} 不计失败）"
+            if derived.get("human"):
+                text += f"（人工覆盖 {derived['human']}）"
+            return text
+        if windows:
+            extra = (f"；其中 {derived['trace_only']} 个有 turn 结果"
+                     if derived.get("trace_only") else "")
+            return f"证据不足（{windows} 个窗口内无 wake 行{extra}；unknown 不计失败）"
+        if attempts:
+            return f"证据不足（{attempts} 行标记没有可对齐的窗口）"
+        return "无标记"
+    if not attempts:
+        return "无标记"
     if heard_ok_column is False:
         return f"证据不足（heard_ok 列缺失；{attempts} 行标记）"
     unknown = cell["unknown_ok"]
@@ -1425,8 +2223,31 @@ def main(argv: list[str] | None = None) -> int:
                         help="captured rui log (docker logs --since 48h rui > /tmp/rui.log)")
     parser.add_argument("--marks", default=None,
                         help="optional CSV: phrase_id,device_id,round,ts,heard_ok,notes")
+    parser.add_argument("--wake-only-phrase",
+                        default=",".join(DEFAULT_WAKE_ONLY_PHRASES),
+                        help="逗号分隔的仅测唤醒句（默认 hello；success 只要求 "
+                             "admitted、不要求 turn；传空串 '' 关闭该语义）")
+    parser.add_argument("--window", type=float, default=DEFAULT_WINDOW_S,
+                        help="seconds used to close the last time window "
+                             f"(default {DEFAULT_WINDOW_S:g}); intermediate windows end "
+                             "at the next marks ts")
+    parser.add_argument("--source-device", default=None,
+                        help="marks device_id that is the playback source, not a device "
+                             "under test: every online device is judged in its windows")
+    parser.add_argument("--log-tz", default=DEFAULT_LOG_TZ,
+                        help="timezone the log's asctime is written in: UTC (default), "
+                             "an IANA name such as Asia/Shanghai, or +08:00")
     parser.add_argument("--json", action="store_true", help="print JSON instead of markdown")
     args = parser.parse_args(argv)
+
+    if args.window <= 0:
+        parser.error("--window must be > 0 seconds")
+    try:
+        log_tz = log_tzinfo(args.log_tz)
+    except (ZoneInfoNotFoundError, ValueError):
+        print(f"fleet_matrix: unknown --log-tz {args.log_tz!r} "
+              "(use UTC, an IANA name like Asia/Shanghai, or +08:00)", file=sys.stderr)
+        return 2
 
     log_path = Path(args.log)
     if not log_path.is_file():
@@ -1452,7 +2273,11 @@ def main(argv: list[str] | None = None) -> int:
                 marks = MarksScan(path=str(marks_path), present=True,
                                   why=f"读取失败: {exc}")
 
-    report = build_report(scan, marks)
+    wake_only = tuple(part.strip() for part in args.wake_only_phrase.split(",")
+                      if part.strip())
+    report = build_report(scan, marks, window_s=args.window,
+                          source_device=args.source_device, log_tz=log_tz,
+                          wake_only_phrases=wake_only)
     print(render_json(report) if args.json else render_markdown(report), end="")
     return 0
 

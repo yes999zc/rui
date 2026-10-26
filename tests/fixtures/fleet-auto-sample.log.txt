@@ -1,0 +1,19 @@
+2026-10-26 06:17:00,500 INFO rui.audio.process: wake candidate lx06-1761460000000001 admitted after 9 ms
+2026-10-26 06:17:02,900 INFO rui.trace: turn {"turn_id": "lx06-a1", "device_id": "lx06", "first_response_ms": 2400.0, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "asr_done": 1500.0, "play_start": 2400.0}, "meta": {"wake_source": "rui"}}
+2026-10-26 06:17:12,400 INFO rui.audio.process: wake candidate lx06-1761460000000002 rejected: turn_open
+2026-10-26 06:17:12,600 INFO rui.audio.process: wake candidate dot2-1761460000000003 admitted after 7 ms
+2026-10-26 06:17:15,000 INFO rui.trace: turn {"turn_id": "dot2-a1", "device_id": "dot2", "first_response_ms": 2400.0, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "asr_done": 1400.0, "play_start": 2400.0}, "meta": {"wake_source": "device", "playback_gap_count": 0}}
+2026-10-26 06:17:24,300 INFO rui.audio.process: wake candidate lx06-1761460000000004 admitted after 11 ms
+2026-10-26 06:17:25,000 INFO rui.trace: turn {"turn_id": "lx06-a2", "device_id": "lx06", "first_response_ms": null, "silence_after_ms": null, "stages_ms": {"wake": 0.0}, "meta": {"wake_source": "rui"}}
+2026-10-26 06:17:26,000 INFO rui.audio.process: wake candidate dot2-1761460000000005 rejected: cross_echo
+wake candidate dot2-1761460000000006 rejected: turn_open
+2026-10-26 06:17:37,000 INFO rui.audio.process: wake candidate lx06-1761460000000007: no verdict in 1500 ms; dropped
+2026-10-26 06:17:48,200 INFO rui.audio.process: wake candidate lx06-1761460000000008 admitted after 8 ms
+2026-10-26 06:17:49,000 INFO rui.audio.process: wake candidate dot2-1761460000000009 admitted after 9 ms
+2026-10-26 06:17:50,000 INFO rui.trace: turn {"turn_id": "lx06-a3", "device_id": "lx06", "first_response_ms": null, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "asr_done": 1400.0}, "meta": {"wake_source": "rui"}}
+2026-10-26 06:17:51,000 INFO rui.trace: turn {"turn_id": "dot2-a2", "device_id": "dot2", "first_response_ms": 2000.0, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "play_start": 2000.0}, "meta": {"wake_source": "device", "playback_gap_count": 0}}
+2026-10-26 06:17:59,999 INFO rui.audio.process: wake candidate lx06-1761460000000010 rejected: turn_open
+2026-10-26 06:18:00,000 INFO rui.audio.process: wake candidate dot2-1761460000000011 admitted after 6 ms
+2026-10-26 06:18:00,100 INFO rui.audio.process: wake candidate lx06-1761460000000012 admitted after 10 ms
+2026-10-26 06:18:02,000 INFO rui.trace: turn {"turn_id": "dot2-a3", "device_id": "dot2", "first_response_ms": 2000.0, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "play_start": 2000.0}, "meta": {"wake_source": "device", "playback_gap_count": 0}}
+2026-10-26 06:18:18,000 INFO rui.trace: turn {"turn_id": "lx06-a4", "device_id": "lx06", "first_response_ms": null, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "asr_done": 1300.0}, "meta": {"wake_source": "rui"}}

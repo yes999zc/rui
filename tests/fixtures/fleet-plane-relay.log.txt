@@ -1,0 +1,2 @@
+2026-10-26 06:21:06,060 INFO rui.audio.client: plane: 2026-10-26 06:21:06,060 INFO __main__: wake candidate dot2-1269114150113803 admitted after 407 ms
+2026-10-26 06:21:05,653 INFO rui.audio.client: plane: 2026-10-26 06:21:05,653 INFO rui.audio.kws: wake: 你好小瑞

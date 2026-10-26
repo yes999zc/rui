@@ -647,3 +647,512 @@ def test_barge_without_stop_is_reported_separately(tmp_path: Path) -> None:
     assert "无 stop 的 barge" in text
     assert "不是成功率" in text
     assert evidence_ref(evidence(report, "fleet", "无 stop 的 barge")) == "L3"
+
+
+# --------------------------------------------------- time windows (task-14)
+# 9 哥's 2026-10-26 decision: marks are written by fleet_say with only `ts`, and the
+# verdict is derived from the log. Two honesty rules are pinned below and must never
+# regress: (a) a window with no wake line for that device is `unknown`, not `fail`;
+# (b) success needs admitted *and* a turn result (asr_done or play_start).
+AUTO_LOG = FIXTURES / "fleet-auto-sample.log.txt"
+AUTO_MARKS = FIXTURES / "fleet-auto-marks.csv"
+
+
+def auto_report(**kwargs) -> dict:
+    return fm.build_report(fm.parse_log(AUTO_LOG), fm.parse_marks(AUTO_MARKS), **kwargs)
+
+
+def window_row(report: dict, phrase: str, device: str) -> dict:
+    for row in report["windows"]["rows"]:
+        if row["phrase_id"] == phrase and row["device"] == device:
+            return row
+    raise AssertionError(f"no window for {phrase}/{device}: "
+                         f"{[(r['phrase_id'], r['device']) for r in report['windows']['rows']]}")
+
+
+def test_window_success_needs_admitted_and_a_turn_result() -> None:
+    """success = admitted + (asr_done or play_start), all inside one window."""
+    report = auto_report()
+    assert report["windows"]["log_tz"] == "UTC"
+    assert report["windows"]["multi_device"] is True
+    assert report["windows"]["judged_devices"] == ["lx06", "dot2"]
+
+    hello = window_row(report, "hello", "lx06")
+    assert hello["verdict"] == "success"
+    assert hello["heard_ok"] is True and hello["source"] == "log"
+    assert hello["wake_lines"] == [1]
+    assert hello["admitted_lines"] == [1]
+    assert hello["turn_lines"] == [2] and hello["turn_result_lines"] == [2]
+
+    # asr_done alone is enough (lx06/stop), play_start alone is enough (dot2/stop).
+    stop_lx = window_row(report, "stop", "lx06")
+    assert stop_lx["verdict"] == "success"
+    assert stop_lx["turn_result_lines"] == [13]
+    assert "asr_done" in stop_lx["reason"]
+    stop_dot2 = window_row(report, "stop", "dot2")
+    assert stop_dot2["verdict"] == "success"
+    assert stop_dot2["turn_result_lines"] == [14]
+    assert "play_start" in stop_dot2["reason"]
+
+    assert report["windows"]["totals"] == {"success": 5, "fail": 5, "unknown": 2}
+
+
+def test_window_without_any_wake_line_is_unknown_not_fail() -> None:
+    report = auto_report()
+    row = window_row(report, "hello", "dot2")
+    assert row["verdict"] == "unknown"
+    assert row["heard_ok"] is None          # never False: unknown must not read as fail
+    assert row["wake_lines"] == []
+    assert "没有任何 wake 行" in row["reason"]
+    assert report["cells"]["verdict_mode"] == "log"
+    assert report["cells"]["cells"]["hello"]["dot2"]["derived"] == {
+        "success": 0, "fail": 0, "unknown": 1, "human": 0, "trace_only": 0,
+        "windows": [1],
+    }
+    text = fm.render_markdown(report)
+    # unknown stays out of the denominator and is spelled out in the cell.
+    assert ("| ①你好小瑞 | `hello` | 1/1 | "
+            "证据不足（1 个窗口内无 wake 行；unknown 不计失败） | 见 §2b |") in text
+    assert "2/6" in text
+    assert "3/4（unknown 2 不计失败）" in text
+    assert "unknown = 窗口内没有该设备的 wake 行" in text
+
+
+def test_window_fail_reasons_come_from_the_rejection_lines() -> None:
+    report = auto_report()
+    time_lx = window_row(report, "time", "lx06")
+    assert time_lx["verdict"] == "fail"
+    assert "turn_open" in time_lx["reason"]
+    assert time_lx["rejected_lines"] == [3]
+
+    play_dot2 = window_row(report, "play", "dot2")
+    assert play_dot2["verdict"] == "fail"
+    assert "cross_echo" in play_dot2["reason"]
+    assert play_dot2["rejected_lines"] == [8]
+
+    next_lx = window_row(report, "next", "lx06")
+    assert next_lx["verdict"] == "fail"
+    assert "admit_timeout" in next_lx["reason"]
+
+    play_lx = window_row(report, "play", "lx06")
+    assert play_lx["verdict"] == "fail"
+    assert "没有 turn 结果" in play_lx["reason"]
+    assert play_lx["admitted_lines"] == [6]
+    assert play_lx["turn_lines"] == [7]
+    assert play_lx["turn_result_lines"] == []
+
+
+def test_adjacent_windows_are_half_open_and_do_not_share_lines() -> None:
+    report = auto_report()
+    stop = window_row(report, "stop", "lx06")
+    bye = window_row(report, "bye", "lx06")
+    assert stop["window_start"] == "06:17:48.000"
+    assert stop["window_end"] == "06:18:00.000"      # [ts_i, ts_{i+1})
+    assert bye["window_start"] == "06:18:00.000"
+    assert 15 in stop["wake_lines"]                  # 06:17:59.999 belongs to stop
+    assert 17 in bye["wake_lines"]                   # 06:18:00.100 belongs to bye
+    assert 15 not in bye["wake_lines"]
+    assert 17 not in stop["wake_lines"]
+    # 06:18:00.000 is exactly the next ts: excluded from stop, included in bye.
+    assert window_row(report, "stop", "dot2")["wake_lines"] == [12]
+    assert window_row(report, "bye", "dot2")["wake_lines"] == [16]
+    assert window_row(report, "bye", "dot2")["turn_result_lines"] == [18]
+
+
+def test_window_flag_closes_only_the_last_window() -> None:
+    default = auto_report()
+    wider = auto_report(window_s=20.0)
+    assert window_row(default, "bye", "lx06")["verdict"] == "fail"
+    assert window_row(wider, "bye", "lx06")["verdict"] == "success"
+    assert window_row(wider, "bye", "lx06")["turn_result_lines"] == [19]
+    # Earlier windows still end at the next marks ts, so --window changes nothing there.
+    assert window_row(default, "hello", "lx06")["window_end"] == "06:17:12.000"
+    assert window_row(wider, "hello", "lx06")["window_end"] == "06:17:12.000"
+    assert default["windows"]["totals"] == {"success": 5, "fail": 5, "unknown": 2}
+    assert wider["windows"]["totals"] == {"success": 6, "fail": 4, "unknown": 2}
+
+
+def test_log_tz_is_the_join_frame_and_has_teeth(tmp_path: Path) -> None:
+    """Production logs are UTC while marks are +08:00; a literal compare is 8 h off."""
+    aware = auto_report()
+    assert window_row(aware, "hello", "lx06")["verdict"] == "success"
+
+    shifted = auto_report(log_tz=fm.log_tzinfo("Asia/Shanghai"))
+    assert shifted["windows"]["log_tz"] == "Asia/Shanghai"
+    assert shifted["windows"]["totals"] == {"success": 0, "fail": 0, "unknown": 12}
+    assert window_row(shifted, "hello", "lx06")["verdict"] == "unknown"
+
+    offset = auto_report(log_tz=fm.log_tzinfo("+08:00"))
+    assert fm.tz_label(fm.log_tzinfo("+08:00")) == "UTC+08:00"
+    assert offset["windows"]["totals"] == {"success": 0, "fail": 0, "unknown": 12}
+
+    # A tz-naive marks ts is read in --log-tz (default UTC): same verdict as +08:00.
+    naive_marks = write_marks(
+        tmp_path,
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "hello,speaker,1,2026-10-26T06:17:00.000,,\n"
+        "time,speaker,1,2026-10-26T06:17:12.000,,\n",
+        name="naive.csv",
+    )
+    naive = fm.build_report(fm.parse_log(AUTO_LOG), fm.parse_marks(naive_marks))
+    assert window_row(naive, "hello", "lx06")["verdict"] == "success"
+    assert window_row(naive, "hello", "lx06")["mark_ts"] == "2026-10-26T06:17:00.000"
+
+
+def test_invalid_log_tz_exits_2(tmp_path: Path, capsys) -> None:
+    log = write_log(tmp_path, [proc("wake candidate lx06-1700 admitted after 5 ms")])
+    assert fm.main(["--log", str(log), "--log-tz", "Not/AZone"]) == 2
+    assert "unknown --log-tz" in capsys.readouterr().err
+
+
+def test_human_heard_ok_is_kept_and_marked_human(tmp_path: Path) -> None:
+    """A human verdict wins the heard_ok column, but the log verdict is still shown."""
+    log = write_log(tmp_path, [
+        proc("wake candidate lx06-1800 admitted after 5 ms",
+             ts="2026-10-26 10:00:00,000"),                             # 1
+        trace({"device_id": "lx06", "stages_ms": {"wake": 0.0}},
+              ts="2026-10-26 10:00:01,000"),                            # 2: no result
+        proc("wake candidate lx06-1801 admitted after 5 ms",
+             ts="2026-10-26 10:00:20,000"),                             # 3: next window
+    ])
+    marks = write_marks(
+        tmp_path,
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "play,speaker,1,2026-10-26T10:00:00+00:00,1,\n"
+        "next,speaker,1,2026-10-26T10:00:20+00:00,,\n",
+    )
+    report = fm.build_report(fm.parse_log(log), fm.parse_marks(marks))
+    row = window_row(report, "play", "lx06")
+    assert row["verdict"] == "fail"          # the log saw admitted but no turn result
+    assert row["heard_ok"] is True           # the human said it was OK
+    assert row["source"] == "human"
+    assert report["cells"]["verdict_mode"] == "human"
+    text = fm.render_markdown(report)
+    assert "| 1 | ③放首歌 | 1 | 2026-10-26T10:00:00+00:00 |" in text
+    assert "| human |" in text
+
+
+def test_source_device_flag_judges_every_online_device(tmp_path: Path) -> None:
+    # fleet_say wrote `lx06` as the source, but lx06 *is* a logged device: without the
+    # flag the rows are device-locked; --source-device declares them as the source.
+    marks_path = tmp_path / "locked.csv"
+    marks_path.write_text(AUTO_MARKS.read_text(encoding="utf-8").replace(",speaker,", ",lx06,"),
+                          encoding="utf-8")
+    locked = fm.build_report(fm.parse_log(AUTO_LOG), fm.parse_marks(marks_path))
+    assert locked["windows"]["multi_device"] is False
+    assert len(locked["windows"]["rows"]) == 6
+    assert {row["device"] for row in locked["windows"]["rows"]} == {"lx06"}
+    assert {row["mode"] for row in locked["windows"]["rows"]} == {"device"}
+
+    expanded = fm.build_report(fm.parse_log(AUTO_LOG), fm.parse_marks(marks_path),
+                               source_device="lx06")
+    assert expanded["windows"]["multi_device"] is True
+    assert len(expanded["windows"]["rows"]) == 12
+    assert window_row(expanded, "hello", "dot2")["verdict"] == "unknown"
+    assert not any("未生效" in note for note in expanded["windows"]["notes"])
+
+
+def test_untimed_wake_lines_are_reported_but_never_attributed() -> None:
+    report = auto_report()
+    play_dot2 = window_row(report, "play", "dot2")
+    assert 9 not in play_dot2["wake_lines"]   # prefix-less line has no timestamp
+    assert play_dot2["verdict"] == "fail"     # decided by the timed cross_echo line
+    # The reader must be able to open the exact line, not hunt for a shape word.
+    assert report["log"]["untimed"] == {"value": 1, "devices": {"dot2": [9]}}
+    assert any("dot2×1（L9）" in item for item in report["todo"])
+    assert any("没有时间戳" in item and "§6" in item for item in report["todo"])
+    row = evidence(report, "fleet", "无时间戳的 wake/turn 行")
+    assert row["file"] == "log"
+    assert row["lines"] == [9]
+    # The prefix-less source line really is the untimed wake line.
+    raw = AUTO_LOG.read_text(encoding="utf-8").splitlines()
+    assert "wake candidate" in raw[8] and "rejected" in raw[8]
+
+
+def test_window_evidence_keeps_log_and_marks_line_numbers() -> None:
+    report = auto_report()
+    scope = "①你好小瑞（wake-only）×lx06（R1 #1）"
+    log_row = evidence(report, scope, "窗口")
+    assert log_row["file"] == "log"
+    assert log_row["lines"] == [1, 2]
+    assert "success" in log_row["metric"]
+    marks_row = evidence(report, scope, "窗口起点")
+    assert marks_row["file"] == "marks"
+    assert marks_row["lines"] == [2]
+
+    payload = json.loads(fm.render_json(report))
+    assert payload["windows"]["totals"] == {"success": 5, "fail": 5, "unknown": 2}
+    assert payload["windows"]["rows"][0]["mark_line"] == 2
+    assert payload["windows"]["judged_devices"] == ["lx06", "dot2"]
+
+
+def test_no_timed_marks_means_no_windows_not_fail() -> None:
+    report = scan_and_build(SAMPLE_LOG)       # log only, no marks at all
+    assert report["windows"]["rows"] == []
+    assert report["cells"]["verdict_mode"] == "human"
+    text = fm.render_markdown(report)
+    assert "没有可比对的窗口" in text
+    assert "不做时间窗对齐" in text
+
+
+def test_cli_window_and_log_tz_flags_are_wired(capsys) -> None:
+    assert fm.main(["--log", str(AUTO_LOG), "--marks", str(AUTO_MARKS)]) == 0
+    out = capsys.readouterr().out
+    assert "- 日志时区：UTC（--log-tz）" in out
+    assert "## 2b. 时间窗对齐（heard_ok 由日志判定）" in out
+    assert "| ①你好小瑞 | `hello` | 1/1 |" in out
+    assert "1 | ①你好小瑞（wake-only） | 1 | 2026-10-26T14:17:00.000+08:00 |" in out
+
+    assert fm.main(["--log", str(AUTO_LOG), "--marks", str(AUTO_MARKS),
+                    "--window", "20", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["windows"]["window_s"] == 20.0
+    assert payload["windows"]["totals"] == {"success": 6, "fail": 4, "unknown": 2}
+
+    assert fm.main(["--log", str(AUTO_LOG), "--marks", str(AUTO_MARKS),
+                    "--log-tz", "Asia/Shanghai", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["windows"]["totals"] == {"success": 0, "fail": 0, "unknown": 12}
+
+    with pytest.raises(SystemExit) as exc:
+        fm.main(["--log", str(AUTO_LOG), "--window", "0"])
+    assert exc.value.code == 2
+
+
+def test_line_number_prefixed_and_comma_ms_log_lines_are_tolerated(tmp_path: Path) -> None:
+    """9 哥 pastes snippets that may be numbered; comma-ms is the real rui format."""
+    path = write_log(tmp_path, [
+        "L1 2026-10-26 06:17:24,053 INFO rui.audio.process: "
+        "wake candidate lx06-1900 admitted after 5 ms",
+        "L2 2026-10-26 06:17:26,500 INFO rui.trace: turn "
+        '{"device_id": "lx06", "stages_ms": {"wake": 0.0, "play_start": 2400.0}}',
+    ])
+    marks = write_marks(
+        tmp_path,
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "hello,speaker,1,2026-10-26T06:17:24.000,,\n",
+    )
+    report = fm.build_report(fm.parse_log(path), fm.parse_marks(marks))
+    assert report["log"]["unparsed"]["value"] == 0
+    row = window_row(report, "hello", "lx06")
+    assert row["verdict"] == "success"
+    assert row["wake_lines"] == [1]
+    assert row["turn_result_lines"] == [2]
+
+
+# ------------------------------------------- plane relay (production log shape)
+# Production capture: the plane is a child process whose stderr is forwarded by the
+# control plane, so every plane line arrives as a *double prefix*:
+#   <outer> INFO rui.audio.client: plane: <inner> INFO <plane logger>: <message>
+# The outer logger alone made every wake/VAD line unparseable (task-14 rework).
+PLANE_RELAY_LOG = FIXTURES / "fleet-plane-relay.log.txt"
+PLANE_RELAY_REG_LOG = FIXTURES / "fleet-plane-relay-regression.log.txt"
+PLANE_RELAY_REG_MARKS = FIXTURES / "fleet-plane-relay-regression-marks.csv"
+
+
+def test_plane_relay_lines_are_parsed_with_the_inner_logger() -> None:
+    report = scan_and_build(PLANE_RELAY_LOG)
+    assert report["log"]["unparsed"]["value"] == 0
+    assert report["log"]["relay"]["value"] == 2
+    assert report["log"]["relay"]["by_inner_logger"] == {"__main__": 1, "rui.audio.kws": 1}
+    dot2 = report["devices"]["dot2"]
+    assert dot2["wake_candidates"]["value"] == 1
+    assert dot2["admitted"]["value"] == 1
+    assert dot2["admitted"]["lines"] == [1]          # physical outer log line
+    kws = report["unattributed"]["kws_wake"]
+    assert kws["value"] == 1
+    assert kws["keywords"][0]["keyword"] == "你好小瑞"
+    assert kws["keywords"][0]["lines"] == [2]
+    # A KWS hit is not a candidate and must not be added to it.
+    assert dot2["wake_candidates"]["value"] == 1
+
+
+def test_plane_relay_uses_the_inner_ts_not_the_1ms_outer_stamp(tmp_path: Path) -> None:
+    """Outer/inner stamps can differ by 1 ms; the window boundary is exact."""
+    path = write_log(tmp_path, [
+        "2026-10-26 06:21:05,215 INFO rui.audio.client: plane: "
+        "2026-10-26 06:21:05,216 INFO __main__: "
+        "wake candidate dot2-9001 admitted after 9 ms",                       # 1
+        "2026-10-26 06:21:07,000 INFO rui.audio.client: plane: "
+        "2026-10-26 06:21:07,001 INFO __main__: "
+        "wake candidate dot2-9002 rejected: lost_same_word",                  # 2
+        trace({"turn_id": "relay-1", "device_id": "dot2",
+               "stages_ms": {"wake": 0.0, "asr_done": 100.0, "play_start": 900.0}},
+              ts="2026-10-26 06:21:06,000"),                                  # 3
+    ])
+    marks = write_marks(
+        tmp_path,
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "hello,dot2,1,2026-10-26T06:21:05.216,,\n"
+        "time,dot2,1,2026-10-26T06:21:10.000,,\n",
+    )
+    report = fm.build_report(fm.parse_log(path), fm.parse_marks(marks))
+    row = window_row(report, "hello", "dot2")
+    # The outer 05.215 is *before* the window start; the inner 05.216 is inside.
+    assert row["wake_lines"] == [1, 2]
+    assert row["admitted_lines"] == [1]
+    assert row["verdict"] == "success"
+
+
+def test_plane_relay_regression_structure_matches_production_counts() -> None:
+    """Same structure/counts as the capture: 15 candidates, 14 admitted, 18 turns."""
+    report = scan_and_build(PLANE_RELAY_REG_LOG, PLANE_RELAY_REG_MARKS)
+    assert report["log"]["unparsed"]["value"] == 0
+    assert report["log"]["relay"]["value"] == 33
+    assert report["log"]["relay"]["by_inner_logger"] == {
+        "__main__": 15, "rui.audio.kws": 15, "rui.audio.vad": 3,
+    }
+    dot2 = report["devices"]["dot2"]
+    assert dot2["wake_candidates"]["value"] == 15
+    assert dot2["admitted"]["value"] == 14
+    rejected = dot2["rejected"]["by_reason"]
+    assert rejected["lost_same_word"]["count"] == 1
+    assert dot2["turns"]["value"] == 18
+    # Arithmetic: candidates = admitted + rejected (nothing dropped silently).
+    assert dot2["wake_candidates"]["value"] == (
+        dot2["admitted"]["value"] + sum(info["count"] for info in rejected.values())
+    )
+    assert report["unattributed"]["kws_wake"]["value"] == 15
+    assert report["windows"]["totals"] == {"success": 13, "fail": 2, "unknown": 15}
+    assert sum(report["windows"]["totals"].values()) == 30
+    # Six follow-up windows have a turn result but no wake line (see production).
+    assert sum(item["trace_only"] for item in report["windows"]["summary"]) == 6
+    text = fm.render_markdown(report)
+    assert "`plane:` 转发行：33 行" in text
+    assert "KWS `wake:` 行 | 15" in text
+    assert "有 6 个窗口「有该设备的 turn 结果但没有 wake 行」" in text
+
+
+def test_relayed_duplicate_turn_is_counted_once(tmp_path: Path) -> None:
+    entry = {"turn_id": "dup-1", "device_id": "dot2",
+             "stages_ms": {"wake": 0.0, "play_start": 1000.0}}
+    path = write_log(tmp_path, [
+        trace(entry),
+        "2026-10-26 10:00:01,000 INFO rui.audio.client: plane: "
+        f"2026-10-26 10:00:01,000 INFO rui.trace: turn {json.dumps(entry)}",
+    ])
+    report = scan_and_build(path)
+    assert report["devices"]["dot2"]["turns"]["value"] == 1
+    assert report["log"]["trace_duplicates"] == {
+        "value": 1, "lines": [{"line": 2, "first_line": 1}],
+    }
+    assert any("同 (device, turn_id)" in item for item in report["todo"])
+
+
+def test_trace_without_wake_is_unknown_and_says_why(tmp_path: Path) -> None:
+    """A follow-up turn is real evidence but cannot prove *this* phrase -> unknown."""
+    log = write_log(tmp_path, [
+        trace({"turn_id": "follow-1", "device_id": "lx06",
+               "stages_ms": {"wake": 0.0, "asr_done": 100.0, "play_start": 900.0}},
+              ts="2026-10-26 10:00:02,000"),
+    ])
+    marks = write_marks(
+        tmp_path,
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "hello,lx06,1,2026-10-26T10:00:00.000,,\n",
+    )
+    report = fm.build_report(fm.parse_log(log), fm.parse_marks(marks))
+    row = window_row(report, "hello", "lx06")
+    assert row["verdict"] == "unknown"
+    assert row["heard_ok"] is None
+    assert row["wake_lines"] == []
+    assert "turn 结果" in row["reason"]
+    assert "无法证明是本句" in row["reason"]
+    summary = report["windows"]["summary"][0]
+    assert summary["unknown"] == 1 and summary["trace_only"] == 1
+
+
+# ---------------------------------------------- wake-only phrases (hello by default)
+def wake_only_report(tmp_path: Path, log_lines: list[str], marks_text: str, **kwargs) -> dict:
+    log = write_log(tmp_path, log_lines)
+    marks = write_marks(tmp_path, marks_text)
+    return fm.build_report(fm.parse_log(log), fm.parse_marks(marks), **kwargs)
+
+
+def test_wake_only_hello_is_success_without_a_turn(tmp_path: Path) -> None:
+    """A pure wake test is answered by the plane; demanding a turn made it 0/5."""
+    report = wake_only_report(
+        tmp_path,
+        [proc("wake candidate lx06-2001 admitted after 5 ms",
+              ts="2026-10-26 10:00:01,000")],
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "hello,lx06,1,2026-10-26T10:00:00.000,,\n",
+    )
+    row = window_row(report, "hello", "lx06")
+    assert row["wake_only"] is True
+    assert row["verdict"] == "success"
+    assert row["heard_ok"] is True
+    assert "仅测唤醒" in row["reason"]
+    assert "不要求 turn" in row["reason"]
+    assert report["windows"]["wake_only_phrases"] == ["hello"]
+    assert report["cells"]["cells"]["hello"]["lx06"]["derived"]["success"] == 1
+    text = fm.render_markdown(report)
+    assert "①你好小瑞（wake-only）" in text
+    assert "仅测唤醒（wake-only）" in text
+
+
+def test_wake_only_hello_all_rejected_is_fail(tmp_path: Path) -> None:
+    report = wake_only_report(
+        tmp_path,
+        [proc("wake candidate lx06-2002 rejected: turn_open",
+              ts="2026-10-26 10:00:01,000")],
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "hello,lx06,1,2026-10-26T10:00:00.000,,\n",
+    )
+    row = window_row(report, "hello", "lx06")
+    assert row["verdict"] == "fail"
+    assert row["heard_ok"] is False
+    assert "仅测唤醒" in row["reason"]
+    assert "全被拒" in row["reason"]
+    assert "turn_open×1" in row["reason"]
+
+
+def test_wake_only_hello_without_any_candidate_is_unknown(tmp_path: Path) -> None:
+    report = wake_only_report(
+        tmp_path,
+        [proc("capture recovered after 1 failure(s)",
+              ts="2026-10-26 10:00:01,000"),
+         # A device line exists (so lx06 is known), but there is no wake candidate.
+         trace({"device_id": "lx06", "stages_ms": {"wake": 0.0}},
+               ts="2026-10-26 10:00:02,000")],
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "hello,lx06,1,2026-10-26T10:00:00.000,,\n",
+    )
+    row = window_row(report, "hello", "lx06")
+    assert row["verdict"] == "unknown"
+    assert row["heard_ok"] is None           # unknown must never read as fail
+    assert "没有任何 wake 行" in row["reason"]
+    assert "仅测唤醒" in row["reason"]
+
+
+def test_wake_only_phrase_empty_restores_the_turn_rule(tmp_path: Path, capsys) -> None:
+    log = write_log(tmp_path, [
+        proc("wake candidate lx06-2003 admitted after 5 ms",
+             ts="2026-10-26 10:00:01,000"),
+    ])
+    marks = write_marks(
+        tmp_path,
+        "phrase_id,device_id,round,ts,heard_ok,notes\n"
+        "hello,lx06,1,2026-10-26T10:00:00.000,,\n",
+    )
+    assert fm.main(["--log", str(log), "--marks", str(marks),
+                    "--wake-only-phrase", "", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    row = payload["windows"]["rows"][0]
+    assert row["wake_only"] is False
+    assert row["verdict"] == "fail"          # old rule: admitted but no turn result
+    assert "没有 turn 结果" in row["reason"]
+    assert payload["windows"]["wake_only_phrases"] == []
+
+
+def test_wake_only_phrase_accepts_a_comma_separated_list(capsys) -> None:
+    assert fm.main(["--log", str(AUTO_LOG), "--marks", str(AUTO_MARKS),
+                    "--wake-only-phrase", "hello,bye", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["windows"]["wake_only_phrases"] == ["bye", "hello"]   # sorted
+    # bye/lx06 is admitted without a turn: wake-only turns it into a success.
+    bye = next(row for row in payload["windows"]["rows"]
+               if row["phrase_id"] == "bye" and row["device"] == "lx06")
+    assert bye["verdict"] == "success"
+    assert "仅测唤醒" in bye["reason"]
+    assert payload["windows"]["totals"] == {"success": 6, "fail": 4, "unknown": 2}
