@@ -13,7 +13,9 @@
   - 证书 + 两个 token 齐备（dot2 在前）→ `audio_plane=true` + `dot2 link: wss listening`；
   - 自签只保证平面能起；真机是否接受取决于设备信任的 CA（原 controller 证书丢失需重新配网）。
   - 6 次实测表 + 可执行复现命令：`docs/audit/tls-required-2026-10.md`。
-- task-11（两台平面可见性）在途：`/health` 按设备字段 + doctor WARN + 配置示例——直接服务 0.7.8 Done 6 c)。
+- task-11（两台平面可见性）PASS+VERIFIED，提交 `5e16026`：`/health.planes` 逐台状态/原因（running|error|not_started；multi_device_disabled|plane_not_started|audio_not_started，含 error 文本）、`rui doctor` 在「2 台且 multi_device 关」时 WARN + 修复句、`config.example.yaml` 注释示例、C-002 A-8。7 条新测试；全量 **1659/17**。
+- **0.7.5 状态**：代码与文档全绿，但 **Done 6 的 c/d/e（真机 audio_plane ×2、唤醒→指令→播放、升级+回滚）未做** → 按「出口条件未全过不打 tag」，0.7.5 **暂不发版**；白天补齐 c/d/e 后再发。
+- **下一步（夜间）**：0.7.6 小爱摘出的**代码卡**（删 `plugs/xiaoai` + `adapter_aliases`、配置迁移告警、Dockerfile/pyproject 去耦）可以夜间做；双跑对比（需 LX06 真机）留白天。
 
 ## 0.7.4 状态（2026-10-26 23:15，已发布）
 
