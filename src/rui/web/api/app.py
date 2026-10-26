@@ -904,6 +904,19 @@ def _is_music_turn(result: object) -> bool:
     return any(str(n).rsplit(".", 1)[-1].startswith("music") for n in tools)
 
 
+def _release_turn(client: object) -> None:
+    """Release the one-turn latch after a session ends without a reply.
+
+    A dismissal deliberately skips `reply_finished` so the plane opens no follow-up
+    window after the goodbye. That call is also the turn's normal release, so the
+    latch has to be cleared explicitly or every later wake is rejected `turn_open`
+    until the process restarts (the 2026-10-26 Dot 2 report).
+    """
+    release = getattr(client, "release_turn", None)
+    if callable(release):
+        release()
+
+
 async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
                         traces) -> bool:
     """D1c ③: stop words split by whether a song is playing. True when handled.
@@ -936,6 +949,8 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
         with contextlib.suppress(Exception):
             await client.send(StopAudio())
         spoken = await runner.dismiss(_speaking(app, client), trace)
+        # The session closed: release the turn latch even though no reply follows.
+        _release_turn(client)
         _light_after_audio(app, spoken, cfg.audio.voice.rate, "off", live=client)
         _record_turn(app, {
             "transcript": clean, "reply": "", "session_action": "stop_elsewhere",
@@ -979,7 +994,9 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
     # running behind it and the farewell said goodbye a second time (measured 20:42).
     spoken = await runner.dismiss(_speaking(app, client), trace)
     # No reply_finished here: the session is closing, so the plane must not open a
-    # follow-up window after the goodbye.
+    # follow-up window after the goodbye. The latch still has to be released, or the
+    # next wake is rejected turn_open until the process restarts.
+    _release_turn(client)
     _light_after_audio(app, spoken, cfg.audio.voice.rate, "off", live=client)
     _record_turn(app, {
         "transcript": clean, "reply": "", "session_action": "bare_stop",
@@ -1397,11 +1414,12 @@ class _PlaneLink:
     """One room's PlaneHandle with the Phase 2 bookkeeping attached.
 
     Reads and writes go straight through to the handle, so the existing turn code and
-    the module-level command helpers work unchanged. Only speak and reply_finished add
-    side effects: the first block claims the output owner (the only room allowed to
-    barge while it plays, section 12.3), and a finished reply closes the turn so later
-    wakes are not rejected turn_open forever. The owner itself is released by
-    _reconcile_owner, because music may still be playing after the answer drained.
+    the module-level command helpers work unchanged. Only speak, reply_finished and
+    release_turn add side effects: the first block claims the output owner (the only
+    room allowed to barge while it plays, section 12.3), and the other two close the
+    turn so later wakes are not rejected turn_open forever. The owner itself is
+    released by _reconcile_owner, because music may still be playing after the answer
+    drained.
     """
 
     def __init__(self, app: FastAPI, device_id: str, handle: object,
@@ -1434,14 +1452,29 @@ class _PlaneLink:
         self._claim_owner()
         await self._handle.speak(pcm, **kwargs)  # type: ignore[attr-defined]
 
+    def _end_turn(self) -> None:
+        """Release this turn's bookkeeping (see `reply_finished` and `release_turn`)."""
+        object.__setattr__(self, "_claimed", False)
+        if self._coordinator is not None:
+            self._coordinator.set_turn_open(False)  # type: ignore[attr-defined]
+            self._coordinator.touch(self._device_id)  # type: ignore[attr-defined]
+
     async def reply_finished(self, *args: object, **kwargs: object) -> None:
         try:
             await self._handle.reply_finished(*args, **kwargs)  # type: ignore[attr-defined]
         finally:
-            object.__setattr__(self, "_claimed", False)
-            if self._coordinator is not None:
-                self._coordinator.set_turn_open(False)  # type: ignore[attr-defined]
-                self._coordinator.touch(self._device_id)  # type: ignore[attr-defined]
+            self._end_turn()
+
+    def release_turn(self) -> None:
+        """End this turn without telling the plane the reply drained.
+
+        A dismissal closes the session before its goodbye and deliberately skips
+        `reply_finished`, so the plane opens no follow-up window after it. That call
+        was also the turn's only latch release, so without this every later wake is
+        rejected `turn_open` until the process restarts (measured 2026-10-26 12:26:
+        「退一下吧。」 -> 11 wakes rejected over the next five minutes).
+        """
+        self._end_turn()
 
 
 def _reconcile_owner(app: FastAPI) -> None:
@@ -2457,6 +2490,26 @@ def create_app(
             ``device_id`` names the room the turn and its answer belong to.
             """
             link = _PlaneLink(app, device_id, handle, coordinator)
+
+            def _release_when_done(turn):
+                """Release the one-turn latch however this utterance ends.
+
+                The handler has many exits: the no-turn filters, a canned command, a
+                dismissal, or the ordinary reply. Only the ordinary reply goes through
+                `reply_finished`, which was also the single place that released the
+                latch; 「退下吧」, 「关闭上下文」 and a bare device name all returned
+                without it, so every later wake was rejected turn_open until the
+                process restarted (measured 2026-10-26). The wrapper makes the release
+                structural, so a future early return cannot reintroduce the deaf house.
+                """
+                async def run(pcm: bytes) -> None:
+                    try:
+                        await turn(pcm)
+                    finally:
+                        link.release_turn()
+                return run
+
+            @_release_when_done
             async def on_utterance(pcm: bytes) -> None:
                 # NOTE: turn_device is set *after* the no-answer filters below. An echo
                 # or a cough on this plane is not "the room that is speaking": setting it

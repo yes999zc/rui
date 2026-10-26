@@ -283,6 +283,93 @@ def test_plane_link_claims_the_owner_when_it_speaks_and_closes_the_turn() -> Non
     assert handle.replies == 1
 
 
+def _utter(portal, app, handle, text: str, monkeypatch) -> None:
+    """Drive the real on_utterance closure with a fixed transcript."""
+    runner = app.state.runner
+
+    async def transcribe(pcm: bytes, trace: object) -> tuple[str, None]:  # noqa: ARG001
+        return text, None
+
+    monkeypatch.setattr(runner, "transcribe", transcribe)
+    portal.call(handle.on_utterance, b"\x00\x00")
+
+
+def _next_wake_is_admitted(client, handle, wake_id: str) -> str:
+    client.portal.call(handle.on_wake_candidate, _candidate(wake_id))
+    time.sleep(0.25)  # the coordinator's merge window is 100 ms in CONFIG
+    return str(getattr(handle.sent[-1], "type", ""))
+
+
+def test_a_canned_command_that_skips_reply_finished_releases_the_turn(
+        tmp_path, monkeypatch) -> None:
+    """「关闭上下文」 answers without a reply drain - and must not wedge turn_open.
+
+    P0 2026-10-26: the dismissal path had the same shape (close the session, skip
+    reply_finished) and every later wake was rejected turn_open until a restart. The
+    utterance wrapper now releases the latch however the handler ends, without asking
+    the plane for a follow-up window.
+    """
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+        assert coordinator.arbiter.state.turn_open is True
+
+        _utter(client.portal, app, living, "关闭上下文", monkeypatch)
+
+        assert app.state.last_turn["tools"] == ["context.off"]
+        assert coordinator.arbiter.state.turn_open is False, (
+            "the canned command left every later wake rejected turn_open")
+        assert living.replies == 0, "a canned command must not open the follow-up window"
+        assert _next_wake_is_admitted(client, living, "w-after-context") == "wake_admit"
+
+
+def test_a_clarify_turn_that_skips_reply_finished_releases_the_turn(
+        tmp_path, monkeypatch) -> None:
+    """A bare device name answers 「打开还是关闭」 without reply_finished either."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+
+        _utter(client.portal, app, living, "餐厅灯。", monkeypatch)
+
+        assert app.state.last_turn["tools"] == ["clarify.verb"]
+        assert coordinator.arbiter.state.turn_open is False, (
+            "the clarify turn left every later wake rejected turn_open")
+        assert living.replies == 0, "clarify must not open the follow-up window"
+        assert _next_wake_is_admitted(client, living, "w-after-clarify") == "wake_admit"
+
+
+def test_a_normal_reply_still_releases_the_turn_through_reply_finished(
+        tmp_path, monkeypatch) -> None:
+    """Regression: an ordinary answer keeps its reply_finished (follow-up window)."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+
+        async def run(pcm, speak, trace, transcript=None, hint=None):  # noqa: ANN001, ARG001
+            return SimpleNamespace(reply="好。", audio_bytes=0, tools=[], stages={},
+                                   to_dict=lambda: {"transcript": "现在几点", "reply": "好。"})
+
+        monkeypatch.setattr(app.state.runner, "run", run)
+        _utter(client.portal, app, living, "现在几点", monkeypatch)
+
+        assert coordinator.arbiter.state.turn_open is False
+        assert living.replies == 1, "the ordinary turn lost its follow-up window"
+
+
+
 def test_multi_device_disabled_never_builds_a_fleet(tmp_path, monkeypatch) -> None:
     class ExplodingFleet(FakeFleet):
         def __init__(self, *args: object, **kwargs: object) -> None:
