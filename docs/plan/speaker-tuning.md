@@ -337,3 +337,125 @@ A 计权（同一工具实跑）：粉噪+鼓点输出 −19.17 → **−14.19 d
 - 代码回滚：`git revert 1971fc5`（下游 `dsp.py` 的修正提交）。
 - 仍需 9 哥 真机 A/B：本次只证明频谱与限幅指标变好，**"不闷了"必须耳朵确认**；
   若觉得高频过亮，把 `ladder_presence_db_100` 从 3.5 降到 2.0 再听一轮。
+
+---
+
+# B1 可行性评估（只评估，未实施）
+
+> 2026-10-26 ｜ 只读调查：未改代码、未改配置、未部署、未连设备（未跑 adb / 未连 wss）。
+> 依据 = 本机两个仓库的源码与文档 + EchoMuse 上游 `main` 的源码/文档 + 设备上实际运行的 server 二进制（只做 `strings`）。
+> 评估对象：§6 B1「把中文 OWW 模型下发到设备侧」，即"播放中用设备侧唤醒词打断"。
+
+## 0. 结论
+
+**B1 = (a) 纯配置/文件下发，可做；不需要刷固件。**
+
+把"固件"和"设备资产"分开看，结论就不含糊：
+
+| 层 | 要不要动 | 依据 |
+|---|---|---|
+| **固件**（`/data/local/bin/server*`、A/B 槽、OTA） | **不动** | 设备上正在跑的二进制已经含 `shell_open`、`owwModel/owwOnDevice` 配置、`[shadow]` ONNX 打分器 |
+| **设备资产**（`/data/local/share/echomuse/oww/*.so,*.onnx`） | **要下发，但这是运行期文件**，不是刷机 | 上游从设计上就把运行时/模型放在固件之外，缺文件只是"打分器不启动"，不报错也不影响主功能 |
+| **配置**（`owwOnDevice`/`owwModel`/`owwThreshold`/`bargeIn*`） | **要改 env**，`config` 消息即时生效、无需重启 | 上游接口文档明说 "Changes take effect immediately — no restart" |
+
+唯一的"真前置"不是固件，而是两件事：**① 中文模型没有现成的，必须用 `oww_forge` 自训**（当前只有英文 stock 模型）；**② 我们自己的 bridge 现在没有文件下发通道**（`adapter.py` 明确不暴露 shell），要么一次性 `adb push`，要么在 bridge 里实现 `/shell` 客户端。两者都是代码/流程工作，都不是刷固件。
+
+## 1. 证据清单
+
+### 1.1 设备上正在跑的固件已经具备全部能力（最硬的一条）
+
+- 本机保存了设备实际运行的二进制：`echomuse-dot2-ref/artifacts/server`——内嵌版本号正是生产日志里的 **`20261024-1911-dev`**（sha256 `65f93891…4717b2e3`；由 `echomuse-dot2-ref/README.md:36-42` 的 `scripts/build.sh` 交叉编译产出，安装走同文 "Install (A/B slots)" 段，`:14` 记录 2026-10-24 已装到设备；即已含 `ref_uplink` 的补丁构建）。
+  对它的 `strings` 输出同时含：
+  - `[control] shell_open received (pty=%v)`、`/shell` → **运行期有 root shell 平面**；
+  - `json:"owwModel,omitempty"`、`json:"owwOnDevice,omitempty"`、`EM_OWW_DIR` → **配置面接受模型名/开关**；
+  - `[shadow] on-device wake word scoring (%s, threshold %.2f, %s)`、`[shadow] on-device wake word disabled`、`onnxruntime %s, model %s, xnnpack=%v` → **打分器代码已在固件里**。
+- 真机行为也已被验证过一次：2026-10-25 用 `config` 消息把 `owwOnDevice=on` + `owwModel=hey_jarvis_v0.1` 推下去，设备日志出现 `[shadow] on-device wake word scoring (onnxruntime 1.19.2, model hey_jarvis_v0.1, xnnpack=true ...) — triggering turns`，推 `off` 后出现 `[shadow] ... disabled`（`rui-dot2-bridge/docs/oww-route-b-status.md:13-15`）。
+- 设备上的资产当时 **md5 全部复核一致**，且 `libonnxruntime.so`/`melspectrogram.onnx`/`embedding_model.onnx`/`silero_vad.onnx`/英文 stock 分类器都已就位（同上 `:11-12`）。⇒ **中文 B1 大概率只需要再放 1 个 ~1MB 的 `<stem>.onnx` 分类器**。
+
+### 1.2 上游设计：运行时和模型**故意不在固件里**
+
+- `controller/em_oww_assets.py:1-32`：*"the ONNX Runtime and the models are deliberately NOT in the firmware: 12.3MB would double the OTA payload and both A/B slots ... They are installed out of band"*。
+- `device/internal/wakeword/shadow/open.go:13-21`：`DefaultDir = "/data/local/share/echomuse/oww"`，注释同样说明库不在固件里、缺失是"ordinary, expected condition"；`:31-58` 定义 `ModelStem`（`owwModel` 以 `.onnx` 结尾取 basename 去后缀，否则原样当 stem）；`:63-79` 只检查 `melspectrogram.onnx` + `embedding_model.onnx` + `<stem>.onnx` 三个文件，缺哪个就报哪个并**优雅回落到控制器 KWS**。
+- `em_oww_assets.py:151-176`：`owwModel` 可以是路径/自定义 `.onnx`，设备端用同一套 `ModelStem` 规则找文件——**文件名对上就能加载，没有安装/注册步骤**。
+
+### 1.3 运行期下发通道确实存在（两条）
+
+1. **`/shell` 平面**：`docs/device-controller-interface.md:38-44` 三条平面里第三条就是 `/shell/{device_id}`，"Root shell proxy, opened only after a `shell_open` command"；`:215` 是控制器→设备的 `shell_open/shell_close` 命令。上游 `controller/em_shell.py:1-8` 写明所有"控制消息以外"的设备操作（OTA、唤醒词资产、凭据）都走它；`:228-246` 与 `:375-429` 的 `stream_file` 用 base64 heredoc 写 `{dest}.part`，**md5 对上才 `mv` 覆盖**，失败不破坏原文件。
+2. **ADB**：`em_oww_sync.py:1-13` 明说这条 shell 传输是"field transport"，配网向导走 ADB 推同样字节；我们 10-25 也是用 `adb push` 把资产放进去的（`oww-route-b-status.md:21`）。
+
+没有额外的"安装模型"HTTP/MQTT 命令：运行期唯一路径就是**把文件写进 `oww` 目录 + `config` 指定 stem**。所以问题不是"有没有接口"，而是"用哪条通道写文件"——两条都不碰固件。
+
+### 1.4 配置即时生效、无需重启
+
+- `docs/device-controller-interface.md:368-374`：`config` 是部分更新，"Changes take effect immediately — no restart"；字段表含 `owwThreshold, owwModel, owwSpeexNs, owwOnDevice, ... bargeInEnabled, bargeInThreshold`。
+- `controller/em_oww_sync.py:304-310` 与 `:431-434`：装完资产后**只需再推一次 `config`**，"the device rebuilds its scorer from a config push"；"No restart is owed"。
+- 我们 bridge 已经在推这些字段：`device_link.py:345-360`（`owwOnDevice`/`owwModel`/`owwThreshold`/`bargeInEnabled`/`bargeInThreshold`…），开关是 `adapter.py:214-222`（只有配了 `oww_model` 才推 on）与 `:983-990`（`DOT2_OWW_MODEL` / `DOT2_OWW_ON_DEVICE`）。
+
+### 1.5 打断路径本身不依赖固件改动
+
+- 播放中设备仍连续推流（`listen_state=stream`），设备侧打分器照常跑，唤醒通过 `oww_wake` 单独上报（`oww-route-b-status.md:16`；`docs/listening.md:122-126`：老控制器/无 `listen_session` 时就是"continuous stream, triggering on its own wake"）。
+- 播放期门槛会降到 `bargeInThreshold` 且要求连续两帧，开关是 `bargeInEnabled`（`docs/listening.md:203-211`）；即使 barge 关，播放中的唤醒**仍会上报**，由控制器决定是否接受（同 §210-211）。
+- 插件侧的静音只发生在 **bridge 内部**：设备帧收上来后才在 `adapter.py:632-640` 的 `_gate_mic()` 里清零，**不影响设备端打分器听到的真实麦克风**。`device_link.py:456-470` 在 `stream` 模式下把"播放中收到的 `oww_wake`"补成 `barge=True`。
+- 这与 `plug.json:47,68` 的声明一致：`"barge_in": "wake"`、`"wake still interrupts playback"`。
+
+### 1.6 中文模型的唯一缺口：没有现成模型
+
+- `p4-device-wake-feasibility.md:15-16` 与 `oww-route-b-status.md:12`：stock 只有英文 `hey_jarvis_v0.1` / `alexa_v0.1` / `hey_mycroft_v0.1` / `hey_rhasspy_v0.1`。
+- `oww_forge/README.md:11-27`：用 openWakeWord 官方流程 + piper 合成音训练，输出单个 <1MB `.onnx`；`:186-198` 支持 55 种 piper 语音（`forge.py piper-voices` 按语言取；中文 voice 是否在运行期目录里需实测），`:301-303` 训练配置里设 `language`；**但**分类器仍建立在 openWakeWord 冻结的**英文** speech embedding 上，非英语唤醒词"not as well served"，效果必须实测。
+- 设备端对分类器没有语言概念，只按文件名加载（见 1.2），所以"中文模型 = 一个兼容 openWakeWord 特征面的 `.onnx`"。
+
+## 2. 如果做（a），具体形状
+
+**配置载荷**（`config` 消息，字符串不是 bool；`owwThreshold` 必须 >0）：
+
+```json
+{"type":"config","owwOnDevice":"on","owwModel":"ni_hao_xiao_rui","owwThreshold":0.4,
+ "bargeInEnabled":true,"bargeInThreshold":0.25}
+```
+
+**文件落点**：`/data/local/share/echomuse/oww/<stem>.onnx`（stem 与 `owwModel` 对齐；建议纯 ASCII 文件名，避免 JSON/文件系统歧义）。
+
+**最小文件集**（若 10-25 那批资产仍在设备上，只需第 4 项）：
+`libonnxruntime.so`(12.3MB) + `melspectrogram.onnx`(1.1MB) + `embedding_model.onnx`(1.3MB) + `<stem>.onnx`(~1MB)；`silero_vad.onnx` 是回合 VAD 用的，可选；`embedding_stream.onnx` 可选（省 CPU）。
+
+**前提/开关**：① 设备与 bridge 的 wss 链路正常（已有）；② `/shell` 平面未被占用（同一设备一次一个 shell 会话）；③ `owwOnDevice=on` + `owwModel` 必须一起推，只推 on 会用固件默认模型（恰好是英文 `hey_jarvis_v0.1`）；④ `bargeInEnabled=true` 才会在播放时降到 `bargeInThreshold`（默认 0.05 太低，建议 0.25 量级）；⑤ **不需要重启设备或 client**，推 config 即重建 scorer。
+
+**下发方式二选一**：
+- **一次性 `adb push`**（零代码，适合先验证/少量设备）：`adb push <stem>.onnx /data/local/share/echomuse/oww/` + `chmod 644` + 核对 md5。
+- **bridge 实现 `/shell` 客户端**（可自动化、可多设备）：`shell_open` → 设备回拨 `/shell` → base64 heredoc 写 `.part` → md5 校验 → `mv` → 推 `config`。当前 **未实现**：`adapter.py:81-87` 明确 `raise NotImplementedError("the Dot 2 adapter exposes no shell")`，`device_link.py:47-48` 只服务 `/control` 与 `/data`。
+
+## 3. 最小验证步骤（建议顺序）
+
+### V0：先证"不刷固件"的机制（~30 min，用英文 stock，不训模型）
+
+1. 确认设备 `/data/local/share/echomuse/oww/` 下运行时与 `hey_jarvis_v0.1.onnx` 还在（10-25 已 md5 复核；不在就按 1.3 的任一条推回去）。
+2. bridge 环境加：`DOT2_OWW_MODEL=hey_jarvis_v0.1`、`DOT2_OWW_ON_DEVICE=on`、`DOT2_OWW_THRESHOLD=0.4`、`DOT2_BARGE_IN_ENABLED=0`（第一轮先关 barge，排除自听误触发），重启 adapter 容器。
+3. 设备日志应出现 `[shadow] on-device wake word scoring (... model hey_jarvis_v0.1 ...)`。
+4. 放音乐，说 "hey jarvis"：bridge 日志应出现 `dot2 link: oww_wake ... treated as barge-in`，rui 侧 `device_wakes`/`device_wake_barges` 增长，播放停止；随后 probe 才能宣告 `device_wake`（`device_link.py:490-514` 的证据门控——**第一次必须真的唤醒一次**，否则仍回落 KWS）。
+5. 再开 `DOT2_BARGE_IN_ENABLED=1` + `DOT2_BARGE_IN_THRESHOLD=0.25`，重复 3 次，记录误触发。
+
+> 通过标准：全程没有改固件/没有 OTA/没有重启设备，只改了 env + 设备资产。
+
+### V1：中文模型（真正 B1）
+
+1. `oww_forge` 训练 `ni_hao_xiao_rui.onnx`：`target_phrases` 用"你好小瑞"，`language=zh`，piper 选中文 voice；预算 ~25GB 资产、数小时/轮；最好再混入 20–50 条真人录音（`oww_forge/README.md:204-208`）。
+2. 只把 `<stem>.onnx`（~1MB）推到设备同一目录，核对 md5。
+3. `DOT2_OWW_MODEL=ni_hao_xiao_rui`，阈值从 0.4 起调；先关 barge 验证静默期唤醒，再开 barge 验证播放中打断。
+4. 判据：播放中 3 次打断 ≥2 次成功且 `barge=true`；安静房间 20 次长回复误唤醒 ≤1 次；打断延迟（wake→stop）记录实际值。
+
+## 4. 风险
+
+1. **中文模型质量是最大不确定项**：openWakeWord 的冻结 embedding 是英文语料训的，中文短语可能"听得见但不够稳"（`oww_forge/README.md:197-198`）。缓解：真人录音混训、阈值下调、先接受英文唤醒词作为可打断入口。
+2. **播放中门槛与自听**：`bargeInThreshold` 默认 0.05 会让设备把自己的声音/残响当 barge；必须用 0.25 量级 + 连续两帧规则（`docs/listening.md:203-208`）。设备 AEC 的残余回声决定上限，**这一点只能真机听/测**。
+3. **设备 CPU/音频抖动**：Dot2 上 ORT + 特征模型与推流并行（10-25 日志 `xnnpack=true`）；若出现 underrun/卡顿，可补 `embedding_stream.onnx` 或提高阈值减少打分负担。
+4. **交付通道缺口**：一次性 `adb push` 不可扩展，多设备/远程设备要么现场 USB，要么在 bridge 里实现 `/shell`（base64 + md5，~1 个模块的代码量）；后者仍需评审/验证，但**不是固件工作**。
+5. **probe 证据门控**：只配 `owwOnDevice=on` 不会立刻宣告 `device_wake`，必须有一次真实 `oww_wake`/`oww_shadow_cross`；期间 rui 继续用 KWS（日志会有一条 fallback），别把它误判成失败。
+6. **资产持久性**：资产在 `/data`，普通重启/OTA 不清；恢复出厂会清空，需要重新下发。若同一设备又接回 EchoMuse 控制器，其 LRU 清理可能删掉非受管分类器（`em_oww_assets.py:320-356`），建议保留一份可重推的副本。
+7. **中文 stem 可用性未实测**：设备端只按文件名找 `.onnx`（无注册表），理论上任意 stem 都行；但为避免 FireOS/JSON 的编码坑，验证阶段先用 ASCII stem。
+
+## 5. 需要 9 哥 决定
+
+1. 是否先做 **V0（英文 stock，零固件改动）** 证明"运行期下发 + 播放中打断"链路，再决定是否投入中文训练？
+2. 中文"你好小瑞"是否接受 **oww_forge 自训**（~25GB、数小时、效果不确定）？还是先用英文唤醒词作为"播放中可打断"的过渡入口？
+3. 生产 Dot2 是否允许 **一次性 `adb push` 一个 ~1MB 分类器**（需要临时 USB/root 访问）？若不允许，是否批准在 bridge 里实现 `/shell` 客户端（纯代码，非固件）？
+4. 播放中 barge 的门槛策略：接受 `bargeInThreshold=0.25` 量级带来的误打断风险，还是宁可门槛高一点（少打断但更稳）？
