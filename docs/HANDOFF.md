@@ -14,6 +14,15 @@
 | task-3 `[docs] 缺口台账 + 8 处矛盾` | **completed** | 两轮 CHANGES + verifier 两轮 FAILED 后修完；house `49df73f`、dot2 `517623d`、xiaoai `0889427` |
 | task-4 `[release] 0.7.3 版本/CHANGELOG/release notes/README pin` | in_progress | impl-core 执行；之后 Lead 打 tag/发 release/构建镜像 |
 
+### 0.7.3 发布（2026-10-26 22:05 起）
+| 项 | 值 |
+|---|---|
+| commit | `c26cc46`（release: 0.7.3） |
+| tag | `v0.7.3`（tag 对象 `13ab512`）已 push |
+| 镜像 | `ghcr.io/yes999zc/rui:0.7.3` = `sha256:b6e8284fa688fe5327d9dff1ea259167c99aa95f06cc5d4360f5197c01652982`（amd64 + arm64，`docker manifest inspect` 已核；`:0.7` 与 `:latest` 同 digest） |
+| release | `https://github.com/yes999zc/rui/releases/tag/v0.7.3`（非 draft、非 prerelease） |
+| CI | tag `c26cc46` 上 **ci / security / secret-scan / docker-publish 四绿**（两个 docker-publish run 均 success：main + tag） |
+
 ### 数字（0.7.3 工作树，commit `cd2d0a2`）
 - 测试四计数：**collected 1651 / passed 1634 / skipped 17 / xfail 0**（failed 0）；dot2 **145 passed**；xiaoai 9 passed。
 - 覆盖率（本机 macOS/Py3.13）：行 **80.95%**（18429/22767）、分支 **69.55%**（5158/7416）、合并 78.15%。
