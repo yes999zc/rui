@@ -36,6 +36,8 @@
 15. task-6 P0 采样自动化 + 矩阵：`scripts/fleet_say.py`（唤醒词 + 1.5 s 后说指令、自动写 marks）+ `fleet_matrix --log-tz/--window/--wake-only-phrase`（commit `3c249f9`）
 16. task-6 P1 归因：`docs/analysis/dot2-vs-xiaoai.md`（Dot2 30 句：唤醒 30/30 admitted、指令 26/30；两条掉分线索落到日志行；commit `850d19e`）
 17. P2-1（task-15）：ack cue 回声不再进 ASR；真机 A/B **0/10 泄漏**（修复前 13/26）；commit `87bb704`，部署测试镜像 `rui-dot2:1.3.0-p21`（未打 tag）
+20. task-16 分析完成（reviewer PASS）：`docs/analysis/wake-vs-command-range.md`，结论「唤醒链两台同量级、差距在 admitted→ASR；H2（播放后静音窗）被代码否证；H1/H3/H4 未做」；提交 `a301dce` + `2c88b0e`
+21. task-19（P2-2 音乐中短指令）已开卡并把归因数据写进卡：音乐期 `[seg]` rms 中位 0.0232（比无音乐 0.0118 **更高**）、peak 到 1.000 → 失败模式是「音乐串音/削波」而非 mic 被静音
 19. task-18（P1）播放态按房间隔离：一屋放歌不再饿死另一屋唤醒；提交 `3bbf93f`，reviewer PASS + verifier VERIFIED（1617/17），生产 `rui-dot2:1.3.0-p22`
 18. 采样编排打通：Dot2 用 Mac Studio 播、LX06（`device_id=living`）用荣耀服务器 192.168.5.34 播，同一份 48k WAV、各自写 UTC 毫秒 marks，`fleet_matrix --log-tz UTC` 出两设备矩阵；设备接入索引见 `docs/device-access.md`（不含口令）
 
@@ -48,6 +50,8 @@
 **task-15（P2-1 ack cue 回声，第四轮返工完成待复评，文件已冻结未提交）**：窄匹配增加 `_quiet_after`（`vad.py:367`，cue 结束后 100 ms 必须安静，±20 ms 容差）：把「教过 EMA 后 mute 场景回复被误丢」挡住（回复比 cue 长、不会安静）；窄命中不再 `_learn_lag`（EMA 只由首轮高质量命中更新，`vad.py:381`）；日志 `kept` 区间改为 `min(skip+drop, hold)` 并新增 `match_offset`（`vad.py:493`）；`CUE_POST_SILENCE_MS=100`（:69）。新增测试：`tests/test_cue_echo_excision.py:450` 教 EMA(760/820) 后跑 mute 几何（cue 700/hold 1690/skip 950）→ captured **1.31 s**、`dropped=[0,950]ms`、fallback=false；`:482` 窄命中后 EMA 不变。无削波 850/950 仍 corr_full 0.030 / tail 0.353 / retained 0.91/1.00。全量 **1613 passed / 17 skipped**，ruff 绿；冻结 md5：vad.py `cf8e558c2d11b7be3041ebb16e0cd7ae`，test `412ecfb749d8488d9951fe0320b31f14`；process.py 未改（`176e8508…`）。
 
 **task-18（P1 播放态按房间隔离，实现完成待门禁，未提交）**：arbiter 的 `turn_open` 增加 `turn_device`（`arbiter.py:187/343`），拒绝改为 `_in_open_turn`（:533，仅同房/同设备）；`_playing_reason`（:550）只在候选属于正在播放的房间时回 `lost_playing`/`cross_echo`，其它房间放行；pending 批量按候选逐条过滤（:480 保留 rejected 列表）。coordinator `set_turn_open` 同步房间、新增 `set_playing`（`coordinator.py:87/101`）；`_reconcile_owner` 把**所有**出声房间写入 playing（`app.py:1582`，无播放时清空 :1562）。旧全局单槽行为在测试中已更新（arbiter/app_fleet 各 1 处），新增 6 个隔离用例（`test_wake_coordinator.py:253/268/283/297/310`、`test_arbiter.py:233`）。反向：旧代码上 A 放歌→B wake `WakeReject`（应 admit）、A turn_open→B `turn_open`。全量 **1617 passed / 17 skipped**，ruff 绿。真机 A/B 由 Lead 执行。
+
+**task-19（P2-2 音乐中短指令，实现完成待门禁，未提交）**：归因结论 H-A 不成立（音乐期高 rms/peak=1.0 的段都紧邻 `cue:`，见 fleet3:414/952；无 cue 的音乐段 rms 0.02–0.06、peak 0.2–0.23）、H-B **成立**（`wake_preroll_ms=500 > wake_skip_ms=300`，barge 时回放环里 200 ms 停播前音频进段；fleet3:596–601 barge→stop_play→seg，07:12:30–35 3.84 s 段串进告别语「没事的话，我先下啦」）、H-C 仅个别成立（07:04:01 rms .006、07:12:13 rms .0022 近似静音，非全局）。最小改动：`process.py:1895-1902` barge 唤醒不再回放预唤醒 ring（仍清空 ring），live 语音不受影响；非 barge 路径不变。新测试 `tests/test_music_barge_head.py`（barge 不回放停播音乐、非 barge 仍回放、stop_play ≤7 ms）。反向：旧 process.py 上 `assert MUSIC_PCM not in gate.fed` 失败。三仓：house-ear **1620 passed/17 skipped**、dot2 **143**（其 .venv）、xiaoai **9**；ruff 绿。真机 A/B 由 Lead。
 
 ## 已批 / 待批（2026-10-26 16:58 9 哥 全部按建议批准）
 
@@ -88,12 +92,18 @@
 - 结论：**采样必须串行**（一次只开一台音源）；同时这是 4 台「互不串台」的 P1 候选（`lost_playing` 让另一台完全无法工作，需要按房间隔离播放态）。
 - 采样脚本改为：单台、顺序、去掉 `放首歌/下一首`（避免自己把 mic 压住），只用 `hello/time/stop/bye` × 5 个电平 × 2 轮。
 
+## 最近状态（2026-10-26 17:55，压缩前）
+
+- 生产 `rui-dot2:1.3.0-p22` healthy，`RestartCount=0`，started 17:15:58；两台设备 `living`/`dot2` 均 connected+ready。
+- 24h 稳定性提醒已改到 **2026-10-27 17:40**（schedule-80a81833），从 17:15 起计。
+- 任务板：completed = task-1/2/4/5/7/8/9/10/11/13/14/15/16/18；进行中 task-19；未开工 task-17；release 卡 task-12 blocked_by = task-6/16/17/18/19（16、18 已完成）。
+
 ## 最近状态（2026-10-26 17:25）
 
 - **已上线测试镜像** `rui-dot2:1.3.0-p22`（r071 + P2-1 + task-18）；回滚 = override 改回 `rui-dot2:1.3.0-r071` + `compose up -d`。
 - **task-18 真机回归待跑**：两屋同时放歌 → 各自唤醒各 5 次，期望两屋都能应答、`lost_playing` 只在同屋出现。
 - **task-16 分析稿已提交**（`a301dce`）：`docs/analysis/wake-vs-command-range.md`；核心发现：唤醒链两台同量级（0.75→0.15 区间），差距在 admitted→ASR；H2 被代码否证；「afplay -v 2 → 3/5」仅为现场手记（低强度），不证明削波阈值。
-- **task-19（P2-2）未开工**；P2 上限 2 项已满。
+- **task-19（P2-2）已开工**（impl-barge-ack）：先判 H-A/H-B/H-C 三条假设、再选最小改动；P2 上限 2 项已满。
 
 ## 当前状态（2026-10-26 17:30，压缩前快照）
 
@@ -101,7 +111,7 @@
 - **已提交**：`87bb704`（P2-1）、`3bbf93f`（task-18）、`3b3b0d1` / `8ee75a1` / `c3eba68`（文档）。全部已 push。
 - **已过门禁**：task-15（PASS + VERIFIED）、task-18（PASS + VERIFIED + 真机回归）。
 - **task-16 分析稿**：`docs/analysis/wake-vs-command-range.md`（已提交 `a301dce`），已按 reviewer 两轮意见全部修正；采样镜像锁定 p21，数字全部重算（Dot2 0.15 = cand 5/adm 4；LX06 0.15 = cand 6/adm 4），H2 已被代码否证（`post_playback_mute_ms` 只作用于有 TTS 回复的 follow-up）。
-- **未开工**：task-19（P2-2 音乐中短指令拾音）、task-17（AEC-lite）。P2 上限 2 项已满（P2-1 完成、P2-2 待做）。
+- **进行中**：task-19（P2-2 音乐中短指令拾音）。**未开工**：task-17（AEC-lite）。P2 上限 2 项已满（P2-1 完成、P2-2 待做）。
 - **task-18 真机回归结果**：客厅放歌时卧室 Dot2 连续 4 次 admitted、`lost_playing` 0 次（修复前 6 分钟 18 次）；但音乐中 ASR 只剩碎片（`'了。'`）——归 task-19。
 - **采样环境**：Mac（Dot2 房间）用 `afplay`，荣耀服务器 `192.168.5.34`（客厅）用 `aplay -plughw:2,0`；两台 NTP 同步，跨机对齐不确定度 ≤150 ms；**采样必须串行**（两屋同时说同一唤醒词会互相饿死）。
 - **待批**：4 台新设备到位后手动添加；打 tag 前的版本号确认；24h 稳定性结果。
