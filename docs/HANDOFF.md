@@ -226,6 +226,8 @@
 
 架构图各自三段：house-ear（服务端/平面/设备三层）、dot2（rui ⇄ plug ⇄ Dot2）、xiaoai（rui 核心 ⇄ `rui-device/v1` plug ⇄ LX06）；均为 Mermaid 源 + SVG/PNG、同一配色。
 
+- **release notes 草稿**：`docs/release/v0.7.2.md`（commit `e69b9c9`）——变更/门禁/已知限制/合规已写实；**digest 与 tag 链接待 task-22 构建后补**。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
