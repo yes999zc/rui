@@ -347,6 +347,24 @@
 - **教训**：README 里 `git clone --branch <tag>` 的目录结构必须与该 tag 实际内容一致；这次是「README 在 main 写、tag 在旧 commit」的典型错配。以后凡是新增 `examples/`，要么先合再打 tag，要么在 README 明确「示例在 main」。
 - 待办：verifier 复跑一次字面步骤（clone main → `cd examples/two-speakers` → `cp -r … plugins/` → `ls`）。
 
+## 发布收口（2026-10-26 20:10）——goal 六条 Done 全部满足，停下等 9 哥 验收
+
+| # | Done 项 | 证据 |
+|---|---|---|
+| 1 | 三仓 README 中英双语重做（矢量架构图+导出、真实脱敏截图、措辞合规） | house-ear `0029097`、dot2 `c79c402`(→`d8bfbc8`)、xiaoai `5126938`(→`6899c49`)；架构图 Mermaid 源 + SVG + PNG（三仓同配色）；hero `docs/assets/console-v2-devices.png`（本地实例、示例数据、无 Xiaomi/无告警）；reviewer 四项清单检过（脱敏/许可/措辞 PASS，真实性与可执行性 CHANGES 已修并 PASS） |
+| 2 | xiaoai 全历史扫描通过并公开 | `d741876`；0 token/私钥、0 内网 IP、0 个人路径、0 MAC；PUBLIC；secret scanning + push protection enabled；alerts 0；reviewer PASS + verifier VERIFIED |
+| 3 | CHANGELOG / tag / release notes（中英）/ 镜像 tag | CHANGELOG：`2f5e5ef`(0.7.2) / `730d6d6`(1.3.1) / `288454e`(0.2.1)；tag `v0.7.2`/`v1.3.1`/`v0.2.1`；三条 GitHub release（中英 + Known limitations）；镜像 `ghcr.io/yes999zc/rui:0.7.2` = `sha256:d830a2ca…8018`（tag commit `ad11936` 构建）；下游 `rui-dot2:1.3.1` 本地 ID `sha256:92ea98f4…`（未推 registry，见已知偏差） |
+| 4 | 发布后 `/api/v2/meta` 与 digest 核对并写进 HANDOFF | 生产 `/api/v2/meta`：`contract=C-002/1`、`api_version=2.0`、`rui_version=0.7.2`、`compat={min:0.6.0,max_exclusive:0.8.0}`；`/health` version 0.7.2、devices 2、enabled 2；生产容器 `rui-dot2:1.3.1` healthy；三处 digest 已对照（见 §发布完成） |
+| 5 | CI 全绿、工作树干净 | `v0.7.2` tag 上 security/secret-scan/docker-publish success；`67db5d8`(main) 上 ci/security/docker-publish/secret-scan 4/4 success；三仓 `git status --short -uall` 均为空 |
+| 6 | 新手安装路径实测通过 | `examples/two-speakers/compose.yaml`（house-ear）+ 三仓 README 的「让 AI 帮你装」；实测 `/health`：`devices=2`、`enabled_devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`；verifier 自起容器复现（含反向：无 token → 退出、少挂插件 → `registered=["dot2"]`）；reviewer PASS + verifier VERIFIED |
+
+**已知偏差（不阻塞验收，已如实记录）**
+- 下游镜像 `rui-dot2:1.3.1` 只在 NAS 本地构建，未推 registry（该仓无 docker-publish workflow，环境无 GHCR 写凭据）；可复现性以「tag + base digest」为准。
+- tag `v0.7.2` 指向 `ad11936`，其树内 `docs/release/v0.7.2.md` 仍是待填草稿表；发布页 body 与 HEAD 文件已是最新值，tag 未移动（改写已发布 ref 风险更大）。
+- `examples/two-speakers/` 在 tag 之后才加入，故 README 安装提示词用 `--branch main`（镜像仍 pin 0.7.2）。
+
+**不做（按 goal 约束）**：4 台联合调试（设备未到）、M10 / console v2 默认切换、任何新功能。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
