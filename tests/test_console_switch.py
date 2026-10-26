@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from ruamel.yaml import YAML
 from pydantic import ValidationError
+from ruamel.yaml import YAML
 
 from rui.config import Config, load_config, save_config
 from rui.web.api import app as app_module
