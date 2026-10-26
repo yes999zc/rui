@@ -7,7 +7,9 @@
 ## 0.7.6 状态（2026-10-27 00:10，进行中）
 
 - **B1a 已合入 `c713916`**（task-12，PASS+VERIFIED）：仓内 `plugs/xiaoai/` 删除（移到 `tests/fixtures/legacy_lx06` 测试夹具，不进镜像）、`src/rui/adapter_aliases.py` 删除；`adapter: xiaoai` 改为配置迁移（`config/store.py` 重写为 `lx06` + 弃用 WARNING + `.bak` 备份 + `/health.adapter_plugins.warnings` + 设备级 `legacy_adapter_spelling`）；默认 `adapter` 改 `lx06`（与旧行为等价、不告警）；Dockerfile 去掉 `COPY plugs`，`/opt/rui-plugins` 归 `rui:rui` 且构建期降权验证可写。全量 **1654/17**、`docker build` 绿。
-- **B1b（task-13）在途**：lx06 测试移植到桥仓、删夹具、`src/rui/web` 剩余 10 处设备字符串改中性、查清 `registered` 口径、镜像挂外置插件实测。完成后 B 只剩「双跑对比」（需 LX06 真机，白天）。
+- **B1b 已合入 `c2ed7fd` / 桥 `0810885`**（task-13，PASS+VERIFIED）：lx06 语义测试移到桥仓（**44 passed**）；核心 `src` 门禁 `xiaoai|lx06|小爱|4412` **0 命中**（仅 `legacy_adapters.py` 豁免）；4412 与旧拼写都收进 `legacy_adapters.py`（整模块 0.8.0 删）；**vendor 唤醒兜底改为数据驱动**：设备清单新增通用字段 `wake_words_residual`（lx06 声明三条），未声明则不过滤——已作为「已知行为变更（0.7.6）」写进 `docs/socket-plug-v1.md`。
+- **`registered` 口径（实测）**：`adapter_plugins.registered` 只统计 `RUI_ADAPTER_PLUGINS` / entry point / `<data_dir>/plugs/*`，不含 `RUI_PLUGINS_DIR` 的 catalog；镜像挂外置插件**必须同时**带 `PYTHONPATH=/opt/rui-plugins`，否则 `registered=[]`。**0.7.8 验收看 `planes[].state=="running"` + `devices`/`device_errors`，不能只看 `registered`**。
+- **B1c（task-14）在途**：删测试夹具 + 17 个共享测试分诊（设备语义移桥仓、通用改 mock）。完成后 B 只剩「双跑对比」（需 LX06 真机，白天）。
 - 版本重排已写进 `docs/ROADMAP-0.8.md`（`b9a9059`）：0.7.4 = P0 修复、0.7.5 = TLS/Done6、0.7.6 = B、0.7.7 = C、0.7.8 = D。
 
 ## 0.7.5 状态（2026-10-26 23:35，进行中）
