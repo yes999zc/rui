@@ -26,16 +26,40 @@
 - **另记**：`docs/release/`（0.7.x 实际目录）与 `docs/releases/README.md` 的路径口径不一致，留一次 docs 小修。
 - **0.7.8 不发版**：剩余出口 = Done 6 c/d/e 真机 + 双跑对比 + 升级/回滚 + 人肉手册（全在白天）。
 
-## 明早第一件事（2026-10-27 02:10）
+## 明早第一件事（2026-10-27 02:50）
 
-1. **读这一节，然后按顺序**：`docs/audit/hermes-triage.md` §7（24 条分诊待你确认：3 条 P0 降级、#27 否决去均值、#32 不改 pip 语义、版本重排）→ 已发的 0.7.3 / 0.7.4 → 待发的 0.7.5 / 0.7.6。
-2. **生产**：今晚 **0 次变更**，仍是 `rui-dot2:1.3.1`（核心 0.7.2，digest 见「版本与契约」）。0.7.3 / 0.7.4 镜像已发布但**没有**部署到 NAS。
-3. **白天必须真机做完才能发版的**：
-   - 0.7.5 出口：Done 6 的 c/d/e（两台 `audio_plane=true`、唤醒→指令→播放、升级+回滚各一次）+ TLS 真机接受度（自签 vs 原 controller 证书）；
-   - 0.7.6 出口：B 的双跑对比（0.7.2 内置 vs 0.7.6 外置，同一配置同一台 LX06，字段级 diff）；
-   - 0.7.8 出口：真机走一遍 + 人肉部署手册（我会亲手跑并贴输出）。
-4. **今晚已完成（不需要你再确认）**：0.7.3、0.7.4 发布；0.7.5 代码 + TLS 实测；0.7.6 的 B 代码（内置 lx06 已删、测试移桥仓、核心 grep 0）；0.7.7 的控制台审计（172 行、0 不可用）。
-5. **需要你拍板的两个口径**：①`adapter_plugins.registered` 不能作为 0.7.8 验收唯一判据（外置插件只认 env/entry-point/data_dir；镜像里要同时带 `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`），建议改用 `planes[].state=="running"`；②两音箱默认只起第一台平面，需 `multi_device: {enabled: true, max_planes: 2}`——这条已写进 README，但要不要改默认值由你定（改默认值影响单设备用户）。
+### 1. 做到哪（A–F）
+| 主线 | 状态 | 证据 |
+|---|---|---|
+| **A** 测试补齐 | 覆盖率基建 + batch-1 三条 + 配置台账完成；36 条「未验证」里 6 条变测试、4 条环境、26 条真机（协议已写） | 1644 passed / 6 skipped；覆盖率 80.95% 行 / 69.55% 分支（基线 `docs/audit/coverage-baseline.md`） |
+| **B** 小爱摘出 | **代码完成**：内置 `plugs/xiaoai` 与 `adapter_aliases` 已删、配置读入迁移 + 告警、`wake_words_residual` 数据驱动、54 条设备语义测试移桥仓、核心 grep 0 | `c713916` / `c2ed7fd` / `300b2a9` / 桥 `0810885` `575b443`；剩双跑（真机）与删测试夹具（task-15，0.7.7） |
+| **C** 控制台审计 | **完成**：172 行元素结论（159 可用 / 12 未验证 / 1 文案错误行 / 0 不可用 / 0 未处理）+ 76 张截图；条件性缺陷 1→0 | `db179f8` + `2e9da6c`；`docs/audit/console-functional.md` |
+| **D** 默认切 v2 | **完成**：`/` 302 `/v2/`、`/health.console=v2`、15 条老链接 302、`/legacy` 弃用横幅、`console: legacy` 一版回滚 | `efab571`；`docs/release/v0.7.8.md` |
+| **E** TLS + Done 6 | TLS 安装路径 + 三矩阵实测 + 两台平面可见性完成；**Done 6 c/d/e 未做**（真机） | `43d18df` / `258d72a` / `5e16026`；`docs/acceptance-done6-0.7.8.md` |
+| **F** 每版纪律 | 0.7.3、0.7.4 已发；0.7.5–0.7.7 合并进 0.7.8（不单独打 tag，理由见下）；每卡 review PASS + verify VERIFIED | `efab571` / `687d7de` / `89a10f1` |
+
+**版本口径（已定）**：0.7.5 / 0.7.6 / 0.7.7 **不单独打 tag** —— 它们的验收项（Done 6 真机、双跑、升级回滚）要等 0.7.8 代码齐了一次做完；事后补 tag 等于假装「发版时已验证」。**0.7.8 是唯一验收节点**。
+
+### 2. 下一步（白天，按序）
+1. 按 `docs/deploy-runbook-0.7.8.md` 在 NAS 上升级（本地候选 `rui:0.7.8-rc1` → 下游 `rui-dot2:1.3.1-r078`，链路已本地验证）；
+2. 按 `docs/acceptance-done6-0.7.8.md` 走 a→c（只读）→ d（会出声）→ e（回滚一次）；
+3. 全过后 `git tag v0.7.8` → `gh release create` → 记录镜像 digest → 回填 HANDOFF 发布表与 runbook 实测表；
+4. B 双跑对比（0.7.2 内置 vs 0.7.8 外置，同一 LX06、同配置、字段级 diff）。
+
+### 3. 等你（只有三件）
+1. **Hermes 分诊确认**：`docs/audit/hermes-triage.md` §7（3 条 P0 降级、#27 否决去均值、#32 不改 pip 语义、版本重排）。
+2. **两个口径**：①`adapter_plugins.registered` 不作 0.7.8 验收唯一判据（镜像里要同时带 `RUI_ADAPTER_PLUGINS` + `PYTHONPATH`），建议改看 `planes[].state`；②两音箱默认只起第一台，要不要把 `multi_device` 默认改开（影响单设备用户）。
+3. **你亲手部署**：0.7.8 的最终验收由你做。
+
+### 4. 已知限制（当晚新增）
+- 自签证书只保证音频平面能起，真机接受取决于设备信任的 CA；
+- 两音箱默认只起第一台平面（需 `multi_device`）；
+- 未声明 `wake_words_residual` 的第三方清单不做 vendor 短语兜底（已知行为变更）；
+- `?from=` 仅标记，v2 未消费（providers/system/channels 三个老链接落设备页）；
+- 测试夹具 `tests/fixtures/legacy_lx06` 仍在（task-15，0.7.7 删）。
+
+### 5. 生产
+**今晚动过 0 次。** 当前仍是 `rui-dot2:1.3.1`（核心 0.7.2，本地镜像 ID `sha256:92ea98f4…`），`/health.console=legacy`。0.7.3 / 0.7.4 镜像已发布但**未部署**；0.7.8 未打 tag（故 registry 上没有 0.7.8 镜像）。
 
 ## 0.7.7 状态（2026-10-27 02:00，进行中）
 
