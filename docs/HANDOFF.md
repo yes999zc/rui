@@ -197,6 +197,15 @@
 - park 原因（reviewer）：① `_aec_filter` 前 taps 帧 `clean` 恒 0 → cleaned 段首 ~32 ms 被置零，可能切用户首字；② `aec_lite=True` 默认开启且残差 ≥0.25 就**静默丢 turn**，真实混响 >64 ms 时可能频繁丢正常指令；③ `aec_lag_max_ms=1500` 与 task-15 的 800 ms 上界冲突，同源回复可能被当 cue 相减；④ 阈值/混响需真机 A/B。
 - **不阻塞发布**：0.7.1/0.7.2 内的包络 + EMA + `quiet_after` 已覆盖真机观测类（削波 + lag≈740 ms）；剩余边界（冷启动不削波、用户与 cue 重叠 <110 ms）写进 0.7.2 release notes 的 Known limitations。
 
+## 发布准备进度（2026-10-26 19:50）
+
+- **task-17**：PARKED（见上），不阻塞。
+- **task-20（xiaoai 扫描 + 公开）**：仓库已 `PUBLIC`（`gh repo view --json visibility` 复核）；Lead 自测扫描：4 个 commit，**0 个 token/私钥、0 个内网 IP、0 条个人路径、0 个 MAC**；仅作者邮箱 `yes999zc@163.com` 出现在提交元数据里（非机密，属可接受）。**仍待该卡 reviewer + verifier 走完**。
+- **task-21（三仓 README）**：已开工，**先做 house-ear 与 rui-dot2-bridge 两份**；xiaoai 那份等 task-20 收口后再做（同仓 README 会打架）。
+- **task-22（CHANGELOG/tag/release + 核对）**：blocked_by task-20/21。
+- CI：`cf05f58` 上 4 个 job 全绿（ci / security / docker-publish / secret-scan）；此后仅文档提交。
+- 工作树：干净（house-ear 只有已提交内容；xiaoai 干净）。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
