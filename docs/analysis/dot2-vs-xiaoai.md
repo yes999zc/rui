@@ -109,3 +109,23 @@
 ## 7. 结论（一句话）
 
 Dot2 的**唤醒与仲裁**在这次采样里是干净的（30/30 admitted、0 拒绝）；掉分集中在**唤醒后的第一句话被 ack cue 回声污染**（13/26）与**音乐播放中的短指令拾音**（2/5）。两者都还需真人 A/B 才能定性为缺陷还是 TTS 音源伪影。
+
+## 8. 双腿同源复测（2026-10-26 16:16–16:41，P2-1 部署后）
+
+条件：同一份 48 kHz/16-bit WAV（6 句，`/tmp/fleet6/*.wav`），每句「唤醒词 → 1.5 s → 指令」，句间 10 s，5 轮。
+- Dot2（卧室）：Mac Studio `afplay -v 1` 播放（`marks-dot2b.csv`，日志 `/tmp/rui-fleet6.log`）
+- LX06（客厅，`device_id=living`）：荣耀服务器 `aplay -plughw:2,0` 播放（`marks-lx06.csv`，日志 `/tmp/rui-fleet5.log`）
+
+| 指标 | Dot2 | LX06（living） |
+|---|---|---|
+| wake candidates | 45（含重复检测） | 30 |
+| admitted / rejected | 45 / 0 | 24 / 6（`lost_playing×2`、`lost_same_word×2`、`turn_open×2`） |
+| turns | 34 | 21 |
+| 逐窗口有证据（30 个窗口） | **11** | **28** |
+| 逐窗口无 wake 行（unknown，不计失败） | **19** | 2 |
+
+**关键对比**：同样一份音频，LX06 那一路 30 次尝试里 30 次都产生了 wake candidate；Dot2 那一路只有 11 个窗口有证据，其余 19 个窗口**没有任何 Dot2 wake 行**。时间线（`/tmp/rui-fleet6.log` 每分钟行数）显示这些空窗成段出现，且集中在「放首歌」之后的几分钟——这与「音乐播放中/刚播完，mic 被设备侧 AEC 或 core 的 `post_playback_mute_ms` 压住」一致（见 §4 P1-B）。
+
+**电平实验（同一台 Dot2，wake-only 5 次）**：`afplay -v 1` → **5/5** 唤醒；`afplay -v 2` → **3/5**。即「更响」反而更差——削波会伤 KWS，不是「越响越好」。这条直接支持 task-16 的假设①（电平/增益）方向，但也说明**不能靠调大音量**验证距离。
+
+**限制（必须遵守）**：Dot2 那 19 个 unknown 窗口**不是失败**，也不计入成功率分母；它们只说明「窗口内没有该设备的 wake 证据」。要判定是「设备没听见」还是「日志被音乐/播放期压住」，需要 task-16 的分级距离实验 + `[seg]`/`cue_gate` 逐行核对。

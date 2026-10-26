@@ -10,7 +10,7 @@
 | rui 核心 | tag `v0.7.1` @ `44cff05`（`v0.7.0` = `e9db990`）；HEAD `c825091`；镜像 `rui:0.7.1-a1p` = `sha256:f446e348e871e11404cb7d081952b458750a6f4a6d6d45512f64551cfdd5285c` |
 | rui-dot2-bridge | tag `v1.3.0` @ `c71deb6`；plug `dot2-echomuse 1.3.0`（`ladder_correct=true`） |
 | rui-xiaoai-bridge | tag `v0.2.0` @ `fcff8eb`；plug `xiaoai-lx06 0.2.0` |
-| 生产 NAS 168（`/vol1/rui`） | 组合镜像 `rui-dot2:1.3.0-r071` = `sha256:252f568ca6b1d88aa2990e79856b7d8b143a7810bac452d294e9e5fcfbe7ecba`；底座 `ghcr.io/yes999zc/rui:sha-615e682`；2026-10-26 13:36 部署、healthy |
+| 生产 NAS 168（`/vol1/rui`） | **测试镜像 `rui-dot2:1.3.0-p21`**（= r071 + P2-1 vad.py，未打 tag）；上一个稳定组合 `rui-dot2:1.3.0-r071` = `sha256:252f568ca6b1d88aa2990e79856b7d8b143a7810bac452d294e9e5fcfbe7ecba`；底座 `ghcr.io/yes999zc/rui:sha-615e682`；2026-10-26 13:36 部署、healthy |
 | 生产配置 | `/health.console=legacy`（M10 未切）；override：`DOT2_PLAYBACK_GATE_MS=0`、`DOT2_OWW_ON_DEVICE=off`、`DOT2_BARGE_IN_ENABLED=0`、`DOT2_CONTROL_PORT=8872`；config：`post_playback_mute_ms=2500`、`ack_echo_ignore_ms=2500`；备份 `rui-dot2-override.yml.bak.20261026-*` |
 | 设备固件 | Dot2 client `fw 20261024-1911-dev`；二进制 `echomuse-dot2-ref/artifacts/server` sha256 `65f93891…` |
 | 契约 | C-001 `rui-device/v1`；C-002/1（含 A-1..A-6）；兼容窗口 `>=0.6.0, <0.8.0`（三仓 manifest 已同步） |
@@ -35,10 +35,22 @@
 14. task-6 采样工具 `scripts/fleet_matrix.py`（日志 + 人工标记 → 矩阵，每个数字带 `--log` 行号证据，证明不了标「证据不足」；reviewer PASS + verifier VERIFIED，commit `9d0083b`）
 15. task-6 P0 采样自动化 + 矩阵：`scripts/fleet_say.py`（唤醒词 + 1.5 s 后说指令、自动写 marks）+ `fleet_matrix --log-tz/--window/--wake-only-phrase`（commit `3c249f9`）
 16. task-6 P1 归因：`docs/analysis/dot2-vs-xiaoai.md`（Dot2 30 句：唤醒 30/30 admitted、指令 26/30；两条掉分线索落到日志行；commit `850d19e`）
+17. P2-1（task-15）：ack cue 回声不再进 ASR；真机 A/B **0/10 泄漏**（修复前 13/26）；commit `87bb704`，部署测试镜像 `rui-dot2:1.3.0-p21`（未打 tag）
+18. 采样编排打通：Dot2 用 Mac Studio 播、LX06（`device_id=living`）用荣耀服务器 192.168.5.34 播，同一份 48k WAV、各自写 UTC 毫秒 marks，`fleet_matrix --log-tz UTC` 出两设备矩阵；设备接入索引见 `docs/device-access.md`（不含口令）
 
 ## 未提交
 
+`docs/device-access.md`（新增，设备接入索引，无口令）
+
 仅 `docs/HANDOFF.md`（本次整理 + task-13 收口记录，未提交）。2026-10-26 14:20 `git status --short` → `M docs/HANDOFF.md`；采样工具已单独提交为 `9d0083b`，三仓代码均已 commit + push。
+
+**task-15（P2-1 ack cue 回声，第四轮返工完成待复评，文件已冻结未提交）**：窄匹配增加 `_quiet_after`（`vad.py:367`，cue 结束后 100 ms 必须安静，±20 ms 容差）：把「教过 EMA 后 mute 场景回复被误丢」挡住（回复比 cue 长、不会安静）；窄命中不再 `_learn_lag`（EMA 只由首轮高质量命中更新，`vad.py:381`）；日志 `kept` 区间改为 `min(skip+drop, hold)` 并新增 `match_offset`（`vad.py:493`）；`CUE_POST_SILENCE_MS=100`（:69）。新增测试：`tests/test_cue_echo_excision.py:450` 教 EMA(760/820) 后跑 mute 几何（cue 700/hold 1690/skip 950）→ captured **1.31 s**、`dropped=[0,950]ms`、fallback=false；`:482` 窄命中后 EMA 不变。无削波 850/950 仍 corr_full 0.030 / tail 0.353 / retained 0.91/1.00。全量 **1613 passed / 17 skipped**，ruff 绿；冻结 md5：vad.py `cf8e558c2d11b7be3041ebb16e0cd7ae`，test `412ecfb749d8488d9951fe0320b31f14`；process.py 未改（`176e8508…`）。
+
+## 待批（等 9 哥，别用默认值推进）
+
+1. **对外发布版本号**（P2-1 已在生产跑测试镜像 `rui-dot2:1.3.0-p21`，未打 tag；下一个正式 tag 叫什么）。
+2. **M10 `/health.console=v2` 默认切换**（等点头）。
+3. **P2-2（播放中「下一首」拾音）** 未批准，只有 P2-1 被批。
 
 ## 下一步（按序）
 
@@ -51,6 +63,13 @@
 3. **M10 默认切换**：等 9 哥 点头；验收 `/health.console=v2`、`/` 302 `/v2/`、`/legacy` 200，回滚一行。
 4. **24h 稳定性复查**：自 2026-10-26 13:36 起计；提醒已设 2026-10-27 13:10（可改 13:40）；结果补进 `docs/release/v0.7.1.md`。
 5. **task-12 发布收口**：task-6 完成 + 发布号经 9 哥 确认后，更新本文件 → `phase_close` → complete。
+
+## 采样进度（2026-10-26 16:40）
+
+- Dot2 腿：Mac Studio `afplay /tmp/fleet6/*.wav`（同源 48kHz WAV），5 轮 × 6 句，marks `/tmp/fleet6/marks-dot2b.csv`。
+- LX06 腿：荣耀服务器 `aplay -plughw:2,0`，同一份 WAV，marks `/tmp/fleet6/marks-lx06.csv`（`device_id=living`）。
+- 日志：`/tmp/rui-fleet5.log`（LX06 腿）与 `/tmp/rui-fleet6.log`（Dot2 复跑腿，2000 行窗口、3 s 轮询）。
+- **电平实测**：`afplay -v 1` → 唤醒 5/5；`afplay -v 2` → **3/5**（更响反而更差，削波伤 KWS）——与 task-16「距离/电平」假设直接相关。
 
 ## 风险与未决
 
@@ -92,7 +111,7 @@
 ## 核验命令（接手先跑）
 
 ```
-cd 01_Code/projects/house-ear && .venv/bin/python -m pytest -o addopts='' -q   # 期望 1523 passed / 17 skipped
+cd 01_Code/projects/house-ear && .venv/bin/python -m pytest -o addopts='' -q   # 期望 1613 passed / 17 skipped
 .venv/bin/python -m ruff check src tests                                       # All checks passed
 cd web && npm run typecheck && npm run build                                   # exit 0，dist/index.html + dist/v2.html
 cd ../rui-dot2-bridge && PYTHONPATH=src ../house-ear/.venv/bin/python -m pytest -q   # 期望 143 passed
