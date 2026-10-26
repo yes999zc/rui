@@ -793,6 +793,15 @@ def run_doctor(cfg: Config | None = None, *,
         except OSError as exc:
             checks.append(Check(f"device:{dev.id}", "warn", f"{dev.host}:22 ssh", str(exc)))
 
+    enabled_devices = [device for device in cfg.devices if device.enabled]
+    if len(enabled_devices) >= 2 and not cfg.multi_device.enabled:
+        checks.append(Check(
+            "multi_device", "warn",
+            f"{len(enabled_devices)} enabled devices, multi_device disabled",
+            "only the first configured device gets an audio plane; set "
+            "multi_device.enabled: true and max_planes >= 2 (see config.example.yaml)",
+        ))
+
     per_device = max(ASSUMED_PER_DEVICE_CPU, aec_rtf * 2)
     capacity = max(1, int(cores * CPU_HEADROOM / per_device))
 

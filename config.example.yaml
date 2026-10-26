@@ -53,6 +53,14 @@ devices:
         music: "#481860"
         music_paused: "#602800"
         muted: "#3C0000"
+
+# 两台音箱：默认（enabled: false）只给配置里的第一台设备起音频平面；要让每台都起，
+# 取消下面注释并保证 max_planes >= 设备数。`/health` 的 `planes` 会逐台显示
+# running / error / not_started，`rui doctor` 在 devices>=2 且此处关闭时给 WARN。
+# multi_device:
+#   enabled: true
+#   max_planes: 2
+
 audio:
   # Measured on LX06 1.94.13 - do not copy these numbers to another speaker, measure it.
   capture:

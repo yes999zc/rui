@@ -1314,3 +1314,23 @@ store 层 `MemoryStore.add/confirm` 仍保留 `[:MAX_TEXT]` 截断，这是语�
 | 有效 token + 合法 JSON | 原有状态码不变 |
 
 31 个 v1 handler 的解析位置未改；handler 内解析重构留到 0.8。
+
+
+#### A-8 `/health.planes`（0.7.5，additive）
+
+`GET /health` 新增 `planes` 数组，逐台说明「这台设备有没有音频平面」；旧的顶层
+`audio_plane`（bool，任一台在跑即为 true）与 `audio_devices`（只有已启动的平面）语义不变。
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `device` | string | `devices[].id` |
+| `room` | string | `devices[].room` |
+| `state` | `running` / `error` / `not_started` | 该设备的平面状态 |
+| `reason` | string | 仅 `not_started`：`audio_not_started` / `multi_device_disabled` / `plane_not_started` |
+| `running` | bool | 该设备平面当前是否在跑 |
+| `error` | string | 该设备平面的错误文本（无则空） |
+| `multi_device` | bool | 本次配置是否启用多平面 |
+
+默认 `multi_device.enabled=false` 时，第二台及以后设备为 `state=not_started`、
+`reason=multi_device_disabled`；`enabled=true` 时每台按实际状态给出。客户端应使用本字段
+判断「两台是否都有 plane」，不要用顶层 `audio_plane` 推断。

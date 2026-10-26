@@ -1792,6 +1792,71 @@ def _audio_devices_health(app: FastAPI, config: Config) -> list[dict]:
     return rows
 
 
+def _planes_health(app: FastAPI, config: Config) -> list[dict]:
+    """One row per enabled device: does this room have a live audio plane?
+
+    Additive view for two-speaker installs. `audio_plane` above stays the old
+    aggregate; this answers "which device actually got a plane", including the
+    devices the default single-plane path never starts.
+    """
+    enabled = [device for device in config.devices if device.enabled]
+    fleet = _audio_fleet(app)
+    statuses: dict[str, dict] = {}
+    if fleet is not None:
+        with contextlib.suppress(Exception):
+            statuses = dict(fleet.status())
+        start_errors = getattr(fleet, "start_errors", None)
+        if callable(start_errors):
+            for device_id, error in start_errors().items():
+                row = statuses.get(device_id)
+                if row is None:
+                    # Fleet launch failed before a supervisor row existed; keep the
+                    # reason instead of degrading it to not_started/error="".
+                    statuses[device_id] = {"running": False, "error": error,
+                                           "device_id": device_id}
+                elif not row.get("error"):
+                    row["error"] = error
+    else:
+        supervisor = getattr(app.state, "audio", None)
+        if supervisor is not None:
+            with contextlib.suppress(Exception):
+                status = supervisor.status()
+                # Before the child is Ready there is no device_id; attribute the
+                # failure to the device this single-plane path picked, so it is not
+                # silently reported as "no plane configured for that room".
+                device_id = (
+                    str(status.get("device_id") or "")
+                    or _primary_device_id(app, config)
+                    or (enabled[0].id if enabled else "")
+                )
+                statuses[device_id] = status
+    rows: list[dict] = []
+    for device in enabled:
+        status = statuses.get(device.id)
+        if status is None:
+            if not statuses:
+                reason = "audio_not_started"
+            elif not config.multi_device.enabled:
+                reason = "multi_device_disabled"
+            else:
+                reason = "plane_not_started"
+            rows.append({
+                "device": device.id, "room": device.room, "state": "not_started",
+                "reason": reason, "running": False, "error": "",
+                "multi_device": config.multi_device.enabled,
+            })
+            continue
+        running = bool(status.get("running"))
+        error = str(status.get("error") or "")
+        rows.append({
+            "device": device.id, "room": device.room,
+            "state": "running" if running else "error",
+            "reason": "", "running": running, "error": error,
+            "multi_device": config.multi_device.enabled,
+        })
+    return rows
+
+
 def _port_conflict_warning(config: Config) -> list[dict]:
     """The `port_conflict` judgment the console's writers use (`device_rules.py`).
 
@@ -3374,6 +3439,9 @@ def create_app(
             # allowed to make the aggregate (and the container) unhealthy; every old
             # top-level field above keeps its meaning.
             "audio_devices": _audio_devices_health(app, cfg_now),
+            # Additive (0.7.5): every enabled device, including ones the default
+            # single-plane path intentionally does not start. See docs/C-002 A-8.
+            "planes": _planes_health(app, cfg_now),
             # Additive in 0.6: the actionable warnings the console renders, plus the
             # `port_conflict` finding for two enabled inbound speakers on one port.
             # Startup still accepts that config on purpose; this is where it surfaces.
