@@ -5788,12 +5788,12 @@ def create_app(
             if not word:
                 continue
             if len(word) > 12:
-                raise HTTPException(status_code=422, detail="唤醒词最多 12 个字")
+                raise HTTPException(status_code=422, detail="wake word must be at most 12 characters")
             if any(char.isspace() or ord(char) < 32 for char in word):
-                raise HTTPException(status_code=422, detail="唤醒词不能包含空格或换行")
+                raise HTTPException(status_code=422, detail="wake words cannot contain spaces or newlines")
             words.append(word)
         if len(words) > 3:
-            raise HTTPException(status_code=422, detail="最多 3 个唤醒词")
+            raise HTTPException(status_code=422, detail="at most 3 wake words")
         return words
 
     def _host(value: object) -> str:
@@ -5803,17 +5803,17 @@ def create_app(
         if host.startswith("[") and host.endswith("]"):
             host = host[1:-1]           # [::1] -> ::1, which is what connect() wants
         if "://" in host:
-            raise HTTPException(status_code=422, detail="host 只填地址，不要带 http://")
+            raise HTTPException(status_code=422, detail="host must be a bare host name or IP, without a scheme")
         if len(host) > 64 or any(char.isspace() for char in host):
-            raise HTTPException(status_code=422, detail="host 不能含空格，最长 64 字符")
+            raise HTTPException(status_code=422, detail="host cannot contain spaces and must be at most 64 characters")
         if host.startswith("-") or host.endswith("-"):
-            raise HTTPException(status_code=422, detail="host 不能以连字符开头或结尾")
+            raise HTTPException(status_code=422, detail="host cannot start or end with a hyphen")
         return host
 
     def _room(value: object) -> str:
         room = str(value or "").strip()
         if len(room) > 32 or any(ord(char) < 32 for char in room):
-            raise HTTPException(status_code=422, detail="房间名最长 32 字，不能含控制字符")
+            raise HTTPException(status_code=422, detail="room name must be at most 32 characters and contain no control characters")
         return room
 
     @app.post("/api/v1/setup/device", dependencies=[Depends(auth)])

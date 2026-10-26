@@ -37,35 +37,34 @@
 
 ## 2. v2 后端端点 → 页面映射（含孤儿）
 
-| # | 方法 路径 | 调用页 | 审计要点 |
-|---|---|---|---|
-| 1 | GET `/api/v2/meta` | 全局壳 | 版本、features、合约拒绝态 |
-| 2 | GET `/api/v2/house` | devices/rooms/run/detail | 房间聚合、warnings、setup 状态 |
-| 3 | GET `/api/v2/plugins` | setup/detail | 插件与模型目录 |
-| 4 | GET `/api/v2/plugins/{id}` | **无（孤儿）** | 0.7.6 决定：删 or 用起来 |
-| 5 | GET `/api/v2/capabilities` | devices/detail | 能力标签与降级 |
-| 6 | GET `/api/v2/devices` | 5 页 | 列表/过滤 |
-| 7 | GET `/api/v2/devices/{id}` | detail | 参数、plane、setup |
-| 8 | GET `/api/v2/devices/{id}/audio` | audio tab、rooms（N+1） | 4 层、来源、override |
-| 9 | GET `/api/v2/devices/{id}/activity` | activity | 轮次+日志混合 |
-| 10 | GET `.../connection` | connect | 掩码 URL |
-| 11 | POST `.../connection/reveal` | connect | 限流 + 明文 token |
-| 12 | PATCH `/api/v2/house` | rooms | 多设备策略 + 重启语义 |
-| 13 | GET `/api/v2/house/audio` | rooms | 全局音频 + 显式值 |
-| 14 | PATCH `/api/v2/house/audio` | rooms | null 清除叶子 |
-| 15 | POST `/api/v2/house/audio/restart` | rooms（2 处） | 全屋重启 |
-| 16 | POST `/api/v2/devices` | **无（孤儿）** | 0.7.6 决定：删 or 接进向导 |
-| 17 | PATCH `/api/v2/devices/{id}` | config tab | 原子字段写 |
-| 18 | DELETE `/api/v2/devices/{id}?confirm=` | danger | 输入 id 才可删 |
-| 19 | PATCH `/api/v2/devices/{id}/audio` | audio tab | override 写 + 回读校验 |
-| 20 | POST `.../token/rotate` | connect | 10 s 冷却 |
-| 21 | POST `.../test` | test | 只收集证据 |
-| 22 | POST `.../actions` | test | 能力门控（say/volume/led/play/stop） |
-| 23 | GET `/api/v2/setup/plan` | setup/add | 8 步计划 |
-| 24 | POST `/api/v2/setup/plan/steps/{step}` | setup/add | 每步只跑声明的 action |
+| # | 方法 路径 | 调用页 | 审计要点 | 结论（0.7.7） |
+|---|---|---|---|---|
+| 1 | GET `/api/v2/meta` | 全局壳 | 版本、features、合约拒绝态 | 可用 |
+| 2 | GET `/api/v2/house` | devices/rooms/run/detail | 房间聚合、warnings、setup 状态 | 可用 |
+| 3 | GET `/api/v2/plugins` | setup/detail | 插件与模型目录 | 可用 |
+| 4 | GET `/api/v2/plugins/{id}` | **无（孤儿）** | 0.7.6 决定：删 or 用起来 | 可用（孤儿，无前端调用） |
+| 5 | GET `/api/v2/capabilities` | devices/detail | 能力标签与降级 | 可用 |
+| 6 | GET `/api/v2/devices` | 5 页 | 列表/过滤 | 可用 |
+| 7 | GET `/api/v2/devices/{id}` | detail | 参数、plane、setup | 可用 |
+| 8 | GET `/api/v2/devices/{id}/audio` | audio tab、rooms（N+1） | 4 层、来源、override | 可用 |
+| 9 | GET `/api/v2/devices/{id}/activity` | activity | 轮次+日志混合 | 可用 |
+| 10 | GET `.../connection` | connect | 掩码 URL | 可用 |
+| 11 | POST `.../connection/reveal` | connect | 限流 + 明文 token | 可用 |
+| 12 | PATCH `/api/v2/house` | rooms | 多设备策略 + 重启语义 | 可用 |
+| 13 | GET `/api/v2/house/audio` | rooms | 全局音频 + 显式值 | 可用 |
+| 14 | PATCH `/api/v2/house/audio` | rooms | null 清除叶子 | 可用 |
+| 15 | POST `/api/v2/house/audio/restart` | rooms（2 处） | 全屋重启 | 可用（no-audio 下 restart.status=failed，预期） |
+| 16 | POST `/api/v2/devices` | **无（孤儿）** | 0.7.6 决定：删 or 接进向导 | 可用（孤儿，无前端调用） |
+| 17 | PATCH `/api/v2/devices/{id}` | config tab | 原子字段写 | 可用 |
+| 18 | DELETE `/api/v2/devices/{id}?confirm=` | danger | 输入 id 才可删 | 可用 |
+| 19 | PATCH `/api/v2/devices/{id}/audio` | audio tab | override 写 + 回读校验 | 可用 |
+| 20 | POST `.../token/rotate` | connect | 10 s 冷却 | 可用 |
+| 21 | POST `.../test` | test | 只收集证据 | 可用 |
+| 22 | POST `.../actions` | test | 能力门控（say/volume/led/play/stop） | 可用（无设备时 409，守卫生效） |
+| 23 | GET `/api/v2/setup/plan` | setup/add | 8 步计划 | 可用 |
+| 24 | POST `/api/v2/setup/plan/steps/{step}` | setup/add | 每步只跑声明的 action | 可用（声明外 action 400） |
 
 v2 仍调用的 v1 端点（C-002 §1.2 白名单，共 21 条）：`config`、`config/catalog`、`config/values`、`mcp`、`music*`、`secrets`、`providers/*`、`health`、`doctor`、`config/recovery*`、`turns`、`logs`、`memory`。审计时**逐条确认返回字段与界面一致**（不只看 200）。
-
 ## 3. 逐页交互清单（95 项，审计时逐行填结论）
 
 > 行号是 0.7.2 基线；实现改动后以卡片报告为准。`§` 见上表。
@@ -223,3 +222,54 @@ Run/rerun test（`POST .../test`）、volume.read、音量滑块、volume.set、
 - `docs/console-ia-audit.md`（v0.3.2）：panel 清单过时（现 11 个）→ 只取「重复入口」结论。
 - `docs/audit/2026-10-code-health.md`：有「两套控制台并存」的定性结论与体量数字 → 引用，不重复审计。
 - 本清单是**第一份 v2 元素级审计范围**，0.7.6 的执行结果写进 `console-functional.md`。
+
+## 9. 0.7.7 实测结论回填（2026-10-27）
+
+> **允许的汇总**：本节按 reviewer 要求新增，只做“结论列”的汇总回填（§2 表已加「结论（0.7.7）」列），不改动上文 §0–§8 的审计范围、元素清单与判定口径；元素级证据仍在 `console-functional.md`。因此不与“仅回填结论列”的写范围约束冲突。
+
+> 元素级证据、复现命令、截图索引见 `docs/audit/console-functional.md`；本表只做“结论列”回填。
+
+### 9.1 路由（14 + 兼容 + 旧壳）
+
+| 路由 | 结论 |
+|---|---|
+| `/devices` `/devices/add` `/devices/:id`（7 tab） | 可用（200 壳 + 页面渲染 + 交互；见 functional §2/§4.2–4.7） |
+| `/rooms` `/run` `/conversation` `/logs` `/memory` | 可用（含空态、401、过滤、轮询、复制、删除确认） |
+| `/setup` `/devices/add`（八步） | 可用（结构/门禁/计划刷新）；空屋 first-run 的 prepare 勾选 + params `device.create` 已实测成功；wake/connect/test/verify 未验证（需真机/夜间红线，functional §10） |
+| `/voice-assistant` `/tools` `/music` `/credentials` `/health` | 可用（保存/回读/重启确认/恢复） |
+| `/config` | 可用：200 壳 + SPA 重定向到 `/voice-assistant` |
+| `/v2/nope` | 可用：HTTP 200 壳 + NotFound 页 |
+| `/legacy`、`/legacy/panel/*` | 可用：旧壳 200（v1 不在本轮范围） |
+| 老链接 `/panel/*`、`/setup`、`/secrets`、`/diagnostics`、`/channels` | **未处理**：全部 200 旧壳，无 302 映射（0.7.8 D 第 5 项） |
+
+### 9.2 元素分组（§3 小节 → 结论）
+
+| scope 小节 | 结论 |
+|---|---|
+| §3.1 全局壳（10） | 可用；唯一文案问题（legacy hint）已修 |
+| §3.2 `/devices`（6） | 可用；`/legacy` 兜底未构造（未验证） |
+| §3.3 详情壳 + tab（9） | 可用 |
+| §3.4 audio（10） | 可用（保存/恢复/回读）；3 个重试横幅与 bool/enum 未验证 |
+| §3.5 config（9） | 可用；`listen_port` 填值未单独保存（未验证） |
+| §3.6 test/actions（11） | 可用（离线门禁 + 409 错误路径）；真实出声受夜间红线限制（未验证） |
+| §3.7 activity（2） | 可用 |
+| §3.8 connect（7） | 可用（reveal/限流/隐藏/rotate/冷却）；adapter-managed 不适用（未验证） |
+| §3.9 danger（3） | 可用（输入 id 门禁 + 删除） |
+| §3.10 `/rooms`（16） | 可用（策略/优先级/全局音频/重启/override/离开拦截） |
+| §3.11 `/run`（5） | 可用；空态 `/legacy` 兜底已确认（0.7.8 改） |
+| §3.12 `/conversation`（7） | 可用（过滤/轮询/重试） |
+| §3.13 `/logs`（8） | 可用（过滤/复制/更多/自动滚动/轮询） |
+| §3.14 `/memory`（6） | 可用（新增/确认/删除/过滤/显示全部） |
+| §3.15 `/setup`（14） | 部分可用：结构/计划/门禁可用；prepare + params（含 device.create）已实测；wake/connect/test/verify 未验证（需真机/夜间红线） |
+| §3.16–3.20 配置页组（6+6+7+7+6） | 可用；probe 成功路径、music 不可写路径为已知限制/未验证 |
+
+### 9.3 异常态
+
+| 类别 | 结论 |
+|---|---|
+| 401 | 可用（仅 meta 401，页面数据不请求，token 对话框自动打开） |
+| 429 | 可用（reveal 10/min、rotate 10 s） |
+| 409 | 可用（confirm_required / device_not_connected / token_missing）；memory disabled 未构造 |
+| 404 | 可用（JSON 404 / 未知设备） |
+| 422 | 可用（`details.fields[]` + UI 红框） |
+| 5xx/离线 | 可用（meta/turns/logs 500 均状态块 + 重试恢复） |

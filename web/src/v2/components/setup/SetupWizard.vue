@@ -705,7 +705,9 @@ onBeforeUnmount(() => {
           <p v-if="locked && createdDeviceId" class="note" data-testid="setup-selection-locked">
             {{ t('v2.setup.select.locked') }}
           </p>
-          <p v-else-if="props.mode === 'first-run' && (!plan || plan.mode === 'first-run')" class="note">
+          <!-- Only claim "the house has no devices" once the server plan says so;
+               before a plugin/model is picked there is no plan at all. -->
+          <p v-else-if="props.mode === 'first-run' && plan && plan.mode === 'first-run'" class="note">
             {{ t('v2.setup.select.firstRunNote') }}
           </p>
           <p v-else-if="props.mode === 'add'" class="note">
