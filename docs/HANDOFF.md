@@ -247,6 +247,12 @@
   - 渲染命令（Chrome 而非 chrome-headless-shell）：`printf '{"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome","args":["--no-sandbox","--disable-gpu"]}' > /tmp/mmdc/pptr.json && /tmp/mmdc/node_modules/.bin/mmdc -p /tmp/mmdc/pptr.json -i docs/assets/architecture.mmd -o docs/assets/architecture.svg -b '#ffffff'`
 - **README 正文尚未写**（house-ear / dot2 / xiaoai 三份都未动）；quickstart 事实已核：`deploy/install.sh` 存在、Python `>=3.11`、`config.example.yaml` + `docker-compose.yml` 在根目录、LICENSE MIT。
 
+### README 进度（2026-10-26 20:35）
+
+- **house-ear README 已完成并提交**（`e8e0d95`）：中英各 10 段、202 行；hero 截图 `docs/assets/console-v2-config.png`、架构图 `architecture.{mmd,svg,png}`；支持矩阵全部带分母/日期、未测项显式「未测」；红线自检通过（无内网 IP、无 token、无 VPN/穿透/代理，小米只作设备型号并注明「无官方关联」，刷机只出现在「不提供/不建议」的否定句里）。
+- **rui-dot2-bridge 架构图已导出**（源文件 `docs/assets/architecture.mmd`，SVG+PNG，同配色），**README 正文未写**（旧版 233 行仍是 0.3.4→0.6.0 口径、含「已解锁/EchoMuse 固件/播放门控 1.1.3」等过时说法，需整体重写）。
+- **rui-xiaoai-bridge**：README 未动（旧版）；按口径用终端记录、quickstart `v0.2.1`。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
