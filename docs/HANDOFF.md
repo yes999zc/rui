@@ -4,6 +4,17 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
+## 0.7.5 状态（2026-10-26 23:35，进行中）
+
+- task-9（TLS 安装路径）PASS+VERIFIED，提交 `43d18df`（house）/`1826e87`（dot2）/`1c1aa35`（xiaoai）：compose 挂 `./secrets`、自签脚本 `scripts/make_dev_tls.sh`、三仓 AI 提示词加 TLS 步。
+- task-10（TLS 三矩阵实测）PASS+VERIFIED，提交 `258d72a`。**结论（已统一 README/审计文档）**：
+  - dot2 的 `listen_port`/`tls_port` 开启时必须有 `secrets/server.pem|key`；缺 → `audio_plane=false` + `missing TLS material`；
+  - 两桥同时配置时，**默认单平面模式只起配置里第一台设备**的平面（`multi_device.enabled=false`，`app.py:3077`）；两台都起需 `multi_device: {enabled: true, max_planes: 2}`（`_start_fleet`，单台失败不拖垮其他）；
+  - 证书 + 两个 token 齐备（dot2 在前）→ `audio_plane=true` + `dot2 link: wss listening`；
+  - 自签只保证平面能起；真机是否接受取决于设备信任的 CA（原 controller 证书丢失需重新配网）。
+  - 6 次实测表 + 可执行复现命令：`docs/audit/tls-required-2026-10.md`。
+- task-11（两台平面可见性）在途：`/health` 按设备字段 + doctor WARN + 配置示例——直接服务 0.7.8 Done 6 c)。
+
 ## 0.7.4 状态（2026-10-26 23:15，已发布）
 
 - 主题按 9 哥 指示改为 **P0/P1 修复**（`docs/audit/hermes-triage.md`）：原「TLS + Done6」顺延到 0.7.5。
