@@ -326,6 +326,20 @@
 - 文档已写：house-ear README 加「三个仓库是什么关系 + 兼容表 + 让 AI 帮你装 + 安装路径实测输出」；两个桥仓 README 加同一段「让 AI 帮你装」。
 - README 里已标注：小爱仍走核心内置 legacy 适配器（`adapter_aliases: xiaoai→lx06`），Phase 2 才转外置插件；0.7.2 上同名 id 可能被内置实现遮蔽。
 
+### task-23 评审 CHANGES 修复（2026-10-26 20:25）
+
+评审（reviewer-fleet-auto-2，自己起容器）抓出 6 条，已全部修完并 push（house-ear `e29fb8d`、dot2 `348335c`、xiaoai `54576f7`）：
+
+1. **compose 路径自洽**：顶部写明「先 `cd examples/two-speakers`」+ `--project-directory .` 等价写法；并注明 `deploy/install.sh` 会另起一套 8080 实例，**不要与 compose 同时用**。
+2. **device token / TLS**：compose 增加 `RUI_DEVICE_TOKEN`、`DOT2_EM_TOKEN`；README 改为「缺 device token **或** 缺 TLS 材料都会让 `audio_plane=false`，以日志第一条报错为准」；`lx06` 的 `host` 标必填。
+3. **legacy 说法更正**（评审实测为准）：外置 lx06 插件**已加载**（`adapter plugins: registered dot2, lx06`，`/opt/rui-plugins/rui_xiaoai_bridge/adapter.py`）；核心别名只在未挂载时回退；不挂 xiaoai 目录 → `registered=["dot2"]`。
+4. **health 证明**：改为选字段输出（含 `audio_plane`），贴真实 JSON；`audio_plane: False` 如实写。
+5. **兼容表**：加 `compatibility.rui_min`（dot2 `0.3.0` / xiaoai `0.6.0`）。
+6. **AI 提示词**：中英各 ≤10 行，含精确 clone/cp、config 字段（lx06 host 必填）、`RUI_DEVICE_TOKEN`、验收/失败/回滚；两个桥仓同步。
+
+- verifier-tools-2 已对**修复前**版本给出 VERIFIED（自建容器：`devices=2`、`device_errors=0`、`registered=["dot2","lx06"]`；反向：无 token → `Exited(2)`、不挂 xiaoai → `registered=["dot2"]`）。
+- **当前状态**：等 reviewer 对修复后的 delta 复评；PASS 后把 task-23 置 complete，并重跑一次 verifier（验证 token/TLS 前置条件的表述）。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
