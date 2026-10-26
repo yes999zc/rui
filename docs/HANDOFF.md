@@ -285,6 +285,14 @@
 6. **镜像不存在**：`ghcr.io/yes999zc/rui:0.7.2` 尚未发布（GHCR 只有 latest/sha-7a81ec6）→ 必须先构建并推镜像，或在 quickstart 显式给 `RUI_IMAGE=`；`deploy/install.sh` 默认用的是 `:latest`，需在 README 里写明。
 7. **dot2 命令/CI**：dot2 README 的 CI badge 指向不存在的 workflow（该仓无 `.github/workflows`）→ 删掉或补 workflow；`rui plug-test` 缺必填 `directory` 参数（`src/rui/__main__.py:708`），镜像内应写 `rui plug-test /opt/rui-plugins/rui_dot2_bridge --adapter …`（见 `deploy/downstream/Dockerfile:23`）；xiaoai `:87/:176` 同改。
 
+### 视觉修改（9 哥 2026-10-26 21:20 补充，压缩后第一优先）
+
+1. **控制台截图留白太多**（1600×1000 但内容居中、两侧大片空白）：裁到内容区（约 1200×1000），或抓图时把窗口调窄；**hero 换成「运行」或「设备」页**（有状态/设备卡片的那张），配置表单页不够抓人。
+   - 注意：`/v2/run` 在 demo 实例上有「设备离线 / 配置未完成」两条告警，`/v2/devices` 的卡片显示「状态未知 / 音频面已停止」，且含 `Xiaomi`。**抓图时要么裁掉告警区，要么改 demo 数据后再抓**，不得让告警或厂商名进图。
+2. **架构图太扁**（784×168，README 里会被缩得很小）：改成**竖向分层**（服务端 → 音频平面 → 设备），或至少导出 ≥1600px 宽、字号加大；`.mmd` 源文件三仓一起改并重新导出 SVG/PNG，保持同一配色。
+
+**执行顺序（不变）**：修 1–5、7 文本 → 建 tag `v0.7.2`/`v1.3.1`/`v0.2.1` → 从 tag commit 构建并推镜像 → 回改 README 里的 tag/镜像引用 → 核对 `/api/v2/meta` 与 digest → 停下等验收。视觉两项插在「修文本」之后、打 tag 之前做（因为要重新提交 README 与 assets）。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
