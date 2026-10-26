@@ -113,7 +113,7 @@ def test_meta_describes_the_contract(console):
 def test_house_aggregates_devices_rooms_and_setup(console):
     client, _ = console()
     body = client.get("/api/v2/house", headers=AUTH).json()
-    assert body["version"]["rui"] == "0.7.0"
+    assert body["version"]["rui"] == "0.7.1"
     assert body["devices"] == {"total": 1, "enabled": 1, "online": 0, "ready": 0}
     assert body["multi_device"]["enabled"] is False
     assert body["multi_device"]["planes_running"] == 0
