@@ -71,7 +71,7 @@
 | `/legacy`、`/legacy/panel/music` | 200 旧壳 | 200 / 1845 B | 可用 |
 | `/api/v2/meta` 无 token | 401 JSON | 401 | 可用 |
 | `/api/v2/nope` | JSON 404 | 404 / 274 B | 可用 |
-| 老链接 `/panel/overview`、`/panel/devices`、`/panel/turns`、`/panel/voice-assistant`、`/panel/providers`、`/panel/integrations`、`/panel/system`、`/panel/credentials`、`/panel/logs`、`/panel/memory`、`/panel/music`、`/setup`、`/secrets`、`/diagnostics`、`/channels` | scope §5 要求 302 → 对应 v2（0.7.7 实现） | **全部 200，返回旧壳，无 302** | ❌ 未实现（见 §8.2，不属本卡写范围） |
+| 老链接 `/panel/overview`、`/panel/devices`、`/panel/turns`、`/panel/voice-assistant`、`/panel/providers`、`/panel/integrations`、`/panel/system`、`/panel/credentials`、`/panel/logs`、`/panel/memory`、`/panel/music`、`/setup`、`/secrets`、`/diagnostics`、`/channels` | 302 → 对应 v2（0.7.7 scope §5；0.7.8 D 实现） | **15/15 302**，跟随跳转全部 200 v2 壳（逐条见 §8.2） | 可用（0.7.8） |
 
 ## 3. 端点矩阵（24）
 
@@ -444,18 +444,69 @@
 - 影响：部署路径不可写时，用户看到 500 而不是“路径不可写”的 4xx。**不是 v2 前端逻辑错误**；测试实例把路径改到可写目录后保存/清空全部通过。
 - 建议：0.7.8 或后续把 `write_music_credentials` 的 `OSError` 转换成 409/422 + 可读 hint。
 
-### 8.2 老链接未做 302 映射
-- 现状：`/panel/overview` 等 15 条旧链接全部 200 返回旧壳；scope §5 要求 0.7.7 实现 302 到对应 v2 路由。
-- 证据：见 §2 表格与 `curl -sI http://127.0.0.1:18099/panel/overview`。
-- 处置：**本卡不实现**（属路由改造，不在“文案/校验小修”范围）；0.7.8 验收清单 D 第 5 项必须处理，否则旧书签永远落在 v1。
+### 8.2 老链接 302 映射（0.7.8 D 已实现）
+
+- 0.7.7 现状：`/panel/overview` 等 15 条旧链接全部 200 返回旧壳（见 §2 表格）。
+- 0.7.8 实现：`src/rui/web/api/legacy_links.py` 里一张显式的表，`app.py` 在 `/legacy`
+  之后、SPA 兜底之前注册。`web.console: v2`（0.7.8 默认）时这 15 条一律 **302**；
+  `web.console: legacy` 时保持 200 旧壳（回滚 = 改一行配置 + 重启）。
+- 规则：查询串原样带过（`/panel/logs?level=warn` → `/v2/logs?level=warn`）；带 tab 的
+  子路径按 panel id 解析（`/panel/devices/manage` → `/v2/devices`）；v2 暂无对应页的
+  落 `/v2/?from=<旧路径>`，不假装功能搬过去了，也不落回旧壳。`?from=` 在 v2 首页
+  SPA 跳到 `/v2/devices` 时会保留（`web/src/v2/router.ts` 的 redirect 带 query）。
+- 映射表与逐条实测（2026-10-27，`--no-audio` 空屋实例，`console` 未配置 → 默认 v2）：
+
+| # | 旧链接 | 目标 | 依据 / 说明 |
+|---|---|---|---|
+| 1 | `/panel/overview` | `/v2/run` | v2「运行 / 概览」 |
+| 2 | `/panel/devices` | `/v2/devices` | v2 设备页 |
+| 3 | `/panel/turns` | `/v2/conversation` | v2 对话页 |
+| 4 | `/panel/voice-assistant` | `/v2/voice-assistant` | v2 语音助手配置 |
+| 5 | `/panel/providers` | `/v2/?from=/panel/providers` | v2 无供应商卡片/试听（§8.3 第 6-7 项） |
+| 6 | `/panel/integrations` | `/v2/tools` | v2 工具（内置 / MCP / HA / 暴露策略） |
+| 7 | `/panel/system` | `/v2/?from=/panel/system` | v2 无 system/web/security 编辑器（§8.3 第 19 项） |
+| 8 | `/panel/credentials` | `/v2/credentials` | v2 凭据页 |
+| 9 | `/panel/logs` | `/v2/logs` | v2 日志页 |
+| 10 | `/panel/memory` | `/v2/memory` | v2 记忆页 |
+| 11 | `/panel/music` | `/v2/music` | v2 音乐页（v1 的 6 个播放按钮是 §8.3 缺口） |
+| 12 | `/setup` | `/v2/setup` | v2 安装向导 |
+| 13 | `/secrets` | `/v2/credentials` | v1 独立凭据路由 |
+| 14 | `/diagnostics` | `/v2/health` | v1 体检页 |
+| 15 | `/channels` | `/v2/?from=/channels` | v2 无渠道页（0.7.8 已知限制） |
+
+- 逐条实测（`curl -s -o /dev/null -w '%{http_code} %{redirect_url}'`，端口 18108）：
+
+```text
+/panel/overview            302 http://127.0.0.1:18108/v2/run
+/panel/devices             302 http://127.0.0.1:18108/v2/devices
+/panel/turns               302 http://127.0.0.1:18108/v2/conversation
+/panel/voice-assistant     302 http://127.0.0.1:18108/v2/voice-assistant
+/panel/providers           302 http://127.0.0.1:18108/v2/?from=/panel/providers
+/panel/integrations        302 http://127.0.0.1:18108/v2/tools
+/panel/system              302 http://127.0.0.1:18108/v2/?from=/panel/system
+/panel/credentials         302 http://127.0.0.1:18108/v2/credentials
+/panel/logs                302 http://127.0.0.1:18108/v2/logs
+/panel/memory              302 http://127.0.0.1:18108/v2/memory
+/panel/music               302 http://127.0.0.1:18108/v2/music
+/setup                     302 http://127.0.0.1:18108/v2/setup
+/secrets                   302 http://127.0.0.1:18108/v2/credentials
+/diagnostics               302 http://127.0.0.1:18108/v2/health
+/channels                  302 http://127.0.0.1:18108/v2/?from=/channels
+```
+
+- 跟随跳转：15/15 最终 200，`<title>Rui · Console v2</title>`（无一条落回旧壳）；复现命令见 §9。
+- 测试：`tests/test_legacy_links.py` 把上表逐条参数化（含查询串、tab 子路径、未知
+  panel、`legacy` 模式 15 条 200 旧壳），`tests/test_console_switch.py` 覆盖默认值/回滚/`/health.console` 两态。
 
 ### 8.3 v1 功能缺口（v2 明确不做）
 - 话术编辑器、模型/语音服务卡片与试听、音乐播放控制 6 按钮、系统/Web/安全 13 字段、渠道 Telegram/微信、工具注册表页、设备探测、MCP/HA 写入。
 - 其中“音乐播放控制”v1 有 6 按钮，v2 只有状态与凭据；本轮按 scope 结论**不补**，进本限制清单。
 
 ### 8.4 v2 页内仍指向 `/legacy` 的两处兜底
-- `DevicesView.vue:242`（空屋且 setup/add 都关闭时）与 `RunView.vue:247`（空屋）仍给 `/legacy` 链接。0.7.8 必须改为 v2 内路径或说明。
-- 本轮未改（行为正确，属 D 的迁移项）。
+- `DevicesView.vue`（空屋且 setup/add 都关闭时）与 `RunView.vue`（空屋）仍给 `/legacy` 链接。
+- 0.7.8 D 决定保留：这两条是“v2 做不了、去旧壳做”的明确出口，目标 `/legacy` 现在
+  200 且带 0.8.0 弃用横幅；改成 v2 内路径会把用户导到一个没有该功能的页面。
+  0.8.0 删除旧壳时这两处必须一起处理（届时 v2 要补上对应能力或给出说明）。
 
 ### 8.5 `audio.*` 清除后的“核心默认”可能与示例配置不同
 - 例：`audio.capture.mic_shift` 清除后 effective 回 **0**（schema 核心默认），不是示例配置里的 12。页面文案已写“清除后回落到核心默认 / 插头 manifest”，行为一致；但运维若把示例值当默认会困惑。建议文档说明。
@@ -463,8 +514,16 @@
 ### 8.6 孤儿端点仍在
 - `GET /api/v2/plugins/{id}` 与 `POST /api/v2/devices` 无前端调用（`v2_api.py:1336`、`v2_api.py:2240`；`api.ts` 无调用）。本轮用 curl 验证均可用；0.7.8 决定“删 or 接进向导”。
 
-### 8.7 控制台默认入口仍是 legacy
-- `WebConfig.console` 默认 `"legacy"`（`schema.py:125`）。本卡按测试配置 `console: v2` 审计；0.7.8 才切默认。回滚方式：改回 `legacy` 重启。
+### 8.7 控制台默认入口（0.7.8 已切 v2）
+- 0.7.7 审计时 `WebConfig.console` 默认 `"legacy"`；0.7.8 D 已改为默认 `"v2"`
+  （`config/schema.py`，`config.example.yaml` 与 `src/rui/config/template.yaml` 同步写
+  `console: v2`）。未配置该键的老配置也按 `v2` 加载。
+- 本地实测（空屋、`--no-audio`、未配置 `console`）：`GET /` → `302 /v2/`；
+  `/health` 里 `console=v2`；`/legacy` 200 旧壳且顶部有弃用横幅
+  （`docs/audit/console-shots/legacy--deprecation.png`，DOM `data-testid="legacy-deprecation"`）。
+- 回滚：配置写 `web.console: legacy` 重启 —— `/` 回到旧壳、15 条老链接恢复 200 旧壳、
+  `/health` 报 `console=legacy`（实测两态）；0.8.0 移除 `legacy` 值时，旧壳与
+  `legacy_links.py` 的 `?from=` 兜底一起删。
 
 ### 8.8 setup 的 id 冲突编辑器在正常流程不可达
 - UI 的 `idCollision` 只在“params 已展开且 draft id 命中已有设备 / 设备以 edit 模式带 `device_id`”时出现；而 add 模式（已有设备）的 params 被 keys/models 门禁禁用，first-run（空屋）又没有同名设备。
@@ -489,6 +548,37 @@ for p in / /v2/ /v2/devices /v2/devices/add /v2/rooms /v2/setup /v2/run /v2/conv
          /legacy /panel/overview; do
   printf "%-28s " "$p"; curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" "http://127.0.0.1:18099$p"
 done
+```
+
+0.7.8 D（默认入口 + 15 条老链接 + 弃用横幅），空屋、`--no-audio`、`console` 不写：
+```bash
+D=$(mktemp -d /tmp/rui-d-XXXX); mkdir -p "$D/data"
+cat > "$D/config.yaml" <<YAML
+version: 3
+system: {data_dir: $D/data}
+web: {host: 127.0.0.1, port: 18108, auth_token: d-token-123}
+devices: []
+YAML
+.venv/bin/rui --config "$D/config.yaml" serve --no-audio &   # 端口 18108
+
+curl -s http://127.0.0.1:18108/health | jq .console          # "v2"（默认）
+for p in /panel/overview /panel/devices /panel/turns /panel/voice-assistant /panel/providers \
+         /panel/integrations /panel/system /panel/credentials /panel/logs /panel/memory \
+         /panel/music /setup /secrets /diagnostics /channels; do
+  printf "%-26s " "$p"
+  curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" "http://127.0.0.1:18108$p"
+done                                                          # 15/15 = 302（目标见 §8.2）
+curl -sL -o /dev/null -w "%{http_code} %{url_effective}\n" http://127.0.0.1:18108/panel/logs
+
+# 回滚面：同一份配置加一行 `console: legacy`（端口 18109）后
+#   /health.console = "legacy"；`/` 与 15 条老链接全部 200 旧壳。
+
+# 弃用横幅（旧壳在 /legacy，两语各一份 DOM）
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+"$CHROME" --headless=new --disable-gpu --virtual-time-budget=4000 --dump-dom \
+  http://127.0.0.1:18108/legacy | grep -o 'legacy-deprecation[^<]*'
+"$CHROME" --headless=new --disable-gpu --lang=en-US --virtual-time-budget=4000 --dump-dom \
+  http://127.0.0.1:18108/legacy | grep -o 'The legacy console[^<]*'
 ```
 
 保存 + 回读（设备音频覆盖）：

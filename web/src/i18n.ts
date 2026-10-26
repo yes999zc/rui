@@ -56,6 +56,9 @@ const zh = {
 
   // — shell / navigation ————————————————————————————————————
   'shell.skip': '跳到主要内容',
+  'shell.deprecated.tag': '已弃用',
+  'shell.deprecated.body': '旧控制台将在 0.8.0 移除，请使用 /v2/ 新控制台。',
+  'shell.deprecated.cta': '打开 /v2/',
   'nav.run': '运行',
   'nav.configure': '配置与维护',
   'nav.life': '生活',
@@ -1721,6 +1724,9 @@ const en: Record<MsgKey, string> = {
   'common.error': 'Something went wrong',
 
   'shell.skip': 'Skip to content',
+  'shell.deprecated.tag': 'Deprecated',
+  'shell.deprecated.body': 'The legacy console will be removed in 0.8.0 — please use the /v2/ console.',
+  'shell.deprecated.cta': 'Open /v2/',
   'nav.run': 'Run',
   'nav.configure': 'Configure & maintain',
   'nav.life': 'Living',

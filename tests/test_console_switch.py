@@ -1,16 +1,19 @@
-"""M10 console switch: `web.console` picks what `/` opens, nothing moves by default.
+"""M10 console switch: `web.console` picks what `/` opens — v2 by default since 0.7.8.
 
-`legacy` (the default) keeps the 0.6 behaviour byte for byte: `/` serves the old SPA.
-`v2` turns `/` into a 302 to `/v2/` (query preserved) and keeps the old shell at
-`/legacy`, history deep links included. `/health.console` reports the live choice so
-an operator never has to infer it from a bookmark. A config written before this field
-existed carries no `console` key and must still load as legacy.
+`v2` (the default) turns `/` into a 302 to `/v2/` (query preserved) and keeps the
+old shell, marked deprecated, at `/legacy`, history deep links included. `legacy`
+is the one-release rollback: `/` serves the old SPA byte for byte, and the 15 old
+console links keep answering it (the 302 matrix lives in `test_legacy_links.py`).
+`/health.console` reports the live choice so an operator never has to infer it from
+a bookmark. A config written before this field existed carries no `console` key and
+must load as v2.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
@@ -19,6 +22,7 @@ from rui.web.api import app as app_module
 from rui.web.api.app import create_app
 
 TOKEN = "test-token-fake"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _dist(tmp_path: Path) -> Path:
@@ -42,30 +46,9 @@ def _app(tmp_path: Path, monkeypatch, *, console: str | None = None):
     return create_app(config, config_path=path)
 
 
-def test_legacy_is_the_default_entry_point(tmp_path, monkeypatch) -> None:
+def test_v2_is_the_default_entry_point(tmp_path, monkeypatch) -> None:
+    """A fresh install lands on the v2 console; the old shell is the /legacy mount."""
     client = TestClient(_app(tmp_path, monkeypatch))
-
-    root = client.get("/")
-    assert root.status_code == 200
-    assert "old-shell-marker" in root.text
-
-    # The old shell is reachable under its own mount in both modes; a history link
-    # must answer index.html, not a 404 or the v2 shell.
-    for path in ("/legacy", "/legacy/", "/legacy/panel/music", "/legacy/setup"):
-        response = client.get(path)
-        assert response.status_code == 200, path
-        assert "old-shell-marker" in response.text, path
-
-    v2 = client.get("/v2")
-    assert v2.status_code == 200
-    assert "v2-shell-marker" in v2.text
-
-    assert client.get("/health").json()["console"] == "legacy"
-    assert client.get("/legacy/api/v1/panels").status_code == 404
-
-
-def test_v2_mode_redirects_the_root_and_keeps_the_query(tmp_path, monkeypatch) -> None:
-    client = TestClient(_app(tmp_path, monkeypatch, console="v2"))
 
     moved = client.get("/", follow_redirects=False)
     assert moved.status_code == 302
@@ -80,29 +63,52 @@ def test_v2_mode_redirects_the_root_and_keeps_the_query(tmp_path, monkeypatch) -
     assert landed.status_code == 200
     assert "v2-shell-marker" in landed.text
 
-    for path in ("/v2", "/v2/house"):
+    # The old shell keeps its own mount in both modes; a history link must answer
+    # index.html, not a 404 or the v2 shell.
+    for path in ("/legacy", "/legacy/", "/legacy/panel/music", "/legacy/setup"):
         response = client.get(path)
         assert response.status_code == 200, path
-        assert "v2-shell-marker" in response.text, path
+        assert "old-shell-marker" in response.text, path
 
-    legacy = client.get("/legacy/panel/music")
-    assert legacy.status_code == 200
-    assert "old-shell-marker" in legacy.text
+    v2 = client.get("/v2")
+    assert v2.status_code == 200
+    assert "v2-shell-marker" in v2.text
 
     assert client.get("/health").json()["console"] == "v2"
+    assert client.get("/legacy/api/v1/panels").status_code == 404
 
 
-def test_a_pre_m10_config_without_the_key_loads_as_legacy(tmp_path, monkeypatch) -> None:
+def test_legacy_mode_is_the_one_release_rollback(tmp_path, monkeypatch) -> None:
+    """`console: legacy` still serves the old shell at `/` and reports it as legacy."""
+    client = TestClient(_app(tmp_path, monkeypatch, console="legacy"))
+
+    root = client.get("/")
+    assert root.status_code == 200
+    assert "old-shell-marker" in root.text
+
+    for path in ("/legacy/panel/music", "/panel/music", "/setup"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert "old-shell-marker" in response.text, path
+
+    v2 = client.get("/v2")
+    assert v2.status_code == 200
+    assert "v2-shell-marker" in v2.text
+
+    assert client.get("/health").json()["console"] == "legacy"
+
+
+def test_a_pre_078_config_without_the_key_loads_as_v2(tmp_path, monkeypatch) -> None:
     path = tmp_path / "config.yaml"
     path.write_text(
         "version: 3\nweb:\n  auth_token: test-token-fake\ndevices: []\n",
         encoding="utf-8",
     )
     config = load_config(path)
-    assert config.web.console == "legacy"
+    assert config.web.console == "v2"
 
     # Additive on read, strict on write: only the two documented values are accepted.
-    assert Config(web={"console": "v2"}).web.console == "v2"
+    assert Config(web={"console": "legacy"}).web.console == "legacy"
     with pytest.raises(ValidationError):
         Config(web={"console": "next"})
 
@@ -111,15 +117,22 @@ def test_a_pre_m10_config_without_the_key_loads_as_legacy(tmp_path, monkeypatch)
     monkeypatch.setattr(app_module, "WEB_DIST", _dist(tmp_path))
     client = TestClient(create_app(config, config_path=path))
 
-    root = client.get("/")
-    assert root.status_code == 200
-    assert "old-shell-marker" in root.text
-    assert client.get("/health").json()["console"] == "legacy"
+    root = client.get("/", follow_redirects=False)
+    assert root.status_code == 302
+    assert root.headers["location"] == "/v2/"
+    assert client.get("/health").json()["console"] == "v2"
+
+
+def test_the_shipped_config_examples_name_v2() -> None:
+    """`config.example.yaml` and the setup template must not lag behind the schema."""
+    for name in ("config.example.yaml", "src/rui/config/template.yaml"):
+        data = yaml.safe_load((REPO_ROOT / name).read_text(encoding="utf-8"))
+        assert data["web"]["console"] == "v2", name
 
 
 def test_v2_legacy_links_point_at_the_legacy_mount() -> None:
     """`/` in v2 mode is a redirect, so a v2 page linking to it would loop."""
-    v2 = Path(__file__).resolve().parents[1] / "web" / "src" / "v2"
+    v2 = REPO_ROOT / "web" / "src" / "v2"
     shell = (v2 / "App.vue").read_text(encoding="utf-8")
     assert 'class="v2-legacy" href="/legacy"' in shell
     for rel in ("views/RunView.vue", "views/DevicesView.vue"):

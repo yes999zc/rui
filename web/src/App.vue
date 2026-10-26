@@ -10,6 +10,7 @@ import { RouterView, useRoute, useRouter } from 'vue-router'
 import SideNav from './components/SideNav.vue'
 import BrandMark from './components/BrandMark.vue'
 import RecoveryBanner from './components/RecoveryBanner.vue'
+import DeprecationBanner from './components/DeprecationBanner.vue'
 import AppIcon from './components/AppIcon.vue'
 import { api, token } from './api'
 import { usePanels } from './composables/usePanels'
@@ -247,6 +248,8 @@ onUnmounted(() => {
           <span>{{ signalWord }}</span>
         </span>
       </header>
+
+      <DeprecationBanner />
 
       <div class="signal-bar" :aria-label="`${signalWord} · v${version || '—'}`">
         <span class="signal-state">

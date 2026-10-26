@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteLocation } from 'vue-router'
 
 /**
  * v2 routes live under `/v2/` (contract C-002 §2.1). The design IA is three
@@ -25,7 +25,13 @@ import { createRouter, createWebHistory } from 'vue-router'
  * any legacy view: v2 owns its route table.
  */
 const routes = [
-  { path: '/', redirect: '/devices' },
+  {
+    // A bare `/v2/` lands on the device list. The query is carried over because
+    // 0.7.8 sends old links with no v2 page here as `/v2/?from=<old path>`
+    // (src/rui/web/api/legacy_links.py); dropping it would hide where we came from.
+    path: '/',
+    redirect: (to: RouteLocation) => ({ path: '/devices', query: to.query }),
+  },
   { path: '/devices', name: 'devices', component: () => import('./views/DevicesView.vue') },
   {
     // Reserved: `/devices/add` shadows a device with id `add`, so the create

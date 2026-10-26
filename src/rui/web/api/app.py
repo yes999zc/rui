@@ -129,6 +129,7 @@ from .device_rules import (
     port_conflict,
 )
 from .device_write import DeviceWriteError, checked_device_config
+from .legacy_links import install_legacy_links
 from .security import install_security_headers
 from .setup_api import install_setup_routes
 from .v2_api import install_v2_routes
@@ -6882,8 +6883,9 @@ def create_app(
 
     # M10 (0.7): `web.console` picks the root entry point. The old shell is built from
     # the same dist (only `v2.html` belongs to v2), so both mounts share one bundle.
-    # Default is still "legacy": v2 is reachable at /v2 but nobody lands on it until
-    # 9哥 signs it off. Flipping the value is additive and needs only a restart.
+    # 0.7.8 flipped the default to "v2": `/` is the v2 console and the old shell is
+    # the deprecated `/legacy`. `legacy` stays accepted for one release (rollback is
+    # one config edit + restart, no new image).
     def _legacy_shell() -> Response:
         if WEB_DIST.is_dir():
             index = WEB_DIST.resolve() / "index.html"
@@ -6912,6 +6914,17 @@ def create_app(
         if full_path.startswith(("api/", "ws")):
             raise HTTPException(status_code=404, detail="Not Found")
         return _legacy_shell()
+
+    # 0.7.8: the 15 old console paths (eleven `/panel/<id>` + /setup /secrets
+    # /diagnostics /channels) answer 302 to their v2 page instead of falling into the
+    # deprecated shell. Registered here, before the catch-all, and after `/legacy` so
+    # the old mount always wins; in `console: legacy` mode the same paths keep
+    # serving the old shell unchanged.
+    install_legacy_links(
+        app,
+        console_mode=lambda: getattr(app.state, "cfg", cfg).web.console,
+        legacy_shell=_legacy_shell,
+    )
 
     @app.get("/{full_path:path}", response_class=HTMLResponse)
     async def console(full_path: str) -> HTMLResponse:
