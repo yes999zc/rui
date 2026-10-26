@@ -1,6 +1,6 @@
 # HANDOFF 2026-10-26 · 0.6.0 已发布 / 控制台 v2 M1+M2 已合并
 
-phase-close: task-16
+phase-close: task-24
 
 ## 会话身份
 - 模式：A（双仓库：rui 上游 + rui-dot2-bridge 下游），单会话单任务板
