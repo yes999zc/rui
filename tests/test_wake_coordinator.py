@@ -189,3 +189,59 @@ def test_close_cancels_a_pending_window() -> None:
     run(scenario())
     assert sent["living"] == []
     assert coordinator.counters["wake_admitted"] == 0
+
+
+# ------------------------------------------------- turn latch (task-10 watchdog)
+def test_dropping_the_turn_room_releases_the_latch() -> None:
+    """2026-10-26: a plane that dies mid-turn can never send the closing event.
+
+    `drop_device` used to forget only the sender/room, so `turn_open` (and the output
+    claim) survived the device and every later wake was rejected until a restart.
+    """
+    coordinator, sent = make_coordinator()
+    coordinator.set_owner("living")
+    coordinator.set_turn_open(True, "living")
+
+    coordinator.drop_device("living")
+
+    assert coordinator.arbiter.state.turn_open is False
+    assert coordinator.arbiter.state.owner_device is None
+    assert coordinator.arbiter.state.playing == set()
+    assert coordinator.turn_device is None
+
+    async def scenario():
+        await coordinator.on_candidate("study", candidate("w-after-drop"))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
+        await coordinator.close()
+
+    run(scenario())
+    assert sent["study"][0].__class__.__name__ == "WakeAdmit"
+
+
+def test_dropping_another_room_keeps_the_open_turn() -> None:
+    """Only the device that owns the turn may release it; another room's turn lives."""
+    coordinator, _sent = make_coordinator()
+    coordinator.set_turn_open(True, "living")
+
+    coordinator.drop_device("study")
+
+    assert coordinator.arbiter.state.turn_open is True
+    assert coordinator.turn_device == "living"
+
+
+def test_turn_age_starts_at_the_false_to_true_edge() -> None:
+    """on_wake and on_utterance both open the same turn; neither may refresh the age."""
+    now = {"t": 100.0}
+    cfg = MultiDeviceConfig(
+        arbitration=ArbitrationConfig(candidate_merge_window_ms=WINDOW_MS))
+    arbiter = WakeArbiter(cfg, [ArbiterDevice(device_id="living", room="客厅", index=0)])
+    coordinator = WakeCoordinator(arbiter, {}, clock=lambda: now["t"])
+
+    coordinator.set_turn_open(True, "living")
+    now["t"] += 5.0
+    assert coordinator.turn_open_for_s() == 5.0
+    coordinator.set_turn_open(True, "living")      # same turn
+    now["t"] += 5.0
+    assert coordinator.turn_open_for_s() == 10.0
+    coordinator.set_turn_open(False)
+    assert coordinator.turn_open_for_s() is None

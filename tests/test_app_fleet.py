@@ -612,3 +612,101 @@ def test_wake_in_flight_detects_pending_candidates() -> None:
     assert app_module._wake_in_flight(app) is False
     app.state.wake_tasks = None
     assert app_module._wake_in_flight(app) is False
+
+
+# ------------------------------------------------- turn latch watchdog (task-10)
+def test_the_watchdog_releases_a_turn_whose_plane_is_gone(tmp_path, monkeypatch) -> None:
+    """A plane crash between wake and utterance leaves no closing event at all.
+
+    2026-10-26 (P0): the latch then rejected every wake in the house until a restart.
+    The watchdog must release it, and the next candidate must be admitted.
+    """
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        coordinator.set_turn_open(True, "living")
+        app.state.turn_device = "living"
+        fleet.supervisor("living").running = False
+
+        assert app_module._turn_watchdog(app, coordinator) is True
+        assert coordinator.arbiter.state.turn_open is False
+
+        client.portal.call(living.on_wake_candidate, _candidate("w-after-plane-gone"))
+        time.sleep(0.25)
+        assert living.sent[-1].type == "wake_admit"
+
+
+def test_the_watchdog_releases_a_stale_turn_with_no_activity(
+        tmp_path, monkeypatch, caplog) -> None:
+    """A lost reply/idle event: latch open past the window with nothing behind it."""
+    import logging
+
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app):
+        coordinator = app.state.wake_coordinator
+        coordinator.set_turn_open(True, "living")
+        app.state.turn_device = "living"
+        coordinator._turn_opened_at = (
+            coordinator._clock() - app_module.TURN_STALE_S - 1.0)
+
+        with caplog.at_level(logging.WARNING, logger="rui.web.api.app"):
+            assert app_module._turn_watchdog(app, coordinator) is True
+
+        assert coordinator.arbiter.state.turn_open is False
+        assert any("turn_open watchdog" in r.getMessage() for r in caplog.records)
+
+
+def test_the_watchdog_keeps_a_live_turn(tmp_path, monkeypatch) -> None:
+    """An utterance being answered is evidence: a long turn must never be cut."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+
+        async def slow_transcribe(pcm: bytes, trace: object) -> tuple[str, None]:
+            await asyncio.sleep(5)
+            return "现在几点", None
+
+        monkeypatch.setattr(app.state.runner, "transcribe", slow_transcribe)
+
+        async def start():
+            return asyncio.create_task(living.on_utterance(b"\x00\x00"))
+
+        task = client.portal.call(start)
+        time.sleep(0.15)  # the task has started: it opened the turn and registered itself
+        assert coordinator.arbiter.state.turn_open is True
+        coordinator._turn_opened_at = (
+            coordinator._clock() - app_module.TURN_STALE_S - 1.0)
+        assert app_module._turn_watchdog(app, coordinator) is False
+
+        # The handler's own release still wins when the turn ends.
+        client.portal.call(task.cancel)
+        time.sleep(0.1)
+        assert coordinator.arbiter.state.turn_open is False
+
+
+def test_the_idle_watch_runs_the_turn_watchdog(tmp_path, monkeypatch) -> None:
+    """The watchdog must be wired into the real 1 s loop, not just callable."""
+    FakeFleet.instances.clear()
+    monkeypatch.setattr(app_module, "TURN_STALE_S", 0.5)
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        coordinator.set_turn_open(True, "living")
+        app.state.turn_device = "living"
+        coordinator._turn_opened_at = coordinator._clock() - 1.0
+
+        time.sleep(2.0)  # two idle ticks
+
+        assert coordinator.arbiter.state.turn_open is False
+        client.portal.call(living.on_wake_candidate, _candidate("w-after-idle-watch"))
+        time.sleep(0.25)
+        assert living.sent[-1].type == "wake_admit"

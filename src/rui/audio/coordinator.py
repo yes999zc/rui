@@ -55,10 +55,43 @@ class WakeCoordinator:
         }
         self.last_decision: Decision | None = None
         self._window_started_at: float | None = None
+        #: The room the open turn belongs to, and when the latch last went False->True.
+        #: `drop_device` needs the room; the app's watchdog needs the age.
+        self._turn_device: str | None = None
+        self._turn_opened_at: float | None = None
 
     # ------------------------------------------------------------------ state
-    def set_turn_open(self, open_: bool) -> None:
+    def set_turn_open(self, open_: bool, device_id: str | None = None) -> None:
+        """Open or close the house-wide one-turn latch.
+
+        ``device_id`` names the room the turn belongs to. Remembering it is what lets
+        `drop_device` release a latch whose plane just disappeared, instead of leaving
+        every later wake rejected until the process restarts (2026-10-26).
+        """
+        state = self.arbiter.state
+        if open_:
+            # Only the False->True transition starts the watchdog's clock: on_wake and
+            # then on_utterance both open the same turn, and a refresh per call would
+            # keep pushing the stale deadline forward.
+            if not state.turn_open:
+                self._turn_opened_at = self._clock()
+            if device_id:
+                self._turn_device = device_id
+        else:
+            self._turn_device = None
+            self._turn_opened_at = None
         self.arbiter.set_state(turn_open=open_)
+
+    @property
+    def turn_device(self) -> str | None:
+        """The room the open turn belongs to (None when the latch is closed)."""
+        return self._turn_device if self.arbiter.state.turn_open else None
+
+    def turn_open_for_s(self) -> float | None:
+        """How long the latch has been open, or None when it is closed."""
+        if not self.arbiter.state.turn_open or self._turn_opened_at is None:
+            return None
+        return max(0.0, self._clock() - self._turn_opened_at)
 
     def set_owner(self, device_id: str | None) -> None:
         """The current output owner: only this device may barge while it plays."""
@@ -72,8 +105,22 @@ class WakeCoordinator:
         self._senders[device_id] = send
 
     def drop_device(self, device_id: str) -> None:
+        """Forget one plane: its sender, room, output claim and any turn it owned.
+
+        A dropped plane can never deliver the utterance/idle event that would close
+        the latch, so leaving `turn_open` set rejected every wake in the house until a
+        restart (the 2026-10-26 class). Only the turn owned by this device is
+        released; another room's live turn keeps its latch.
+        """
         self._senders.pop(device_id, None)
         self._rooms.pop(device_id, None)
+        state = self.arbiter.state
+        if state.owner_device == device_id:
+            self.set_owner(None)
+        elif device_id in state.playing:
+            self.arbiter.set_state(playing=state.playing - {device_id})
+        if self._turn_device == device_id:
+            self.set_turn_open(False)
 
     # ----------------------------------------------------------------- events
     async def on_candidate(self, device_id: str, msg: object) -> None:

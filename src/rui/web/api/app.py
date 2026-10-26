@@ -1233,6 +1233,67 @@ def _wake_in_flight(app: FastAPI) -> bool:
     return bool(tasks) and any(not task.done() for task in tasks)
 
 
+def _turn_in_flight(app: FastAPI) -> bool:
+    """True while an utterance handler is running: the turn is provably alive."""
+    tasks = getattr(app.state, "turn_tasks", None)
+    return bool(tasks) and any(not task.done() for task in tasks)
+
+
+# A turn latch with no turn task, candidate or audio behind it is stuck. The only
+# legitimate latch window without an utterance handler is the listening gate, which
+# gives up after `max_wait_ms` (5 s default) plus the wake skip/preroll. 20 s is four
+# times that, so a slow ASR/model round (already covered by `_turn_in_flight`) or a
+# long sentence cannot trip it, while a lost WakeIdle/utterance costs 20 s of deafness
+# instead of a container restart (the 2026-10-26 report: 11 rejected wakes over five
+# minutes, only a restart recovered).
+TURN_STALE_S = 20.0
+
+
+def _room_plane_alive(app: FastAPI, device_id: str) -> bool:
+    """True when that room still has a live, connected plane."""
+    fleet = _audio_fleet(app)
+    if fleet is not None:
+        return device_id in fleet.device_ids() and bool(fleet.running(device_id))
+    supervisor = getattr(app.state, "audio", None)
+    return bool(getattr(supervisor, "running", False))
+
+
+def _turn_watchdog(app: FastAPI, coordinator: object) -> bool:
+    """Release the one-turn latch when its owner (plane or turn) is provably gone.
+
+    Two failure modes used to cost a restart: the plane crashed between the wake and
+    its utterance end (no WakeIdle/utterance ever arrives), and a lost reply event left
+    the latch set with nothing running. A live turn always has one of: a running
+    utterance task, a candidate waiting for a verdict, or audio/gate activity on a
+    plane - so the normal one-turn rule is untouched. Returns True when it reset.
+    """
+    if not coordinator.arbiter.state.turn_open:  # type: ignore[attr-defined]
+        return False
+    if _wake_in_flight(app) or _turn_in_flight(app):
+        return False
+    for live in _live_clients(app):
+        metrics = getattr(live, "metrics", None)
+        if metrics is not None and (
+            getattr(metrics, "output_owner", "")
+            or getattr(metrics, "gate_speaking", False)
+        ):
+            return False
+    room = str(getattr(app.state, "turn_device", "") or "")
+    if room and not _room_plane_alive(app, room):
+        log.warning("turn_open watchdog: plane %r is gone; released the one-turn latch", room)
+        coordinator.set_turn_open(False)  # type: ignore[attr-defined]
+        return True
+    age = coordinator.turn_open_for_s()  # type: ignore[attr-defined]
+    if age is not None and age >= TURN_STALE_S:
+        log.warning(
+            "turn_open watchdog: no turn/plane activity for %.0f s; released the "
+            "one-turn latch", age,
+        )
+        coordinator.set_turn_open(False)  # type: ignore[attr-defined]
+        return True
+    return False
+
+
 def _session_client(app: FastAPI) -> object | None:
     """The room the open session belongs to, falling back to the primary.
 
@@ -2501,11 +2562,18 @@ def create_app(
                 without it, so every later wake was rejected turn_open until the
                 process restarted (measured 2026-10-26). The wrapper makes the release
                 structural, so a future early return cannot reintroduce the deaf house.
+                The task is also registered as the watchdog's "this turn is alive" proof.
                 """
                 async def run(pcm: bytes) -> None:
+                    task = asyncio.current_task()
+                    turns = getattr(app.state, "turn_tasks", None)
+                    if turns is not None and task is not None:
+                        turns.add(task)
                     try:
                         await turn(pcm)
                     finally:
+                        if turns is not None and task is not None:
+                            turns.discard(task)
                         link.release_turn()
                 return run
 
@@ -2519,7 +2587,7 @@ def create_app(
                 if coordinator is not None:
                     # A follow-up utterance arrives with no new Wake event, so the turn
                     # has to be (re)stated here as well as in on_wake.
-                    coordinator.set_turn_open(True)
+                    coordinator.set_turn_open(True, device_id)
                     coordinator.touch(device_id)
                 def _no_turn(reason: str, *args: object) -> None:
                     """An utterance that produces no answer must release the turn.
@@ -2744,7 +2812,7 @@ def create_app(
                     # Sent by the winning plane right after wake_admit: from here the
                     # house is in a turn, so other candidates get turn_open (K2), and
                     # this is the recency signal the next same-room arbitration reads.
-                    coordinator.set_turn_open(True)
+                    coordinator.set_turn_open(True, device_id)
                     coordinator.touch(device_id)
                 _light(app, "wake", live=link)
                 # Unified idle rule (9哥, 16:1x): ANY interaction in a session ends
@@ -2976,6 +3044,9 @@ def create_app(
             # one output owner for the house (K2). Reset here so a TestClient re-entering
             # the lifespan never inherits a dead fleet's tasks or owner.
             app.state.wake_tasks = set()
+            # Utterance handlers in flight: the watchdog's proof that a latch still has
+            # a live turn behind it (a crashed plane leaves no such task).
+            app.state.turn_tasks = set()
             app.state.turn_device = ""
             app.state.output_owner = ""
             # Routing state: the last room a person used (reminder fallback when
@@ -3023,10 +3094,15 @@ def create_app(
                 # Phase 2: the arbiter's owner/playing view must follow the planes, not
                 # the last reply (music keeps sounding after the answer drained).
                 _reconcile_owner(app)
+                # A crashed plane or a lost utterance/idle event can leave the one-turn
+                # latch set with nothing left to clear it. Runs before the no-client
+                # return below: a room whose plane just died has no client to ask.
+                coordinator = getattr(app.state, "wake_coordinator", None)
+                if coordinator is not None:
+                    _turn_watchdog(app, coordinator)
                 client = _session_client(app)
                 if client is None:
                     continue
-                coordinator = getattr(app.state, "wake_coordinator", None)
                 # A wake that is being arbitrated, or a turn that just opened, owns the
                 # session: saying goodbye in that 400 ms window cut the new wake's gate
                 # and left turn_open stuck (measured 13:03:33 -> every later wake
@@ -3173,6 +3249,8 @@ def create_app(
         if coordinator is not None:
             await coordinator.close()
         for task in list(getattr(app.state, "wake_tasks", set()) or set()):
+            task.cancel()
+        for task in list(getattr(app.state, "turn_tasks", set()) or set()):
             task.cancel()
         supervisor = getattr(app.state, "audio", None)
         if supervisor is not None:
