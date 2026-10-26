@@ -52,7 +52,7 @@
 
 ```bash
 git clone --branch v0.7.2 https://github.com/yes999zc/rui.git && cd rui
-bash deploy/install.sh                      # 生成 compose / config / .env 并启动
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.2 bash deploy/install.sh   # pin 到本版本（默认是 :latest）
 cat console-token.txt                       # 控制台 token（也可用 rui token 重新读取）
 ```
 
@@ -145,7 +145,7 @@ Source: [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd); exports 
 
 ```bash
 git clone --branch v0.7.2 https://github.com/yes999zc/rui.git && cd rui
-bash deploy/install.sh                      # writes compose / config / .env, then starts
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.2 bash deploy/install.sh   # pin this release (default is :latest)
 cat console-token.txt                       # console token (or: rui token)
 ```
 
