@@ -102,7 +102,9 @@ gh release view v0.6.0 --json tagName,url                                      #
 - 已完成：task-1/4（v2 tools + C-002 mcp）、task-2/7（每设备测试历史 + v1 写入 + A-5）、task-5（barge 不播 cue，真机 8/8）、task-8（compat 三仓）。
 - 进行中：无（task-9 已完成，reviewer PASS + verifier VERIFIED，1512/17）。
 - **backlog（发布后）**：turn_open 看门狗——plane 崩溃/断链丢失 WakeIdle 时 `turn_open` 仍会永久卡住（`coordinator.drop_device` 不复位、`WakeArbiter.reset()` 无调用者、`idle_watch` 遇 turn_open 主动跳过）；需加断连复位/看门狗。另：普通唤醒 cue 回声偶发成 turn、whitespace id 测试、下游反向用例、docs 旧窗口文案、uv.lock 0.2.0。
-- **提交计划（冻结后执行，9 哥 已授权 commit/push）**：① `fix(audio): no cue on barge`（process/protocol/test_barge）；② `fix(session): release turn latch on dismiss/context/clarify`（app.py + 2 tests）；③ `feat(setup): per-device test history`（setup_state/setup_api/v2_api/2 tests）；④ `feat(release): rui 0.7.0 + compat <0.8.0`（pyproject/__init__/manifests/tests + C-002 全文件，含 A-5 与窗口）；⑤ `docs: handoff/speaker-tuning/audit`；下游两仓各自 `fix(manifest): rui_compat <0.8.0`。
+- **已提交并推送（2026-10-26 13:05，9 哥 授权）**：house-ear `main` → `cf0e7d4 fix(audio)`、`3c0c78f fix(session)`、`7a62dc0 feat(release) rui 0.7.0`、`9c622b1 docs`（工作区干净）；rui-dot2-bridge → `c71deb6 chore(release) 1.3.0`；rui-xiaoai-bridge → `fcff8eb chore(release) 0.2.0`。三仓测试：house-ear **1512/17**、dot2 **143**、xiaoai **9**、ruff/typecheck 全绿。
+- **镜像构建阻塞（2026-10-26 13:05）**：NAS 上从 `git archive` 源码构建 `rui:0.7.0` 在 Dockerfile 第一个 apt 步骤失败：`deb.debian.org` 极慢/超时；`APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn`（host-only，sed 只替换主机名）后仍报 `xz-utils/pkg-config/nasm/libopus-dev/libmp3lame-dev` 无候选（apt update 只拿到部分索引）。源码在 NAS `~/rui-src-0.7.0`，日志 `/tmp/build-core.log`。**回退方案**：thin image = `FROM ghcr.io/yes999zc/rui:sha-615e682` + 覆盖 `site-packages/rui/**`（新 src）+ `web/dist`（本地 npm build）+ `plugs/xiaoai/plugin.yaml`，tag `rui:0.7.0`；或改用可用 apt 镜像后重试。下游 `~/dot2-src-1.3.0` 已同步（`c71deb6`）。
+
 - **构建/部署（授权）**：冻结后从 commit 构建核心 0.7.0 镜像 → 下游 `rui-dot2:0.7.0-a1p`（或正式 tag）→ NAS 168 recreate；真机验收由 9 哥 最后统一做（退下/空闲告别后连说 3 次「你好小瑞」、播放中打断、无自听循环）。
 - 生产：`rui-dot2:0.7.0-pre9-a1p`（旧核心 0.6.0 + 打补丁 process.py），待用正式 0.7.0 镜像替换。
 - 9 哥 授权（13:00）：**可随时用 NAS 部署、可推 GitHub**；最终统一做真机验收，不再逐项找 9 哥 测试。
