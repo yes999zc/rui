@@ -15,7 +15,9 @@
 - **task-18 文档收口已完成待评审**（工作树未提交，6 文件）：`docs/deploy.md` §3.8 改「默认 v2 / legacy 一版回滚」、CHANGELOG 0.7.8 段（写明「未写 console 键的老配置会静默变 v2」）、新增 `docs/release/v0.7.8.md` 中英、README 英文 hero、`legacy_links` 注释修正、`?from=` 已知限制。
 - **版本口径（Lead 已定）**：**0.7.5 / 0.7.6 / 0.7.7 不单独打 tag** —— 它们的出口条件（Done 6 真机、双跑、升级回滚）要等 0.7.8 代码齐了一次做完；事后补 tag 等于假装「发版时已验证」。**0.7.8 是唯一验收节点**，CHANGELOG/release notes 必须覆盖四块（TLS、两台平面可见性、小爱摘出、审计+默认切 v2）。
 - **task-18 已合入 `687d7de`**（PASS+VERIFIED）：deploy.md 控制台章节、CHANGELOG 四块（TLS/平面/摘出/审计+切 v2，六个基线数字齐全）、`docs/release/v0.7.8.md` 中英（升级 4 步 + 回滚 `console: legacy`）、README 英文 hero、`?from=` 已知限制。
-- **task-19（版本号 0.7.8）已派给 impl-d**：三处版本一致 + README pin + release notes 去掉「bump 后成立」；之后才谈 tag/镜像/release。
+- **task-19 已合入 `89a10f1`**（PASS+VERIFIED）：core **0.7.8**（pyproject/`__init__`/uv.lock 一致 + `uv lock --check` 绿）、README 中英 pin 0.7.8（`0.7.4` 只留历史行）、`/api/v2/meta` 实测 `rui_version=0.7.8` + `compat 0.6.0..<0.8.0`；全量 **1642/6**、ruff 绿。README 的 LX06 规则已按 0.7.6 事实重写（外置插件必需、旧拼写读入迁移 + WARNING、无别名无内置回退、0.8.0 删迁移）。
+- **0.7.8 仍未打 tag**：出口条件是 Done 6 c/d/e 真机 + B 双跑 + 升级/回滚 + 人肉手册（白天）。代码与文档已全部就位，白天通过即可 `git tag v0.7.8` + release + 镜像。
+- **下载/部署注意**：0.7.8 镜像默认 v2；生产升级前确认三件事（外置 lx06 插件挂载、TLS 材料、`multi_device`），命令见 `docs/release/v0.7.8.md` 升级四步。
 - **另记**：`docs/release/`（0.7.x 实际目录）与 `docs/releases/README.md` 的路径口径不一致，留一次 docs 小修。
 - **0.7.8 不发版**：剩余出口 = Done 6 c/d/e 真机 + 双跑对比 + 升级/回滚 + 人肉手册（全在白天）。
 
