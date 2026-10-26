@@ -26,12 +26,23 @@ docker image inspect --format '{{.Id}}' rui-dot2:1.3.1 | tee /vol1/rui/.rollback
 
 ## 2. 构建带 0.7.8 底座的下游镜像（不动生产）
 
+**注意**：`ghcr.io/yes999zc/rui:0.7.8` 只有在打了 `v0.7.8` tag 之后才存在于 registry（CI 在 tag 上构建镜像）。**验收前用本地候选镜像**（已验证可构建）：
+
 ```bash
-cd /vol1/rui/rui-dot2-bridge   # 若本机无源码，先在 Mac 构建后 docker save/load
-docker build --build-arg RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.8 \
-  -t rui-dot2:1.3.1-r078 .
-docker run --rm --entrypoint rui rui-dot2:1.3.1-r078 --version   # 期望 0.7.8
+# 在 house-ear 源码目录构建候选（本地 tag，不推 registry）
+docker build -t rui:0.7.8-rc1 .          # 已验证：产出 sha256:fe65d3a2…
+
+# 用候选做下游镜像（rui-dot2-bridge 的 Dockerfile 在 deploy/downstream/）
+cd /vol1/rui/rui-dot2-bridge               # 本机无源码就先在 Mac 构建后 docker save | ssh docker load
+docker build -f deploy/downstream/Dockerfile \
+  --build-arg RUI_IMAGE=rui:0.7.8-rc1 -t rui-dot2:1.3.1-r078 .
+
+# 版本检查（rui 没有 --version，用 python 读 __version__）
+docker run --rm --entrypoint python rui-dot2:1.3.1-r078 -c "import rui;print(rui.__version__)"   # 期望 0.7.8
+docker run --rm --entrypoint sh rui-dot2:1.3.1-r078 -c 'ls /opt/rui-plugins'                      # 期望 rui_dot2_bridge
 ```
+
+> 本地已实测：`rui 0.7.8`、`/opt/rui-plugins` 含 `rui_dot2_bridge`。打完 tag 后可用 `ghcr.io/yes999zc/rui:0.7.8` 复现同一条链。
 
 ## 3. 配置前置（0.7.8 的三个行为）
 
@@ -79,7 +90,7 @@ curl -s localhost:8080/health | jq '{devices,device_errors,console}'   # 期望�
 | 步骤 | 命令/判据 | 实测输出 | 结论 |
 |---|---|---|---|
 | 备份 | 三个文件存在 | 待填 | |
-| 构建 | `rui --version` | 待填 | |
+| 构建 | `python -c "import rui"` = 0.7.8 | 已本地实测 `rui 0.7.8` | |
 | 切换 | `docker compose up -d` | 待填 | |
 | health | 五字段 | 待填 | |
 | 老链接 | `/` 与 `/panel/logs` | 待填 | |
