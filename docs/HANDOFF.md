@@ -53,6 +53,14 @@
 
 **task-19（P2-2 音乐中短指令，实现完成待门禁，未提交）**：归因结论 H-A 不成立（音乐期高 rms/peak=1.0 的段都紧邻 `cue:`，见 fleet3:414/952；无 cue 的音乐段 rms 0.02–0.06、peak 0.2–0.23）、H-B **成立**（`wake_preroll_ms=500 > wake_skip_ms=300`，barge 时回放环里 200 ms 停播前音频进段；fleet3:596–601 barge→stop_play→seg，07:12:30–35 3.84 s 段串进告别语「没事的话，我先下啦」）、H-C 仅个别成立（07:04:01 rms .006、07:12:13 rms .0022 近似静音，非全局）。最小改动：`process.py:1895-1902` barge 唤醒不再回放预唤醒 ring（仍清空 ring），live 语音不受影响；非 barge 路径不变。新测试 `tests/test_music_barge_head.py`（barge 不回放停播音乐、非 barge 仍回放、stop_play ≤7 ms）。反向：旧 process.py 上 `assert MUSIC_PCM not in gate.fed` 失败。三仓：house-ear **1620 passed/17 skipped**、dot2 **143**（其 .venv）、xiaoai **9**；ruff 绿。真机 A/B 由 Lead。
 
+**task-19（P2-2，第五轮返工待门禁，未提交）**：把 disarm 出口统一收口到 `process.py::_disarm_gate(reason)`（约 :2663）——`gate.armed` 时 disarm 并清 `_stale_speech_blocked`；`_disarm_gate_for_our_audio` 改走它（消除第四条漏清：reminder/console 语音 disarm 不经 `_feed_gate`）；`_feed_gate` 的 `armed -> disarmed` 转换也清位（约 :1959，覆盖 task-15 的 `_cue_excised` 静默超时，无 `idle_events`）；`idle_events` 变化清位保留。三处同一布尔赋值、均在事件循环单写者上，幂等无竞态。新测试 `tests/test_stale_speech_after_wake.py:170`（真实 vad 的 `_cue_excised` 超时 disarm → 后续 PLAY_PCM 入队）、`:214`（唤醒在听时我方 reminder disarm → 音频正常入队）；反向变异（去掉 helper 清位/armed 转换清位）→ 两用例分别 `AssertionError`。三仓：house-ear **1626 passed/17 skipped**、dot2 **143**、xiaoai **9**；ruff 绿。
+
+**task-19（P2-2 音乐中短指令，第四轮返工待门禁，未提交）**：清位时机补齐——`_stale_speech_blocked` 现在在 `process.py:1962-1967`（`_feed_gate` 里 `idle_events` 变化，即 `wake without speech`/`WakeIdle`/超时 disarm）清除，也在本 turn utterance 落地时清除（:1988）；`_begin_wake_turn:1823` 在无 gate 时不置位。这样安静唤醒后 reminder/console debug say 的 PLAY_PCM 能正常播出。新用例 `tests/test_stale_speech_after_wake.py:117`（silent wake → 后续 PLAY_PCM 必须入队）；反向变异（注释掉 idle 清位）→ `AssertionError` at `assert plane._stale_speech_blocked is False`。已修好项保持：goodbye 已入队 chunk 仍被 flush/drop、farewell `say(keep_abort)` 早退、cue 正常。三仓：house-ear **1624 passed/17 skipped**、dot2 **143**、xiaoai **9**；ruff 绿。单会话限制已记：`runner.abort()` 全局 flag，A/B 两房共用 runner，跨房隔离仅 arbiter 层（task-18），不在本卡改。
+
+**task-19（P2-2 音乐中短指令，第三轮返工待门禁，未提交）**：阻塞 1——plain wake 只 abort flag，已入队 goodbye 音频仍播放（07:12 30.65–30.97 已有 1.4–2.0 s 入 plane）。修法：`process.py` 新增 `_stale_speech_blocked`（唤醒置位、本 turn utterance 落地时清除，`_accept_play_pcm` 丢弃此间 PLAY_PCM，SpeakStart/SpeakFinished 同步忽略），`_begin_wake_turn` 开头 `_flush_speech()` 清空已入队；不用 StopAudio 因为会连 wake cue「在呢」一起停。阻塞 2——`turn.say()` 无条件 `_abort.clear()`：新增 `keep_abort=True`，farewell 用它并在 abort 已置位时直接不播；`farewell` 仍先 `idle.stop()`。app 侧保留「任何 wake 都 `runner.abort()`」。新测试 `tests/test_stale_speech_after_wake.py`（预置/迟到 chunk 均不进 gate，utterance 后恢复）、`tests/test_turn.py:780`（abort 后 farewell 零播放）。反向变异：丢弃 guard 后 `assert 0.10015625 == 0.0`；turn 移除 abort 早退后 `the aborted goodbye still played`。三仓：house-ear **1623 passed/17 skipped**、dot2 **143**、xiaoai **9**；ruff 绿。真机 A/B 归 Lead。
+
+**task-19（P2-2 音乐中短指令，返工后待门禁，未提交）**：归因更正——07:12 headline 不是 barge：`:1110` 30.080 farewell 先触发、`:1111` 30.489 wake（TTS 未入队/barge=false）、`:1125` 30.969 起告别语 live 播放、`:1128` 3.84 s 段把告别语+「下一首」送进 ASR；`:596-601` 只是 H-C 近静音个例，H-B 不成立。修法：`app.py:2841-2848` 任何唤醒都 `runner.abort()`（不只 barge）中止上一轮/告别 TTS；`turn.py` farewell 改为先 `idle.stop()` 再 say，避免被中止的告别语事后清掉新唤醒的 idle 会话。撤销上一版 barge ring 裁剪（`process.py` 已还原，ring 仍回放，skip 之后用户首字保留）。新测试 `test_app_fleet.py:718` 普通 wake 必须 abort（旧代码 FAILED）、`tests/test_music_barge_head.py:104` barge 仍回放 ring（防回归）。三仓：house-ear **1621 passed/17 skipped**、dot2 **143**、xiaoai **9**；ruff 绿。真机 A/B 归 Lead。
+
 ## 已批 / 待批（2026-10-26 16:58 9 哥 全部按建议批准）
 
 **已批（可继续，不用再问）**
@@ -115,6 +123,14 @@
 - **task-18 真机回归结果**：客厅放歌时卧室 Dot2 连续 4 次 admitted、`lost_playing` 0 次（修复前 6 分钟 18 次）；但音乐中 ASR 只剩碎片（`'了。'`）——归 task-19。
 - **采样环境**：Mac（Dot2 房间）用 `afplay`，荣耀服务器 `192.168.5.34`（客厅）用 `aplay -plughw:2,0`；两台 NTP 同步，跨机对齐不确定度 ≤150 ms；**采样必须串行**（两屋同时说同一唤醒词会互相饿死）。
 - **待批**：4 台新设备到位后手动添加；打 tag 前的版本号确认；24h 稳定性结果。
+
+## task-19 收口（2026-10-26 18:05，**第 5 轮为 timebox 上限，9 哥 已定**）
+
+- **门禁**：reviewer-barge **PASS**（出口穷举：process 内唯一裸 `gate.disarm()` 在 `_disarm_gate:2661`，无第五条绕过）；verifier-tools-2 **VERIFIED**（真实 vad `_cue_excised` 静音超时 → `blocked=False`、`queued_s=0.040`；我方音频 disarm → 同样放行；幂等两出口 `queued=2`）。全量 **1626/17**、ruff 绿（I001 已修）。
+- **实现**：`process.py:508 _stale_speech_blocked` + `:2647 _disarm_gate(reason)`（唯一 disarm 出口，armed 时清位）+ `_flush_speech()` + `_accept_play_pcm:2942` 丢迟到 PLAY_PCM；`turn.py:1127 say(keep_abort=False)`、`:1135` abort 已置位则 return 0；`app.py:2841-2848` 任何 wake 都 `runner.abort()`。
+- **提交**：`989baa1`；镜像 **`rui-dot2:1.3.0-p23`**（18:00 部署，healthy、2 台在线、未打 tag）。回滚 = override 改回 `rui-dot2:1.3.0-r071` + `compose up -d`。
+- **真机 A/B（18:00–18:02，第一次）结果不可用**：10 次「唤醒+指令（音乐中）」只 3 次 admitted、1 条 turn（transcript `有点。`），`rejected=0`。判断为**采样协议问题**（`afplay` 起播后 8 s 即说唤醒词、音乐+TTS 混叠、且句间节奏与 `stop` 后音乐重启重叠），**不是结论**。需要按「每轮先确认播放态、唤醒前留足稳定播放、指令用 1.5 s lead」重跑，并用 `fleet_matrix` 出表后再下结论。
+- **已知限制（不再扩范围，发布后开卡）**：① `runner.abort()` 是全局单 flag，B 房唤醒会中止 A 房正在合成的回复（runner 单会话）；② 已播出的告别尾音无法追回（只能阻止后续 chunk），彻底消音需「本机 TTS 参考消减」；③ `_feed_gate:1962/:1967` 是直接清位而非调 helper（功能等价，表述差异）。
 
 ## 风险与未决
 
