@@ -253,6 +253,18 @@
 - **rui-dot2-bridge 架构图已导出**（源文件 `docs/assets/architecture.mmd`，SVG+PNG，同配色），**README 正文未写**（旧版 233 行仍是 0.3.4→0.6.0 口径、含「已解锁/EchoMuse 固件/播放门控 1.1.3」等过时说法，需整体重写）。
 - **rui-xiaoai-bridge**：README 未动（旧版）；按口径用终端记录、quickstart `v0.2.1`。
 
+### 三仓 README 全部完成（2026-10-26 20:50）
+
+| 仓 | commit | 篇幅 | 素材 |
+|---|---|---|---|
+| house-ear | `e8e0d95` | 202 行 | 截图 `docs/assets/console-v2-config.png` + `architecture.{mmd,svg,png}` |
+| rui-dot2-bridge | `4227654` | 201 行 | `architecture.{mmd,svg,png}`（插件三层图） |
+| rui-xiaoai-bridge | `7eaba4a` | 约 200 行 | `architecture.{mmd,svg,png}`（rui ⇄ plug ⇄ LX06） |
+
+- 三份都是中英双语、结构一致（定位/badge/hero/15 秒 demo/架构图/特性/三行 quickstart/前置条件/支持矩阵/故障排查/已知限制/致谢/MIT）。
+- 自检结果：资源引用全部存在；无内网 IP、无 token、无个人路径；无 VPN/穿透/代理/破解/解锁/刷机/root 字样（改成「设备前置条件」表述）；支持矩阵未测项全部显式标「未测」，历史数字带日期。
+- **待办**：按 9 哥 要求「每张卡独立 review + verify」，README 需过「真实性/脱敏/许可/措辞」四项清单；通过后三仓 push + tag + release。
+
 ## 风险与未决
 
 - **task-6 P1 已交付，等 P2 决策**：Dot2 唤醒 30/30 admitted、指令 26/30；掉分两处（ack cue 回声 13/26、音乐中「下一首」2/5）已落日志行；LX06 与小爱对比仍缺样本（不同屋）。
