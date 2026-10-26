@@ -35,7 +35,7 @@
 | 可用 | **159** |
 | 文案错误（本轮发现并已修） | **4 组**（明细见 §5；元素表内 1 行标 🟡，其余 3 组为壳/文案/接口层） |
 | 不可用（本轮结束后仍存在的行为缺陷） | **0** |
-| 条件性缺陷（仅异常环境触发，已记入已知限制） | **1**（音乐凭据路径不可写 → 500，见 §8.1） |
+| 条件性缺陷（仅异常环境触发，已记入已知限制） | **0**（0.7.8 已修：音乐凭据路径不可写 → **409**，见 §8.1） |
 | 未验证（附原因） | **12 行 / 6 类**（见 §11） |
 | 未处理项 | **0** |
 
@@ -349,7 +349,7 @@
 | 保存 | 点击 | PUT `/music/credentials` 200 | ✅ 可用 | 状态徽标「已配置」；重载保持 |
 | 清空槽位（危险确认） | 点击 → 确认 | PUT 200 | ✅ 可用 | 标题「确认清除该凭据槽位」；清空后槽位缺失 |
 
-> 首次执行时 `PUT /music/credentials` 返回 **500**，原因不是 UI，而是示例配置把 `music.secrets_path` 指向不可写的 `/var/lib/rui/lan_media.json`（见 §8.1）。把测试实例路径改到 `/tmp` 后，该元素全部通过。
+> 首次执行时 `PUT /music/credentials` 返回 **500**，原因不是 UI，而是示例配置把 `music.secrets_path` 指向不可写的 `/var/lib/rui/lan_media.json`（见 §8.1）。把测试实例路径改到 `/tmp` 后，该元素全部通过。**0.7.8 已修：现在返回 409 + 可操作 detail，见 §8.1。**
 
 ### 4.17 `/credentials`
 
@@ -439,10 +439,27 @@
 
 ## 8. 已知限制
 
-### 8.1 音乐凭据路径不可写时返回 500（条件性）
-- 复现：配置 `music.secrets_path: /var/lib/rui/lan_media.json`，以非 root 运行 → `PUT /api/v1/music/credentials` 500，服务端 traceback `PermissionError`；UI 只显示通用错误。
-- 影响：部署路径不可写时，用户看到 500 而不是“路径不可写”的 4xx。**不是 v2 前端逻辑错误**；测试实例把路径改到可写目录后保存/清空全部通过。
-- 建议：0.7.8 或后续把 `write_music_credentials` 的 `OSError` 转换成 409/422 + 可读 hint。
+### 8.1 音乐凭据路径不可写时返回 409（0.7.8 已修）
+- 0.7.7 现状：配置 `music.secrets_path: /var/lib/rui/lan_media.json`，以非 root 运行 →
+  `PUT /api/v1/music/credentials` **500**，服务端 traceback `PermissionError`；UI 只显示通用错误。
+- **0.7.8 修复（task-20）**：
+  - `src/rui/config/catalog.py` 的 `write_music_credentials()` 捕获 `OSError`
+    （`PermissionError` / `NotADirectoryError` / 父目录缺失），抛
+    `MusicCredentialsWriteError`（`OSError` 子类；带 path + OS reason + 修复句）。
+  - `src/rui/web/api/app.py` 在 `PUT /api/v1/music/credentials`（v2 控制台调用的就是它，
+    `web/src/v2/api.ts:1584`；没有 `/api/v2/music/credentials` 路由）把**写入**与**清空
+    （unlink）**两支的 `OSError` 都映射成 **409**，`detail` 为：
+    `music credentials file is not writable: <path> (<reason>); fix the directory
+    permissions or set music.secrets_path to a writable location (for example under
+    system.data_dir)`。
+  - 启动迁移语义不变：`migrate_legacy_music_credentials()` 仍可 `except OSError`
+    （新异常是子类），保留 inline 值并只打 warning。
+- 证据：`tests/test_music_credentials.py` 的
+  `test_an_unwritable_credentials_path_is_a_4xx_not_500` 与
+  `test_clearing_credentials_on_an_unwritable_path_is_a_4xx`（chmod 555 临时目录；旧代码
+  在 `raise_server_exceptions=False` 下返回 **500**，修复后 **409**）；正常保存/清空/0600/
+  不回显的既有测试仍绿（该文件 6 passed）。
+- 提交：本卡不 commit；commit 由 Lead 落盘后回填（本条目对应 task-20）。
 
 ### 8.2 老链接 302 映射（0.7.8 D 已实现）
 

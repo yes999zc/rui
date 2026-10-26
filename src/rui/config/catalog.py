@@ -1725,20 +1725,49 @@ def music_credentials(cfg: Config) -> dict[str, str]:
     return data
 
 
+class MusicCredentialsWriteError(OSError):
+    """The music credentials file cannot be written (permissions / bad parent).
+
+    Subclasses OSError so the startup migration's existing ``except OSError`` keeps
+    its behaviour (log and keep the inline values). The API layer turns it into a 409
+    with this same actionable sentence instead of a 500 traceback.
+    """
+
+    def __init__(self, path: Path, error: OSError) -> None:
+        self.path = Path(path)
+        self.error = error
+        reason = getattr(error, "strerror", None) or str(error) or type(error).__name__
+        super().__init__(
+            f"music credentials file is not writable: {self.path} ({reason}); "
+            "fix the directory permissions or set music.secrets_path to a writable "
+            "location (for example under system.data_dir)"
+        )
+
+
 def write_music_credentials(path: Path, data: dict[str, str]) -> None:
-    """Atomic 0600 write of the music credentials JSON (never into config.yaml)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Atomic 0600 write of the music credentials JSON (never into config.yaml).
+
+    A path that cannot be written raises `MusicCredentialsWriteError` (an OSError)
+    carrying the path, the OS reason and the `music.secrets_path` fix, so the console
+    answers 4xx with an actionable message instead of a 500.
+    """
+    path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.chmod(tmp, 0o600)          # chmod before the first byte, umask-proof
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=1)
-    except BaseException:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.chmod(tmp, 0o600)      # chmod before the first byte, umask-proof
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=1)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    except OSError as exc:
         tmp.unlink(missing_ok=True)
-        raise
-    os.replace(tmp, path)
-    os.chmod(path, 0o600)
+        raise MusicCredentialsWriteError(path, exc) from exc
 
 
 def migrate_legacy_music_credentials(cfg: Config) -> bool:

@@ -8,8 +8,10 @@ panel only know whether the file exists.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from rui.config import Config, save_config
@@ -139,3 +141,61 @@ def test_enabled_music_keeps_the_status_and_never_echoes_values(tmp_path) -> Non
         assert panels["music"]["enabled"] is True
         assert any(block["type"] == "credentials"
                    for block in panels["music"]["blocks"])
+
+
+def _unwritable_client(tmp_path: Path) -> tuple[TestClient, Path, Path]:
+    """A client whose `music.secrets_path` lives in a directory we then chmod 555."""
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root ignores directory permissions")
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.music.source = "navidrome"
+    cfg.music.cache_dir = str(tmp_path / "cache")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    cfg.music.secrets_path = str(locked / "lan_media.json")
+    path = tmp_path / "config.yaml"
+    save_config(path, cfg)
+    # raise_server_exceptions=False is the point: the old code answered a real 500
+    # instead of letting the OSError escape the test client.
+    return TestClient(create_app(cfg, config_path=path),
+                      raise_server_exceptions=False), locked, Path(cfg.music.secrets_path)
+
+
+def test_an_unwritable_credentials_path_is_a_4xx_not_500(tmp_path) -> None:
+    """Audit §8.1: a filesystem misconfiguration must not surface as a 500."""
+    client, locked, _stored = _unwritable_client(tmp_path)
+    locked.chmod(0o555)
+    try:
+        response = client.put("/api/v1/music/credentials", json={
+            "url": "http://192.0.2.50:4533", "user": "bakey", "password": "pw"})
+    finally:
+        locked.chmod(0o755)
+
+    assert 400 <= response.status_code < 500, response.text
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert isinstance(detail, str)
+    assert "not writable" in detail
+    # Actionable: names the field to change and the path that failed.
+    assert "music.secrets_path" in detail
+    assert str(locked / "lan_media.json") in detail
+
+
+def test_clearing_credentials_on_an_unwritable_path_is_a_4xx(tmp_path) -> None:
+    """The delete branch (`data` empty -> unlink) must answer 4xx for the same reason."""
+    client, locked, stored = _unwritable_client(tmp_path)
+    stored.write_text(json.dumps({
+        "url": "http://192.0.2.50:4533", "user": "bakey", "password": "pw"}),
+        encoding="utf-8")
+
+    locked.chmod(0o555)
+    try:
+        response = client.put("/api/v1/music/credentials", json={
+            "url": "", "user": "", "password": ""})
+    finally:
+        locked.chmod(0o755)
+
+    assert 400 <= response.status_code < 500, response.text
+    assert response.status_code == 409, response.text
+    assert "music.secrets_path" in response.json()["detail"]

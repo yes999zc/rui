@@ -154,7 +154,7 @@ No API contract change.**
   at the device page with `?from=` in the URL (marker only, not consumed — audit §8.9).
 - Unchanged from 0.7.4: cue-echo edges, the single-session runner, non-recallable
   goodbye tails, per-room wake words, concurrent multi-device untested.
-- Unchanged from the 0.7.7 audit: music credentials on a non-writable path return 500
+- Music credentials on a non-writable path now return **409** with a fixable message (was 500; fixed in 0.7.8)
   (conditional); v1-only gaps (phrase editor, provider cards/audition, music playback
   buttons, system/web/security fields, channels, tool registry, device probe) stay out
   of v2 for now; the setup id-collision editor is unreachable in the normal flow.

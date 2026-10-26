@@ -47,6 +47,7 @@ from ...channels.supervisor import ChannelSupervisor
 from ...channels.weixin import WeixinAdapter
 from ...config.catalog import (
     KEYWORD_DEFAULTS,
+    MusicCredentialsWriteError,
     coerce,
     field_specs,
     get_path,
@@ -4553,10 +4554,26 @@ def create_app(
                 data.pop(key, None)
         if errors:
             raise HTTPException(status_code=422, detail=errors)
-        if data:
-            write_music_credentials(path, data)
-        else:
-            path.unlink(missing_ok=True)
+        try:
+            if data:
+                write_music_credentials(path, data)
+            else:
+                path.unlink(missing_ok=True)
+        except OSError as exc:
+            # 409, not 500: the request is valid but the configured file cannot be
+            # written. The catalog's error already names `music.secrets_path`; the
+            # unlink branch (clearing the last slot) needs the same sentence here.
+            if isinstance(exc, MusicCredentialsWriteError):
+                detail = str(exc)
+            else:
+                reason = (getattr(exc, "strerror", None) or str(exc)
+                          or type(exc).__name__)
+                detail = (
+                    f"music credentials file is not writable: {path} ({reason}); "
+                    "fix the directory permissions or set music.secrets_path to a "
+                    "writable location (for example under system.data_dir)"
+                )
+            raise HTTPException(status_code=409, detail=detail) from exc
         if source_given and source_id != cfg.music.source:
             current = (_read_config_or_409() if config_path is not None and
                        Path(config_path).exists() else cfg)
