@@ -1,0 +1,44 @@
+2026-10-26 13:49:57,900 INFO rui.log_setup: level set to info
+2026-10-26 13:50:00,120 INFO rui.audio.process: wake candidate lx06-1761486600120000 admitted after 11 ms
+2026-10-26 13:50:01,900 INFO rui.audio.vad: [seg] 1.20 s rms=0.0140 peak=0.2010 speech=1.05 s
+2026-10-26 13:50:02,300 INFO rui.trace: turn {"turn_id": "lx06-t1", "device_id": "lx06", "first_response_ms": 2742.5, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "end_of_speech": 1180.2, "asr_first": 1350.0, "asr_done": 1560.0, "llm_first": 1700.0, "llm_done": 1980.0, "tts_first": 2260.0, "play_start": 2742.5}, "meta": {"wake_source": "rui"}}
+2026-10-26 13:50:05,300 INFO rui.web.api.app: turn: {"transcript": "你好小瑞", "reply": "在呢。", "audio_bytes": 44100, "error": "", "tools": [], "stages": {"asr": {"used": "sherpa", "elapsed_ms": 210.2, "attempts": 1}}}
+2026-10-26 13:50:20,010 INFO rui.audio.process: wake candidate dot2-1761486620010000 admitted after 9 ms
+2026-10-26 13:50:21,500 INFO rui.audio.vad: [seg] 0.98 s rms=0.0102 peak=0.1500 speech=0.86 s
+2026-10-26 13:50:22,900 INFO rui.trace: turn {"turn_id": "dot2-t1", "device_id": "dot2", "first_response_ms": 3100.0, "silence_after_ms": 96.0, "stages_ms": {"wake": 0.0, "barge_in": 2380.1, "silence": 2476.1, "play_start": 3100.0}, "meta": {"wake_source": "device", "device_wake_score": 0.61, "device_wake_threshold": 0.5, "device_wake_barge_hint": true, "device_wake_action": "barge", "playback_gap_count": 0}}
+2026-10-26 13:50:24,000 INFO rui.audio.process: barge: 1 wake during playback, dropped 2.4 s queued
+2026-10-26 13:50:24,048 INFO rui.audio.process: barge: silence_after_ms=48 (server-side: queue flushed, stop_play sent; device ALSA buffer ~300 ms not included)
+2026-10-26 13:50:30,200 INFO rui.audio.process: wake candidate lx06-1761486630200000 rejected: turn_open
+2026-10-26 13:50:45,700 INFO rui.audio.process: wake candidate lx06-1761486645700000 admitted after 14 ms
+2026-10-26 13:50:46,900 INFO rui.trace: turn {"turn_id": "lx06-t2", "device_id": "lx06", "first_response_ms": 2610.4, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "end_of_speech": 990.1, "asr_first": 1180.0, "asr_done": 1390.0, "llm_first": 1500.0, "tts_first": 2010.0, "play_start": 2610.4}, "meta": {"wake_source": "rui", "playback_gap_count": 2, "playback_max_gap_ms": 120.5}}
+2026-10-26 13:50:48,900 INFO rui.audio.process: reply: 12 chunks, lead max 340 ms
+2026-10-26 13:50:48,905 INFO rui.audio.process: reply: 2 gaps, max 120 ms
+2026-10-26 13:51:02,400 INFO rui.web.api.app: turn: {"transcript": "几点了", "reply": "现在十三点五十一分。", "audio_bytes": 88200, "error": "", "tools": [], "stages": {}}
+wake candidate dot2-1761486662400000 rejected: turn_open
+2026-10-26 13:51:10,900 INFO rui.audio.process: wake candidate dot2-1761486670900000: no verdict in 1500 ms; dropped
+2026-10-26 13:51:20,100 INFO rui.providers.chain: asr: turn: ConnectionError: 连接被重置
+2026-10-26 13:51:22,700 INFO rui.trace: turn {"turn_id": "dot2-t2", "device_id": "dot2", "first_response_ms": null, "silence_after_ms": null, "stages_ms": {"wake": 0.0}, "meta": {"wake_source": "rui", "playback_gap_count": 0}}
+2026-10-26 13:51:24,700 WARNING rui.web.api.app: turn failed: turn timed out after 30 s
+2026-10-26 13:51:40,300 INFO rui.audio.process: wake candidate lx06-1761486700300000 admitted after 8 ms
+2026-10-26 13:51:41,600 INFO rui.trace: turn {"turn_id": "lx06-t3", "device_id": "lx06", "first_response_ms": 2390.0, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "end_of_speech": 800.0, "asr_first": 950.0, "asr_done": 1150.0, "play_start": 2390.0}, "meta": {"wake_source": "rui"}}
+2026-10-26 13:51:44,100 INFO rui.audio.process: barge: 2 wake during playback, dropped 1.7 s queued
+2026-10-26 13:51:44,190 INFO rui.audio.vad: [seg] 1.44 s rms=0.0200 peak=0.3000 speech=1.30 s
+2026-10-26 13:51:45,000 INFO rui.audio.process: barge: silence_after_ms=1200 (server-side: queue flushed, stop_play sent; device ALSA buffer ~300 ms not included)
+2026-10-26 13:52:00,500 INFO rui.audio.process: wake candidate lx06-1761486720500000 admitted after 10 ms
+2026-10-26 13:52:00,900 INFO rui.trace: turn {"turn_id": "lx06-t4", "device_id": "lx06", "first_response_ms": null, "silence_after_ms": null, "stages_ms": {"wake": 0.0}, "meta": {"wake_source": "rui"}}
+2026-10-26 13:52:05,000 INFO rui.web.api.app: turn: {"transcript": "", "reply": "", "audio_bytes": 0, "error": "asr: no ready provider", "tools": [], "stages": {}}
+2026-10-26 13:52:10,000 INFO rui.audio.vad: utterance discarded: 220 ms of speech
+2026-10-26 13:52:20,000 INFO rui.audio.process: wake candidate dropped: no control plane connected
+2026-10-26 13:52:30,000 INFO rui.audio.process: capture: PaError: device busy; retry 1/3
+2026-10-26 13:52:31,000 INFO rui.audio.process: capture recovered after 1 failure(s)
+2026-10-26 13:52:40,000 ERROR rui.audio.process: audio plane degraded: capture failed 4 times: PaError: device busy; stopping so the supervisor rebuilds it
+2026-10-26 13:52:50,000 INFO rui.web.api.app: wake without speech (2.0 s); idle goodbye in 8 s
+2026-10-26 13:53:00,000 INFO rui.trace: turn {"turn_id": "broken", "device_id": "lx06", "stages_ms": {
+2026-10-26 13:53:01,000 INFO rui.web.api.app: turn: {"transcript": "下一首"
+  File "/opt/rui/src/rui/audio/process.py", line 1234, in _pump
+2026-10-26 13:53:10,000 INFO rui.audio.process: wake candidate dot2-1761486790000000 rejected: cross_echo
+
+2026-10-26 13:53:20,000 INFO rui.audio.process: wake candidate dot2-1761486800000000 admitted after 12 ms
+2026-10-26 13:53:21,400 INFO rui.trace: turn {"turn_id": "dot2-t3", "device_id": "dot2", "first_response_ms": 3020.6, "silence_after_ms": null, "stages_ms": {"wake": 0.0, "end_of_speech": 1010.0, "asr_first": 1200.0, "asr_done": 1420.0, "play_start": 3020.6}, "meta": {"wake_source": "device", "device_wake_score": 0.72, "device_wake_threshold": 0.5, "device_wake_barge_hint": false, "device_wake_action": "turn", "playback_gap_count": 0}}
+2026-10-26 13:53:30,000 INFO rui.audio.process: barge: 1 wake during playback, dropped 0.9 s queued
+2026-10-26 13:53:30,060 INFO rui.audio.process: barge: silence_after_ms=60 (server-side: queue flushed, stop_play sent; device ALSA buffer ~300 ms not included)
