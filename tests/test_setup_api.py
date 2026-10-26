@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from rui import secrets as secrets_module
+from rui import setup_state as setup_store
 from rui.config import Config, DeviceConfig, load_config, save_config
 from rui.config.schema import ProviderConfig, StageConfig
 from rui.providers import keycheck
@@ -108,6 +109,28 @@ def _make_local_asr(tmp_path) -> None:
 
 def _step(body: dict, step_id: str) -> dict:
     return next(item for item in body["steps"] if item["id"] == step_id)
+
+
+def _add_device(client: TestClient, device_id: str = "living") -> None:
+    response = client.post("/api/v1/setup/step", json={
+        "step": "params", "action": "device.upsert",
+        "payload": {"id": device_id, "host": "speaker.local", "room": "客厅",
+                    "wake_words": ["你好小瑞"]},
+    })
+    assert response.status_code == 200, response.text
+
+
+def _save_test_record(tmp_path, **overrides) -> None:
+    """Write the house-wide ``device.test`` slot the way the probe does."""
+    record = {
+        "ok": True,
+        "at": "2026-10-26T00:00:00+00:00",
+        "device_id": "living",
+        "checks": [{"id": "plane", "ok": True}],
+    }
+    record.update(overrides)
+    setup_store.update(str(tmp_path / "data"), lambda data: setup_store.set_value(
+        data, ("test", "device", "test"), record))
 
 
 def _plug_dir(tmp_path, plugin_id: str = "demo") -> None:
@@ -248,7 +271,7 @@ def test_eight_steps_and_evidence_drives_every_transition(wizard, monkeypatch) -
     assert device.params == {"plug_id": "xiaoai-lx06", "volume_max": 100}
     assert "@你好小瑞" in (path.parent / "keywords.txt").read_text(encoding="utf-8")
 
-    # connect/test: the live plane is the only connection evidence.
+    # connect/test: with no stored probe the live plane is the connection evidence.
     client.app.state.audio = _Plane(connected=True)
     state = client.get("/api/v1/setup/step").json()
     assert _step(state, "connect")["status"] == "done"
@@ -261,6 +284,80 @@ def test_eight_steps_and_evidence_drives_every_transition(wizard, monkeypatch) -
     assert _step(state, "verify")["status"] == "done"
     assert state["verified"] is True
     assert state["complete"] is True and state["next_step"] is None
+
+
+# The setup store has one house-wide test slot. These tests pin the v1 rule: a record
+# for this device is the verdict, no record falls back to the live link, and nobody
+# else's record (or a draft's stale one) can leak in.
+
+@pytest.mark.parametrize("ok", [False, "false"])
+def test_a_failed_device_test_is_not_masked_by_a_live_link(wizard, ok) -> None:
+    client, _path, tmp_path = wizard
+    _add_device(client)
+    _save_test_record(tmp_path, ok=ok, checks=[{"id": "token", "ok": False}])
+    client.app.state.audio = _Plane(connected=True)
+
+    step = _step(client.get("/api/v1/setup/step").json(), "test")
+    assert step["status"] == "pending"
+    assert step["evidence"]["tested"] is True
+    assert step["evidence"]["ok"] is False
+    assert step["evidence"]["stored"] is False
+    # The link is still reported; it just does not overrule the stored failure.
+    assert step["evidence"]["speaker_connected"] is True
+    assert step["detail"]["checks"] == [{"id": "token", "ok": False}]
+
+
+def test_a_passing_device_test_completes_without_a_live_link(wizard) -> None:
+    client, _path, tmp_path = wizard
+    _add_device(client)
+    _save_test_record(tmp_path, ok=True)
+    client.app.state.audio = _Plane(connected=False)
+
+    step = _step(client.get("/api/v1/setup/step").json(), "test")
+    assert step["status"] == "done"
+    assert step["evidence"]["tested"] is True
+    assert step["evidence"]["ok"] is True
+    assert step["evidence"]["speaker_connected"] is False
+    assert step["evidence"]["at"] == "2026-10-26T00:00:00+00:00"
+
+
+def test_no_record_still_completes_on_the_live_link(wizard) -> None:
+    client, _path, _tmp = wizard
+    _add_device(client)
+    client.app.state.audio = _Plane(connected=True)
+
+    step = _step(client.get("/api/v1/setup/step").json(), "test")
+    assert step["status"] == "done"
+    assert step["evidence"]["tested"] is False
+    assert step["evidence"]["ok"] is True
+    assert step["evidence"]["stored"] is False
+    assert step["evidence"]["at"] == ""
+
+
+@pytest.mark.parametrize("device_id", ["kitchen", ""])
+def test_another_devices_test_record_does_not_count(wizard, device_id) -> None:
+    client, _path, tmp_path = wizard
+    _add_device(client)
+    # A record for another room, or a pre-M6 one that never wrote `device_id`, is no
+    # record here: the link fallback decides and the failed probe stays invisible.
+    _save_test_record(tmp_path, ok=False, device_id=device_id)
+    client.app.state.audio = _Plane(connected=True)
+
+    step = _step(client.get("/api/v1/setup/step").json(), "test")
+    assert step["status"] == "done"
+    assert step["evidence"]["tested"] is False
+    assert step["evidence"]["ok"] is True
+
+
+def test_a_draft_device_does_not_inherit_a_test_record(wizard) -> None:
+    client, _path, tmp_path = wizard
+    _save_test_record(tmp_path, ok=True)      # points at a device that isn't set up
+
+    step = _step(client.get("/api/v1/setup/step").json(), "test")
+    assert step["status"] == "pending"
+    assert step["evidence"]["tested"] is False
+    assert step["evidence"]["ok"] is False
+    assert step["evidence"]["at"] == ""
 
 
 def test_a_turn_before_setup_start_is_not_verify_evidence(wizard) -> None:

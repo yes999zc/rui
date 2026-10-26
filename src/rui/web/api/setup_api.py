@@ -66,6 +66,32 @@ _CONNECT_HINTS: dict[str, dict[str, str]] = {
 }
 
 
+def _device_test_record(saved: dict, device: DeviceConfig | None) -> dict:
+    """The stored ``device.test`` record, but only when it belongs to ``device``.
+
+    The setup store keeps one house-wide ``test/device/test`` slot, so the probe a
+    test wrote for one room must never become evidence for another room, and a draft
+    (``device is None``) owns no record at all. Records without a matching
+    ``device_id`` -- including pre-M6 ones that never wrote the field -- are "no
+    record" for everyone. Every layer is checked with ``isinstance`` because
+    ``setup.json`` is user-editable and a non-dict there must not fail the read.
+    """
+    if device is None:
+        return {}
+    test = saved.get("test")
+    if not isinstance(test, dict):
+        return {}
+    device_node = test.get("device")
+    if not isinstance(device_node, dict):
+        return {}
+    record = device_node.get("test")
+    if not isinstance(record, dict) or not record:
+        return {}
+    if str(record.get("device_id") or "") != device.id:
+        return {}
+    return record
+
+
 def install_setup_routes(
     app: FastAPI,
     auth: Callable[..., None],
@@ -534,16 +560,20 @@ def install_setup_routes(
             "actions": [] if outbound else ["connect.inspect"],
         }
 
-        # test: for inbound speakers only the live link counts (SSH is diagnostics);
-        # an outbound speaker has no inbound link, so its stored probe is the evidence.
-        stored_test = saved.get("test", {}).get("device", {}).get("test", {})
-        if not isinstance(stored_test, dict):
-            stored_test = {}
-        stored_ok = bool(stored_test.get("ok"))
-        test_done = stored_ok if outbound else connected
+        # test: a stored probe for *this* device is the verdict when one exists -- a
+        # failed `ok` must not be masked by the live link. Only the JSON boolean true
+        # is a pass (`"false"` is a failure, not a pass). Without a record the old
+        # behaviour stands: an inbound speaker may continue on the live link, an
+        # outbound one stays pending until `device.test` writes evidence.
+        stored_test = _device_test_record(saved, device)
+        tested = bool(stored_test)
+        stored_ok = stored_test.get("ok") is True
+        test_done = stored_ok if tested else bool(connected and not outbound)
         test_step = {
             "id": "test", "status": "done" if test_done else "pending",
             "evidence": {"stored": stored_ok,
+                         "ok": test_done,
+                         "tested": tested,
                          "at": stored_test.get("at") or "",
                          "speaker_connected": connected,
                          "transport": connection["transport"],
