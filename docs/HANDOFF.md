@@ -6,7 +6,7 @@
 |---|---|
 | rui main | `ef7ff18`（2026-10-26 门禁后提交：/v2/tools 8 文件 + C-002 只读例外 + 契约测试；**未 push**）。工作区另有 2 个未提交路径：`docs/plan/speaker-tuning.md`、`docs/HANDOFF.md` |
 | rui 发布版 | tag `v0.6.0` @ `adc4c2b`；官方镜像 `ghcr.io/yes999zc/rui@sha256:abef1f276c3c21e9155d97c98913ee6c2e98fdfe842e43b90f64a5db6c12b241` |
-| 生产 NAS 168 | **`rui-dot2:0.7.0-pre9-a1p`**（2026-10-26 12:21 部署；底座 = `pre8-eq` + 打补丁 `process.py`，唯一 delta = barge 不播 cue）@ `/vol1/rui`；`/health.console=legacy`（**默认未切**）。override：`DOT2_PLAYBACK_GATE_MS=0`、`DOT2_OWW_ON_DEVICE=off`、`DOT2_BARGE_IN_ENABLED=0`；config：dot2 `post_playback_mute_ms=2500`/`ack_echo_ignore_ms=2500`；备份 `rui-dot2-override.yml.bak.20261026-*` |
+| 生产 NAS 168 | **`rui-dot2:1.3.0-r071`**（2026-10-26 13:36 部署；`rui` 0.7.1 + `dot2` 1.3.0；digest 见 `docs/release/v0.7.1.md`）@ `/vol1/rui`；`/health.console=legacy`（**默认未切**）。override：`DOT2_PLAYBACK_GATE_MS=0`、`DOT2_OWW_ON_DEVICE=off`、`DOT2_BARGE_IN_ENABLED=0`；config：dot2 `post_playback_mute_ms=2500`/`ack_echo_ignore_ms=2500`；备份 `rui-dot2-override.yml.bak.20261026-*` |
 | 下游 rui-dot2-bridge | `1971fc5`（EQ/限幅修正）；plug `dot2-echomuse 1.2.0`；`plug.json ladder_correct=true` |
 | 下游 rui-xiaoai-bridge | `6f5f4dd` + tag `v0.1.0`（plugin `xiaoai-lx06`，`rui_compat >=0.6.0 <0.7.0`） |
 | 设备固件 | Dot2 client `fw 20261024-1911-dev`；二进制 `echomuse-dot2-ref/artifacts/server` sha256 `65f93891…` |
@@ -102,7 +102,8 @@ gh release view v0.6.0 --json tagName,url                                      #
 - 已完成：task-1/4（v2 tools + C-002 mcp）、task-2/7（每设备测试历史 + v1 写入 + A-5）、task-5（barge 不播 cue，真机 8/8）、task-8（compat 三仓）。
 - 进行中：无（task-9 已完成，reviewer PASS + verifier VERIFIED，1512/17）。
 - **backlog（发布后）**：turn_open 看门狗——plane 崩溃/断链丢失 WakeIdle 时 `turn_open` 仍会永久卡住（`coordinator.drop_device` 不复位、`WakeArbiter.reset()` 无调用者、`idle_watch` 遇 turn_open 主动跳过）；需加断连复位/看门狗。另：普通唤醒 cue 回声偶发成 turn、whitespace id 测试、下游反向用例、docs 旧窗口文案、uv.lock 0.2.0。
-- **已发布（2026-10-26 13:10）**：house-ear `main` `e9db990` + tag **v0.7.0**（`cf0e7d4` audio / `3c0c78f` session / `7a62dc0` release / `9c622b1` docs / `e9db990` release matrix）；dot2 `c71deb6` + tag **v1.3.0**；xiaoai `fcff8eb` + tag **v0.2.0**；三仓已 push。测试：house-ear **1512/17**、dot2 **143**、xiaoai **9**、ruff/typecheck 全绿。
+- **已发布 0.7.1（2026-10-26 13:36）**：`44cff05` + tag `v0.7.1`；含 turn latch watchdog（task-10）与 cue 回声修复（task-11）；镜像 `rui:0.7.1-a1p` / `rui-dot2:1.3.0-r071`，24h 稳定性从 13:36 起计。
+- **已发布 0.7.0（2026-10-26 13:10）**：house-ear `main` `e9db990` + tag **v0.7.0**（`cf0e7d4` audio / `3c0c78f` session / `7a62dc0` release / `9c622b1` docs / `e9db990` release matrix）；dot2 `c71deb6` + tag **v1.3.0**；xiaoai `fcff8eb` + tag **v0.2.0**；三仓已 push。测试：house-ear **1512/17**、dot2 **143**、xiaoai **9**、ruff/typecheck 全绿。
 - **生产镜像（13:06 部署）**：`rui-dot2:1.3.0-a1p` = `sha256:c5ab81c6f9da…9062`（`FROM rui:0.7.0-a1p` = `sha256:6d15c44d1992…15fc`，底座 `ghcr.io/yes999zc/rui:sha-615e682`）；容器 healthy、设备已重连；`/api/v2/meta` = 0.7.0 / max 0.8.0。验收矩阵与 DoD 见 `docs/release/v0.7.0.md`。
 - **镜像构建阻塞（2026-10-26 13:05）**：NAS 上从 `git archive` 源码构建 `rui:0.7.0` 在 Dockerfile 第一个 apt 步骤失败：`deb.debian.org` 极慢/超时；`APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn`（host-only，sed 只替换主机名）后仍报 `xz-utils/pkg-config/nasm/libopus-dev/libmp3lame-dev` 无候选（apt update 只拿到部分索引）。源码在 NAS `~/rui-src-0.7.0`，日志 `/tmp/build-core.log`。**回退方案**：thin image = `FROM ghcr.io/yes999zc/rui:sha-615e682` + 覆盖 `site-packages/rui/**`（新 src）+ `web/dist`（本地 npm build）+ `plugs/xiaoai/plugin.yaml`，tag `rui:0.7.0`；或改用可用 apt 镜像后重试。下游 `~/dot2-src-1.3.0` 已同步（`c71deb6`）。
 
