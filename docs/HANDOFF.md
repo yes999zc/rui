@@ -11,8 +11,8 @@
 |---|---|---|
 | task-1 `[impl] 覆盖率基建与基线` | **completed** | reviewer PASS + verifier VERIFIED + CI 四绿（`d21bb5f`）；commit `d21bb5f` |
 | task-2 `[test] 未验证 batch-1（HE-03/HE-12/D2-06）` | **completed** | PASS + VERIFIED（verifier 自做变异并还原）；house `cd2d0a2`、dot2 `18ad114` |
-| task-3 `[docs] 缺口台账 + 8 处矛盾` | in_progress | 两轮 CHANGES + verifier FAILED（2 处事实错误）已修，等 verifier 终判 |
-| task-4 `[release] 0.7.3 版本/CHANGELOG/release notes/README pin` | pending | blocked_by task-3；之后 Lead 打 tag/发 release/构建镜像 |
+| task-3 `[docs] 缺口台账 + 8 处矛盾` | **completed** | 两轮 CHANGES + verifier 两轮 FAILED 后修完；house `49df73f`、dot2 `517623d`、xiaoai `0889427` |
+| task-4 `[release] 0.7.3 版本/CHANGELOG/release notes/README pin` | in_progress | impl-core 执行；之后 Lead 打 tag/发 release/构建镜像 |
 
 ### 数字（0.7.3 工作树，commit `cd2d0a2`）
 - 测试四计数：**collected 1651 / passed 1634 / skipped 17 / xfail 0**（failed 0）；dot2 **145 passed**；xiaoai 9 passed。

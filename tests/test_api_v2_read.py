@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from rui import secrets
+from rui import __version__, secrets
 from rui.config import Config, DeviceConfig, save_config
 from rui.log_setup import LOG_FILE_NAME
 from rui.web.api import app as app_module
@@ -113,7 +113,7 @@ def test_meta_describes_the_contract(console):
 def test_house_aggregates_devices_rooms_and_setup(console):
     client, _ = console()
     body = client.get("/api/v2/house", headers=AUTH).json()
-    assert body["version"]["rui"] == "0.7.2"
+    assert body["version"]["rui"] == __version__
     assert body["devices"] == {"total": 1, "enabled": 1, "online": 0, "ready": 0}
     assert body["multi_device"]["enabled"] is False
     assert body["multi_device"]["planes_running"] == 0

@@ -60,9 +60,9 @@
 把下面这段直接贴给任意 AI 助手（Claude / ChatGPT / DeepSeek 都行）：
 
 ```text
-目标：用 Docker 跑起 rui 0.7.2，接一台 Dot2 和一台 LX06。
+目标：用 Docker 跑起 rui 0.7.3，接一台 Dot2 和一台 LX06。
 前置：docker compose version 通过；8080 空闲；5 GB 磁盘。
-1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.2
+1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.3
 2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.1 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) 写 ./config/config.yaml：web.auth_token、devices[]（id/adapter/room/host/listen_port；lx06 的 host 必填）
@@ -84,8 +84,8 @@
 ## 三行启动
 
 ```bash
-git clone --branch v0.7.2 https://github.com/yes999zc/rui.git && cd rui
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.2 bash deploy/install.sh   # pin 到本版本（默认是 :latest）
+git clone --branch v0.7.3 https://github.com/yes999zc/rui.git && cd rui
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.3 bash deploy/install.sh   # pin 到本版本（默认是 :latest）
 cat console-token.txt                       # 控制台 token（也可用 rui token 重新读取）
 ```
 
@@ -93,7 +93,7 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 
 ## 兼容性与前置条件
 
-- Python **3.11+**；Docker 与 Docker Compose（推荐镜像 `ghcr.io/yes999zc/rui:0.7.2`）。
+- Python **3.11+**；Docker 与 Docker Compose（推荐镜像 `ghcr.io/yes999zc/rui:0.7.3`）。
 - 需要自备 **LLM / TTS / ASR** 供应商（在配置文件里填，或使用本地模型）。没有凭据时服务能起，但对话链路不会工作。
 - 设备前置条件（第三方设备，与厂商**无官方关联**）：
   - EchoMuse Dot2（RS03QR）：固件需已具备设备本地接口，并与本服务在同一局域网；设备侧音频参数由桥接插件下发。
@@ -197,9 +197,9 @@ Two constraints must both hold: `compatibility.rui_min` in the device manifest (
 Paste this into any assistant (Claude / ChatGPT / DeepSeek):
 
 ```text
-Goal: run rui 0.7.2 with Docker, one Dot2 and one LX06.
+Goal: run rui 0.7.3 with Docker, one Dot2 and one LX06.
 Preflight: docker compose version; port 8080 free; 5 GB disk.
-1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.2
+1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.3
 2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.1 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) write ./config/config.yaml: web.auth_token and devices[] (id/adapter/room/host/listen_port; host required for lx06)
@@ -221,8 +221,8 @@ No ffmpeg build needed (the image ships it)
 ## Three-line quickstart
 
 ```bash
-git clone --branch v0.7.2 https://github.com/yes999zc/rui.git && cd rui
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.2 bash deploy/install.sh   # pin this release (default is :latest)
+git clone --branch v0.7.3 https://github.com/yes999zc/rui.git && cd rui
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.3 bash deploy/install.sh   # pin this release (default is :latest)
 cat console-token.txt                       # console token (or: rui token)
 ```
 
@@ -230,7 +230,7 @@ Open `http://127.0.0.1:8080/v2/`, log in with that token, and add your first spe
 
 ## Compatibility and prerequisites
 
-- Python **3.11+**, Docker and Docker Compose (recommended image: `ghcr.io/yes999zc/rui:0.7.2`).
+- Python **3.11+**, Docker and Docker Compose (recommended image: `ghcr.io/yes999zc/rui:0.7.3`).
 - Your own **LLM / TTS / ASR** providers (configured in the config file, or local models). The service starts without credentials, but the dialogue path stays idle.
 - Device prerequisites (third-party hardware, **not affiliated with any vendor**):
   - EchoMuse Dot2 (RS03QR): firmware must already expose the device's local interface and be on the same LAN; audio parameters are pushed by the bridge.

@@ -14,6 +14,51 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [0.7.3] - 2026-10-26
+
+**Theme: test baseline and reproducibility. No behaviour change.**
+
+### Added
+
+- **Coverage is now produced by every CI test job.** `pytest-cov` is in the `dev`
+  extra; the Python 3.11 / 3.12 test legs upload `coverage.json`,
+  `pytest-report.xml` and `python-version.txt` as `coverage-<py>` artifacts.
+  `scripts/coverage_report.py` turns them into the package table and the
+  machine-readable `docs/audit/coverage-baseline.json`; the 0.7.3 baseline is
+  **80.95% line / 69.55% branch** (local Python 3.13, 120 files).
+- **An independent `rui plug-test` smoke** runs in CI against
+  `tests/fixtures/sample-plug` (a minimal manifest + fake adapter). It does not
+  depend on `plugs/xiaoai`, which is scheduled for removal in 0.7.5.
+- **Batch-1 unverified items are now automated tests**: HE-03 (a null
+  `first_response_ms` stays "evidence insufficient", never 0), HE-12 (the
+  source-run `plugs/` fallback authorises an in-process adapter) and D2-06
+  (dot2 `stop_playback` on an active stream must not swallow the next reply).
+
+### Changed
+
+- Test counts are reported in one canonical form: collected / passed / skipped /
+  xfail. For the 0.7.3 tree that is **1651 / 1634 / 17 / 0** for house-ear,
+  **145 passed** for rui-dot2-bridge and **9 passed** for rui-xiaoai-bridge.
+- `docs/audit/unverified-inventory.md` gained the per-package coverage ledger
+  with a three-way gap classification, 26 real-device protocols (command /
+  criterion / record table), and the eight document-contradiction resolutions.
+- No runtime behaviour change. `rui_compat` stays `>=0.6.0 <0.8.0`; both bridges
+  keep their current versions (1.3.1 / 0.2.1).
+
+### Evidence
+
+- Coverage: 80.95% line (18429/22767) / 69.55% branch (5158/7416); CI artifacts
+  at `d21bb5f` reported 76.59% (3.11) and 77.59% (3.12) on their own interpreters.
+- `ruff` green in all three repos; full suites green (numbers above).
+- CI run at `d21bb5f`: `test (3.11)`, `test (3.12)`, `image` and the workflow all
+  succeeded; `coverage-3.11` / `coverage-3.12` artifacts exist.
+
+### Known limitations
+
+Unchanged from 0.7.2 (see `docs/release/v0.7.2.md` §已知限制): cue-echo edges,
+single-session dialogue runner, non-recallable spoken goodbye, per-room wake-word
+isolation, untested concurrent multi-device behaviour.
+
 ## [0.7.2] - 2026-10-26
 
 ### Fixed
