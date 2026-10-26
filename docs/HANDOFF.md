@@ -23,29 +23,17 @@
 7. **B1 可行性评估（只评估未实施）**：结论 **(a) 纯配置/文件下发，不需要刷固件** —— 设备二进制已含 `owwModel/owwOnDevice` 与 `[shadow]` ONNX 打分器，模型放 `/data/local/share/echomuse/oww`，可经 `/shell`（shell_open+base64+md5）或 adb 写入，config 即时重建 scorer、无需重启。证据与前置条件见 `docs/plan/speaker-tuning.md:343-461`。
 8. **诚实性修复（v1/v2 一致）**：设备测试步不再被「链路通」掩盖（`setup_api.py:69/568`、`v2_api.py:862`）；`pytest -o addopts='' -q` → 1488 passed / 17 skipped；`ruff` → All checks passed。
 
-## 未提交文件（**未 commit / 未 push**，原样留给新会话）
+## 未提交文件
 
-| 文件 | 说明 |
-|---|---|
-| `web/src/v2/views/ToolsView.vue`（新） | `/v2/tools` 工具页（天气/新闻/MCP+HA） |
-| `web/src/v2/tools.ts`（新） | tools 分区/回退逻辑 |
-| `web/src/v2/api.ts` | +`GET /api/v1/mcp` 类型与封装 |
-| `web/src/v2/router.ts`、`App.vue` | `/tools` 路由 + 「配置」段入口 |
-| `web/src/v2/i18n.ts` | zh/en 新文案（键集一致） |
-| `web/src/v2/style.css`、`README.md` | 样式/文档 |
-| `docs/plan/speaker-tuning.md` | 新增「B1 可行性评估」章节（L343–461） |
-| `docs/HANDOFF.md` | 本文件 |
+**无。工作区干净**（2026-10-26 13:42，`git status --short` 为空）。三仓均已 commit + push：
+house-ear `main` → `2b42f46`（含 0.7.1 addendum）；dot2 `c71deb6` + tag `v1.3.0`；xiaoai `fcff8eb` + tag `v0.2.0`。
 
-说明：工具页已于 2026-10-26 过独立门禁（reviewer PASS / verifier VERIFIED，全量 `1492 passed / 17 skipped`），但**仍未 commit、未进生产镜像**；build 产物入 gitignore。
-门禁后新增的未提交路径（共 **12** 条）：`docs/contracts/C-002-console-v2-api.md`（M，登记 `GET /api/v1/mcp` 只读例外）、`tests/test_c002_v1_mcp_exception.py`（??，4 个测试：401/200+JSON/HA token 不回显/静态守卫）。
+## 下一步（按序）
 
-## 下一步（每条带验收命令）
-
-1. **`/v2/tools` 过门禁后提交**：验收 `npm run typecheck && npm run build`（exit 0）+ `pytest -o addopts='' -q`（1488/17）+ fresh reviewer/verifier 通过。
-2. **9 哥 决定 B1 是否落地**：先跑 V0（英文 stock，~30 min，零固件）验证链路 → 验收：设备日志出现 `[shadow]` scorer 加载、播放中说「停」能停。
-3. **A2 或 B1 二选一后出设计**：验收 `docs/plan/speaker-tuning.md` 有选定方案 + 回滚步骤 + 真机 A/B 计划。
-4. **每设备测试历史**：验收 `GET /api/v2/devices/{id}` 的 `setup.last_test_*` 只读本设备，两设备互不影响。
-5. **M10 默认切换（等 9 哥 点头）**：验收 `/health.console=v2`、`/` 302 `/v2/`、`/legacy` 200，回滚一行可用。
+1. **两台新 Dot2 到位**：先做 EQ 耳测（保留 `/loudness`）→ 再清 override 里的 `DOT2_CONTROL_PORT=8872` → 逐台 `listen_port`（8871/8873）→ v2 添加设备 → 4 台联合验收。命令/证据字段见 `docs/release/acceptance-4devices.md`。
+2. **M10 默认切换**：等 9 哥 点头；验收 `/health.console=v2`、`/` 302 `/v2/`、`/legacy` 200，回滚一行。
+3. **最终真机语音验收**（9 哥 一次做）：退下/空闲告别后连说 3 次「你好小瑞」、播放中打断（音量 40/100）、普通唤醒不再自问自答；同时按 task-6 的 6 句 × 5 轮采 Dot2 vs 小爱矩阵。
+4. **24h 稳定性**：从 2026-10-26 13:36 起计；已设 2026-10-27 13:10 提醒（可改为 13:40）复查 5xx/掉线/重启恢复，结果补进 `docs/release/v0.7.1.md`。
 
 ## 风险与未决
 
@@ -96,22 +84,15 @@ gh release view v0.6.0 --json tagName,url                                      #
 
 > 非 [phase] 收口任务，故不写 phase-close 标记、不调用 phase_close。
 
-## 当前状态（2026-10-26 13:00）
+## 当前状态（2026-10-26 13:42）
 
-- 仓库版本已升 **0.7.0**（`src/rui/__init__.py` + `pyproject.toml`）；三仓 `rui_compat` 均 `<0.8.0`（task-8 已完成，PASS+VERIFIED）。
-- 已完成：task-1/4（v2 tools + C-002 mcp）、task-2/7（每设备测试历史 + v1 写入 + A-5）、task-5（barge 不播 cue，真机 8/8）、task-8（compat 三仓）。
-- 进行中：无（task-9 已完成，reviewer PASS + verifier VERIFIED，1512/17）。
-- **backlog（发布后）**：turn_open 看门狗——plane 崩溃/断链丢失 WakeIdle 时 `turn_open` 仍会永久卡住（`coordinator.drop_device` 不复位、`WakeArbiter.reset()` 无调用者、`idle_watch` 遇 turn_open 主动跳过）；需加断连复位/看门狗。另：普通唤醒 cue 回声偶发成 turn、whitespace id 测试、下游反向用例、docs 旧窗口文案、uv.lock 0.2.0。
-- **已发布 0.7.1（2026-10-26 13:36）**：`44cff05` + tag `v0.7.1`；含 turn latch watchdog（task-10）与 cue 回声修复（task-11）；镜像 `rui:0.7.1-a1p` / `rui-dot2:1.3.0-r071`，24h 稳定性从 13:36 起计。
-- **已发布 0.7.0（2026-10-26 13:10）**：house-ear `main` `e9db990` + tag **v0.7.0**（`cf0e7d4` audio / `3c0c78f` session / `7a62dc0` release / `9c622b1` docs / `e9db990` release matrix）；dot2 `c71deb6` + tag **v1.3.0**；xiaoai `fcff8eb` + tag **v0.2.0**；三仓已 push。测试：house-ear **1512/17**、dot2 **143**、xiaoai **9**、ruff/typecheck 全绿。
-- **生产镜像（13:06 部署）**：`rui-dot2:1.3.0-a1p` = `sha256:c5ab81c6f9da…9062`（`FROM rui:0.7.0-a1p` = `sha256:6d15c44d1992…15fc`，底座 `ghcr.io/yes999zc/rui:sha-615e682`）；容器 healthy、设备已重连；`/api/v2/meta` = 0.7.0 / max 0.8.0。验收矩阵与 DoD 见 `docs/release/v0.7.0.md`。
-- **镜像构建阻塞（2026-10-26 13:05）**：NAS 上从 `git archive` 源码构建 `rui:0.7.0` 在 Dockerfile 第一个 apt 步骤失败：`deb.debian.org` 极慢/超时；`APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn`（host-only，sed 只替换主机名）后仍报 `xz-utils/pkg-config/nasm/libopus-dev/libmp3lame-dev` 无候选（apt update 只拿到部分索引）。源码在 NAS `~/rui-src-0.7.0`，日志 `/tmp/build-core.log`。**回退方案**：thin image = `FROM ghcr.io/yes999zc/rui:sha-615e682` + 覆盖 `site-packages/rui/**`（新 src）+ `web/dist`（本地 npm build）+ `plugs/xiaoai/plugin.yaml`，tag `rui:0.7.0`；或改用可用 apt 镜像后重试。下游 `~/dot2-src-1.3.0` 已同步（`c71deb6`）。
-
-- **构建/部署（授权）**：冻结后从 commit 构建核心 0.7.0 镜像 → 下游 `rui-dot2:0.7.0-a1p`（或正式 tag）→ NAS 168 recreate；真机验收由 9 哥 最后统一做（退下/空闲告别后连说 3 次「你好小瑞」、播放中打断、无自听循环）。
-- 生产：`rui-dot2:0.7.0-pre9-a1p`（旧核心 0.6.0 + 打补丁 process.py），待用正式 0.7.0 镜像替换。
-- 9 哥 授权（13:00）：**可随时用 NAS 部署、可推 GitHub**；最终统一做真机验收，不再逐项找 9 哥 测试。
-- 9 哥 观察（待最终验收确认）：显式「退下吧」可正常退下；**空闲告别（“我先下啦”）之后仍在监听**——待 task-9 部署后一起验证是否符合预期。
-
+- **版本**：rui **0.7.1**（commit `44cff05` + tag `v0.7.1`；0.7.0 = `e9db990` + tag `v0.7.0`）；dot2 **1.3.0**（`c71deb6` + `v1.3.0`）；xiaoai **0.2.0**（`fcff8eb` + `v0.2.0`）。三仓已 push。
+- **生产**（NAS 168，13:36 部署，healthy）：`rui-dot2:1.3.0-r071` = `sha256:252f568ca6b1d88aa2990e79856b7d8b143a7810bac452d294e9e5fcfbe7ecba`；核心 `rui:0.7.1-a1p` = `sha256:f446e348e871e11404cb7d081952b458750a6f4a6d6d45512f64551cfdd5285c`；底座 `ghcr.io/yes999zc/rui:sha-615e682`。容器内 `rui.__version__=0.7.1`、`vad.py` 含 `set_echo_reference`、`app.py` 含 `TURN_STALE_S`；设备 `dot2` 已重连。
+- **任务板**：completed = task-1/2/4/5/7/8/9/10/11；pending = task-3（B1/V0，BLOCKED，等中文模型/adb 决策）、task-6（Dot2 vs 小爱矩阵，并入最终验收）。
+- **门禁**：全部交付均 reviewer PASS + verifier VERIFIED；最终全量 house-ear **1523 passed / 17 skipped**、ruff 绿；dot2 **143 passed**；xiaoai **9 passed**。
+- **发布文档**：`docs/release/v0.7.0.md`（门禁矩阵 + DoD）、`docs/release/v0.7.1.md`（0.7.1 两个修复 + digest + 限制）、`docs/release/acceptance-4devices.md`（4 台接入 runbook）、`docs/audit/2026-10-code-health.md`（Top 10，2 条阻塞已修）。
+- **9 哥 授权**：可随时用 NAS 部署、可 push GitHub；最终统一做真机验收，不再逐项找 9 哥 测试。
+- **待确认的体验点**：空闲告别（“我先下啦”）后仍可被唤醒（预期行为，待最终验收确认）；显式「退下吧」后 3 连唤醒（task-9 修复，待真机确认）。
 
 ## P0 / 阻塞（2026-10-26 12:33，真机）
 
