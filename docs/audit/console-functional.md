@@ -495,6 +495,9 @@
 ```
 
 - 跟随跳转：15/15 最终 200，`<title>Rui · Console v2</title>`（无一条落回旧壳）；复现命令见 §9。
+- **`?from=` 目前仅作标记**：v2 不读取、不提示、不做跳转说明，只在地址栏保留；
+  `providers` / `system` / `channels` 三条没有 v2 页面的老链接跟随跳转后停在
+  设备页 `/v2/devices`（见 §8.9）。
 - 测试：`tests/test_legacy_links.py` 把上表逐条参数化（含查询串、tab 子路径、未知
   panel、`legacy` 模式 15 条 200 旧壳），`tests/test_console_switch.py` 覆盖默认值/回滚/`/health.console` 两态。
 
@@ -529,6 +532,15 @@
 - UI 的 `idCollision` 只在“params 已展开且 draft id 命中已有设备 / 设备以 edit 模式带 `device_id`”时出现；而 add 模式（已有设备）的 params 被 keys/models 门禁禁用，first-run（空屋）又没有同名设备。
 - 服务端冲突仍被覆盖：`POST /api/v2/devices` 同 id → 409 `device_exists`；`GET /setup/plan?device_id=<已有>` 返回 edit 模式。重复创建设有绕过风险，只影响向导里的“改名/修复”体验。
 - 本轮不补入口（改交互属 D/后续）；若 0.7.8 要让向导支持改名，需要给 params 一个可达路径。
+
+### 8.9 `?from=` 只是标记，v2 未消费（0.7.8）
+- 0.7.8 的 302 映射把 `providers`、`system`、`channels`（以及任何未知 panel id）送到
+  `/v2/?from=<旧路径>`，用于在地址栏留下来源。**v2 前端目前不读取这个参数**，不显示
+  「该页在 v2 暂无对应页面」之类的提示；`/v2/` 的 SPA redirect 会带着 query 进
+  `/v2/devices`，所以用户看到的是设备页。
+- 影响：这三条老书签不会 404、也不会落回旧壳，但用户需要自己从设备页/配置区找目标页。
+  0.8.0（删旧壳）之前若要更友好，可让 v2 识别 `from` 并给一条说明或历史页链接。
+- 记录位置：本文件 §8.2 与 `docs/release/v0.7.8.md` 的「已知限制」。
 
 ## 9. 关键证据与复现命令
 

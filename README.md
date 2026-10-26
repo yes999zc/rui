@@ -167,6 +167,8 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 
 Your existing speakers keep their own microphones and speakers, but wake words, dialogue, memory and music run on your own machine: one `rui` service plus one bridge plug per speaker model. The `/v2` console adds devices, edits configuration and shows logs and traces — no YAML editing required.
 
+![Console v2 · Devices page (local demo instance, sample data)](docs/assets/console-v2-devices.png)
+
 ```text
 "Hey Rui" → "I'm here" → "play some music" → "next" (while playing) → "stand down" → turn ends
 ```

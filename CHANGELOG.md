@@ -14,6 +14,149 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [0.7.8] - 2026-10-27
+
+**Theme: four cards in one release — the TLS install path, per-device plane
+visibility, the LX06 plug leaving core, and the v2 console becoming the default.
+No API contract change.**
+
+> **0.7.5–0.7.7 ship inside 0.7.8; none of them gets its own tag.** Their exit
+> conditions (Done 6 on hardware, the built-in-vs-external dual run, and the
+> upgrade/rollback pass) all need the complete 0.7.8 tree and one hardware window.
+> Tagging them after the fact would claim a verification that never happened.
+> **0.7.8 is the single acceptance node**; this section is the per-version record for
+> 0.7.5–0.7.8.
+>
+> （口径原文：0.7.5–0.7.7 的开发合并进 0.7.8，未单独发版；原因是它们的验收项依赖 0.7.8 的完整代码与真机窗口。）
+
+### 0.7.5 — TLS install path and per-device plane visibility
+
+**Added**
+
+- **TLS material ships with the two-speaker example** (`43d18df`):
+  `examples/two-speakers/compose.yaml` mounts `./secrets` at `/opt/rui-secrets`
+  (`DOT2_SECRETS_DIR`), `scripts/make_dev_tls.sh` self-signs `server.pem` /
+  `server.key`, and the install prompts of all three repos gained the TLS step.
+  When dot2's `listen_port` / `tls_port` is on, certs are mandatory: missing material
+  gives `audio_plane=false` with `missing TLS material`, not a silent half-start.
+- **Per-device plane visibility** (`5e16026`): `GET /health.planes` returns one row
+  per enabled device (`device`, `room`, `state` = `running|error|not_started`,
+  `reason` = `multi_device_disabled|plane_not_started|audio_not_started`, `error`,
+  `multi_device`); the old `audio_plane` boolean stays as the aggregate. `rui doctor`
+  warns when 2+ devices are enabled and `multi_device` is off ("only the first
+  configured device gets an audio plane; set `multi_device.enabled: true` and
+  `max_planes >= 2`"), and `config.example.yaml` carries the example. Contract C-002
+  A-8. 7 new tests; the 0.7.5 close-out baseline was **1659/17**.
+
+**Measured** (`258d72a`; `docs/audit/tls-required-2026-10.md`, three matrices × 2 runs)
+
+- dot2 with `tls_port` on and no `secrets/server.pem|key` → `audio_plane=false`,
+  first error `missing TLS material`.
+- lx06 + dot2 with no TLS and an empty `RUI_DEVICE_TOKEN` → `false`,
+  `RUI_DEVICE_TOKEN is empty` (the default single plane starts only the first
+  configured device).
+- Certs + both tokens, dot2 first → `true`, `dot2 link: wss listening on 8871`.
+- Self-signed only proves the audio plane can start; whether the speaker accepts it
+  depends on the CA the device trusts, and the original controller certificate cannot
+  be recreated.
+
+### 0.7.6 — the LX06 bridge leaves core
+
+**Changed**
+
+- **No in-repo device plug, no adapter alias module.** `plugs/xiaoai/` is gone
+  (moved to `tests/fixtures/legacy_lx06`, which is not shipped) and
+  `src/rui/adapter_aliases.py` is deleted (`c713916`). The Dockerfile no longer
+  `COPY plugs`; `/opt/rui-plugins` is owned by `rui:rui` and its writability is
+  checked at build time. The 0.7.6 B1a close-out baseline was **1654/17**.
+- **`adapter: xiaoai` migrates on load** (`c713916`): rewritten to `lx06` with a
+  deprecation WARNING, surfaced by `/health.adapter_plugins.warnings` and, per device,
+  as `legacy_adapter_spelling`. The default `adapter` is now `lx06` (same behaviour,
+  no warning). The compatibility module `rui/config/legacy_adapters.py` (old spellings
+  plus the implicit 4412 listen-port default) is the only file allowed to mention the
+  old names and is deleted in 0.8.0.
+- **Vendor wake-word fallback is data-driven** (`c2ed7fd`): the new optional
+  `devices[].wake_words_residual` list declares the phrases the device itself says;
+  ASR matching early-yields them. **Known behaviour change:** a manifest that does not
+  declare the field no longer early-yields vendor phrases — only `is_echo` / `is_noise`
+  apply. The built-in lx06 manifest declares three, so its behaviour is unchanged.
+  Documented in `docs/socket-plug-v1.md`.
+- **54 device-semantics tests moved to the bridge repo** (`300b2a9` / bridge
+  `575b443`), byte-identical: credit 5, device-services 7, kws 5, led 18, playback 1,
+  turn-audio 6, vendor 11, console-secret 1. Core went 1655/17 → **1612/6**; the bridge
+  suite went 44 → **87 passed / 11 skipped** (+54 collected); the 20 generic
+  `test_security_fixes` stay in core.
+
+**Verified**
+
+- Core grep gate `xiaoai|lx06|小爱|4412` over `src/**/*.py` is **0 hits** outside
+  `legacy_adapters.py` (re-run on this tree).
+
+### 0.7.7 — console audit (C)
+
+**Fixed** (`db179f8`)
+
+- **Element-by-element v2 audit**: **172 interaction rows / 159 usable / 12
+  unverified / 0 unusable** (172 = 159 usable + 1 copy-error row + 12 unverified +
+  0 unusable), 4 instances, 76 screenshots, no real device and no sound
+  (`docs/audit/console-functional.md`). Four copy/validation groups fixed: setup
+  first-run copy claiming an empty house, the stale legacy-console hint,
+  dead `v2.config.stub*` i18n keys, and seven Chinese validation messages on device
+  writes turned into English technical sentences per C-002 §4.4.
+
+### 0.7.8 — the v2 console becomes the default (D)
+
+**Changed** (`efab571`)
+
+- **`web.console` defaults to `v2`.** A fresh install — and **an existing
+  `config.yaml` that never wrote a `console` key — now silently serves v2 at `/`**
+  (302 to `/v2/`, query preserved). Nothing in the config file changes; only the
+  landing page does. `config.example.yaml` and `src/rui/config/template.yaml` now
+  spell `console: v2` out. `CONFIG_VERSION` stays 3 and the contract window stays
+  `>=0.6.0 <0.8.0`.
+- **The 15 old console links answer 302 instead of the old shell**
+  (`/panel/overview` … `/panel/music`, plus `/setup`, `/secrets`, `/diagnostics`,
+  `/channels`). Mapping table and per-link evidence: `docs/audit/console-functional.md`
+  §8.2; implementation `src/rui/web/api/legacy_links.py`. The three v1 pages v2 does
+  not have yet (`providers`, `system`, `channels`) land on `/v2/?from=<old path>`,
+  which the v2 SPA does not consume today (it redirects to `/v2/devices`).
+- **The old console is now `/legacy` and marked deprecated.** A bilingual banner at
+  the top says it is removed in 0.8.0; the shell is otherwise unchanged. With
+  `web.console: legacy`, `/` and all 15 old links keep answering the old shell — that
+  is the one-release rollback.
+- **Docs**: `docs/deploy.md` §3.8 rewritten for the new default; README zh/en heroes
+  both show the v2 devices page.
+
+**Added**
+
+- **Tests**: `tests/test_legacy_links.py` (the 15-path matrix plus query strings, tab
+  sub-paths, unknown panel ids and the `legacy`-mode 200s) and an updated
+  `tests/test_console_switch.py` (default v2, rollback, `/health.console` in both
+  modes, shipped config examples).
+
+### Evidence (final tree)
+
+- house-ear **1642 passed / 6 skipped**; `ruff check .` green; `cd web && npm run
+  typecheck && npm run build` green; `git diff --check` clean.
+- Gates: 0.7.5 task-9/10/11 **PASS + VERIFIED**; 0.7.6 task-12/13/14 **PASS +
+  VERIFIED**; 0.7.7 audit **PASS + VERIFIED** (reviewer-audit rounds R1/R2 closed);
+  0.7.8 task-17 reviewer-d **PASS** + verifier-tests **VERIFIED** (`efab571`).
+- Rollback verified live: with `web.console: legacy`, `/health.console = legacy` and
+  `/` plus all 15 old links return 200 with the old shell (no redirect).
+
+### Known limitations
+
+- `providers`, `system` and `channels` have no v2 page in 0.7.8; their old links stop
+  at the device page with `?from=` in the URL (marker only, not consumed — audit §8.9).
+- Unchanged from 0.7.4: cue-echo edges, the single-session runner, non-recallable
+  goodbye tails, per-room wake words, concurrent multi-device untested.
+- Unchanged from the 0.7.7 audit: music credentials on a non-writable path return 500
+  (conditional); v1-only gaps (phrase editor, provider cards/audition, music playback
+  buttons, system/web/security fields, channels, tool registry, device probe) stay out
+  of v2 for now; the setup id-collision editor is unreachable in the normal flow.
+- From 0.7.6: a third-party manifest that omits `wake_words_residual` may let vendor
+  phrases into a turn (see the behaviour change above).
+
 ## [0.7.4] - 2026-10-26
 
 **Theme: P0/P1 fixes. One new status code (413); no other contract change.**

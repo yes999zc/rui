@@ -633,42 +633,50 @@ doctor 里的三行（`docker compose exec -T rui rui doctor`，或控制台「�
   命令，**不打印 token 值**。容器里通常看不到宿主机的 `console-token.txt`（它不是挂载卷），
   可设 `RUI_CONSOLE_TOKEN_FILE=/path/to/console-token.txt` 指向一份可读副本。
 
-### 3.8 切换控制台（legacy / v2）
+### 3.8 控制台入口（v2 默认 / legacy 回滚）
 
-`web.console` 决定打开服务器根地址 `/` 时进入哪套控制台。默认 **`legacy`**（旧控制台），
-v2 仍在 `/v2` 上并行可访问。
+`web.console` 决定打开服务器根地址 `/` 时进入哪套控制台。**0.7.8 起默认 `v2`**：全新
+安装和没写这个键的老配置，`/` 都会 302 到 `/v2/`。旧控制台降级到 `/legacy`，顶部带
+中英弃用横幅（**0.8.0 移除**），`/legacy` 下的路由与深链行为与 0.6 完全一致（只多一条弃用横幅）。
 
 | 取值 | `/` | 旧控制台 | v2 控制台 | `/health.console` |
 |---|---|---|---|---|
-| `legacy`（默认） | 旧控制台 | `/`（以及 `/legacy`） | `/v2` | `legacy` |
-| `v2` | **302 → `/v2/`**（保留 query） | **只在 `/legacy`**（`/legacy/panel/...` 深链可用） | `/v2` | `v2` |
+| `v2`（默认） | **302 → `/v2/`**（保留 query） | **只在 `/legacy`**（`/legacy/panel/...` 深链可用） | `/v2` | `v2` |
+| `legacy`（一版回滚，0.8.0 移除） | 旧控制台 | `/`（以及 `/legacy`） | `/v2` | `legacy` |
 
 ```yaml
 web:
-  console: v2        # legacy（默认）| v2
+  console: v2        # v2（默认）| legacy（一版回滚，0.8.0 移除）
 ```
 
-切换是配置 + 重启，不需要新镜像（先在 NAS 安装目录备份配置）：
+全新安装不用改任何东西；确认线上入口只认 `/health.console`（不要凭浏览器缓存或书签
+推断），根地址本身也能看出来：
+
+```bash
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8080/  # v2: 302 /v2/
+curl -s http://127.0.0.1:8080/health | jq -r .console                            # 期望 "v2"
+```
+
+**行为变更（0.7.8）**：老书签 `/panel/<id>`（11 条）以及 `/setup`、`/secrets`、`/diagnostics`、
+`/channels` 共 15 条，现在 **302 到对应 v2 页面**（`/panel/turns` → `/v2/conversation` 等），
+不再落回旧壳；v2 暂无对应页的 `providers` / `system` / `channels` 落 `/v2/?from=<旧路径>`
+（目前只是标记，v2 未消费，SPA 会进设备页）。映射表与逐条实测见
+[`docs/audit/console-functional.md`](audit/console-functional.md) §8.2。
+
+回滚一行（配置 + 重启，不需要新镜像；先备份配置）：
 
 ```bash
 cp ~/rui/config/config.yaml ~/rui/config/config.yaml.bak.$(date +%Y%m%d-%H%M%S)
-sed -i 's/^  console: .*/  console: v2/' ~/rui/config/config.yaml   # 没有该行就手动加到 web: 块
-docker compose up -d --force-recreate
-curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8080/  # v2: 302 /v2/
-curl -s http://127.0.0.1:8080/health | jq -r .console             # 线上实际入口，不会撒谎
+sed -i 's/^  console: .*/  console: legacy/' ~/rui/config/config.yaml   # 没有该行就手动加到 web: 块
+cd ~/rui && docker compose up -d --force-recreate
+curl -s http://127.0.0.1:8080/health | jq -r .console                            # 期望 "legacy"
 ```
 
-回滚一行（旧壳一直挂在 `/legacy`，`legacy` 下 `/` 行为与 0.6 完全一致）：
-
-```bash
-sed -i 's/^  console: .*/  console: legacy/' ~/rui/config/config.yaml && docker compose up -d --force-recreate
-```
-
-> **v2 未验收前不要切默认。** 等 9 哥 本人试过 `/v2` 的全部页面（设备增删改、音频覆盖、
-> 向导、运行/配置页）并确认后，再把 `web.console` 改成 `v2`。
-> `console` 是 0.7 新增字段，`CONFIG_VERSION` 不变；旧镜像读到 `console: v2` 会忽略该键
-> （按 legacy 运行），所以回滚到 0.6.x 也不用改配置文件。判断线上入口只认
-> `/health.console`，不要凭浏览器缓存或书签推断。
+> **兼容窗口**：`console` 是 0.7 新增字段，`CONFIG_VERSION` 不变。0.7.x 镜像都读这个键
+> （`v2` / `legacy` 两值从 0.7.0 起就存在）；只有 **0.6.x 及更早**的镜像会忽略它、按旧壳
+> 运行，所以从 0.7.8 回滚到 0.6.x 时也不用改配置文件。
+> v2 的验收记录（172 行交互 / 0 不可用）在 `docs/audit/console-functional.md`，0.7.8 的
+> 评审与验证结论在 `docs/release/v0.7.8.md`。
 
 ## 4. 音乐：Navidrome
 

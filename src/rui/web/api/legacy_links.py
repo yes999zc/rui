@@ -28,10 +28,11 @@ from fastapi.responses import RedirectResponse, Response
 
 V2_HOME = "/v2/"
 
-# The eleven v1 panel ids (`_build_panels` in app.py) that have a v2 destination.
-# `providers` and `system` are deliberately absent: v2 has no provider cards/
-# audition and no system/web/security editor yet (`console-functional.md` §8.3,
-# rows 6-7/19), so they take the `?from=` landing rather than a wrong page.
+# The nine of the eleven v1 panel ids (`_build_panels` in app.py) that have a v2
+# destination. `providers` and `system` are deliberately absent: v2 has no provider
+# cards/audition and no system/web/security editor yet
+# (`console-functional.md` §8.3, rows 6-7/19), so they take the `?from=` landing
+# rather than a wrong page.
 PANEL_TARGETS: dict[str, str] = {
     "overview": "/v2/run",
     "devices": "/v2/devices",
