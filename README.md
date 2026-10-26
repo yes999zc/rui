@@ -67,7 +67,7 @@
 2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) 写 ./config/config.yaml：web.auth_token、devices[]（id/adapter/room/host/listen_port；lx06 的 host 必填）
-5) TLS（dot2 的 tls_port 开启时必需）：把原 controller 证书放到 ./secrets/（server.pem + server.key）；没有就运行 `bash ../../scripts/make_dev_tls.sh` 自签。自签只保证音频平面能起，真机是否接受取决于设备信任的 CA（详见 `docs/audit/tls-required-2026-10.md`）
+5) TLS（dot2 的 tls_port 开启时必需）：把原 controller 证书放到 ./secrets/（server.pem + server.key）；没有就运行 `bash ../../scripts/make_dev_tls.sh` 自签。自签只保证音频平面能起，真机是否接受取决于设备信任的 CA（详见 `docs/audit/tls-required-2026-10.md`）。**默认只起第一台设备的平面；两台都起需在 config 设 `multi_device: {enabled: true, max_planes: 2}`**
 6) export RUI_DEVICE_TOKEN=<设备令牌>; docker compose up -d
 7) 验收：/health 里 devices=2、device_errors=0、adapter_plugins.registered=["dot2","lx06"]；audio_plane=false 时看日志的 RUI_DEVICE_TOKEN / missing TLS material
 失败看：docker compose logs --tail=80 rui 的 config error / adapter / TLS；回滚：down 后把 image 换回上一版 tag；TLS 失败可先移走 ./secrets/ 确认是否 TLS 引起
@@ -125,7 +125,11 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 {'status': 'ok', 'version': '0.7.2', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
 ```
 
-如实说明：`adapter_plugins.registered`、`devices`、`device_errors` 在任何情况下都成立。**`audio_plane` 取决于设备令牌**：设了 `RUI_DEVICE_TOKEN` 后实测为 `true`；不设时为 `false`，日志是 `RUI_DEVICE_TOKEN is empty`。TLS 材料（`secrets/server.pem|key`）与音频平面启动的关系**以实测为准**：见 `docs/audit/tls-required-2026-10.md` 的三组矩阵（①只挂 dot2 无 secrets、②两桥无 secrets、③两桥有自签 secrets）。自签只解决「平面能起」，真机是否接受取决于设备信任的 CA；原 controller 证书丢失时设备需重新配网。
+如实说明：`adapter_plugins.registered`、`devices`、`device_errors` 在任何情况下都成立。**`audio_plane` 取决于「哪台设备的平面被启动」**（实测见 `docs/audit/tls-required-2026-10.md`）：
+- **默认 `multi_device.enabled=false`：单平面，只启动配置里的第一台设备**。第一台是 dot2（`listen_port` 即 `tls_port`）且 `secrets/server.pem|key` 缺失 → `audio_plane=false`，日志 `missing TLS material`；有证书（原证书或自签）→ `true`，`wss listening`。第一台是 xiaoai 且 `RUI_DEVICE_TOKEN` 为空 → `false`，日志 `RUI_DEVICE_TOKEN is empty`。
+- **两台都起：需 `multi_device.enabled=true` 且 `max_planes >= 2`**，按台起平面、单台失败不拖垮其他；本卡实测的是默认单平面。
+- 两个 token + 证书齐备、dot2 在前时实测 `audio_plane=true`。
+自签只解决「平面能起」，真机是否接受取决于设备信任的 CA；原 controller 证书丢失时设备需重新配网。
 
 ## 故障排查
 
@@ -206,7 +210,7 @@ Preflight: docker compose version; port 8080 free; 5 GB disk.
 2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) write ./config/config.yaml: web.auth_token and devices[] (id/adapter/room/host/listen_port; host required for lx06)
-5) TLS (required when dot2's tls_port is on): put the original controller cert into ./secrets/ (server.pem + server.key); if you do not have it, run `bash ../../scripts/make_dev_tls.sh`. Self-signed only proves the audio plane starts; whether the device accepts it depends on its trusted CA (see `docs/audit/tls-required-2026-10.md`)
+5) TLS (required when dot2's tls_port is on): put the original controller cert into ./secrets/ (server.pem + server.key); if you do not have it, run `bash ../../scripts/make_dev_tls.sh`. Self-signed only proves the audio plane starts; whether the device accepts it depends on its trusted CA (see `docs/audit/tls-required-2026-10.md`). **By default only the first configured device gets a plane; to run both, set `multi_device: {enabled: true, max_planes: 2}` in the config**
 6) export RUI_DEVICE_TOKEN=<device token>; docker compose up -d
 7) verify: /health shows devices=2, device_errors=0, adapter_plugins.registered=["dot2","lx06"]; if audio_plane=false read the log for RUI_DEVICE_TOKEN / missing TLS material
 On failure: docker compose logs --tail=80 rui (config error / adapter / TLS); rollback: down, switch image back; for TLS failures move ./secrets/ away first to isolate
@@ -264,7 +268,11 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 {'status': 'ok', 'version': '0.7.2', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
 ```
 
-To be precise: `adapter_plugins.registered`, `devices` and `device_errors` always hold. **`audio_plane` depends on the device token**: with `RUI_DEVICE_TOKEN` set it measured `true`; without it, `false` with `RUI_DEVICE_TOKEN is empty`. The relation between TLS material (`secrets/server.pem|key`) and plane startup is **decided by measurement**: see the three matrices in `docs/audit/tls-required-2026-10.md` (① dot2 only, no secrets; ② both bridges, no secrets; ③ both bridges with self-signed secrets). Self-signed only makes the plane start; real-device acceptance depends on the device's trusted CA, and a lost original controller certificate means the device must be re-provisioned.
+To be precise: `adapter_plugins.registered`, `devices` and `device_errors` always hold. **`audio_plane` depends on which device's plane is started** (measured; see `docs/audit/tls-required-2026-10.md`):
+- **Default `multi_device.enabled=false`: one plane, only the first configured device.** dot2 first (`listen_port` is `tls_port`) without `secrets/server.pem|key` → `audio_plane=false`, log `missing TLS material`; with a certificate (original or self-signed) → `true`, `wss listening`. xiaoai first with an empty `RUI_DEVICE_TOKEN` → `false`, log `RUI_DEVICE_TOKEN is empty`.
+- **Both devices: set `multi_device.enabled=true` and `max_planes >= 2`**; each device gets a plane and one failure does not take down the others. This card measured the default single-plane path.
+- With both tokens and the certificate, dot2 first, the measured value is `audio_plane=true`.
+Self-signed only makes the plane start; real-device acceptance depends on the device's trusted CA, and a lost original controller certificate means the device must be re-provisioned.
 
 ## Troubleshooting
 

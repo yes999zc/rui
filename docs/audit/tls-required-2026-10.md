@@ -1,78 +1,133 @@
-# TLS 是否必需：三组安装矩阵（0.7.5，方法与预期）
+# TLS 是否必需：三组安装矩阵实测（0.7.5）
 
-> 状态：**方法已定，实测待下一张卡执行**（夜间纪律：不起容器、不拉镜像、不碰真机、不出声）。
-> 本文只定义「怎么测、看什么、怎么判」，不替实测下结论。
-> 相关事实：`rui-dot2-bridge/src/rui_dot2_bridge/device_link.py:261`（`tls_port` 开启时要求
-> `secrets/server.pem|key`，缺失抛 `RuntimeError: missing TLS material`）；`adapter.py:953`
-> 读 `DOT2_SECRETS_DIR`（compose 挂到 `/opt/rui-secrets`）。`examples/two-speakers/compose.yaml`
-> 本版已加 `./secrets:/opt/rui-secrets:ro` + `DOT2_SECRETS_DIR`。
+> 状态：**已实测**（2026-10-26，本地容器；不接真机、不出声）。
+> 镜像：`ghcr.io/yes999zc/rui:0.7.4`，digest **`sha256:de26c5bacc00fbbb807da11d9eb1d7427125aab154703997d5a0131c23d8e749`**。
+> 配置模板：`examples/two-speakers/`；设备为测试地址（`192.0.2.x`），无真实设备。
+> 复现命令见文末；本文所有结论都来自下面 6 次实跑。
+
+## 结论（可判定）
+
+**dot2 平面在 `listen_port`（= `tls_port`）开启时必须有 `server.pem`/`server.key`；缺失则 `audio_plane=false`，错误为 `missing TLS material`。**
+
+**平面数量取决于 `multi_device`**：
+
+- **默认 `multi_device.enabled=false`**：单个 `AudioPlaneSupervisor` + `_pick_device()` 只启动**配置里第一台**设备（`app.py:3077`、`schema.py:1067`）。因此第一台是谁决定先暴露哪个错误：xiaoai 在前且 `RUI_DEVICE_TOKEN` 为空 → `RUI_DEVICE_TOKEN is empty`；dot2 在前且无证书 → `missing TLS material`。
+- **`multi_device.enabled=true`**：`_start_fleet` 按 `max_planes` 为每台设备起一个平面，单台失败不拖垮其他（`app.py:2965-2999`、`fleet.py:140-146`）；两台都起需 `max_planes >= 2`。
+
+证书 + 两个 token 齐备、且 dot2 在前（默认单平面）时 → `audio_plane=true`，dot2 `wss listening on 8871`。
 
 ## 必须写清的风险句
 
 **自签证书只解决「音频平面能启动」；真机是否接受，取决于设备信任的 CA，自签不能保证。**
 设备以固定 ServerName `echomuse-controller` 校验；原 controller 证书无法重建，丢失时设备需要重新配网。
-因此本矩阵即使三组全绿，也只能说明「平面侧不缺材料」，不能说明「真机链路可用」。
+本矩阵只证明「平面侧不缺材料」，不证明「真机链路可用」。
 
-## 三组矩阵
+## 实测结果（每组 2 次）
 
-统一前置：
+环境：同一台 Mac、同一镜像 digest；`docker run` 映射 18081–18086；每次 `down` 后重建 data 目录。
+`/health` 取 `devices` / `device_errors` / `audio_plane` / `adapter_plugins`；日志取第一条相关错误。
 
-- 同一台机器、同一份 `examples/two-speakers/`、同一镜像 digest（记录 `docker image inspect` 的 RepoDigests）。
-- 配置里 dot2 设备**开启 `tls_port`**（例如 4433），并设 `DOT2_EM_TOKEN`；lx06 按需配置。
-- 每组开始前 `docker compose down`，清理 `./secrets/`（除非该组要求有证书）。
-- 观察点：`docker compose up -d` 退出码、`docker compose logs rui` 中 `missing TLS material`/`audio_plane` 行、
-  `curl -s localhost:8080/health` 的 `audio_plane`、`adapter_plugins`、`device_errors`。
-- 每组重复 2 次（排除首次拉镜像/初始化噪声），记录两次是否一致。
+| 组 | 设备顺序 | secrets | token | devices | device_errors | audio_plane | registered | 第一错 |
+|---|---|---|---|---:|---:|---|---|---|
+| ①-a | dot2 | 无 | DOT2 有 / RUI 空 | 1 | 0 | **false** | dot2, lx06 | `missing TLS material: secrets/server.pem / secrets/server.key` |
+| ①-b | dot2 | 无 | 同上 | 1 | 0 | **false** | dot2, lx06 | 同上 |
+| ②-a | lx06, dot2 | 无 | DOT2 有 / RUI 空 | 2 | 0 | **false** | dot2, lx06 | `RUI_DEVICE_TOKEN is empty: refusing to accept an unauthenticated speaker connection`（lx06 先启动） |
+| ②-b | lx06, dot2 | 无 | 同上 | 2 | 0 | **false** | dot2, lx06 | 同上 |
+| ③-a | dot2, lx06 | 自签 | 两个都有 | 2 | 0 | **true** | dot2, lx06 | 无；dot2 `wss listening on 8871` |
+| ③-b | dot2, lx06 | 自签 | 两个都有 | 2 | 0 | **true** | dot2, lx06 | 同上 |
 
-### 矩阵 ①：只挂 dot2（`tls_port` 开启），无 secrets
+> 以上 6 次均为**默认 `multi_device.enabled=false`（单平面）**；`devices` 数量来自配置，`audio_devices` 里只有第一台有 `running/error` 状态。两台都起需启用 `multi_device`，不在本卡实测范围。
 
-| 项 | 内容 |
-|---|---|
-| 文件 | 只保留 `plugins/rui_dot2_bridge`；`./secrets/` 不存在或为空 |
-| 命令 | `docker compose up -d`；`docker compose logs --tail=120 rui`；`curl -s localhost:8080/health` |
-| 预期（待实测） | 平面启动失败或 `audio_plane=false`，日志出现 `missing TLS material`（若实际为 true，则说明 TLS 不是启动必需，需改 README 表述） |
-| 判定 | 以日志与 `/health` 为准；只记录，不调设备 |
+关键日志（原样）：
 
-### 矩阵 ②：两桥都挂，无 secrets
+- ①：`RuntimeError: missing TLS material: secrets/server.pem / secrets/server.key`，`audio plane refused: missing TLS material`
+- ②：`RuntimeError: RUI_DEVICE_TOKEN is empty: refusing to accept an unauthenticated speaker connection`
+- ③：`dot2 link: wss listening on 8871`；`/health` 的 `audio_devices[0] = {id: dot2, running: true, error: ""}`
 
-| 项 | 内容 |
-|---|---|
-| 文件 | `plugins/` 同时含 `rui_dot2_bridge` 与 `rui_xiaoai_bridge`；`./secrets/` 为空 |
-| 命令 | 同 ①；额外看 `adapter_plugins.registered` 是否含 `["dot2","lx06"]` |
-| 预期（待实测） | 与 ① 相同（dot2 仍因 TLS 失败）；lx06 不应因 dot2 的 TLS 缺失而被拖垮，需看日志归属 |
-| 判定 | 分清「dot2 平面失败」与「整个 audio_plane 失败」；记录 `device_errors` |
+## 复现命令（可直接执行）
 
-### 矩阵 ③：两桥都挂，有自签 secrets
+> 下面假设三个仓都在同一父目录；先进入 house-ear 根目录，再显式取三个绝对路径，不依赖 cwd。
+> 容器名固定 `rui-tls-1/2/3`，端口 `18081/18082/18083`；每组可重复执行（先 `down`）。
 
-| 项 | 内容 |
-|---|---|
-| 文件 | `plugins/` 两桥；`./secrets/server.pem` + `server.key` 由 `bash scripts/make_dev_tls.sh` 生成（SAN=`DNS:echomuse-controller`） |
-| 命令 | `bash scripts/make_dev_tls.sh`（在 `examples/two-speakers/` 下用 `bash ../../scripts/make_dev_tls.sh`）→ `docker compose up -d` → `docker compose logs --tail=120 rui` → `curl -s localhost:8080/health` |
-| 预期（待实测） | 平面可启动（`audio_plane=true`）；日志无 `missing TLS material`；真机是否连上**不在本组判定**（需白天的真机项） |
-| 判定 | 只判「平面启动」；真机信任另立真机卡，按 §风险句记录 |
+```bash
+cd /path/to/01_Code/projects/house-ear      # 换成你的 house-ear 根目录
+HOUSE=$(pwd)
+DOT2=$(cd ../rui-dot2-bridge && pwd)
+XIAO=$(cd ../rui-xiaoai-bridge && pwd)
+T=/tmp/rui-tls-matrix
+docker pull ghcr.io/yes999zc/rui:0.7.4
+rm -rf "$T"; mkdir -p "$T"/{config,data-1,data-2,data-3,plugins,secrets}
 
-## 记录表（每组一行）
+# 插件：dot2 包 + xiaoai 包 + xiaoai 的 plugin.yaml/devices（缺失会报 no plug manifest）
+cp -r "$DOT2/src/rui_dot2_bridge" "$T/plugins/"
+cp -r "$HOUSE/plugs/xiaoai/xiaoai_plug" "$T/plugins/"
+cp "$HOUSE/plugs/xiaoai/plugin.yaml" "$T/plugins/"
+cp -r "$HOUSE/plugs/xiaoai/devices" "$T/plugins/"
 
-| 组 | 日期 | 镜像 digest | secrets | up 退出码 | audio_plane | registered | device_errors | 日志关键行 | 结论 |
-|---|---|---|---|---|---|---|---|---|---|
-| ① |  |  | 无 |  |  |  |  |  |  |
-| ② |  |  | 无 |  |  |  |  |  |  |
-| ③ |  |  | 自签 |  |  |  |  |  |  |
+# 三份最小配置（multi_device 默认关闭 = 单平面只起第一台）
+cat > "$T/config/config-1.yaml" <<'YAML'
+version: 2
+system: {data_dir: /var/lib/rui, log_level: info, timezone: Asia/Shanghai}
+web: {host: 0.0.0.0, port: 8080, auth_token: "test-token"}
+devices:
+  - {id: dot2, adapter: dot2, host: 192.0.2.10, room: Lab, listen_port: 8871, token_env: DOT2_EM_TOKEN}
+YAML
 
-判定规则：
+cat > "$T/config/config-2.yaml" <<'YAML'
+version: 2
+system: {data_dir: /var/lib/rui, log_level: info, timezone: Asia/Shanghai}
+web: {host: 0.0.0.0, port: 8080, auth_token: "test-token"}
+devices:
+  - {id: lx06, adapter: lx06, host: 192.0.2.11, room: Lab2, listen_port: 8872, token_env: RUI_DEVICE_TOKEN}
+  - {id: dot2, adapter: dot2, host: 192.0.2.10, room: Lab, listen_port: 8871, token_env: DOT2_EM_TOKEN}
+YAML
 
-1. 只有 ③ 出现 `audio_plane=true` 且日志无 `missing TLS material`，才能写「TLS 材料是平面启动前提」。
-2. 若 ①/② 也 `audio_plane=true`，说明当前构建并不要求 TLS 才能起平面；README 与 HANDOFF 的表述按此统一。
-3. 若 ③ 仍失败，先看是证书路径/权限（`/opt/rui-secrets` 只读、`server.key` 600）还是 SAN/ServerName 不匹配，再决定是否改脚本。
-4. 真机连不上不属于本矩阵失败；按风险句记录「设备不信任自签 CA」。
+# ③ 与 ② 同设备，但顺序换成 dot2 在前（让单平面先起 dot2 以验证 TLS）
+cat > "$T/config/config-3.yaml" <<'YAML'
+version: 2
+system: {data_dir: /var/lib/rui, log_level: info, timezone: Asia/Shanghai}
+web: {host: 0.0.0.0, port: 8080, auth_token: "test-token"}
+devices:
+  - {id: dot2, adapter: dot2, host: 192.0.2.10, room: Lab, listen_port: 8871, token_env: DOT2_EM_TOKEN}
+  - {id: lx06, adapter: lx06, host: 192.0.2.11, room: Lab2, listen_port: 8872, token_env: RUI_DEVICE_TOKEN}
+YAML
 
-## 本卡不做
+# ③ 的自签证书（SAN=DNS:echomuse-controller）
+bash "$HOUSE/scripts/make_dev_tls.sh" "$T/secrets"
 
-- 不启动容器、不拉镜像、不接真机、不让设备出声（夜间纪律）。
-- 不修改 `src/` 行为、不动版本号/契约窗口。
-- 不在本文件写任何 digest/镜像 tag 占位符；实测时回填真实值。
+common=(-v "$T/plugins:/opt/rui-plugins:ro" -e RUI_CONFIG=/config/config.yaml
+  -e PYTHONPATH=/opt/rui-plugins
+  -e RUI_ADAPTER_PLUGINS='dot2=rui_dot2_bridge.adapter:build,lx06=xiaoai_plug.adapter:build')
 
-## 后续
+# ① dot2 only，无 secrets
+docker run -d --name rui-tls-1 -p 18081:8080   -v "$T/config/config-1.yaml:/config/config.yaml:ro" -v "$T/data-1:/var/lib/rui"   "${common[@]}" -e DOT2_EM_TOKEN=testtoken -e RUI_DEVICE_TOKEN=   ghcr.io/yes999zc/rui:0.7.4
 
-- 下一张卡按本文件执行 ①②③，把结果填进记录表，并据结论修订 house README 的 TLS 段。
-- 真机接受度单独一张卡（白天），判据是「设备能完成唤醒→指令→播放」，不是 `/health`。
+# ② 两桥，无 secrets（lx06 在前 -> 先报 token 错）
+docker run -d --name rui-tls-2 -p 18082:8080   -v "$T/config/config-2.yaml:/config/config.yaml:ro" -v "$T/data-2:/var/lib/rui"   "${common[@]}" -e DOT2_EM_TOKEN=testtoken -e RUI_DEVICE_TOKEN=   ghcr.io/yes999zc/rui:0.7.4
+
+# ③ 两桥 + 自签 + 两个 token（dot2 在前 -> 验证 TLS 可起）
+docker run -d --name rui-tls-3 -p 18083:8080   -v "$T/config/config-3.yaml:/config/config.yaml:ro" -v "$T/data-3:/var/lib/rui"   -v "$T/secrets:/opt/rui-secrets:ro" "${common[@]}"   -e DOT2_EM_TOKEN=testtoken -e RUI_DEVICE_TOKEN=testtoken   -e DOT2_SECRETS_DIR=/opt/rui-secrets   ghcr.io/yes999zc/rui:0.7.4
+
+sleep 7
+for n in 1 2 3; do
+  echo "== rui-tls-$n"
+  curl -s -H 'X-Auth-Token: test-token' "localhost:1808$n/health"     | python3 -c 'import json,sys;d=json.load(sys.stdin);print({k:d[k] for k in ("devices","device_errors","audio_plane","adapter_plugins")});print([(x["id"],x["running"],x["error"][:100]) for x in d["audio_devices"]])'
+  docker logs "rui-tls-$n" 2>&1 | grep -iE "missing TLS|is empty|listening on" | head -3
+done
+
+# 清理
+docker rm -f rui-tls-1 rui-tls-2 rui-tls-3
+rm -rf "$T"
+```
+
+> 若要两台都起：配置加 `multi_device: {enabled: true, max_planes: 2}`，再重复 ③；默认单平面只起第一台。
+
+## 与 README/HANDOFF 的统一表述（建议句）
+
+> 「dot2 的 `listen_port`/`tls_port` 开启时，`secrets/server.pem|key` 是音频平面启动前提；缺它 `/health` 的 `audio_plane=false`，日志为 `missing TLS material`。默认 `multi_device.enabled=false` 时只启动配置里的第一台设备；两台都起需 `multi_device.enabled=true` 且 `max_planes >= 2`。自签只保证平面启动，真机是否接受取决于设备信任的 CA（实测见 `docs/audit/tls-required-2026-10.md`）。」
+
+## 本卡不做 / 清理
+
+- 不接真机、不调 TTS/音乐/唤醒、不出声；未验证真机接受度。
+- 测试容器 `rui-tls-1/2/3`（每组建 1 个、共 6 次实跑）与 `/tmp/rui-tls-matrix` 已删除；仓库无 secrets/缓存残留。
+- 未改 `src/`、版本号、契约窗口。
