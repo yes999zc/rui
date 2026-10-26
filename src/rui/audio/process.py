@@ -1914,6 +1914,12 @@ class AudioPlane:
             # A barge played no cue, so there is nothing to skip: holding here would swallow
             # the first words of the sentence the barge interrupted.
             if not barge:
+                # Hand the gate the cue we are about to play. A device's playback latency
+                # can push the cue past the skip window; the gate then measures how much
+                # was still unplayed and drops only that tail (2026-10-26 12:33: the
+                # replayed 「在呢」 echo opened a turn). A device that mutes its microphone
+                # during the cue simply matches nothing.
+                self.gate.set_echo_reference(audio, self.cfg.audio.playback.rate)
                 self.gate.hold(hold_ms, skip_ms=min(hold_ms, cue_ms + ACK_TAIL_MS))
 
         if audio.size:

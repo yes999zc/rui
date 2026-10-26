@@ -95,6 +95,7 @@ class RecordingGate:
         self.fed = 0
         self.interrupted = 0
         self.speech_ms = 0.0
+        self.echo_reference = None
 
     def arm(self, **_kwargs) -> None:
         self.armed = True
@@ -102,6 +103,9 @@ class RecordingGate:
 
     def hold(self, ms: float, skip_ms: float = 0.0) -> None:  # noqa: ARG002
         self.holds.append(ms)
+
+    def set_echo_reference(self, samples, rate: int) -> None:  # noqa: ARG002
+        self.echo_reference = samples
 
     def feed(self, pcm: bytes, ts_ms: float = 0.0):  # noqa: ARG002
         self.fed += len(pcm)
@@ -131,6 +135,8 @@ def test_a_barge_wake_does_not_play_the_cue(monkeypatch) -> None:
     calls, render = fake_ack()
     monkeypatch.setattr(process, "render_ack", render)
     plane, adapter = make_plane()
+    gate = RecordingGate()
+    plane.gate = gate
     queue_seconds(plane, 2.0)
 
     frames = run_wake_and_settle(plane)
@@ -144,6 +150,8 @@ def test_a_barge_wake_does_not_play_the_cue(monkeypatch) -> None:
     assert wake["ack_mode"] == "none", "the wake event must report that no cue played"
     assert plane._wake_hold_until == 0.0, "the ack hold was opened for a cue-less barge"
     assert plane._mic_mute_until == 0.0, "the barge opened a post-playback mute window"
+    assert gate.echo_reference is None, "a cue-less barge handed the gate a reference"
+    assert gate.holds == [], "a cue-less barge opened a gate hold"
 
 
 def test_a_quiet_wake_still_plays_the_cue(monkeypatch) -> None:
@@ -151,6 +159,8 @@ def test_a_quiet_wake_still_plays_the_cue(monkeypatch) -> None:
     calls, render = fake_ack()
     monkeypatch.setattr(process, "render_ack", render)
     plane, adapter = make_plane()
+    gate = RecordingGate()
+    plane.gate = gate
 
     frames = run_wake_and_settle(plane)
 
@@ -162,6 +172,11 @@ def test_a_quiet_wake_still_plays_the_cue(monkeypatch) -> None:
     assert wake["barge"] is False
     assert wake["ack_mode"] == "earcon"
     assert plane._wake_hold_until > time.monotonic(), "the cue hold is missing"
+    # The gate must know which cue it is hearing, or it cannot tell its echo from a
+    # person when the device plays it late.
+    assert gate.echo_reference is not None
+    assert len(gate.echo_reference) > 0
+    assert gate.holds and gate.holds[0] > 0
 
 
 def test_a_barge_does_not_extend_the_cue_hold() -> None:

@@ -54,6 +54,13 @@ class GateConfig:
     max_utterance_ms: int = 45000     # old build: 45 s, one 43.28 s segment measured
     max_wait_ms: int = 5000           # wake with nothing said: give up
     threshold: float = 0.5
+    # Cue-echo alignment (see `UtteranceGate.set_echo_reference`): envelope block size,
+    # and how similar an observed block sequence must be to the cue before the gate
+    # believes the device was still playing it when the skip window ended. Below the
+    # minimum the gate keeps its pre-existing behaviour, so a device that mutes its
+    # microphone during the cue is unaffected.
+    echo_block_ms: int = 20
+    echo_match_min: float = 0.6
 
 
 class UtteranceGate:
@@ -102,6 +109,10 @@ class UtteranceGate:
         # skipped instead of replayed into the VAD, or ASR transcribes our own 「在呢」
         # as a request (measured 2026-10-23 15:49/15:53/15:55).
         self._hold_skip_ms = 0.0
+        # The loudness envelope of the skipped (cue) samples, matched against the cue's
+        # own envelope when the hold lifts; see `_cue_tail_ms`.
+        self._hold_skip_samples: list[np.ndarray] = []
+        self._echo_env = None
         self._hold_buf: deque[np.ndarray] = deque()
         self._preroll: deque[np.ndarray] = deque()
         self._preroll_samples = 0
@@ -179,9 +190,72 @@ class UtteranceGate:
         the cue is buffered instead of dropped: keeping only a 600 ms tail lost the first
         ~1.1 s of a request that started right after the cue (13:47 「放一首告白气球」 arrived
         as 「告白气球」). The buffer is bounded by the echo window (~1.2 s).
+
+        `skip_ms` is the *nominal* cue length. A device's playback latency can move the
+        cue past that boundary; `set_echo_reference` lets the gate measure how much of the
+        cue was still unplayed and drop only that much from the buffer.
         """
         self._hold_ms = max(0.0, ms)
         self._hold_skip_ms = max(0.0, min(skip_ms, ms))
+        self._hold_skip_samples.clear()
+
+    def set_echo_reference(self, samples: np.ndarray, rate: int) -> None:
+        """Remember the cue that is about to play, so its echo is not taken for speech.
+
+        The skip window covers the cue at its nominal length, but a device cannot start
+        playing the instant the bytes arrive: when its playback buffer is deeper, the
+        cue is still sounding after the skip ends, and the buffered echo window replayed
+        that tail into ASR as a user turn (2026-10-26: cue 「在呢」 -> turn 「在呢。」 ->
+        reply 「怎么了？」). Matching loudness envelopes rather than waveforms survives the
+        device AEC's attenuation and phase shift, and needs no per-device latency
+        constant: the cue's own syllable rhythm says where the skip window ended.
+        """
+        envelope = self._envelope(np.asarray(samples, dtype=np.float32).reshape(-1), rate)
+        self._echo_env = envelope if envelope.size else None
+
+    def _envelope(self, samples: np.ndarray, rate: int) -> np.ndarray:
+        """RMS per `echo_block_ms` block: the rhythm of a sound, not its waveform."""
+        block = max(1, int(rate * self.cfg.echo_block_ms / 1000))
+        usable = samples.size - samples.size % block
+        if usable <= 0:
+            return np.zeros(0, dtype=np.float32)
+        frames = samples[:usable].reshape(-1, block)
+        return np.sqrt(np.mean(np.square(frames), axis=1)).astype(np.float32)
+
+    def _cue_tail_ms(self) -> float:
+        """How much of the cue was still unplayed when the skip window ended.
+
+        The skipped samples are the cue as the microphone heard it (AEC-residual, so
+        quieter and phase-shifted, but the same rhythm). Sliding the cue's envelope over
+        them finds the cue's start; from there and the window length the played part is
+        known, and the rest is the echo that must not reach the VAD. `0` means the cue
+        was over (or the match is not trustworthy) and the old replay path applies.
+        """
+        if self._echo_env is None or not self._hold_skip_samples:
+            return 0.0
+        observed = self._envelope(np.concatenate(self._hold_skip_samples), self.rate)
+        reference = self._echo_env
+        if observed.size == 0 or reference.size == 0:
+            return 0.0
+        best_score = 0.0
+        best_offset = 0
+        for offset in range(observed.size):
+            overlap = min(reference.size, observed.size - offset)
+            if overlap < 3:  # under 60 ms cannot distinguish a match from noise
+                break
+            window = observed[offset : offset + overlap]
+            head = reference[:overlap]
+            denom = float(np.linalg.norm(window) * np.linalg.norm(head))
+            if denom <= 0.0:
+                continue
+            score = float(np.dot(window, head) / denom)
+            if score > best_score:
+                best_score, best_offset = score, offset
+        if best_score < self.cfg.echo_match_min:
+            return 0.0
+        played_ms = (observed.size - best_offset) * self.cfg.echo_block_ms
+        cue_ms = reference.size * self.cfg.echo_block_ms
+        return max(0.0, cue_ms - played_ms)
 
     # ------------------------------------------------------------------ input
     def feed(self, pcm: bytes, ts_ms: float = 0.0) -> tuple[bytes, float] | None:
@@ -194,6 +268,8 @@ class UtteranceGate:
             if self._hold_skip_ms > 0:
                 drop_ms = min(self._hold_skip_ms, block_ms)
                 drop = min(block.size, int(round(drop_ms * self.rate / 1000.0)))
+                if drop:
+                    self._hold_skip_samples.append(block[:drop].copy())
                 self._hold_skip_ms = max(0.0, self._hold_skip_ms - drop * 1000.0 / self.rate)
                 block = block[drop:]
                 block_ms = block.size * 1000.0 / self.rate
@@ -205,15 +281,27 @@ class UtteranceGate:
             if self._hold_ms > 0:
                 return None
             # Hold lifted: hand every buffered block through the normal path, oldest first,
-            # and stop as soon as one of them closes a turn.
+            # and stop as soon as one of them closes a turn. A cue tail that was still
+            # playing is dropped first, so its echo cannot open a turn by itself; a reply
+            # that starts after the cue is untouched and buffered as before.
             pending = list(self._hold_buf)
             self._hold_buf.clear()
+            tail_ms = self._cue_tail_ms()
             out = None
+            dropped_ms = 0.0
             for buffered in pending:
+                if dropped_ms < tail_ms:
+                    block_ms = buffered.size * 1000.0 / self.rate
+                    take_ms = min(block_ms, tail_ms - dropped_ms)
+                    take = min(buffered.size, int(round(take_ms * self.rate / 1000.0)))
+                    buffered = buffered[take:]
+                    dropped_ms += take * 1000.0 / self.rate
+                    if buffered.size == 0:
+                        continue
                 out = self._consume(buffered, ts_ms)
                 if out is not None:
                     return out
-            return None
+            return out
         return self._consume(block, ts_ms)
 
     def _consume(self, samples: np.ndarray, ts_ms: float) -> tuple[bytes, float] | None:

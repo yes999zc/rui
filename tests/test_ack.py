@@ -254,6 +254,7 @@ class FakeGate:
         self.interrupted = 0
         self.speech_ms = 0.0
         self.events: list[str] = []
+        self.echo_reference = None
 
     def arm(self, **_kwargs) -> None:
         self.armed += 1
@@ -263,6 +264,10 @@ class FakeGate:
     def hold(self, ms: float, skip_ms: float = 0.0) -> None:  # noqa: ARG002
         self.holds.append(ms)
         self.events.append("hold")
+
+    def set_echo_reference(self, samples, rate: int) -> None:  # noqa: ARG002
+        self.echo_reference = samples
+        self.events.append("echo")
 
     def feed(self, pcm: bytes, ts_ms: float = 0.0):  # noqa: ARG002
         self.fed += len(pcm)
@@ -332,6 +337,9 @@ class HoldAwareGate:
         self.held_ms = 0.0
         self.events.append("hold")
 
+    def set_echo_reference(self, samples, rate: int) -> None:  # noqa: ARG002
+        self.events.append("echo")
+
     def feed(self, pcm: bytes, ts_ms: float = 0.0):
         if not self.armed:
             return None
@@ -398,8 +406,9 @@ def test_wake_replays_the_preroll_then_holds() -> None:
 
         assert gate.armed == 1
         assert gate.fed == 5 * 640  # every pre-wake block reached the gate
-        assert gate.events == ["arm"] + ["feed"] * 5 + ["hold"], (
-            "replay must happen before the hold: those blocks are the person, not the cue"
+        assert gate.events == ["arm"] + ["feed"] * 5 + ["echo", "hold"], (
+            "replay must happen before the hold: those blocks are the person, not the cue; "
+            "the cue's reference is handed over just before the hold"
         )
         assert plane._preroll == type(plane._preroll)()  # ring consumed, not kept
         assert plane.preroll_replayed_ms == pytest.approx(100.0, abs=1.0)

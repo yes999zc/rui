@@ -80,6 +80,9 @@ class FakeGate:
     def hold(self, ms: float, skip_ms: float = 0.0) -> None:
         self.hold_calls.append((ms, skip_ms))
 
+    def set_echo_reference(self, samples, rate: int) -> None:  # noqa: ARG002
+        self.echo_reference = samples
+
     def disarm(self) -> None:
         self.armed = False
 
