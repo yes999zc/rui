@@ -2783,6 +2783,36 @@ a.v2-run-badge:hover {
   border-top: 1px solid var(--line);
 }
 
+/* — M9c tools: four catalog sections + read-only MCP/HA status ———————— */
+
+.v2-tools-section {
+  margin-bottom: var(--s5);
+}
+
+.v2-tools-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s3);
+  padding-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+
+.v2-tools-section-title {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+
+.v2-tools-status-table td {
+  vertical-align: top;
+}
+
+.v2-tools-status-table .badge {
+  white-space: nowrap;
+}
+
 /* device summary (read-only inside the catalog page) */
 
 .v2-device-config-list {

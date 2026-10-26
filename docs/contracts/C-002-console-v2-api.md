@@ -44,6 +44,7 @@
 
 - 不定义账号/角色/多租户、HA/ESPHome 依赖、OTA/刷机/ADB/WebUSB。
 - 不定义非设备域的 v2 API（providers/integrations/music/memory 在 v2 首次交付仍可调用稳定 v1 端点；迁移时另立契约）。
+- **v1 只读例外登记**：v2 工具页（`/v2/tools`）在 v2 提供等价端点前，可经 `web/src/v2/api.ts` 调用 `GET /api/v1/mcp` 读取 MCP/HA 连接状态。例外**只覆盖只读**：v2 页面禁止调用 `PUT /api/v1/mcp` 与 `POST /api/v1/mcp/test`（MCP/HA 的编辑入口仍是旧控制台的 `/panel/integrations` 面板「MCP 与家庭助理」tab，组件 `mcp-manager`）；鉴权沿用 `X-Auth-Token`（§4.2，与 `api.ts` 的 fetch 约定一致）。**secret 边界**：响应不含 `secrets.yaml` 中的值或任何 token 值——HA/generic token 只以 `has_token` 存在性布尔与 `token_env` 变量名出现；`tools.mcp_servers[].env` 与 `headers` 是 `config.yaml` 字段，会随 v1 响应原样返回，v2 页面不得渲染这两项（页面只展示 name/transport/enabled/state 等摘要）。**下线条件**：v2 提供等价的只读端点（如 `/api/v2/mcp`）并完成 §10.1 的兼容窗口后移除本条；移除前需前后端同一版本内同步——前端先停止调用，后端再下线 v1 端点，不得先删。
 - v1 端点的形状与语义保持兼容；已记录的实现修正见 A-4（device/setup 写不再落盘派生的 `audio.voice.kws_keywords_file`；`GET /api/v1/voice/threshold` 在两个路径字段都为空时改读 `config.yaml` 同目录的 `keywords.txt`，不可读时降级为 `exists=false`）与 A-6（`POST /api/v1/memory` 的非法输入改 422、`/api/v1/turns` 的 `stages.*.elapsed_ms`/`attempts` 改为真实观测值；既有字段不变，`attempts[]` 仅新增 `elapsed_ms`）。v2 可在内部复用 v1 的服务层实现，但对外形状以本契约为准。
 - 不新增配置版本；不要求 `CONFIG_VERSION` 升级。
 
@@ -76,7 +77,7 @@
 
 - `from '../panels'`、`from '../views/PanelHost.vue'`、`from '../views/`、`api.panels(`；
 - 任何 `model === 'lx06'` / `device.adapter === 'dot2'` / 机型名字面量做分支；
-- 直接 `fetch('/api/v1/...')` 的旧**设备**端点（`/api/v1/devices*`、`/api/v1/setup/step`、`/api/v1/device/volume`、`/api/v1/debug/*`）；非设备域的过渡页面（turns/logs/memory/config/providers/music/doctor）可调用 v1 稳定端点，但必须经 `web/src/v2/api.ts` 封装，不得直接散落 fetch。
+- 直接 `fetch('/api/v1/...')` 的旧**设备**端点（`/api/v1/devices*`、`/api/v1/setup/step`、`/api/v1/device/volume`、`/api/v1/debug/*`）；非设备域的过渡页面（turns/logs/memory/config/providers/music/doctor）可调用 v1 稳定端点，但必须经 `web/src/v2/api.ts` 封装，不得直接散落 fetch；v2 工具页另允许只读的 `GET /api/v1/mcp`（见 §1.2，写入端点仍禁用）。
 
 允许的机型差异只有一个来源：`GET /api/v2/plugins` / device 的 `capabilities` + `params` schema。
 

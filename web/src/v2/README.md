@@ -114,6 +114,15 @@ web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, AudioPan
   response's `restart_fields` stays visible. 422 `details.fields[].path`
   (FastAPI `detail[].loc`) marks the row red. Device fields are read-only here and
   link to `/v2/devices/{id}`.
+- `/v2/tools` — M9c tools config: the same catalog/diff flow restricted to the
+  `tools*` groups, split into weather / news / MCP (incl. HA) / other sections by
+  catalog group id (or path prefix for a flat catalog). `tools.mcp_servers` is
+  excluded from the generic field renderer: it is an array of server objects
+  (would print `[object Object]`) that also carries `env`/`headers`, and its
+  servers are covered by the read-only status section instead. A read-only
+  connection status section renders `GET /api/v1/mcp` (available/unavailable/
+  not configured, last handshake per generic server); server add/edit stays out
+  of v2.
 - `/v2/music` — M9 source registry (`/music/sources`), playback/config status
   (`/music`), presence-only credential slots, source switch/save through
   `PUT /music/credentials`, and a draft-only `POST /music/test`. Credential

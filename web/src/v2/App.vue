@@ -42,9 +42,10 @@ const runSubnav: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'memory', to: '/memory', labelKey: 'v2.nav.memory' },
 ]
 
-/** Sub-navigation under the Config section (M9): four config pages. */
+/** Sub-navigation under the Config section (M9): five config pages. */
 const configSubnav: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'voice', to: '/voice-assistant', labelKey: 'v2.nav.voiceAssistant' },
+  { key: 'tools', to: '/tools', labelKey: 'v2.nav.tools' },
   { key: 'music', to: '/music', labelKey: 'v2.nav.music' },
   { key: 'credentials', to: '/credentials', labelKey: 'v2.nav.credentials' },
   { key: 'health', to: '/health', labelKey: 'v2.nav.health' },
@@ -64,6 +65,7 @@ const section = computed(() => {
   if (
     route.path.startsWith('/config') ||
     route.path.startsWith('/voice-assistant') ||
+    route.path.startsWith('/tools') ||
     route.path.startsWith('/music') ||
     route.path.startsWith('/credentials') ||
     route.path.startsWith('/health')
@@ -81,6 +83,7 @@ const runPage = computed(() => {
 })
 
 const configPage = computed(() => {
+  if (route.path.startsWith('/tools')) return 'tools'
   if (route.path.startsWith('/music')) return 'music'
   if (route.path.startsWith('/credentials')) return 'credentials'
   if (route.path.startsWith('/health')) return 'health'
@@ -97,6 +100,7 @@ const pageLabel = computed(() => {
     return t('v2.nav.run')
   }
   if (section.value === 'config') {
+    if (configPage.value === 'tools') return t('v2.nav.tools')
     if (configPage.value === 'music') return t('v2.nav.music')
     if (configPage.value === 'credentials') return t('v2.nav.credentials')
     if (configPage.value === 'health') return t('v2.nav.health')

@@ -4,8 +4,8 @@
  * Hand-written from the contract on purpose: the v2 console must not import the
  * legacy client (`../api.ts` pulls `PanelSpec` types from the panel registry) nor
  * any legacy device endpoint. This module speaks the `/api/v2/*` endpoints plus
- * the C-002 §1.2 transitional v1 endpoints (`/turns`, `/logs`, `/memory`); no v1
- * *device* endpoint is called.
+ * the C-002 §1.2 transitional v1 endpoints (`/turns`, `/logs`, `/memory`, plus the
+ * read-only `GET /api/v1/mcp`); no v1 *device* endpoint is called.
  *
  * Auth follows the console convention: localStorage `rui-token`, header
  * `X-Auth-Token`. A 401 means "ask the operator for a token", so it is surfaced
@@ -1030,6 +1030,83 @@ export interface ConfigValuesResponse {
   warnings: string[]
 }
 
+/** One Home Assistant MCP bridge, as `GET /api/v1/mcp` reports it. */
+export interface McpHaStatus {
+  base_url: string
+  token_env: string
+  /** Presence only; the token value never leaves the server. */
+  has_token: boolean
+  /** False = `tools.ha.base_url` is empty: Home Assistant is not configured. */
+  wired: boolean
+  connected: boolean
+  latency_ms: number | null
+  tools: number
+  entities: number
+  error: string
+}
+
+/** A generic `tools.mcp_servers` row plus its live connection status. */
+export interface McpServerStatus {
+  name: string
+  transport: string
+  url: string
+  command: string[]
+  headers: Record<string, string>
+  token_env: string
+  has_token: boolean
+  enabled: boolean
+  connected: boolean
+  tools: number
+  tool_names: string[]
+  latency_ms: number | null
+  error: string
+  /** Unix seconds of the last successful handshake/call; null = never. */
+  last_seen: number | null
+}
+
+/**
+ * A built-in MCP instance (today: Home Assistant). The descriptor is owned by
+ * `src/rui/tools/mcp_manifest.py`, so the page renders it instead of inventing
+ * names/policies.
+ */
+export interface McpFirstPartyInstance {
+  id: string
+  name: string
+  kind: string
+  transport: string
+  config_path: string
+  endpoint: string
+  token_env: string
+  has_token: boolean
+  wired: boolean
+  connected: boolean
+  latency_ms: number | null
+  tools: number
+  entities: number
+  tool_prefix: string
+  tool_names: string[]
+  whitelist: string[]
+  excluded_domains: string[]
+  danger_policy: string
+  href: string
+  docs: string
+}
+
+/** `GET /api/v1/mcp` — read-only MCP/HA connection state (no secrets). */
+export interface McpStatus {
+  ha: McpHaStatus
+  first_party: McpFirstPartyInstance[]
+  servers: McpServerStatus[]
+  generic_wired: boolean
+  stdio_enabled: boolean
+  generic: {
+    enabled: number
+    connected: number
+    tools: number
+    stdio_enabled: boolean
+  }
+}
+
 export interface MusicCredentialField {
   key: string
   kind: 'text' | 'url' | 'password' | string
@@ -1484,6 +1561,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ values } satisfies ConfigValuesRequest),
     }),
+
+  /**
+   * `GET /api/v1/mcp` — read-only MCP/HA connection status. The write path
+   * (`PUT /api/v1/mcp`) is not used by this page: server list editing stays on
+   * the legacy panel until v2 owns that form; here the status is informational.
+   */
+  mcp: (): Promise<McpStatus> => request<McpStatus>('/api/v1/mcp'),
 
   /** `GET /api/v1/music/sources` — registry plus presence-only credential state. */
   musicSources: (): Promise<MusicSourcesResponse> =>

@@ -15,6 +15,7 @@ import { createRouter, createWebHistory } from 'vue-router'
  *   /v2/logs             service-log tail with level filter and copy (M8)
  *   /v2/memory           memory list + add/confirm/remove (M8)
  *   /v2/voice-assistant  catalog-driven assistant/session/audio config (M9a)
+ *   /v2/tools            catalog-driven weather/news/search/MCP/HA config (M9c)
  *   /v2/music            sources, playback status and write-only credentials (M9b)
  *   /v2/credentials      secret presence, writes and provider probes (M9b)
  *   /v2/health           health, dependency probes and config recovery (M9b)
@@ -60,6 +61,11 @@ const routes = [
     path: '/voice-assistant',
     name: 'voice-assistant',
     component: () => import('./views/VoiceAssistantView.vue'),
+  },
+  {
+    path: '/tools',
+    name: 'tools',
+    component: () => import('./views/ToolsView.vue'),
   },
   { path: '/music', name: 'music', component: () => import('./views/MusicView.vue') },
   {
