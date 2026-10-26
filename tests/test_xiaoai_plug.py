@@ -43,7 +43,7 @@ def test_the_image_plug_is_a_v1_manifest_with_audio_defaults() -> None:
 
     assert plugin.id == "xiaoai-lx06"
     assert plugin.trust is TrustLevel.BUILTIN
-    assert plugin.rui_compat == ">=0.3.0 <0.7.0"
+    assert plugin.rui_compat == ">=0.3.0 <0.8.0"
     assert plugin.source_dir == PLUG.resolve()
     assert len(plugin.devices) == 1
 
@@ -245,7 +245,7 @@ def test_two_image_plugs_are_listed_side_by_side(tmp_path: Path, monkeypatch) ->
             id: dot2-echomuse
             name: "Echo Dot 2 (EchoMuse) plug"
             version: 1.2.0
-            rui_compat: ">=0.3.0 <0.7.0"
+            rui_compat: ">=0.3.0 <0.8.0"
             license: MIT
             maintainer: "Test"
             trust: trusted

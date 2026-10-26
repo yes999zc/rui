@@ -13,7 +13,7 @@
 |---|---|
 | 契约 ID / 版本 | `C-002/1` |
 | API 版本 | `2.0`（路径前缀 `/api/v2`） |
-| rui 版本窗口 | `>=0.6.0, <0.7.0`：只增不改（客户端可见变更见 A-2、A-5、A-6），v1 保持可用（已记录修正见 A-4 与 A-6） |
+| rui 版本窗口 | `>=0.6.0, <0.8.0`：只增不改（客户端可见变更见 A-2、A-5、A-6），v1 保持可用（已记录修正见 A-4 与 A-6） |
 | 破坏性变更 | 本契约 **不含字段删除/重命名**；0.6.x 有意行为变更有三处：§5.4 动作门禁顺序（见 Addendum A-2）、`setup/plan` test/connect 步的证据来源（见 A-5），以及 v1 `POST /api/v1/memory` 校验与 `/api/v1/turns` stage 计时（见 A-6，属 bug 修正；既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`），均客户端可见；删除/重命名只能进 `/api/v3` 或 0.7 的 C-002/2 |
 | 依赖契约 | C-001 `rui-device/v1`（manifest：`capabilities`、`params`、`audio_defaults`、`runtime`、`device_side`）**不变** |
 | 认证 | 沿用 `X-Auth-Token`；无账号/角色/会话 |
@@ -369,8 +369,8 @@ Activity（设备维度事件流）
 {
   "contract": "C-002/1",
   "api_version": "2.0",
-  "rui_version": "0.6.0",
-  "compat": {"min": "0.6.0", "max_exclusive": "0.7.0"},
+  "rui_version": "0.7.0",
+  "compat": {"min": "0.6.0", "max_exclusive": "0.8.0"},
   "features": {
     "house": true,
     "house_audio": true,
@@ -1134,7 +1134,7 @@ Activity（设备维度事件流）
 
 ### 10.1 兼容窗口
 
-- `>=0.6.0 <0.7.0`：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序（A-2）、`setup/plan` test/connect 步的证据来源（A-5）与 A-6 的 v1 bug 修正（memory 非法输入改 422、`/turns` stage 计时真实化；既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`）外不改语义；`meta.features` 用于渐进点亮。
+- `>=0.6.0 <0.8.0`：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序（A-2）、`setup/plan` test/connect 步的证据来源（A-5）与 A-6 的 v1 bug 修正（memory 非法输入改 422、`/turns` stage 计时真实化；既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`）外不改语义；`meta.features` 用于渐进点亮。
 - v1 端点与形状保持向后兼容；唯一已知的**新增字段**仍是 `/api/v1/turns` 每条可选 `device_id`（不删不改旧字段，旧消费者可忽略）；A-6 另外在 `attempts[]` 元素上新增 `elapsed_ms`（不删不改既有元素字段）。v2 不修改 `GET /api/v1/devices`、`PUT /api/v1/devices/{id}`、`/api/v1/setup/step` 的既有字段；这些写路径不再落盘派生的 `kws_keywords_file`，`GET /api/v1/voice/threshold` 的路径推导与不可读降级也见 A-4。`POST /api/v1/memory` 的 422 校验与 `/api/v1/turns` 的 `stages.*.elapsed_ms`/`attempts` 修正见 A-6。
 - C-001 不变：v2 只消费 manifest 的 `capabilities/params/audio_defaults/runtime/device_side`，不新增字段。
 
@@ -1250,19 +1250,19 @@ Activity（设备维度事件流）
 
 | 字段 | 类型 | 语义 |
 |---|---|---|
-| `tested` | `bool` | setup store 中存在**属于该 `device_id`** 的最近一次 `device.test` 记录（记录里的 `device_id` 必须与请求的设备一致；`add/first-run` 的草稿没有设备，一律视为无记录） |
+| `tested` | `bool` | setup store 中存在**属于该 `device_id`** 的最近一次 `device.test` 记录：先取按设备保存的 `test/device/by_id/<device_id>`——命中（键存在且记录为非空 dict，记录内的 `device_id` 与键一致）时即为本设备的记录；`by_id` 缺失、非 dict、或该键记录不是非空 dict 时视为没有按设备记录，回退到旧单槽 `test/device/test`（该记录内的 `device_id` 必须与请求的设备一致）；`by_id` 命中但记录内 `device_id` 与键不一致时不回退、按无记录。`add/first-run` 的草稿没有设备，一律视为无记录 |
 
 判定规则：
 
 - `tested=true`：`status` 与 `evidence.ok` 都只由记录里的 `ok` 决定。即最近一次测试 `ok:false` 时，即使链路当前 `speaker_connected=true`，test 步仍为 `pending`、`evidence.ok=false`，`evidence.checks` 保留失败的检查项，`next_step` 不会跳过 test。
 - `tested=false`（从未测过）且 transport 为 inbound：保留原有提示语义——**该设备自己的**链路已连接时 `status=done`、`evidence.ok=true`，由 `tested=false` 区分「未测但链路通」与「测试通过」。
 - `tested=false` 且 transport 为 outbound：仍为 `pending`/`ok=false`（outbound 没有入站链路可作提示）。
-- 记录加固：只有 JSON 布尔 `true` 算通过；`"ok": "false"` 这类字符串、缺 `ok` 的残记录按失败（保守）；`test`/`device`/记录本身不是 dict 时视为无记录（`tested=false`），不得抛 500。
+- 记录加固：只有 JSON 布尔 `true` 算通过；`"ok": "false"` 这类字符串、缺 `ok` 的残记录按失败（保守）；`test`/`device` 不是 dict 时视为无记录（`tested=false`），不得抛 500。`by_id` 不存在、不是 dict、或该键记录不是非空 dict 时，视为没有按设备记录并继续回退旧单槽（旧槽记录为非空 dict 且 `device_id` 匹配则照常 `tested=true`）；`by_id` 命中但记录内 `device_id` 与键不一致时按无记录且不回退（手改坏的数据不能冒充证据）。
 - connect 步同样按设备取链路：`speaker_connected` 提示来自该设备自己的平面；草稿（`device_id` 不存在）没有平面，connect 为 `pending`，不会因别的房间在线而 `done`。
 
 `checks`/`at` 字段语义不变；`evidence.ok` 在 `tested=true` 时只按记录 `ok` 裁决（不再被 live link 覆盖），`tested=false` 时仍是链路提示。旧客户端忽略 `tested` 即可。该规则只影响 `GET /setup/plan` 与 setup step 响应中的 `plan`，不改 `POST /devices/{id}/test` 的响应。
 
-设备详情（`GET /api/v2/devices/{id}` 的 `setup.last_test_ok/last_test_at`）按同一来源读取：只取**本设备**的 `device.test` 记录（记录内 `device_id` 必须与请求的设备一致），记录结构损坏（`test`/`device`/记录本身不是 dict）时按无记录处理（`last_test_ok=false`、`last_test_at=""`），不得 500；`"ok":"false"` 等非布尔 `true` 同样不算通过。注意 setup store 目前只有**单个**测试槽（最近一次记录，与设备共用），每设备历史记录是后续项，因此详情页也只能展示最近一次而非历史。
+设备详情（`GET /api/v2/devices/{id}` 的 `setup.last_test_ok/last_test_at`）按同一来源读取：只取**本设备**的 `device.test` 记录。`test`/`device` 不是 dict 时按无记录处理（`last_test_ok=false`、`last_test_at=""`），不得 500；`"ok":"false"` 等非布尔 `true` 同样不算通过。setup store 自 0.6.x 起按设备保存最近一次记录：`test/device/by_id/<device_id>` 命中（键存在且记录为非空 dict，记录内的 `device_id` 与请求一致）时即该设备的记录；`by_id` 缺失、非 dict、或该键记录不是非空 dict 时回退旧单槽 `test/device/test`（仅当旧槽记录为非空 dict 且其 `device_id` 与请求一致时生效，否则无记录）；`by_id` 命中但记录内 `device_id` 不一致时按无记录且不回退。旧文件无需迁移即可读。v1 wizard 的 `device.test` 与 v2 写入同一处（双写 `by_id` 与旧单槽），因此 **v2 读取**（详情的 `setup.last_test_*` 与 setup plan 的 `tested`）在两个控制台交错测试后总能读到本设备的最近一次；v1 wizard 的 test 步仍只读旧单槽（全屋最近一次 + `device_id` 匹配），不受 `by_id` 影响。详情页展示的是每设备最近一次记录，不是完整历史。
 
 ### A-6. 行为修正：v1 `memory` 校验与 `/turns` stage 计时（既有字段名不变）
 

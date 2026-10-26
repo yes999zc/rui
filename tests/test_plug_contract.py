@@ -44,7 +44,7 @@ def _plugin_doc(**overrides) -> dict:
         "id": "contract-test-plugin",
         "name": "Contract Test Plug",
         "version": "1.0.0",
-        "rui_compat": ">=0.2.0 <0.7.0",
+        "rui_compat": ">=0.2.0 <0.8.0",
         "license": "MIT",
         "maintainer": "Test <test@example.invalid>",
         "trust": "trusted",

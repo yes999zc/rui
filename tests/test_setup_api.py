@@ -6,6 +6,8 @@ client claim. These tests pin that, plus the write-only/0600/idempotent promises
 """
 from __future__ import annotations
 
+import itertools
+import json
 import stat
 
 import pytest
@@ -1267,3 +1269,61 @@ def test_connect_evidence_reports_the_manifest_token_env(tmp_path, monkeypatch) 
     assert evidence["token_env"] == "DOT2_EM_TOKEN"
     assert evidence["token_configured"] is True
     assert "dot2-token" not in client.get("/api/v1/setup/step?plug=dot2-echomuse").text
+
+
+# ------------------------------------------- v1 and v2 test history must agree
+def _setup_json(tmp_path) -> dict:
+    path = tmp_path / "data" / "setup.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+async def _usable_probe(host: str) -> dict:
+    return {"host": host, "usable": True,
+            "ssh": {"port_open": True, "banner": True}, "hint": ""}
+
+
+def test_a_v1_wizard_test_is_visible_on_the_v2_card(wizard, monkeypatch) -> None:
+    """Both consoles write the same record: the v1 wizard's test is the device's last."""
+    client, _path, tmp_path = wizard
+    _add_device(client, "living")
+    monkeypatch.setattr(app_module, "_probe_host", _usable_probe)
+    client.app.state.audio = _Plane(connected=True)
+
+    state = client.post("/api/v1/setup/step", json={
+        "step": "test", "action": "device.test", "payload": {"device_id": "living"}})
+    assert state.status_code == 200, state.text
+
+    stored = _setup_json(tmp_path)["test"]["device"]
+    assert stored["by_id"]["living"]["device_id"] == "living"
+    assert stored["by_id"]["living"]["ok"] is True
+    card = client.get("/api/v2/devices/living").json()
+    assert card["setup"]["last_test_ok"] is True
+    assert card["setup"]["last_test_at"] == stored["by_id"]["living"]["at"]
+
+
+def test_the_v2_card_shows_the_latest_when_the_v1_wizard_writes_after_it(
+        wizard, monkeypatch) -> None:
+    """v2 test then v1 test: the card must move forward, not keep the older by_id."""
+    client, _path, tmp_path = wizard
+    _add_device(client, "living")
+    monkeypatch.setattr(app_module, "_probe_host", _usable_probe)
+    client.app.state.audio = _Plane(connected=True)
+    ticks = itertools.count(1)
+    monkeypatch.setattr(
+        setup_store, "iso_now",
+        lambda: f"2026-10-26T{next(ticks):02d}:00:00+00:00")
+
+    first = client.post("/api/v2/devices/living/test")
+    assert first.status_code == 200, first.text
+    older = _setup_json(tmp_path)["test"]["device"]["by_id"]["living"]["at"]
+
+    state = client.post("/api/v1/setup/step", json={
+        "step": "test", "action": "device.test", "payload": {"device_id": "living"}})
+    assert state.status_code == 200, state.text
+
+    stored = _setup_json(tmp_path)["test"]["device"]
+    latest = stored["by_id"]["living"]["at"]
+    assert latest != older
+    # The legacy slot mirrors the newest record for the v1 device list.
+    assert stored["test"]["at"] == latest
+    assert client.get("/api/v2/devices/living").json()["setup"]["last_test_at"] == latest

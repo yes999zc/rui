@@ -5,6 +5,11 @@ rui_compat ">=0.2.0 <0.4.0" while rui.__version__ was 0.4.0. The loader refuses
 an out-of-range manifest, so every test that loaded one failed. This guard makes
 a future version bump fail at the source with the offending range and file named,
 instead of as a wall of unrelated test failures.
+
+0.7.0 repeated the trap one release later: the shipped manifests declared
+"<0.7.0", so the version bump alone would have refused every plug. The scan below
+now discovers every `plugin.yaml` in the repository instead of listing two paths,
+so a new shipped manifest is covered the moment it lands.
 """
 from __future__ import annotations
 
@@ -23,9 +28,24 @@ from rui.plugins import (
 )
 
 REPO = Path(__file__).resolve().parents[1]
-XIAOAI = REPO / "plugs" / "xiaoai"
-EXAMPLE = REPO / "examples" / "plugin-example"
+#: Directories whose `plugin.yaml` is generated, vendored, or not shipped by this repo.
+SKIP_PARTS = {
+    ".git", ".venv", "node_modules", "web", "build", "dist", "__pycache__",
+}
 _YAML = YAML(typ="safe")
+
+
+def _shipped_manifests() -> list[Path]:
+    """Every in-repo manifest the loader is expected to accept, not just two paths."""
+    return sorted(
+        path
+        for path in REPO.rglob("plugin.yaml")
+        if not any(part in SKIP_PARTS for part in path.relative_to(REPO).parts)
+        and not any(part.startswith(".") for part in path.relative_to(REPO).parts)
+    )
+
+
+_MANIFESTS = _shipped_manifests()
 
 
 def _manifest_range(path: Path) -> str:
@@ -38,12 +58,23 @@ def _manifest_range(path: Path) -> str:
 
 def _assert_accepts(label: str, range_text: str) -> None:
     running = rui.__version__
+    # rui's own parser is the loader's authority (it also accepts the space-separated
+    # manifest syntax, which `SpecifierSet` would reject without comma normalisation).
     assert parse_range(range_text).matches(running), (
         f"{label} declares rui_compat {range_text!r}, which does not accept the "
         f"running build {running}. Shipped manifests and test fixtures must "
         "accept the version they run under; widen the ceiling (or derive it "
         "from rui.__version__) before bumping the version."
     )
+
+
+def test_the_repo_ships_the_known_manifests() -> None:
+    """A parametrized scan that finds nothing would silently pass."""
+    shipped = {path.relative_to(REPO).as_posix() for path in _MANIFESTS}
+    assert shipped >= {
+        "plugs/xiaoai/plugin.yaml",
+        "examples/plugin-example/plugin.yaml",
+    }, f"manifest discovery lost a shipped plug: {sorted(shipped)}"
 
 
 def test_fixture_compat_range_accepts_the_running_build() -> None:
@@ -57,17 +88,14 @@ def test_fixture_compat_range_accepts_the_running_build() -> None:
 
 
 @pytest.mark.parametrize(
-    ("label", "manifest"),
-    [
-        ("plugs/xiaoai/plugin.yaml (image LX06 plug)", XIAOAI),
-        ("examples/plugin-example/plugin.yaml", EXAMPLE),
-    ],
+    "manifest",
+    _MANIFESTS,
+    ids=[path.relative_to(REPO).as_posix() for path in _MANIFESTS],
 )
-def test_shipped_manifest_accepts_the_running_build(
-    label: str, manifest: Path | None
-) -> None:
+def test_every_shipped_manifest_accepts_the_running_build(manifest: Path) -> None:
+    label = manifest.relative_to(REPO).as_posix()
     try:
-        plugin = load_plugin(manifest)
+        plugin = load_plugin(manifest.parent)
     except PluginError as exc:
         raise AssertionError(
             f"{label} cannot be loaded by rui {rui.__version__}: {exc}. "
@@ -75,6 +103,8 @@ def test_shipped_manifest_accepts_the_running_build(
             "rui_compat ceiling before bumping the version."
         ) from None
     _assert_accepts(label, plugin.rui_compat)
+    # Read the raw file too: the loader could normalise the range in a future core.
+    _assert_accepts(f"{label} (raw rui_compat)", _manifest_range(manifest))
 
 
 def test_manifests_written_by_the_fixtures_accept_the_running_build(

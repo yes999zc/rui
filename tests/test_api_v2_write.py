@@ -792,7 +792,7 @@ def _dot2_manifest_plug(data_dir: Path, *, capabilities: tuple[str, ...] = ("pla
         "id": "dot2",
         "name": "Echo Dot 2",
         "version": "1.2.0",
-        "rui_compat": ">=0.5.0 <0.7.0",
+        "rui_compat": ">=0.5.0 <0.8.0",
         "license": "MIT",
         "maintainer": "rui maintainers",
         "homepage": "https://example.invalid/dot2",

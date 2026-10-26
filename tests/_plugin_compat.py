@@ -20,9 +20,9 @@ FIXTURE_COMPAT_FLOOR = "0.2.0"
 def fixture_compat_range() -> str:
     """Return a rui_compat range that accepts the running build.
 
-    The ceiling is the next minor release (0.5.0 -> <0.7.0), matching the shipped
-    v0/v1 matrices. A future bump therefore keeps the fixtures valid without
-    widening the range to something meaningless like <999.
+    The ceiling is the minor after the running build (0.7.0 -> <0.8.0), matching
+    the shipped v0/v1 matrices. A future bump therefore keeps the fixtures valid
+    without widening the range to something meaningless like <999.
     """
     version = parse_version(rui.__version__)
     ceiling = f"{version.major}.{version.minor + 1}.0"

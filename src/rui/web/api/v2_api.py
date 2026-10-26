@@ -863,27 +863,15 @@ def _device_test_record(saved: dict[str, Any],
                         device: DeviceConfig | None) -> dict[str, Any]:
     """The stored ``device.test`` record, but only when it belongs to ``device``.
 
-    The setup store is house-wide (one ``test/device/test`` slot), so the record a
-    probe wrote for one room must never become evidence for another room, and a draft
-    (``device is None``) must never inherit any record at all. Records without a
-    matching ``device_id`` -- including pre-M6 ones that never wrote the field -- are
-    "no record" for everyone. Every layer is checked with ``isinstance`` because
-    ``setup.json`` is user-editable and a non-dict there must not 500 a read.
+    The lookup lives in :mod:`rui.setup_state`: it prefers this device's own record
+    and falls back to the legacy single slot only when that record names the same
+    device, so a probe for another room never becomes evidence here and the test order
+    no longer decides what a device's card shows. A draft (``device is None``) owns no
+    record at all, and corrupt layers read as "no record" instead of raising.
     """
     if device is None:
         return {}
-    test = saved.get("test")
-    if not isinstance(test, dict):
-        return {}
-    device_node = test.get("device")
-    if not isinstance(device_node, dict):
-        return {}
-    record = device_node.get("test")
-    if not isinstance(record, dict) or not record:
-        return {}
-    if str(record.get("device_id") or "") != device.id:
-        return {}
-    return record
+    return setup_store.device_test_record(saved, device.id)
 
 
 def _catalog_entries(data_dir: str | Path | None) -> tuple[dict[str, Any], list[str]]:
@@ -1226,8 +1214,8 @@ def install_v2_routes(
 
     def _setup_summary(config: Config, device: DeviceConfig) -> dict[str, Any]:
         stored = setup_store.read(config.system.data_dir)
-        # The setup store has one house-wide `test/device/test` slot; only this
-        # device's own record may show up on its detail card (C-002 A-5). Corrupt
+        # Only this device's own record may show up on its detail card (C-002 A-5);
+        # the per-device store keeps A and B independent of test order. Corrupt
         # layers read as "no record", and only the JSON boolean true is a pass.
         record = _device_test_record(stored, device)
         resolved = resolve(device, config)
@@ -1316,7 +1304,7 @@ def install_v2_routes(
             "contract": "C-002/1",
             "api_version": "2.0",
             "rui_version": __version__,
-            "compat": {"min": "0.6.0", "max_exclusive": "0.7.0"},
+            "compat": {"min": "0.6.0", "max_exclusive": "0.8.0"},
             "features": {
                 "house": True,
                 "house_audio": True,
@@ -2525,8 +2513,8 @@ def install_v2_routes(
                  "transport": transport, "checks": checks}
         setup_store.update(
             config.system.data_dir,
-            lambda data, entry=entry: setup_store.set_value(
-                data, ("test", "device", "test"), entry),
+            lambda data, entry=entry: setup_store.record_device_test(
+                data, device.id, entry),
         )
         return result
 
@@ -3061,8 +3049,9 @@ def install_v2_routes(
             "actions": [],
         }
 
-        # Only this device's own record counts: the setup store is house-wide, and a
-        # draft (device is None) owns no record at all (C-002 A-5).
+        # Only this device's own record counts (per-device store, with the legacy
+        # single slot as fallback), and a draft (device is None) owns no record at
+        # all (C-002 A-5).
         stored_test = _device_test_record(saved, device)
         # `device.test` always writes this record (ok/at/checks), so a non-empty dict
         # means a probe ran. `ok=false` is a result, not a missing one: the live link

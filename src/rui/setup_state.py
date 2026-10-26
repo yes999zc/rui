@@ -109,6 +109,67 @@ def iso_now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+# The device-test record lives in two places for one release: ``test/device/test`` is
+# the pre-0.6 single house-wide slot (the last test of any room; v1 still reads it),
+# and ``test/device/by_id/<id>`` is the per-device history the v2 detail card and the
+# setup plan read. Both writers go through :func:`record_device_test` so the two stay
+# in step; readers go through :func:`device_test_record` so an old file still works.
+_DEVICE_TEST: tuple[str, ...] = ("test", "device", "test")
+_DEVICE_TEST_BY_ID: tuple[str, ...] = ("test", "device", "by_id")
+
+
+def _dict(value: object) -> dict[str, Any]:
+    """A JSON layer as a dict; anything else is "nothing stored" (setup.json is editable)."""
+    return value if isinstance(value, dict) else {}
+
+
+def device_test_record(data: dict[str, Any], device_id: str) -> dict[str, Any]:
+    """The stored ``device.test`` record for one device; ``{}`` when there is none.
+
+    The per-device record wins. The map key is the identity, and the record must agree
+    with it: a hand-edited entry naming another device is corrupt, not evidence for
+    this one. The legacy single slot is the fallback for files written before the
+    per-device map existed, and only when its record names the same device -- a record
+    from another room is never evidence for this one. Every layer is checked with
+    :func:`_dict` because setup.json is user-editable: a non-dict layer means "no
+    record", not an exception.
+    """
+    device_id = str(device_id or "").strip()
+    if not device_id:
+        return {}
+    node = _dict(_dict(_dict(data.get("test")).get("device")).get("by_id"))
+    record = node.get(device_id)
+    if isinstance(record, dict) and record:
+        if str(record.get("device_id") or "").strip() == device_id:
+            return record
+        return {}
+    legacy = _dict(_dict(_dict(data.get("test")).get("device")).get("test"))
+    if legacy and str(legacy.get("device_id") or "").strip() == device_id:
+        return legacy
+    return {}
+
+
+def record_device_test(data: dict[str, Any], device_id: str,
+                       entry: dict[str, Any]) -> bool:
+    """Store ``entry`` as ``device_id``'s test result and as the legacy last-test slot.
+
+    Both consoles write here (the v2 routes and the v1 wizard), so whichever one ran
+    last, the device's own record is the newest for that device. Keeping the legacy
+    slot authoritative for "the last test in this house" preserves the v1 device
+    list's behaviour (it has no device dimension); the per-device map is what makes
+    the v2 detail card and setup plan independent of test order. Returns whether
+    anything changed, as :func:`update` expects.
+    """
+    device_id = str(device_id or "").strip()
+    if not device_id:
+        return False
+    # set_value replaces a corrupt intermediate layer with a dict, so a hand-edited
+    # ``"device": []`` cannot stop the write.
+    changed = set_value(data, _DEVICE_TEST, entry)
+    changed = set_value(data, _DEVICE_TEST_BY_ID + (device_id,), entry) or changed
+    return changed
+
+
 def epoch(value: object) -> float | None:
     """Parse an ISO timestamp written by :func:`iso_now` (None when unusable)."""
     text = str(value or "").strip()

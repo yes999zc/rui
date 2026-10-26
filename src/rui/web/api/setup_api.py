@@ -69,12 +69,14 @@ _CONNECT_HINTS: dict[str, dict[str, str]] = {
 def _device_test_record(saved: dict, device: DeviceConfig | None) -> dict:
     """The stored ``device.test`` record, but only when it belongs to ``device``.
 
-    The setup store keeps one house-wide ``test/device/test`` slot, so the probe a
-    test wrote for one room must never become evidence for another room, and a draft
-    (``device is None``) owns no record at all. Records without a matching
-    ``device_id`` -- including pre-M6 ones that never wrote the field -- are "no
-    record" for everyone. Every layer is checked with ``isinstance`` because
-    ``setup.json`` is user-editable and a non-dict there must not fail the read.
+    v1 keeps reading the legacy house-wide ``test/device/test`` slot (the last test in
+    this house), and only accepts it when the record names this device, so a probe a
+    test wrote for one room never becomes evidence for another room. A draft (``device
+    is None``) owns no record at all, and records without a matching ``device_id`` --
+    including pre-M6 ones that never wrote the field -- are "no record" for everyone.
+    The v2 routes read the per-device map instead (see :mod:`rui.setup_state`). Every
+    layer is checked with ``isinstance`` because ``setup.json`` is user-editable and a
+    non-dict there must not fail the read.
     """
     if device is None:
         return {}
@@ -1135,8 +1137,8 @@ def install_setup_routes(
                          "checks": checks}
                 setup_store.update(
                     data_dir,
-                    lambda data, entry=entry: setup_store.set_value(
-                        data, ("test", "device", "test"), entry),
+                    lambda data, entry=entry: setup_store.record_device_test(
+                        data, device.id, entry),
                 )
             elif action == "try.run":
                 text = str(values.get("text") or "").strip()
