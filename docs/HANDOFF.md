@@ -12,6 +12,7 @@
 - **B1c-1 已合入 `300b2a9` / 桥 `575b443`**（task-14，PASS+VERIFIED）：54 条设备语义测试（credit 5 / device-services 7 / kws 5 / led 18 / playback 1 / turn-audio 6 / vendor 11 / console-secret 1）**逐条字节一致**搬到桥仓；core 1655/17 → **1612/6**，桥仓 44 → **87/11**；`test_security_fixes` 通用 20 条留在 core。
 - **B 剩余两件**：①**双跑对比**（0.7.2 内置 vs 0.7.6 外置，需 LX06 真机 → 白天）；②**删测试夹具** `tests/fixtures/legacy_lx06`（9 个通用测试仍依赖 lx06 注册/4412/params；需把 sample-plug 扩成替代 → **task-15，排 0.7.7**，不阻塞 0.7.6）。
 - **0.7.6 暂不发版**：出口条件里的双跑要真机，按纪律不打 tag；白天补双跑后再发。
+- **0.7.7（C 控制台审计）已开工**（task-16，交付 `docs/audit/console-functional.md`）：无头逐页逐按钮实测，夜间不接真机/不出声；基线清单位于 `docs/audit/console-audit-scope.md`（14 路由 / 7 tab / 24 端点 / ~95 元素）。
 - 版本重排已写进 `docs/ROADMAP-0.8.md`（`b9a9059`）：0.7.4 = P0 修复、0.7.5 = TLS/Done6、0.7.6 = B、0.7.7 = C、0.7.8 = D。
 
 ## 0.7.5 状态（2026-10-26 23:35，进行中）
