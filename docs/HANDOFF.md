@@ -4,7 +4,7 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
-## 0.7.4 状态（2026-10-26 22:40，进行中）
+## 0.7.4 状态（2026-10-26 23:15，已发布）
 
 - 主题按 9 哥 指示改为 **P0/P1 修复**（`docs/audit/hermes-triage.md`）：原「TLS + Done6」顺延到 0.7.5。
 - task-5（P0-A：rui#18 请求体上限 + rui#17 `_greet` 忙等）**review PASS + verify VERIFIED**，已合入 `cf42695`：全量 **1645/17**（连续 3 次），flaky 0/20，三态实测 413/401/422，greet ticker 865/s、冷启动 3.6 ms；反向变异 5 组。
@@ -65,6 +65,16 @@
 ### 白天项（今晚不做）
 - 唤醒→指令→播放、音质/距离/打断、EQ 耳测、4 台联调、24h 稳定性满窗。
 - 生产升级演练的「出声验证」部分（可先做不出声的升级/回滚 + `/health` 核对）。
+
+### 0.7.4 发布（2026-10-26 23:15）
+| 项 | 值 |
+|---|---|
+| commit | house `13469a4`；xiaoai `749d4d3` |
+| tag | `v0.7.4`（tag 对象 `42262b4`）、xiaoai `v0.2.2` |
+| 镜像 | `ghcr.io/yes999zc/rui:0.7.4` = `sha256:de26c5bacc00fbbb807da11d9eb1d7427125aab154703997d5a0131c23d8e749`（amd64 + arm64；`:0.7`/`:latest` 同 digest） |
+| release | `rui/releases/tag/v0.7.4`、`rui-xiaoai-bridge/releases/tag/v0.2.2`（均非 draft/prerelease） |
+| CI | tag 上 ci / security / secret-scan / docker-publish **四绿**（main + tag 两个 publish run 均 success） |
+| 版本 | core 0.7.4；dot2 1.3.1（无改动）；xiaoai 0.2.2 |
 
 ## 版本与契约
 
