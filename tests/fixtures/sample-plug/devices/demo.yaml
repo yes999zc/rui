@@ -1,0 +1,21 @@
+# One synthetic device: the smallest manifest that still exercises the contract
+# kit's manifest + adapter paths. Playback/volume/led are declared so the fake
+# adapter's sink checks run; wake stays on RUI KWS (no device_wake capability),
+# which keeps the fixture independent of a real device-side wake engine.
+schema: rui-device/v1
+id: demo-speaker
+model: "DEMO-01"
+name: "Demo Speaker"
+vendor: "rui fixtures"
+class: A
+transport: inbound
+protocol: {kind: ws, version: "1"}
+capabilities: [playback, volume, led]
+runtime:
+  mode: in-process
+  entrypoint: "demo_adapter:build"
+  listen_port: 4412
+  token_env: RUI_DEVICE_TOKEN
+params:
+  - {key: host, label: "Speaker address", type: string, required: true, placeholder: "<speaker-host>"}
+  - {key: room, label: "Room", type: string, default: "Test room"}

@@ -27,3 +27,10 @@ acceptance-runs/
 
 # Local output of scripts/security-pip-audit.sh; CI uploads it as an artifact.
 security-reports/
+
+# Coverage/test artifacts from the 0.7.3 baseline workflow (scripts/coverage_report.py).
+.coverage
+.coverage.*
+coverage.json
+pytest-report.xml
+python-version.txt

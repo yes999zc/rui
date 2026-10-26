@@ -1,0 +1,104 @@
+{
+  "schema": "rui-coverage-baseline/v1",
+  "generated_at": "2026-10-26T12:33:07+00:00",
+  "commit": "aad18a5",
+  "worktree_dirty": true,
+  "python": "3.13.13",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "command": "uv run pytest --cov=rui --cov-branch --cov-report=term-missing --cov-report=json:coverage.json --junit-xml=pytest-report.xml",
+  "tests": {
+    "collected": 1644,
+    "passed": 1627,
+    "skipped": 17,
+    "xfail": 0,
+    "failed": 0
+  },
+  "overall": {
+    "line_percent": 80.93,
+    "branch_percent": 69.54,
+    "covered_lines": 18425,
+    "num_statements": 22767,
+    "covered_branches": 5157,
+    "num_branches": 7416
+  },
+  "packages": {
+    "(root)": {
+      "line_percent": 82.94,
+      "branch_percent": 71.03,
+      "covered_lines": 851,
+      "num_statements": 1026
+    },
+    "audio": {
+      "line_percent": 80.72,
+      "branch_percent": 65.6,
+      "covered_lines": 3248,
+      "num_statements": 4024
+    },
+    "channels": {
+      "line_percent": 52.81,
+      "branch_percent": 35.64,
+      "covered_lines": 461,
+      "num_statements": 873
+    },
+    "config": {
+      "line_percent": 94.05,
+      "branch_percent": 86.22,
+      "covered_lines": 1139,
+      "num_statements": 1211
+    },
+    "device": {
+      "line_percent": 82.35,
+      "branch_percent": 74.34,
+      "covered_lines": 737,
+      "num_statements": 895
+    },
+    "doctor": {
+      "line_percent": 88.08,
+      "branch_percent": 78.29,
+      "covered_lines": 377,
+      "num_statements": 428
+    },
+    "music": {
+      "line_percent": 88.03,
+      "branch_percent": 80.39,
+      "covered_lines": 1529,
+      "num_statements": 1737
+    },
+    "plugins": {
+      "line_percent": 75.73,
+      "branch_percent": 63.01,
+      "covered_lines": 1470,
+      "num_statements": 1941
+    },
+    "providers": {
+      "line_percent": 72.83,
+      "branch_percent": 60.11,
+      "covered_lines": 839,
+      "num_statements": 1152
+    },
+    "security": {
+      "line_percent": 87.03,
+      "branch_percent": 80.0,
+      "covered_lines": 208,
+      "num_statements": 239
+    },
+    "session": {
+      "line_percent": 90.66,
+      "branch_percent": 83.17,
+      "covered_lines": 1573,
+      "num_statements": 1735
+    },
+    "tools": {
+      "line_percent": 77.54,
+      "branch_percent": 64.77,
+      "covered_lines": 1077,
+      "num_statements": 1389
+    },
+    "web": {
+      "line_percent": 80.37,
+      "branch_percent": 68.4,
+      "covered_lines": 4916,
+      "num_statements": 6117
+    }
+  }
+}

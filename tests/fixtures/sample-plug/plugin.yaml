@@ -1,0 +1,15 @@
+# Minimal Socket & Plug fixture for the CI `rui plug-test` smoke step.
+#
+# It intentionally does not live under plugs/xiaoai: the built-in LX06 plug is
+# scheduled for removal in 0.7.5, and the smoke test must keep working without it.
+schema: rui-plugin/v0
+id: sample-plug
+name: "Sample Plug (contract smoke fixture)"
+version: 1.0.0
+rui_compat: ">=0.3.0 <0.8.0"
+license: MIT
+maintainer: "rui maintainers"
+homepage: "https://example.invalid/sample-plug"
+trust: trusted
+devices:
+  - devices/demo.yaml

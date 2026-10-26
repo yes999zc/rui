@@ -13,9 +13,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          # Each matrix leg must actually use its interpreter; without this both
+          # coverage artifacts would describe the runner's default Python.
+          python-version: ${{ matrix.python-version }}
       - run: uv sync --extra dev
-      - run: uv run ruff check src tests
-      - run: uv run pytest
+      - run: uv run ruff check src tests scripts/coverage_report.py
+      # The artifact itself must prove which interpreter ran: coverage.json only
+      # records coverage.py's version and the JUnit XML has no such property.
+      - run: uv run python -V | tee python-version.txt
+      # Coverage is produced on every test job so a regression is visible in the
+      # run, not just in a local report. There is no threshold yet (0.7.3 only
+      # establishes the baseline): coverage-baseline.json is the comparison point.
+      - run: >-
+          uv run pytest
+          --cov=rui --cov-branch --cov-report=term-missing
+          --cov-report=json:coverage.json
+          --junit-xml=pytest-report.xml
+      # Contract-kit smoke: the fixture under tests/fixtures is independent of
+      # plugs/xiaoai, which 0.7.5 removes. A non-zero exit fails the job.
+      - run: >-
+          uv run rui plug-test tests/fixtures/sample-plug
+          --adapter tests/fixtures/sample-plug/demo_adapter.py:build
+      # Keep the numbers even when the tests fail (a coverage drop may be the
+      # reason); missing files must not turn a red test job into an artifact error.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: |
+            coverage.json
+            pytest-report.xml
+            python-version.txt
+          if-no-files-found: warn
 
   image:
     runs-on: ubuntu-latest
