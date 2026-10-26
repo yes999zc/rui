@@ -20,7 +20,9 @@
 | 非阻塞（进 post-release backlog） | 8 | 见 §1 #3–#10 |
 | 明确不做 | — | 重构、删代码、性能压测、动生产、改下游仓库 |
 
-**一句话结论**：代码本身的整洁度高于同类项目平均（ruff 全绿、0 个 TODO/FIXME、1518 条测试、
+**一句话结论**：代码本身的整洁度高于同类项目平均（ruff 全绿、0 个 TODO/FIXME、测试总数按 0.7.3
+规范口径为 **1651 / 1634 / 17 / 0**（collected/passed/skipped/xfail，见
+`docs/audit/coverage-baseline.md`；本审计当日 `--collect-only` 为 1518）、
 零未引用前端模块、死代码仅 ~30 行）；真正卡住 0.7.0 的不是"代码烂"，而是**版本兼容上限**与
 **已部署镜像不可重建**这两件流程性事实。
 
@@ -403,7 +405,7 @@ adapter 与 core 之间没有第二份 ws 协议实现（core 只经 `runtime.en
 | 层 | 成本 | 证据 |
 |---|---|---|
 | Python 导入 | **364 ms / 726 模块**（实测） | `import rui.web.api.app` 计时 |
-| 配置加载 + 恢复 | 未测 | `__main__.py:509-528`（`load_with_recovery`） |
+| 配置加载 + 恢复 | 功能已测（`tests/test_config_recovery.py`）；**耗时**未测 | `__main__.py:509-528`（`load_with_recovery`） |
 | HA over MCP | 一次握手（有超时，见 `tools/mcp_manager.py:331-338`） | `app.py:2425` |
 | 通用 MCP | 并发启动，单服务器失败不阻塞 | `app.py:2440`，`mcp_manager.py:518-519` |
 | `runner.warm()` | **可能是最大项**：本地 ASR 1.1 GB 模型 + TTS/LLM 连接 | `turn.py:430-453`；`app.py:2447`（串行 await） |
@@ -469,7 +471,7 @@ adapter 与 core 之间没有第二份 ws 协议实现（core 只经 `runtime.en
 | 配置热更 | 无 watcher；手改需重启（§1 #10） | 否 |
 | 文档滞后 | `docs/multi-device-design.md:19-25` 仍写"运行时只允许一个音频面驱动一台设备"，而 `fleet.py` 已实现多平面（Phase 2）；该文档是 0.4.1 口径 | 否 |
 | CI 缺类型检查 | `.github/workflows/ci.yml` 只跑 `ruff check` + `pytest`，无 mypy/pyright；代码里 27 处 `type: ignore` | 否 |
-| 健康信号（正面） | `ruff check src web` → **All checks passed**；`pytest --collect-only` → **1518** 条；`tests/test_kernel_decoupling.py` → passed | — |
+| 健康信号（正面） | `ruff check src web` → **All checks passed**；`pytest --collect-only` → **1651** 条（0.7.3 工作树；四计数 1651/1634/17/0，见 `coverage-baseline.md`）；`tests/test_kernel_decoupling.py` → passed | — |
 | 凭据卫生（交接风险） | HANDOFF「风险与未决」记录 NAS 密码 / `RUI_HA_TOKEN` / `web.auth_token` 曾在子代理输出回显，建议轮换 | 否（非代码问题，但发布前应处理） |
 
 ---
@@ -545,7 +547,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -c \
 
 # 健康信号
 .venv/bin/ruff check src web                    # All checks passed
-.venv/bin/python -m pytest --collect-only -q | awk -F': ' '/^tests\//{s+=$2} END{print s}'   # 1518
+.venv/bin/python -m pytest --collect-only -q | awk -F': ' '/^tests\//{s+=$2} END{print s}'   # 1651（0.7.3；四计数见 coverage-baseline.md，审计当日 1518）
 ```
 
 ---

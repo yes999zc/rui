@@ -20,7 +20,7 @@
 | ID | 声明 | 位置 | 现状 | 现有测试 | 变成什么测试 | 批次 |
 |---|---|---|---|---|---|---|
 | HE-03 | `first_response_ms` 常为 null，「证据不足」 | `docs/analysis/dot2-vs-xiaoai.md:45` | CI 测试 | `tests/test_he03_first_response_null.py`（5 条；`pytest -q tests/test_he03_first_response_null.py`） | 固定 trace fixture 回放：null 只计 skipped、不补 0；生产端 `play_start` 上报已正确（filler 不计），无需改代码 | 1 |
-| HE-09 | 源码全量镜像构建 + 镜像体积（431 MB）未验证 | `docs/release/v0.7.0.md:40,55`、`HANDOFF:415` | 待补 | 无（`docker-publish` 只走薄层） | CI 干净 checkout `docker build` → 断言构建成功 + `docker image inspect` 体积记录 | 流水线 |
+| HE-09 | 源码全量镜像构建 + 镜像体积（431 MB）未验证 | `docs/release/v0.7.0.md:40,55`、`HANDOFF` §「风险与未决」 | 待补 | 无（`docker-publish` 只走薄层） | CI 干净 checkout `docker build` → 断言构建成功 + `docker image inspect` 体积记录 | 流水线 |
 | HE-10 | 每台设备 RSS/CPU（1 vs 2 plane）未测，「线性增长」是断言 | `audit/2026-10-code-health.md:40,250` | RSS 未测 | 无 | fake-plane soak + `docker stats` 采样，断言斜率阈值 | 环境协议 |
 | HE-11 | boot → healthy 秒数未验证（只有文档 85 s） | `code-health:415,479`、`runbook:406` | 未验证 | 无 | CI：限时启动容器 → `/health` 200，3 次取中位 | 环境协议 |
 | HE-12 | 源码运行路径（`plugs/` fallback，无镜像插件）未验证 | `code-health:487` | CI 测试 | `tests/test_he12_source_plug_fallback.py`（2 条；`pytest -q tests/test_he12_source_plug_fallback.py`） | 合成 `plugs/` 源树 + fake adapter：fallback manifest 授权 in-process 注册，且同名 user plug 不能覆盖 builtin 来源 | 1 |
@@ -37,22 +37,22 @@
 
 | ID | 声明 | 位置 | 现状 | 判据 | 需要 |
 |---|---|---|---|---|---|
-| X-01 | 音量控制从未系统验证（两台设备） | 三仓 README | 未测 | 设 5 档 → 读回一致、cap 处不失真；`POST /api/v1/device/volume` ×5 + 耳听 | 真机 |
+| X-01 | 音量控制从未系统验证（两台设备） | 三仓 README | 未测 | 设 5 档（v2 action `volume.set` args `{"value":V}`，V=1–255；或 v1 `PUT /api/v1/device/volume` body `{"value":V,"device":"<id>"}`）→ `volume.read` 回读一致、cap 处不失真 + 耳听 | 真机 |
 | X-02 | 指示灯未测 | 三仓 README | 未测 | 唤醒/思考/告别序列与 `tests/test_led.py` 顺序一致（拍照留证） | 真机 + 照片 |
 | X-03 | 多设备并发未测（音量/LED/4 台） | 三仓 README、`release/v0.7.2.md:57` | 未测 | `acceptance-4devices.md` §5.3/§7 表格填满、0 串台、0 `lost_same_word`；任一 null = 失败 | 4 台（设备未到） |
 | X-04 | LX06 语音指令成功率未统计 | house-ear README:110、xiaoai README:91 | 未测 | 6 句 × 5 轮 ≥26/30（同 Dot2 口径） | 真机 + 人声 |
 | X-05 | LX06 唤醒 19/20、打断 205.2 ms 是 2026-10-24 历史，无 0.7.2 重测 | xiaoai README:75,89,90 | 历史实测 | `acceptance-v1.py wake --trials 20` ≥19/20；`barge --trials 3` stop-push ≤300 ms | 真机 |
 | X-06 | Dot2 矩阵（30/30、26/30、8/8、10/10）测于 0.7.1/p21，0.7.2 未重测 | house-ear README:105、dot2 README:88 | 未重测 | 同分母重采；每个数字带 `--log` 行号 | 真机 + 校准音源 |
-| X-07 | EQ/限幅只过测量，没过耳朵 | dot2 README:98、`HANDOFF:410` | 无听测 | 盲听 A/B：3 首、5 分制、随机顺序、≥4/5 且无失真 | 9 哥 耳朵 |
+| X-07 | EQ/限幅只过测量，没过耳朵 | dot2 README:98、`HANDOFF` §「风险与未决」 | 无听测 | 盲听 A/B：3 首、5 分制、随机顺序、≥4/5 且无失真 | 9 哥 耳朵 |
 | HE-01 | D5 告别自回声误开 turn：加了 `reply_finished` 但仍「待验证」 | `docs/plan-to-0.6.md:21` | 仍待验证 | 把告别 PCM 当 mic 输入注入 → 0 额外 turn；真机 10 次告别 | CI 部分 + 真机 |
-| HE-02 | cue 回声在「冷启动+不削波+lag>800 ms」或「重叠<110 ms」仍可能漏 | `release/v0.7.2.md:53`、`HANDOFF:386` | 已知限制 | 门禁测试补 lag 900/1200 ms、overlap 50 ms；真机 A/B | 真机 |
+| HE-02 | cue 回声在「冷启动+不削波+lag>800 ms」或「重叠<110 ms」仍可能漏 | `release/v0.7.2.md:53`、`HANDOFF` §「已知限制（0.7.2 发布时点）」 | 已知限制 | 门禁测试补 lag 900/1200 ms、overlap 50 ms；真机 A/B | 真机 |
 | HE-04 | 首声可闻延迟从未声学测量 | `docs/audio-latency.md:154` | 未测 | mic 录音 + `play_start` 时间相关，5 轮给 P50/P95（暂不设门） | 真机 + 录音 |
 | HE-05 | 3–4 m 唤醒距离从未尝试 | `docs/acceptance.md:99` | 未做 | `acceptance-v1.py wake --trials 10 --label far-field`（只记录） | 真机 |
 | HE-06 | NAS 断电自启未测 | `docs/runbook.md:173,403` | 推断 | 真断电一次：5 min 内 `/health` 200 + `audio_plane=true`，无需人工 | NAS |
 | HE-07 | 真机重连时序（Wi-Fi 抖动/IP 变化）未测 | `runbook:404`、`device-management-research.md:973` | 未测 | 断开 AP / 改 IP → `speaker connected` <10 s、重试 ≤1 | 真机 + 路由器 |
 | HE-08 | 24h/3 天长稳未满窗 | `release/v0.7.0.md:37` | 未满窗 | 0 5xx、0 plane 重启、RSS 斜率 <1 %/h | 真机 |
 | HE-15 | 中文 OWW 模型效果未知；中文 onnx stem 未试 | `plan/speaker-tuning.md:448,454` | 效果待测 | 每变体 20 次唤醒 ≥19/20，否则砍功能 | 真机 + 自训模型 |
-| HE-16 | 音乐中 2 m 短指令未测 | `HANDOFF:177` | 未测 | 10 次 ≥10/10（同 1 m 口径） | 真机 |
+| HE-16 | 音乐中 2 m 短指令未测 | `HANDOFF` §「task-19 真机 A/B」 | 未测 | 10 次 ≥10/10（同 1 m 口径） | 真机 |
 | D2-01 | canary 0.6.0：无真机，唤醒/播放/AEC/音量/token 未验证 | `dot2 docs/canary-0.6.0-official-image.md:251` | 未验证 | 接设备跑 wake/play/barge + token 重连 | 真机 |
 | D2-03 | 0.2.2/0.3.4 部署从未验证设备链路；`install.sh` 未重跑 | `dot2 docs/deploy-0.3.4-user-report.md:296-299` | unverified | 设备侧部署验收 + headless 控制台点一遍 + 一次性容器重跑 `install.sh` | 真机 + 容器 |
 | D2-05 | `primeWait 14–22 ms` 未验证；那一轮没声音、没听测 | `stutter-adapter-options.md:390` | 未验证 | 日志断言 primeWait + 人工听测清单 | 真机 |
@@ -64,21 +64,121 @@
 | D2-12 | 0.2.2 兼容只做过静态分析（TLS hostname/4412、`oww_wake` 形状、trust 自定义） | `rui-0.2.2-dot2-compat.md:576-586` | 未实测 | 设备 TLS/端口实测；未知消息进 debug 分支的单测；定 trust 策略 | 真机 + CI |
 | D2-13 | 真机第一轮遗留：音量适配、长回复噪声、仅唤醒/多轮/距离、2 min 基线太短 | `real-machine-round-1.md:51-53` | 待补 | 静音基线 3×5 min；长回复听测；逐距离各 5 次 | 真机 |
 
-## 3. 文档矛盾（0.7.3 卡片 K-0.7.3-3 必须逐条给终态）
+## 3. 文档矛盾（0.7.3 终态，逐条已落地）
 
-| # | 矛盾 | 判定基准 |
-|---|---|---|
-| 1 | `code-health:406`「配置加载+恢复未测」vs 已有 `test_config_recovery.py` | 代码在 → 缺的是**耗时**测量；改措辞 |
-| 2 | READMEs「0.7.2 未重测」vs `HANDOFF:223` 标成 v0.7.2 | 采样日期 2026-10-26 15:01 的镜像是 0.7.1/p21 → **README 对**，改 HANDOFF |
-| 3 | dot2 README「volume 未测」vs `milestone-m1:23`「音量/响度 ✅」 | 前者指**控制端点**，后者指**响度/EQ**；两处各自限定语义 |
-| 4 | `socket-plug-v1.md:309` 说 plug-test 子进程 vs `plug-test-kit.md:22` 说 in-process | 以代码为准（audit P2-14：in-process）→ 改前者 |
-| 5 | barge 指标：stop-push ≤300 ms vs acoustic P50 ≤600 ms | 两个指标都留，README 的 8/8、205.2 ms 必须注明是 stop-push |
-| 6 | 测试总数 1512 / 1518 / 1571 | 以 0.7.3 的规范口径（collected/passed/skipped/xfail）为准，三处统一 |
-| 7 | xiaoai CHANGELOG 把历史 19/20、205.2 ms 放 `### Verified` 下 | 改为 `### Historical measurements (2026-10-24, not re-tested)` |
-| 8 | canary「wake/playback/AEC/volume 未验证」vs dot2 README 30/30 | 不同轮次；互相加注日期 + 范围（canary 指 0.6.0 官方镜像、无真机） |
+> 引用约定：`docs/HANDOFF.md` 一律用**段落锚点**（文件顶部会不断插入新快照，绝对行号必然漂移）；
+> 其他文件仍用 file:line，因为它们的插入点稳定。
+
+| # | 矛盾（原位置） | 判定（谁对） | 改动（本卡工作树，file:line） | 未改/备注 |
+|---|---|---|---|---|
+| 1 | `code-health:406`「配置加载 + 恢复 未测」vs 已有 `tests/test_config_recovery.py` | 功能测试**已存在**；真正缺的是**启动耗时**测量 | `docs/audit/2026-10-code-health.md:408` → 「功能已测（…）；**耗时**未测」 | 保留「耗时未测」；耗时预算归 HE-17（0.7.7），不是再写一遍功能测试 |
+| 2 | READMEs「0.7.2 未重测」vs `HANDOFF` §「三仓 README 的分仓口径」把同批数字挂在 v0.7.2 下 | **README 对**：数字来自 0.7.1/p21 采样（2026-10-26 15:01） | `docs/HANDOFF.md` §「三仓 README 的分仓口径」加「0.7.1/p21 实测；0.7.2 未重测」；§「README 四项评审结论」标完成；README 矩阵原本已正确（house `README.md:105`、dot2 `README.md:88`） | 不改历史 commit/发布记录；不改 HANDOFF 其他轮次记录 |
+| 3 | dot2 README「volume 未测」vs `milestone-m1:23`「音量/响度 ✅」 | 两句都对但**语义不同**：README 指**控制端点**，m1 指**响度/EQ** | `rui-dot2-bridge/README.md:97,211` 限定为控制端点；`rui-dot2-bridge/docs/milestone-m1.md:23-24` 改为「响度/EQ（不是控制端点）」「音量回读（控制端点）」 | 未改 m1 的 ✅ 结论（A/B 证据仍有效） |
+| 4 | `socket-plug-v1.md:309`（旧文）说 plug-test 子进程 vs `plug-test-kit.md:22` in-process | **kit 文档/代码对**：in-process import，无子进程 | `docs/socket-plug-v1.md:387` 写死「kit 在调用方进程内 import `--adapter`（in-process，不是子进程/容器/沙箱）」 | `socket-plug-v1.md:268` 仍保留否定式「不启动子进程」（讲 adapter 入口，不是 kit）；本卡只固定 kit 执行模型措辞，不改 268。代码证据：`src/rui/plugins/contract.py:1065-1130`（`importlib` 进程内加载） |
+| 5 | barge 指标 stop-push ≤300 ms vs acoustic P50 ≤600 ms；README 的 8/8、205.2 ms 未注明判据 | **两个指标都保留**：8/8 与 205.2 ms 是 **stop-push**（server 停播→设备丢队列），不是声学端到端 | `README.md:111,248`；`rui-dot2-bridge/README.md:95,209`；`rui-xiaoai-bridge/README.md:90,197`；`docs/HANDOFF.md` §「三仓 README 的分仓口径」全部加「stop-push / 非声学端到端」 | acoustic P50 ≤600 ms 仍是 m1 验收项（`milestone-m1.md:22`），不与 stop-push 合并 |
+| 6 | 测试总数 1512 / 1518 / 1571 三口径 | **以 0.7.3 四计数为准**：`1651 / 1634 / 17 / 0`（collected/passed/skipped/xfail；见 `docs/audit/coverage-baseline.md`） | `docs/audit/2026-10-code-health.md:23,474,550`；`docs/HANDOFF.md` §「README 截图与稿件的当前状态」；本文件 §3 本条 | `docs/release/v0.7.0.md:25,39` 是 0.7.0 发布历史快照、`docs/ROADMAP-0.8.md:66` 是当时的任务描述，均不在本卡写范围，保留原数字；新文档一律引用 baseline |
+| 7 | xiaoai `CHANGELOG` 把 19/20、205.2 ms 放 `### Verified` 下，README 却写 0.7.2 未复测 | **README 对**：19/20、205.2 ms 是 2026-10-24 历史实测 | `rui-xiaoai-bridge/CHANGELOG.md:15-23`：新增 `### Historical measurements (2026-10-24, not re-tested)`；`### Verified` 只留 9 项契约测试 + 未测项 | 数字本身不改；只移动归属并补 stop-push 判据 |
+| 8 | canary「wake/playback/AEC/volume 未验证」vs dot2 README 30/30 | **不同轮次，两者都对**：canary = 0.6.0 官方镜像、arm64、无真机（2026-10-26）；README = rui 0.7.1/p21 真机轮次（2026-10-26 15:01） | `rui-dot2-bridge/docs/canary-0.6.0-official-image.md:249-252` 标注轮次/范围/不可互证；`rui-dot2-bridge/README.md:89,203` 反向加注 canary 日期与「无真机」 | 未改 canary 的「未验证」清单（该轮次确实未测） |
 
 ## 4. 与 0.7.8 验收的关系
 
 - **必须做完**（进 Done 6 / 手册）：X-01 音量、X-03 多设备（至少 2 台）、HE-06 断电自启、HE-08 24h 初查、D2-11 固件参考（若设备在）。
 - **明确不做，写进「已知限制」**：X-02 LED 照片、X-07 EQ 耳测（等 9 哥）、HE-05 远场、HE-15 中文 OWW、D2-07/08/09 声学仪器项。
 - **CI 可测项不留到 0.7.8**：batch-1 在 0.7.3 完成，batch-2 在 0.7.7 完成；0.7.8 只出最终覆盖率报告。
+
+## 5. 覆盖率与未覆盖清单（0.7.3）
+
+### 5.1 口径
+
+- 基线文件：`docs/audit/coverage-baseline.md` / `docs/audit/coverage-baseline.json`（本机 macOS + Python 3.13.13，
+  行 **80.95%**、分支 **69.55%**；命令 `uv run pytest --cov=rui --cov-branch --cov-report=term-missing`）。
+- CI artifact 实测（commit `d21bb5f`，task-1 时点，尚未包含 task-2 新增测试）：Python 3.11 = **76.59%**、3.12 = **77.59%**，120 files。
+  跨平台/解释器有差，引用时以「哪个 artifact + 哪个 Python」为准；本表引用 0.7.3 最终本机基线（`cd2d0a2`），不混用 CI 数字。
+- 每个一级子包的行/分支数字与 covered/total 均来自基线 JSON；「未覆盖行」= statements − covered_lines。
+
+### 5.2 每包数字 + 缺口主类
+
+| 子包 | 行 % | covered / statements | 分支 % | 未覆盖行 | 缺口主类 | 说明 / 0.7.7 输入 |
+|---|---:|---:|---:|---:|---|---|
+| `(root)` | 82.94 | 851 / 1026 | 71.03 | 175 | 可单测未写 | `__main__.py` 101、`healthcheck.py` 27、`setup_state.py` 22；无 batch-2 对应，进 0.7.8 后 backlog |
+| `audio` | 80.72 | 3248 / 4024 | 65.60 | 776 | 可单测未写（主）+ 需真机子集 | `process.py` 436、`client.py` 100、`kws.py` 81；fake-plane/时钟注入归 **HE-14**；ALSA/真实 KWS/AEC 走 §6 真机协议 |
+| `channels` | 52.81 | 461 / 873 | 35.64 | 412 | 可单测未写 | `weixin.py` 119、`telegram.py` 113、`cli.py` 107；无 batch-2 卡，进 0.7.8 后 backlog |
+| `config` | 94.05 | 1139 / 1211 | 86.22 | 72 | 可单测未写 | `store.py` 21、`catalog.py` 20、`recovery.py` 19；**HE-17** 只补 `load_with_recovery` 耗时预算（功能已测） |
+| `device` | 82.46 | 738 / 895 | 74.67 | 157 | 可单测未写 | `loader.py` 113（adapter env/entrypoint 解析）、`registry.py` 24；归 **HE-13**；真实重连/token 走 §6 |
+| `doctor` | 88.08 | 377 / 428 | 78.29 | 51 | 可单测未写 | `probes.py` 51（环境探测分支）；无 batch-2 卡 |
+| `music` | 88.03 | 1529 / 1737 | 80.39 | 208 | 可单测未写 | `jellyfin.py` 43、`subsonic.py` 36、`names.py` 36（HTTP fake 可覆盖）；无 batch-2 卡 |
+| `plugins` | 75.89 | 1473 / 1941 | 63.01 | 468 | 可单测未写 | `contract.py` 350 行缺失中仅 **23 行**是 pre-v1 兼容层 `_fallback_load`（`tests/test_plug_contract.py:459,478` 已覆盖其行为），其余 327 行是 contract kit 分支（0.7.7/backlog）；`loader.py` 36 + `models.py` 33 归 **HE-13** |
+| `providers` | 72.83 | 839 / 1152 | 60.11 | 313 | 可单测未写 | `keycheck.py` 164（网络校验，可用 fake transport）、`openai_compat.py` 70；无 batch-2 卡 |
+| `security` | 87.03 | 208 / 239 | 80.00 | 31 | 可单测未写 | `netguard.py` 31；无 batch-2 卡 |
+| `session` | 90.66 | 1573 / 1735 | 83.17 | 162 | 可单测未写 | `turn.py` 72、`memory.py` 17、`phrasebook.py` 13；无 batch-2 卡 |
+| `tools` | 77.54 | 1077 / 1389 | 64.77 | 312 | 可单测未写 | `info.py` 100、`mcp_client.py` 73、`ha.py` 45；无 batch-2 卡 |
+| `web` | 80.37 | 4916 / 6117 | 68.40 | 1201 | 可单测未写（主）+ 需真机子集 | `app.py` 750、`v2_api.py` 337、`setup_api.py` 102；设备 action / 控制台真机流程走 §6 |
+| **total** | **80.95** | **18429 / 22767** | **69.55** | **4338** | — | — |
+
+### 5.3 缺口三类（每类落到归属）
+
+| 类别 | 含义 | 本基线中的代表缺口 | 归属 |
+|---|---|---|---|
+| **可单测未写** | 用 fake/临时目录即可覆盖，不需要设备 | `audio` 776、`web` 1201、`plugins` 468（含 contract kit 327 + loader/models 69 + 其他 72）、`device` 157、`tools` 312、`channels` 412、`providers` 313、`music` 208、`session` 162、`(root)` 175、`doctor` 51、`security` 31、`config` 72 | 0.7.7 batch-2：**HE-13**（device/plugins 的 env/entrypoint 语法与 override）、**HE-14**（audio frame/text fuzz、可注入时钟、jitter）、**HE-17**（config 加载耗时预算）；其余进 0.7.8 后 backlog |
+| **需真机** | 需要真实设备/耳听/声学环境，CI 只能给协议 | `audio/process.py` 的 ALSA/KWS/AEC 路径、`web` 的设备 action、`device` 的重连/token、music 的真实媒体源 | §6 的 26 条协议（命令 + 判据 + 记录表），0.7.4 / 0.7.8 |
+| **已弃用** | 仍随代码保留但正常路径不再走，不为它补测试 | 仅 `adapter_aliases.py` 的 `xiaoai→lx06` 别名（临时，0.8 前移除）；`contract.py` 的 `_fallback_load` 不归此类（23 行未覆盖，行为已由 `tests/test_plug_contract.py:459,478` 覆盖） | 不排测试；删除/下线时同步删测试与清单 |
+
+### 5.4 batch-1 测试 ↔ 覆盖对应
+
+| 条目 | 测试（file::test） | 对 `src/rui` 覆盖/缺口的作用 |
+|---|---|---|
+| HE-03 | `tests/test_he03_first_response_null.py::test_null_first_response_is_skipped_not_counted_as_zero` 等 5 条；`pytest -q tests/test_he03_first_response_null.py` | 锁定 `scripts/fleet_matrix.py` 的「null 不补 0」与 `TurnTrace` 上报；工具脚本不计入 `--cov=rui`，不改变包级数字 |
+| HE-12 | `tests/test_he12_source_plug_fallback.py::test_source_plugs_fallback_backs_the_in_process_adapter` 等 2 条；`pytest -q tests/test_he12_source_plug_fallback.py` | 覆盖 `plugins/builtin.py` 的源码 fallback 与 `device/loader.py` 的 manifest 授权分支（覆盖 +4 行：device +1、plugins +3） |
+| D2-06 | `rui-dot2-bridge/tests/test_d2_06_stop_playback_flush.py::test_active_stop_clears_discarding_before_the_next_reply` 等 2 条；`cd rui-dot2-bridge && .venv/bin/python -m pytest -q tests/test_d2_06_stop_playback_flush.py` | 在桥仓，不计入 house `--cov=rui`；守护 `stop_playback` flush→EOS 顺序 |
+
+## 6. 真机项三件套（命令 / 判据 / 记录表）
+
+> 适用于 §2 的 26 条真机/人工项。每条都必须**现场执行命令 → 按判据记录 → 落表**；没测到写 `null + 原因`，不补、不猜。
+> 环境：`BASE=http://<rui-host>:8080`、`H='X-Auth-Token: <token>'`、`ID=<device-id>`、`$LOG`=该设备平面/容器日志。
+> 记录表模板（复制到 0.7.4/0.7.8 验收记录，一行一次运行）：
+
+| 日期 | 设备/房间 | 距离/音源 | 命令 | 分母 n | 结果 | 判据 | 日志/JSON/截图 |
+|---|---|---|---|---|---|---|---|
+
+> **执行环境**：所有 `scripts/*.py` 命令必须在 `house-ear` 的 `.venv` 下（`.venv/bin/python scripts/...`）或 `uv run python scripts/...` 执行；系统 Python 3.12 缺少 `ruamel` 等依赖。
+> **cwd 规则**：默认在 `house-ear/` 根目录执行；D2-01 build、D2-05 compose、D2-09 tools 需先 `cd rui-dot2-bridge`；D2-07/D2-11 的 `scripts/measure_erle.py` 在 `house-ear/`；X-*/HE-* 默认在 `house-ear/`。
+> 逐台「添加→入网→唤醒→应答→播放→停止→删除」的固定记录表用 `docs/release/acceptance-4devices.md §5.3`；
+> 证据格式（截图命名、4xx/5xx 片段、镜像 tag/commit/视口）用 `docs/audit/console-audit-scope.md §7`。
+
+| ID | 命令（可复制） | 判据 | 记录表 |
+|---|---|---|---|
+| X-01 | v2：`curl -sS -X POST "$BASE/api/v2/devices/$ID/actions" -H "$H" -H 'Content-Type: application/json' -d '{"action":"volume.set","args":{"value":V}}'`，V=51/102/153/204/255（1–255）；再 `{"action":"volume.read","args":{}}`。或 v1：`curl -sS -X PUT "$BASE/api/v1/device/volume" -H "$H" -H 'Content-Type: application/json' -d '{"value":V,"device":"<id>"}'` | 默认配置（cap 未生效）下断言回读 `== V`；cap<100 时回读 = `percent_to_device_volume(min(device_volume_to_percent(V), cap))`（允许设备取整）。5 档无失真、无跳变 | 模板（V/回读）+ `acceptance-4devices §5.3` |
+| X-02 | `curl -sS -X POST "$BASE/api/v2/devices/$ID/actions" -H "$H" -H 'Content-Type: application/json' -d '{"action":"led.set","args":{"effect":"wake"}}'`；对 listening/thinking/error 各一次 | 灯序与 `tests/test_led.py` 一致；每态截图 | 模板 + `led-<state>.png` |
+| X-03 | `python scripts/fleet_say.py --rounds 1 --gap 8 --out /tmp/fleet.csv`；`python scripts/fleet_matrix.py --log "$LOG" --marks /tmp/fleet.csv` | 4 台表格填满；0 `lost_same_word`、0 串台；任一 null = 失败 | `acceptance-4devices §5.3`（4 行） |
+| X-04 | `python scripts/measure_turns.py --url "$BASE" --command-dir <6 句 wav 目录> --rounds 5 --out /tmp/lx06-turns.jsonl` | 6 句 × 5 轮 ≥26/30 | 模板 + `/tmp/lx06-turns.jsonl` |
+| X-05 | `python scripts/acceptance-v1.py wake --url "$BASE" --trials 20 --criterion 0.95`；`python scripts/acceptance-v1.py barge --url "$BASE" --trials 3 --auto-say` | 唤醒 ≥19/20；stop-push ≤300 ms | `acceptance-runs/*.md`（脚本自动写） |
+| X-06 | `python scripts/measure_turns.py --url "$BASE" --command-dir <6 句 wav 目录> --rounds 5 --out /tmp/fleet.jsonl`；`python scripts/fleet_matrix.py --log "$LOG" --json` | 30/30、26/30、8/8、10/10 同分母重采；每个数字带 `--log` 行号 | 模板 + `acceptance-runs` + 行号 |
+| X-07 | `cd rui-dot2-bridge && python tools/eq_report.py --json`（客观）；盲听 3 首、随机顺序、5 分制 | 客观指标不劣化；盲听 ≥4/5 且无失真 | 模板（曲目/顺序/评分） |
+| HE-01 | `python scripts/measure_turns.py --url "$BASE" --command-dir <告别 wav 目录> --rounds 10 --out /tmp/goodbye.jsonl` | 告别后 0 个额外 turn；`reply_finished` 生效 | 模板 + JSONL |
+| HE-02 | `python scripts/measure_turns.py --url "$BASE" --command-dir <wav 目录> --gap 0.9 --rounds 5 --out /tmp/he02-09.jsonl`；`--gap 1.2 --out /tmp/he02-12.jsonl` 各一次 | 0 自回声 turn；cue 后无假请求 | 模板 + JSONL |
+| HE-04 | `python scripts/measure_turns.py --url "$BASE" --command-dir <5 句 wav 目录> --rounds 5`；手机/麦克风录音 `ffmpeg -f avfoundation -i ":0" -t 120 /tmp/mic.wav` | 给出首声 P50/P95（记录，不设门） | 模板（server 值 + 录音偏移） |
+| HE-05 | `python scripts/acceptance-v1.py wake --url "$BASE" --trials 10 --label far-field --no-gate` | 只记录 10 次远场结果（不判 PASS/FAIL） | `acceptance-runs/*.md` |
+| HE-06 | 断电重启 NAS 后：`curl -fsS "$BASE/health" -H "$H" \| jq '{status,audio_plane}'`，每 30 s 一次共 10 次 | ≤5 min 内 200 且 `audio_plane=true`，无需人工 | 模板（时间戳/状态） |
+| HE-07 | 断 AP/改 IP 后：`curl -sS -H "$H" "$BASE/api/v2/devices/$ID" \| jq '{connected,status}'`，每 5 s 一次 | <10 s 回到 `connected=true/status=ready`；重试 ≤1 | 模板（时间序列） |
+| HE-08 | `docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.CPUPerc}}'` 每 300 s；`curl -fsS -o /dev/null -w '%{http_code}' "$BASE/health"` | 24h 0 5xx、0 plane 重建、RSS 斜率 <1 %/h | 模板/CSV（24h） |
+| HE-15 | `python scripts/measure_wake.py --config <cfg> --device "$ID" --seconds 60 --save-voice /tmp/oww.wav`；每个变体 20 次 | 20 次 ≥19 次；否则砍该变体 | 模板（变体/命中） |
+| HE-16 | `python scripts/measure_turns.py --url "$BASE" --command-dir <音乐中短指令 wav 目录> --rounds 10` | 10/10；音乐不断、指令不丢 | 模板 + JSONL |
+| D2-01 | `cd rui-dot2-bridge && docker build --platform linux/amd64 -f deploy/downstream/Dockerfile .`；`python ../house-ear/scripts/acceptance-v1.py wake --url "$BASE" --trials 5`；设备侧 `curl` 回连 | 构建/运行成功；唤醒/播放/barge/token 重连逐项记录 | `canary-0.6.0-official-image.md §八` 命令清单 + 模板 |
+| D2-03 | `bash deploy/install.sh`（一次性容器）→ `curl -fsS "$BASE/health" -H "$H" \| jq`；控制台逐页点一遍 | 设备链路 ready；`device_errors=0`；无 5xx | `acceptance-4devices §5.3` + `console-audit-scope §7` |
+| D2-05 | 先把 rui 配置 `system.log_level: debug`（`primeWait` 只在 `device_link.py:417` 的 `log.debug`），再 `cd rui-dot2-bridge && docker compose -f deploy/downstream/docker-compose.yml logs --since 30m \| grep primeWait`（每轮 10 次） | `primeWait` 14–22 ms；无 1 s 异常；人耳无卡顿 | 模板（primeWait/听感 + `system.log_level: debug` 截图） |
+| D2-07 | `python scripts/measure_erle.py --config <cfg> --device dot2 --file <粉噪 wav> --seconds 600 --json` | `aec_erle_db` P50 ≥20 dB（目标 25） | 模板 + JSON |
+| D2-08 | `sox -n -r 48000 -c 1 /tmp/sweep.wav synth 10 sine 20 20000`；手机录音；按 `docs/aec-device-tuning.md` 公式算 RT60 | 只记录每个房间 RT60（假设 0.3–0.5 s） | 模板（房间/RT60） |
+| D2-09 | `cd rui-dot2-bridge && python tools/eq_report.py --wav <48 kHz mono S16 wav> --json`（脚本没有 `--gain`）；SPL 计 1 m 读数、增益档位按部署参数（`DOT2_LOUDNESS_*` / config）逐档记录；1 h 耐久 | SPL 记录；THD 不劣化；1 h 无热衰 | 模板（SPL/THD/时长 + 档位） |
+| D2-10 | `python scripts/acceptance-v1.py wake --url "$BASE" --trials 20 --criterion 0.95`；`... barge --trials 3 --auto-say`；`docker stats --no-stream` | 20 次 ≥19/20；声学 P50 ≤600 ms；RSS 记录 | `acceptance-runs` + 模板 |
+| D2-11 | `python scripts/measure_erle.py --config <cfg> --device dot2 --file <粉噪 wav> --seconds 300 --json` | `ref_active=true` 且播放时 ERLE >10 dB | 模板 + JSON |
+| D2-12 | `python -m rui plug-test <plug dir> --adapter <adapter.py>:build --json`；`openssl s_client -connect <device>:8870 -servername <host> -brief` | 契约全 PASS；TLS hostname/4412 握手成功；未知消息进 debug 不崩 | 模板 + `contract-report.json` |
+| D2-13 | `python scripts/measure_erle.py --config <cfg> --device dot2 --file <粉噪 wav> --seconds 300 --json` ×3；`python scripts/measure_turns.py --url "$BASE" --command-dir <wav 目录> --rounds 5 --out /tmp/d213.jsonl`；长回复/逐距离各 5 次 | 静音基线 3×5 min；长回复无噪声；距离逐档记录 | 模板（轮次/距离/结果） |
+
+## 7. 后续（task-2 reviewer 非阻塞观察，0.7.7 前处理）
+
+1. **HE-03 filler 端到端断言**：当前 `tests/test_he03_first_response_null.py` 只做了 `TurnTrace` 级断言
+   （filler 不产生 `first_response_ms`）；补一条 `TurnRunner` 端到端用例：让 LLM/工具延迟触发
+   `assistant.filler_after_s`，断言 filler 播出后 `play_start` 仍来自首个答案 chunk。
+2. **HE-12 `catalog.get("shadow-plug")` 防空断言**：当前用 `resolve()` 证明 builtin 胜出；
+   补断言 `PlugCatalog.get("shadow-plug")` 的 `source == "user"`，证明 user plug 确实被加载、
+   只是解析优先级输给 builtin，避免「user plug 根本没载入」也能让测试通过的空过。

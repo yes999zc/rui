@@ -2,10 +2,12 @@
 
 > **性质**：基线记录，不是门禁。本卡（0.7.3 A 段 1）只建立「可复跑的数字 + 机器可读的比较基准」，
 > 不设覆盖率阈值；后续版本用 `--compare` 判断是否回退。
-> **对象**：`house-ear` @ `aad18a5` + 本卡未提交工作树（`worktree_dirty: true`）。
-> **测量时间**：2026-10-26 20:33（Asia/Shanghai，UTC 12:33）。
+> **对象**：`house-ear` @ `cd2d0a2`（最后一笔含测试的提交，**无 src 变更**）+ 本卡 docs 未提交工作树（`worktree_dirty: true`）。
+> **测量时间**：2026-10-26 21:27（Asia/Shanghai，UTC 13:27）。
 > **机器**：macOS 27.0.1 arm64，Python 3.13.13，uv 0.13.0。
 > **口径**：证据 = 实际命令输出；机器可读版本见同目录 `coverage-baseline.json`。
+> **版本定位**：这是 0.7.3 收口后的最终基线（含 task-2 新增测试），即 0.7.4 起的「不得回退」比较基准。
+> **CI 旧口径**：`docs/audit/unverified-inventory.md` §5.1 里的 76.59% / 77.59% 来自 `d21bb5f`（task-1，1644 用例）的 artifact，**不用于本基线比较**；跨版本比较必须同 commit + 同 Python 重跑。
 
 ---
 
@@ -13,15 +15,15 @@
 
 | 项 | 数字 |
 |---|---:|
-| 总体行覆盖率 | **80.93%**（18425 / 22767） |
-| 总体分支覆盖率 | **69.54%**（5157 / 7416） |
-| 测试 collected / passed / skipped / xfail | **1644 / 1627 / 17 / 0**（failed 0） |
+| 总体行覆盖率 | **80.95%**（18429 / 22767） |
+| 总体分支覆盖率 | **69.55%**（5158 / 7416） |
+| 测试 collected / passed / skipped / xfail | **1651 / 1634 / 17 / 0**（failed 0） |
 | 测量范围 | `src/rui` 全部 120 个 .py（source 枚举，含未导入；其中 5 个 0 覆盖） |
 | 覆盖率门槛 | 无（本卡只建基线） |
 | 比较基准 | `docs/audit/coverage-baseline.json`（schema `rui-coverage-baseline/v1`） |
 
 > **为什么看不到 78%**：`pytest --cov-branch` 的 `TOTAL` 列会把「部分覆盖的分支」也算作未覆盖，
-> 显示的是行 + 分支的合并值（本次 78.13%）。本基线按验收标准拆开记录：行 80.93% / 分支 69.54%。
+> 显示的是行 + 分支的合并值（本次 78.15%）。本基线按验收标准拆开记录：行 80.95% / 分支 69.55%。
 > 两者不是矛盾，是 coverage.py 的两种呈现。
 
 ---
@@ -37,18 +39,18 @@
 | `audio` | 80.72 | 3248 / 4024 | 65.60 |
 | `channels` | 52.81 | 461 / 873 | 35.64 |
 | `config` | 94.05 | 1139 / 1211 | 86.22 |
-| `device` | 82.35 | 737 / 895 | 74.34 |
+| `device` | 82.46 | 738 / 895 | 74.67 |
 | `doctor` | 88.08 | 377 / 428 | 78.29 |
 | `music` | 88.03 | 1529 / 1737 | 80.39 |
-| `plugins` | 75.73 | 1470 / 1941 | 63.01 |
+| `plugins` | 75.89 | 1473 / 1941 | 63.01 |
 | `providers` | 72.83 | 839 / 1152 | 60.11 |
 | `security` | 87.03 | 208 / 239 | 80.00 |
 | `session` | 90.66 | 1573 / 1735 | 83.17 |
 | `tools` | 77.54 | 1077 / 1389 | 64.77 |
 | `web` | 80.37 | 4916 / 6117 | 68.40 |
-| **total** | **80.93** | **18425 / 22767** | **69.54** |
+| **total** | **80.95** | **18429 / 22767** | **69.55** |
 
-最低的三个一级子包是 `channels`（52.81%）、`providers`（72.83%）、`plugins`（75.73%）；
+最低的三个一级子包是 `channels`（52.81%）、`providers`（72.83%）、`plugins`（75.89%）；
 它们自然是后续补测试的首选，但本卡**不**据此排期。
 
 ---
@@ -67,14 +69,14 @@
 
 | collected | passed | skipped | xfail |
 |---:|---:|---:|---:|
-| **1644** | **1627** | **17** | **0** |
+| **1651** | **1634** | **17** | **0** |
 
 - `collected` = `pytest-report.xml` 中全部 `<testcase>`（含 skip/xfail），与
-  `pytest --collect-only -q | awk -F': ' '/^tests\//{s+=$2} END{print s}'` 的 1644 一致。
+  `pytest --collect-only -q | awk -F': ' '/^tests\//{s+=$2} END{print s}'` 的 1651 一致。
 - `skipped` 的 17 条全部是 `pytest.skip`（可选依赖/环境不满足），`xfail` 为 0。
-- **1644 比本卡开工前的 1643 多 1**：`tests/test_plugin_compat_guard.py` 会扫描仓库内每个
-  `plugin.yaml` 做参数化，本卡新增的 `tests/fixtures/sample-plug/plugin.yaml` 因此自动多出
-  1 条 guard 测试。这是预期变化，不是口径漂移。
+- **1651 比 0.7.3 第一次基线（1644）多 7**：task-2 新增 HE-03 5 条 + HE-12 2 条；其中
+  `tests/test_plugin_compat_guard.py` 对新增 `tests/fixtures/sample-plug/plugin.yaml` 的
+  参数化 guard 已包含在 1644 里。这是新增测试，不是口径漂移。
 - 本次所有测试统一在 `uv sync --extra dev` 的环境下运行（与 CI 一致）；`kws` /
   `weixin-voice` 等可选 extra 未安装，相关用例按 skip 计。
 
@@ -100,7 +102,7 @@ CI 写到仓库根目录并作为 artifact 上传，路径不影响数字。
 ```bash
 # 只算 collected（与 JUnit 的 testcase 数一致）
 .venv/bin/python -m pytest --collect-only -q | awk -F': ' '/^tests\//{s+=$2} END{print s}'
-# 1644
+# 1651
 ```
 
 ---
@@ -126,8 +128,9 @@ uv run python scripts/coverage_report.py \
 注意事项（比较前先读）：
 
 1. 本基线在 **macOS / Python 3.13.13** 上测得；CI 在 ubuntu-latest 的 **3.11 / 3.12** 上跑，
-   同一 commit 的绝对百分比可能有零点几的差异。跨 Python 版本比较时以 CI artifact 内的
-   `coverage.json` 为准，或用同一 Python 版本重测。
+   同一 commit 的绝对百分比可能有零点几的差异。跨 Python 版本比较时，以**同一 commit 重跑**的
+   CI artifact `coverage.json` 为准（或用同一 Python 版本重测）；**不得**拿 `d21bb5f` 的旧 artifact
+   与本基线比较。
 2. 基线里没有 `failed` 门槛：`pytest` 本身非 0 退出应由 CI 拦住；`failed > 0` 时
    `scripts/coverage_report.py` 仍会输出数字，但那不是可比较的基线。
 3. 包级比较只覆盖基线里已记录的包；新增一级子包不会被自动要求覆盖率，但删除/重命名

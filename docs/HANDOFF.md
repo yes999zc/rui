@@ -1,7 +1,53 @@
-# HANDOFF — rui 稳定版阶段快照（2026-10-26 13:45）
+# HANDOFF — rui 稳定版阶段快照（2026-10-26 22:05）
 
-> 单一当前快照。历史快照段（11:43 暂停点 / 12:33 P0 / 13:42 当前状态）已删除；仍未解决的项并入 §下一步 与 §风险与未决。
-> 任务板：completed = task-1/2/4/5/7/8/9/10/11；pending = task-3（B1，BLOCKED）、task-6（阻塞发布）、task-12（[phase] 发布收口，blocked_by task-6）。
+> **本会话当前快照（0.7.3 收口 + 夜间无人值守）** 见下方「## 0.7.3 状态（2026-10-26 22:05）」；其下的
+> 「## 版本与契约」「## 已完成」… 是 0.7.2 及更早的快照，除被 §0.7.3 显式更新处外仍有效。
+> 明早 9 哥 第一件事：读 §0.7.3 的「待你决定」「白天项」与「生产变更日志」。
+
+## 0.7.3 状态（2026-10-26 22:05）
+
+### 任务板（本会话）
+| 卡 | 状态 | 说明 |
+|---|---|---|
+| task-1 `[impl] 覆盖率基建与基线` | **completed** | reviewer PASS + verifier VERIFIED + CI 四绿（`d21bb5f`）；commit `d21bb5f` |
+| task-2 `[test] 未验证 batch-1（HE-03/HE-12/D2-06）` | **completed** | PASS + VERIFIED（verifier 自做变异并还原）；house `cd2d0a2`、dot2 `18ad114` |
+| task-3 `[docs] 缺口台账 + 8 处矛盾` | in_progress | 两轮 CHANGES + verifier FAILED（2 处事实错误）已修，等 verifier 终判 |
+| task-4 `[release] 0.7.3 版本/CHANGELOG/release notes/README pin` | pending | blocked_by task-3；之后 Lead 打 tag/发 release/构建镜像 |
+
+### 数字（0.7.3 工作树，commit `cd2d0a2`）
+- 测试四计数：**collected 1651 / passed 1634 / skipped 17 / xfail 0**（failed 0）；dot2 **145 passed**；xiaoai 9 passed。
+- 覆盖率（本机 macOS/Py3.13）：行 **80.95%**（18429/22767）、分支 **69.55%**（5158/7416）、合并 78.15%。
+- CI（`d21bb5f`）：ci / security / secret-scan / docker-publish **四绿**；artifact `coverage-3.11`（Python 3.11.17）/ `coverage-3.12`（3.12.15），CI 覆盖率 76.59% / 77.59%。
+- 基线文件：`docs/audit/coverage-baseline.md` + `.json`（0.7.4 起不得回退的比较基准）。
+
+### 未验证清单与审计范围（0.7.3 产出）
+- `docs/audit/unverified-inventory.md`：36 条「未验证」（6 CI 可测 / 4 环境协议 / 26 真机），8 处文档矛盾终态，覆盖率缺口三分类，26 条真机三件套（命令+判据+记录表）。
+- `docs/audit/console-audit-scope.md`：v2 14 路由 / 7 tab / 24 端点 / ~95 交互元素；v1→v2 32 行对齐；老链接映射表。
+- `docs/audit/hermes-triage.md`：24 个第三方 issue 的分诊台账（**待 9 哥 确认**，见下）。
+
+### 夜间纪律（9 哥 2026-10-26 21:25 授权，到明早）
+1. 可做：生产 NAS 部署/升级/回滚（有纪律）、git push/tag/release、docker build/推镜像、本地容器、无头浏览器审计。
+2. **红线：不许让真音箱出声**（TTS、音乐、唤醒音、对设备喊全禁）；听音类验收（音质/距离/打断/唤醒率）留白天。
+3. 生产每次部署：备份 override+config（`.bak.日期`）→ 记录当前 digest → 回滚命令写进本文件 → 部署后核对 `/health` → 记录新 digest → 失败立刻回滚。
+4. 每张卡完成更新本文件；60% 上下文前必须写一次；压缩失败最多重试 2 次并记进本文件。
+5. 连续两轮无可推进 → pause goal，写清原因与「明早第一件事」。
+6. 门禁不降：review PASS + verify VERIFIED 缺一不可；不合格 park 并写原因。
+
+### 生产变更日志（今晚）
+| 时间 | 动作 | 结果 | digest |
+|---|---|---|---|
+| — | 尚未动生产 | — | 当前生产 `rui-dot2:1.3.1`（本地 ID `sha256:92ea98f4…`，见下「版本与契约」） |
+
+> 每做一次生产部署/回滚，在此表加一行（时间、动作、`/health` 结果、新 digest、回滚命令）。
+
+### 待 9 哥 决定（明早）
+1. **Hermes 台账确认**：`docs/audit/hermes-triage.md` §7 —— 3 条 P0 降级、#27 否决去均值修法、#32 不改 pip 语义、版本重排（0.7.4=P0 修复；TLS+Done6→0.7.5；小爱摘出→0.7.6；控制台审计→0.7.7）。
+2. 0.7.3 发布号确认（core 0.7.3；两个桥本版不 bump）。
+3. 白天真机项：Done 6 的 c/d/e、0.7.5 双跑、EQ 耳测、唤醒/打断复测。
+
+### 白天项（今晚不做）
+- 唤醒→指令→播放、音质/距离/打断、EQ 耳测、4 台联调、24h 稳定性满窗。
+- 生产升级演练的「出声验证」部分（可先做不出声的升级/回滚 + `/health` 核对）。
 
 ## 版本与契约
 
@@ -220,7 +266,7 @@
 
 | 仓 | quickstart tag | demo 素材 | 支持矩阵可写项 |
 |---|---|---|---|
-| house-ear（rui） | `v0.7.2` | 本地 `rui serve --no-audio` 实例 + Chrome headless 抓 `/v2`，设备名换 `Living Room Speaker`，注明「本地演示实例，示例数据」 | Dot2 唤醒 30/30、指令 26/30（2026-10-26，TTS 校准后）；barge 8/8（2026-10-26，真机）；音乐中短指令 10/10（2026-10-26，人声）；音量/指示灯/多设备 **未测** |
+| house-ear（rui） | `v0.7.2` | 本地 `rui serve --no-audio` 实例 + Chrome headless 抓 `/v2`，设备名换 `Living Room Speaker`，注明「本地演示实例，示例数据」 | **0.7.1/p21 实测（2026-10-26 15:01）；0.7.2 未重测**——Dot2 唤醒 30/30、指令 26/30（TTS 校准后）；barge 8/8（真机，**stop-push 判据**）；音乐中短指令 10/10（人声）；音量/指示灯/多设备 **未测** |
 | rui-dot2-bridge | `v1.3.1` | **真实终端记录**（桥加载/plug-test），脱敏 | 同上（只写桥相关项）；「已解锁/刷机」措辞全部改写为**设备前置条件** |
 | rui-xiaoai-bridge | `v0.2.1` | **真实终端记录**（`rui plug-test` / 插件加载日志），无界面截图 | LX06 唤醒 19/20、打断 205.2 ms（**历史实测**，查不到原始日志就降级为「已测（有限样本）」）；音量/指示灯/多设备 **未测** |
 
@@ -230,7 +276,8 @@
 
 ## README 截图与稿件的当前状态（2026-10-26 20:10，压缩前）
 
-- **版本已落库并提交**（未 push）：house-ear `dee693f` = 0.7.2、dot2 `72a97c0` = 1.3.1、xiaoai `39d9273` = 0.2.1；三仓测试 1626/17、143、9 全绿，ruff 绿。
+- **版本已落库并提交**（未 push）：house-ear `dee693f` = 0.7.2、dot2 `72a97c0` = 1.3.1、xiaoai `39d9273` = 0.2.1；**v0.7.2 快照**测试 house **1626/17**、dot2 **143**、xiaoai **9** 全绿，ruff 绿。
+- **0.7.3 当前工作树**（task-2 后，commit `cd2d0a2`）：house **1651/1634/17/0**（collected/passed/skipped/xfail，见 `docs/audit/coverage-baseline.md`）、dot2 **145**（task-2 新增 2）、xiaoai **9**；ruff 绿。
 - **release notes 草稿**：`docs/release/v0.7.2.md`（`e69b9c9`），digest 待 task-22 补。
 - **截图候选**（本地 demo 实例 `rui serve --no-audio` @ 127.0.0.1:18080，示例房间 `Living Room`、设备 `living-room-speaker`，页脚 `rui 0.7.2`）：
   - `docs/assets/console-v2-devices.png`（**不要用**：设备卡片含 `Xiaomi · 设备接入` 且状态为「状态未知/音频面已停止/从未上报」，既触红线也不像产品图）
@@ -277,7 +324,7 @@
 评审通过：脱敏（图片实看无 IP/token/序列号/人脸/房间照）、许可（三仓 MIT 一致）、措辞（无 VPN/穿透/代理/翻墙；无刷机/root 教程；无厂商 logo、写明第三方）、资产与文件存在性、未测项标注、EQ 数字与 CHANGELOG 一致。
 
 **待修（按优先级，全部是文档改动）**
-1. **版本真实性**：三份都写「在 0.7.2 上实测」，但那些数字来自 15:01 的 0.7.1/p21 采样。要求：矩阵标题改「0.7.1 / p21 实测（2026-10-26 15:01），0.7.2 未重测」；dot2 README `:70/:164`、house-ear `:72-77` 同改；xiaoai `:58/:147` 与 `:91/:180` 自相矛盾 → 统一为「插件 9 项契约测试通过；LX06 真机指标为 2026-10-24 历史」。
+1. **版本真实性**：✅ 已完成（task-3，2026-10-26）：house-ear/dot2 README 矩阵标题均为「0.7.1 / p21 实测（2026-10-26 15:01），0.7.2 未重测」；xiaoai README 为「2026-10-24 历史实测（0.7.2 未复测）」；本文件 §「三仓 README 的分仓口径」同加版本标签；xiaoai CHANGELOG 的 19/20、205.2 ms 已移入 `### Historical measurements (2026-10-24, not re-tested)`。原始要求保留如下（历史）：三份都写「在 0.7.2 上实测」，但那些数字来自 15:01 的 0.7.1/p21 采样。要求：矩阵标题改「0.7.1 / p21 实测（2026-10-26 15:01），0.7.2 未重测」；xiaoai `:58/:147` 与 `:91/:180` 自相矛盾 → 统一为「插件 9 项契约测试通过；LX06 真机指标为 2026-10-24 历史」。
 2. **能力表述与已知限制矛盾**：house-ear `:44/:137`「跨房间互不影响」 vs `:99/:192`（runner 单会话，跨房回复会被中止）→ 改成「跨房间的播放与回合仲裁隔离；对话运行器仍是单会话」；xiaoai `:86/:175` 同改。house-ear `:40`/xiaoai `:21/:110`「核心不含设备专用逻辑/没有小爱专属代码」与 `src/rui/adapter_aliases.py:21`（`"xiaoai": "lx06"`、`LEGACY_DEFAULT_ADAPTER`）不符 → 改「无设备实现，仅保留 0.6→0.7 的临时 adapter 别名」。
 3. **有限样本**：LX06 `19/20`、`205.2 ms` 实为 2026-10-24 三轮（24.2/64.5/205.2，max=205.2）→ 逐格标日期 + `max/n=3`。
 4. **结构一致**：house-ear 用「分层架构 / Layered architecture」，dot2/xiaoai 用「架构 / Architecture」→ 统一；hero 图口径要写明（house-ear 有 console 截图，dot2/xiaoai 无 → 要么补图要么明确「桥仓不设 hero」）。
@@ -458,3 +505,13 @@ gh release view v0.7.1 --json tagName,url                                      #
 - 任务板会随会话消失；跨会话只信本文件 + `docs/release/*`。
 
 > 非 [phase] 收口任务，故不写 phase-close 标记；task-12 收口时才由 Lead 追加 `phase-close: task-12`。
+
+## task-3 进度检查点（2026-10-26 21:2x，工作树未提交）
+
+- **任务**：`[docs] 0.7.3 覆盖率缺口台账 + 8 处文档矛盾收口`（impl-core，in_progress）。
+- **已完成**：8 处矛盾全部落改（house README:111,248；dot2 README:89,95,97,203,209,211；dot2 milestone-m1:23-24；dot2 canary:249-252；xiaoai CHANGELOG:15-23、README:90,197；socket-plug-v1:387；code-health:23,408,474,550；HANDOFF §「三仓 README 的分仓口径」/§「README 截图与稿件的当前状态」/§「README 四项评审结论」）。
+- **已完成**：`docs/audit/unverified-inventory.md` 新增 §3 终态表、§5 覆盖率台账（**12 个一级子包 + root = 13 个 scope**，三类缺口，HE-13/14/17 输入，batch-1 对应）、§6 真机 26 条三件套、§7 task-2 reviewer backlog。
+- **已完成**：三仓 grep 前后计数（house README+docs 90→**92**；其中 inventory 27→**28**、排除 inventory 核心 63→**64**（按 per-file 实测求和），核心 +1 来自 HANDOFF §「README 四项评审结论」新加的已核对历史标签；dot2 14→14；xiaoai 10→10）与 `git diff --stat`；§3 8 行、§6 26 条真机行均通过结构自检。
+- **CHANGES 轮（reviewer-core，2026-10-26 21:27）**：基线按 0.7.3 最终值重建（cd2d0a2，1651/1634/17/0，行 80.95 / 分支 69.55）；plugins 缺口改归「可单测未写」；HANDOFF §「README 截图与稿件的当前状态」恢复 v0.7.2 快照并另起一行 0.7.3；X-01/D2-05/D2-09 命令与 cwd 修正；dot2 volume 口径三拆；§3 #4 备注改准。
+- **待做**：重跑 ruff/全量/grep/基线命令，send_message 给 reviewer（经 lead）；等复评。
+- **未做**：没有 commit；没有改代码/版本号；没有碰卡面写范围外文件（`docs/ROADMAP-0.8.md` 的未提交改动是 Lead 的，不是本卡）。

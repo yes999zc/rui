@@ -384,7 +384,7 @@ dot2 = "my_plugin.adapter:build"
 | Boundary harness | probe 缺能力、`drain_wakes()` 抛异常、`stop_playback()` 失败、VAD 缺失 | 不崩溃；降级 KWS；计数正确 |
 | Report schema | `contract-report.json`：manifest、场景、结果、指标、环境 | 可作为 `acceptance.evidence` 附件 |
 
-工具是开发/验收工具，不是运行时。**0.3.2 的 kit 以 in-process 方式加载 `--adapter`**（等价于运维方信任该代码），不是沙箱；不要用 kit 跑未审计的第三方代码。kit 不测 playback gap/boundary 场景（未交付，见 P1-11），这些由插头/音频面自测。
+工具是开发/验收工具，不是运行时。**执行模型：kit 在调用方进程内 import `--adapter` 指定的模块（in-process，不是子进程/容器/沙箱）**（等价于运维方信任该代码）；不要用 kit 跑未审计的第三方代码。kit 不测 playback gap/boundary 场景（未交付，见 P1-11），这些由插头/音频面自测。
 
 ### 6.3 验收标准
 

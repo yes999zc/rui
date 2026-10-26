@@ -108,7 +108,7 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 |---|---|---|
 | 唤醒 | 30/30 admitted（2026-10-26，6 句 × 5 轮，校准后 TTS 音源） | 19/20（2026-10-24，n=20） |
 | 语音指令 | 26/30（同上，含音乐占据扬声器的场景） | 未测 |
-| 播放中打断 | 8/8（2026-10-26，真机人声） | 停播 205.2 ms（2026-10-24 三轮 24.2/64.5/205.2，max n=3） |
+| 播放中打断 | 8/8（2026-10-26，真机人声；**stop-push 判据**：server 停播 → 设备丢队列，非声学端到端） | 停播 205.2 ms（2026-10-24 三轮 24.2/64.5/205.2，max n=3；**stop-push，非声学端到端**） |
 | 音量控制 | 未测 | 未测 |
 | 指示灯 | 未测 | 未测 |
 | 多设备并发 | 未测 | 未测 |
@@ -245,7 +245,7 @@ Open `http://127.0.0.1:8080/v2/`, log in with that token, and add your first spe
 |---|---|---|
 | Wake | 30/30 admitted (2026-10-26, 6 phrases × 5 rounds, calibrated TTS source) | 19/20 (2026-10-24, n=20) |
 | Voice commands | 26/30 (same run, including music-owns-speaker cases) | untested |
-| Barge-in during playback | 8/8 (2026-10-26, real voice) | 205.2 ms stop (2026-10-24, three runs 24.2/64.5/205.2, max n=3) |
+| Barge-in during playback | 8/8 (2026-10-26, real voice; **stop-push criterion**: server stop → device queue drop, not acoustical end-to-end) | 205.2 ms stop (2026-10-24, three runs 24.2/64.5/205.2, max n=3; **stop-push, not acoustical end-to-end**) |
 | Volume control | untested | untested |
 | LED | untested | untested |
 | Concurrent multi-device | untested | untested |

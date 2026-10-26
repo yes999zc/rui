@@ -1,24 +1,24 @@
 {
   "schema": "rui-coverage-baseline/v1",
-  "generated_at": "2026-10-26T12:33:07+00:00",
-  "commit": "aad18a5",
+  "generated_at": "2026-10-26T13:27:17+00:00",
+  "commit": "cd2d0a2",
   "worktree_dirty": true,
   "python": "3.13.13",
   "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
   "command": "uv run pytest --cov=rui --cov-branch --cov-report=term-missing --cov-report=json:coverage.json --junit-xml=pytest-report.xml",
   "tests": {
-    "collected": 1644,
-    "passed": 1627,
+    "collected": 1651,
+    "passed": 1634,
     "skipped": 17,
     "xfail": 0,
     "failed": 0
   },
   "overall": {
-    "line_percent": 80.93,
-    "branch_percent": 69.54,
-    "covered_lines": 18425,
+    "line_percent": 80.95,
+    "branch_percent": 69.55,
+    "covered_lines": 18429,
     "num_statements": 22767,
-    "covered_branches": 5157,
+    "covered_branches": 5158,
     "num_branches": 7416
   },
   "packages": {
@@ -47,9 +47,9 @@
       "num_statements": 1211
     },
     "device": {
-      "line_percent": 82.35,
-      "branch_percent": 74.34,
-      "covered_lines": 737,
+      "line_percent": 82.46,
+      "branch_percent": 74.67,
+      "covered_lines": 738,
       "num_statements": 895
     },
     "doctor": {
@@ -65,9 +65,9 @@
       "num_statements": 1737
     },
     "plugins": {
-      "line_percent": 75.73,
+      "line_percent": 75.89,
       "branch_percent": 63.01,
-      "covered_lines": 1470,
+      "covered_lines": 1473,
       "num_statements": 1941
     },
     "providers": {
