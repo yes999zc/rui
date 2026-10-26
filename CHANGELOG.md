@@ -29,6 +29,10 @@ No API contract change.**
 >
 > （口径原文：0.7.5–0.7.7 的开发合并进 0.7.8，未单独发版；原因是它们的验收项依赖 0.7.8 的完整代码与真机窗口。）
 
+**Release artifacts:** core **0.7.8** (`pyproject.toml`, `src/rui/__init__.py`,
+`uv.lock`); `rui-dot2-bridge` stays **1.3.1** and `rui-xiaoai-bridge` stays **0.2.2**
+(no code change in this release).
+
 ### 0.7.5 — TLS install path and per-device plane visibility
 
 **Added**

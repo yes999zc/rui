@@ -51,19 +51,19 @@
 
 | rui 核心 | rui-dot2-bridge | rui-xiaoai-bridge |
 |---|---|---|
-| **0.7.4**（当前） | **1.3.1**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.3.0`（本版无改动） | **0.2.2**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.6.0` |
-| 0.7.2（历史） | 1.3.1 | 0.2.1 |
+| **0.7.8**（当前） | **1.3.1**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.3.0`（本版无改动） | **0.2.2**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.6.0` |
+| 0.7.4（历史） | 1.3.1 | 0.2.2 |
 
-> 小爱的外置插件**已在本示例中生效**（日志 `adapter plugins: registered dot2, lx06`，加载 `/opt/rui-plugins/rui_xiaoai_bridge/adapter.py`）。核心仍保留 `adapter_aliases: xiaoai→lx06` 兼容别名，**只在未挂外置插件时**回退到内置实现；不挂 xiaoai 目录实测 `registered=["dot2"]`。
+> LX06 的插件**必须外置**：把 `rui-xiaoai-bridge` 挂到 `/opt/rui-plugins`，并设 `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`；挂上后日志为 `adapter plugins: registered dot2, lx06`。旧配置里的 `adapter: xiaoai` 在**读入时即迁移为 `lx06` 并打 WARNING**（`/health.adapter_plugins.warnings`），核心不再有兼容别名、也不回退内置实现；不挂插件时设备错误会明确提示去 mount 桥。该迁移在 **0.8.0 删除**。
 
 ## 让 AI 帮你装
 
 把下面这段直接贴给任意 AI 助手（Claude / ChatGPT / DeepSeek 都行）：
 
 ```text
-目标：用 Docker 跑起 rui 0.7.4，接一台 Dot2 和一台 LX06。
+目标：用 Docker 跑起 rui 0.7.8，接一台 Dot2 和一台 LX06。
 前置：docker compose version 通过；8080 空闲；5 GB 磁盘。
-1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.4
+1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.8
 2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) 写 ./config/config.yaml：web.auth_token、devices[]（id/adapter/room/host/listen_port；lx06 的 host 必填）
@@ -87,8 +87,8 @@
 ## 三行启动
 
 ```bash
-git clone --branch v0.7.4 https://github.com/yes999zc/rui.git && cd rui
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.4 bash deploy/install.sh   # pin 到本版本（默认是 :latest）
+git clone --branch v0.7.8 https://github.com/yes999zc/rui.git && cd rui
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.8 bash deploy/install.sh   # pin 到本版本（默认是 :latest）
 cat console-token.txt                       # 控制台 token（也可用 rui token 重新读取）
 ```
 
@@ -96,7 +96,7 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 
 ## 兼容性与前置条件
 
-- Python **3.11+**；Docker 与 Docker Compose（推荐镜像 `ghcr.io/yes999zc/rui:0.7.4`）。
+- Python **3.11+**；Docker 与 Docker Compose（推荐镜像 `ghcr.io/yes999zc/rui:0.7.8`）。
 - 需要自备 **LLM / TTS / ASR** 供应商（在配置文件里填，或使用本地模型）。没有凭据时服务能起，但对话链路不会工作。
 - 设备前置条件（第三方设备，与厂商**无官方关联**）：
   - EchoMuse Dot2（RS03QR）：固件需已具备设备本地接口，并与本服务在同一局域网；设备侧音频参数由桥接插件下发。
@@ -197,19 +197,19 @@ Two constraints must both hold: `compatibility.rui_min` in the device manifest (
 
 | rui core | rui-dot2-bridge | rui-xiaoai-bridge |
 |---|---|---|
-| **0.7.4** (current) | **1.3.1**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.3.0` (no change in this release) | **0.2.2**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.6.0` |
-| 0.7.2 (historical) | 1.3.1 | 0.2.1 |
+| **0.7.8** (current) | **1.3.1**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.3.0` (no change in this release) | **0.2.2**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.6.0` |
+| 0.7.4 (historical) | 1.3.1 | 0.2.2 |
 
-> The external Xiaoai plug **is active in this example** (`adapter plugins: registered dot2, lx06`, loaded from `/opt/rui-plugins/rui_xiaoai_bridge/adapter.py`). The core keeps an `adapter_aliases: xiaoai→lx06` alias that **only falls back to the built-in** when the plug dir is not mounted; without it `registered=["dot2"]`.
+> The LX06 plug is **external only**: mount `rui-xiaoai-bridge` under `/opt/rui-plugins` and set `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`; with it mounted the log reads `adapter plugins: registered dot2, lx06`. A config that still says `adapter: xiaoai` is **migrated to `lx06` on load with a WARNING** (`/health.adapter_plugins.warnings`); there is no compatibility alias and no built-in fallback, and without the plug the device error tells you to mount the bridge. **0.8.0 removes this migration.**
 
 ## Let an AI install it
 
 Paste this into any assistant (Claude / ChatGPT / DeepSeek):
 
 ```text
-Goal: run rui 0.7.4 with Docker, one Dot2 and one LX06.
+Goal: run rui 0.7.8 with Docker, one Dot2 and one LX06.
 Preflight: docker compose version; port 8080 free; 5 GB disk.
-1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.4
+1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.8
 2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) write ./config/config.yaml: web.auth_token and devices[] (id/adapter/room/host/listen_port; host required for lx06)
@@ -233,8 +233,8 @@ No ffmpeg build needed (the image ships it)
 ## Three-line quickstart
 
 ```bash
-git clone --branch v0.7.4 https://github.com/yes999zc/rui.git && cd rui
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.4 bash deploy/install.sh   # pin this release (default is :latest)
+git clone --branch v0.7.8 https://github.com/yes999zc/rui.git && cd rui
+RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.8 bash deploy/install.sh   # pin this release (default is :latest)
 cat console-token.txt                       # console token (or: rui token)
 ```
 
@@ -242,7 +242,7 @@ Open `http://127.0.0.1:8080/v2/`, log in with that token, and add your first spe
 
 ## Compatibility and prerequisites
 
-- Python **3.11+**, Docker and Docker Compose (recommended image: `ghcr.io/yes999zc/rui:0.7.4`).
+- Python **3.11+**, Docker and Docker Compose (recommended image: `ghcr.io/yes999zc/rui:0.7.8`).
 - Your own **LLM / TTS / ASR** providers (configured in the config file, or local models). The service starts without credentials, but the dialogue path stays idle.
 - Device prerequisites (third-party hardware, **not affiliated with any vendor**):
   - EchoMuse Dot2 (RS03QR): firmware must already expose the device's local interface and be on the same LAN; audio parameters are pushed by the bridge.
