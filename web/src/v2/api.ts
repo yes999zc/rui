@@ -699,16 +699,71 @@ function parseRetryAfterS(value: string | null): number | null {
   return Math.max(0, Math.ceil((at - Date.now()) / 1000))
 }
 
+/**
+ * FastAPI's historical error shapes, normalized into the C-002 envelope so a
+ * page can always read `err.fields`:
+ *
+ * - `detail: [{loc:[path], msg}]` on a **422** — form/writer validation. `loc`
+ *   is the field the operator typed into; the transport prefix (`body` /
+ *   `query` / `path`) is stripped so only the dotted field remains.
+ * - `detail: {code, message, details}` — provider create/probe errors.
+ *
+ * A validation-array on any other status is *not* field validation: a 500 with
+ * `loc:["query","limit"]` must keep its original status/code and text instead of
+ * becoming a fake `invalid_values` form error. A plain string `detail` is left
+ * to `summarizeBody()`, which already renders it.
+ */
+function normalizeDetail(detail: unknown, status: number): Record<string, unknown> | null {
+  if (status === 422 && Array.isArray(detail)) {
+    const fields: ErrorField[] = []
+    for (const item of detail) {
+      if (!item || typeof item !== 'object') continue
+      const row = item as { loc?: unknown; msg?: unknown }
+      const loc = Array.isArray(row.loc) ? row.loc.map(String) : []
+      while (loc.length && ['body', 'query', 'path'].includes(loc[0] ?? '')) loc.shift()
+      const path = loc.join('.')
+      if (!path) continue
+      fields.push({ path, message: asString(row.msg) || undefined })
+    }
+    // `loc` was only a transport prefix (e.g. a whole-body type error): let
+    // `summarizeBody()` keep the server's message instead of inventing a field.
+    if (!fields.length) return null
+    return {
+      code: 'invalid_values',
+      message: fields.map((field) => `${field.path}: ${field.message ?? ''}`).join('; '),
+      details: { fields },
+    }
+  }
+  if (detail && typeof detail === 'object') {
+    const row = detail as Record<string, unknown>
+    if (typeof row.code === 'string' || typeof row.message === 'string') {
+      return {
+        code: asString(row.code) || statusCode(status),
+        message: asString(row.message),
+        details: row.details,
+        hint: asString(row.hint),
+      }
+    }
+  }
+  return null
+}
+
 function errorFromResponse(
   status: number,
   body: unknown,
   requestId: string | null,
   retryAfterHeader: string | null = null,
 ): V2ApiError {
-  const envelope =
+  const errorEnvelope =
     body && typeof body === 'object' && (body as { error?: unknown }).error
       ? ((body as { error: Record<string, unknown> }).error as Record<string, unknown>)
       : null
+  const envelope =
+    errorEnvelope ??
+    normalizeDetail(
+      body && typeof body === 'object' ? (body as { detail?: unknown }).detail : undefined,
+      status,
+    )
   const code = asString(envelope?.code) || statusCode(status)
   const message = asString(envelope?.message) || summarizeBody(body) || `HTTP ${status}`
   return new V2ApiError({
@@ -757,6 +812,29 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 function encodeId(id: string): string {
   return encodeURIComponent(id)
+}
+
+/**
+ * Authenticated binary download (the failed-config copy). A plain `<a href>`
+ * cannot carry `X-Auth-Token`, so the page fetches the bytes and saves a blob.
+ */
+async function requestBlob(path: string): Promise<Blob> {
+  const headers = new Headers()
+  const current = token.get()
+  if (current) headers.set('X-Auth-Token', current)
+  const res = await fetch(path, { headers })
+  if (res.status === 401) window.dispatchEvent(new Event('v2:unauthorized'))
+  if (!res.ok) {
+    const raw = await res.text()
+    let body: unknown = raw
+    try {
+      body = raw ? JSON.parse(raw) : null
+    } catch {
+      /* keep text */
+    }
+    throw errorFromResponse(res.status, body, res.headers.get('X-Request-ID'))
+  }
+  return res.blob()
 }
 
 function clampInt(value: number, min: number, max: number): number {
@@ -859,6 +937,411 @@ export interface MemoryEditRequest {
 export interface MemoryEditResponse {
   items: MemoryItem[]
   item: MemoryItem | null
+}
+
+/* — M9 config pages: v1 non-device endpoints (C-002 §1.2) —————————————
+ *
+ * The config-center, music, secrets, providers, doctor and recovery endpoints
+ * are stable v1 *non-device* APIs. They are wrapped here (never called as a
+ * scattered `fetch`) and their secret-bearing responses are typed as presence
+ * only: no type in this module can carry a credential value.
+ */
+
+/** Localized copy as the config catalog and music presets emit it. */
+export interface CopyText {
+  zh: string
+  en: string
+}
+
+export type ConfigFieldKind = 'text' | 'textarea' | 'number' | 'bool' | 'select' | 'list'
+
+export interface ConfigShortcutOption {
+  value: string | number
+  label?: CopyText
+}
+
+export interface ConfigFieldSpec {
+  path: string
+  group: string
+  tier: number
+  kind: ConfigFieldKind | string
+  label: CopyText
+  hint: CopyText
+  effect: 'save' | 'restart' | string
+  unit: CopyText | null
+  min: number | null
+  max: number | null
+  options: Array<string | ConfigShortcutOption> | null
+  advanced: boolean
+  writable: boolean
+  nullable: boolean
+  /** Lives outside `Config` (keywords.txt) but still writes through `/config/values`. */
+  virtual: boolean
+  audition?: Record<string, unknown>
+}
+
+export interface ConfigGroupSpec {
+  id: string
+  title: CopyText
+  tier: number
+  order: number
+  effect: 'save' | 'restart' | string
+  hint: CopyText
+}
+
+export interface ConfigTierSpec {
+  id: number
+  title: CopyText
+  hint: CopyText
+}
+
+export interface ConfigSecretPresence {
+  has_value: boolean
+  category?: string
+  consumers?: SecretConsumer[]
+  hint?: CopyText
+  writable?: boolean
+}
+
+/** `GET /api/v1/config/catalog` — the console's editable-field directory. */
+export interface ConfigCatalog {
+  tiers: ConfigTierSpec[]
+  groups: ConfigGroupSpec[]
+  fields: ConfigFieldSpec[]
+  values: Record<string, unknown>
+  secrets: Record<string, ConfigSecretPresence>
+  restart_command: string
+  writable_root: string[]
+}
+
+/** `GET /api/v1/config` — the effective config, server-side redacted. */
+export type ConfigDocument = Record<string, unknown>
+
+/** `PUT /api/v1/config/values` — only changed dotted paths. */
+export interface ConfigValuesRequest {
+  values: Record<string, unknown>
+}
+
+export interface ConfigValuesResponse {
+  config: ConfigDocument
+  applied: string[]
+  restart_required: boolean
+  restart_fields: string[]
+  warnings: string[]
+}
+
+export interface MusicCredentialField {
+  key: string
+  kind: 'text' | 'url' | 'password' | string
+  required: boolean
+  secret: boolean
+  label: CopyText
+  placeholder: CopyText
+  hint: CopyText
+}
+
+export interface MusicPreset {
+  id: string
+  name: CopyText
+  protocol_family: string
+  docs_url: string
+  default_port: number | null
+  default_path: string
+  description: CopyText
+  custom: boolean
+  available: boolean
+  credential_fields: MusicCredentialField[]
+}
+
+export interface MusicCredentialsState {
+  present: boolean
+  ready: boolean
+  missing: string[]
+  /** Presence only — the API never returns a credential value. */
+  fields: Record<string, boolean>
+}
+
+export interface MusicSourcesResponse {
+  current: string
+  source_known: boolean
+  current_preset: MusicPreset | null
+  sources: MusicPreset[]
+  credentials: MusicCredentialsState
+  enabled: boolean
+  running_source: string
+  restart_required: boolean
+}
+
+export interface MusicTrack {
+  id?: string
+  title: string
+  artist: string
+  t?: number
+}
+
+export interface MusicStatusResponse {
+  enabled: boolean
+  credentials_present: boolean
+  credentials_ready: boolean
+  credentials_missing: string[]
+  source: string
+  source_known: boolean
+  source_name: CopyText | null
+  running_source: string
+  state?: string
+  track?: { id?: string; title: string; artist: string } | null
+  queue_left?: number
+  top?: Array<{ artist: string; plays: number }>
+  last?: MusicTrack | null
+}
+
+export interface MusicCredentialsRequest {
+  source?: string
+  [slot: string]: string | undefined
+}
+
+export interface MusicCredentialsResponse {
+  has_credentials: boolean
+  has_url: boolean
+  has_user: boolean
+  has_password: boolean
+}
+
+export interface MusicTestResponse {
+  ok: boolean
+  latency_ms: number | null
+  source: string
+  error: string
+}
+
+export interface SecretConsumer {
+  id: string
+  kind: string
+  category: string
+  label: CopyText
+  href?: string
+  stage?: string
+  provider?: string
+  device?: string
+  source?: string
+}
+
+/** One row of `GET /api/v1/secrets` — presence and consumers, never a value. */
+export interface SecretEntry {
+  has_value: boolean
+  category: string
+  used_by: string[]
+  consumers: SecretConsumer[]
+  hint: CopyText
+  writable: boolean
+  href?: string
+}
+
+export interface SecretsResponse {
+  names: string[]
+  secrets: Record<string, SecretEntry>
+}
+
+export interface SecretWriteResponse {
+  name: string
+  has_key: boolean
+}
+
+export interface ProviderCredentialSpec {
+  role: 'api_key' | 'app_id' | 'api_secret' | string
+  /** Environment variable name; the value itself is write-only. */
+  name: string
+  label: CopyText
+  hint: CopyText
+  required: boolean
+}
+
+export interface ProviderPreset {
+  id: string
+  stage: 'llm' | 'asr' | 'tts' | string
+  kind: string
+  display_name: CopyText
+  description: CopyText
+  base_url: string
+  model: string
+  api_key_env: string
+  app_id_env: string
+  api_secret_env: string
+  credentials: ProviderCredentialSpec[]
+  required_fields: string[]
+  required_env: string[]
+  keyless: boolean
+  docs_url: string
+  probe: { supported: boolean; check: string }
+  default_name: string
+  default_voice: string
+  custom: boolean
+}
+
+export interface ProviderPresetsResponse {
+  presets: ProviderPreset[]
+  count: number
+}
+
+export interface ProviderProbeRequest {
+  preset_id: string
+  name?: string
+  base_url?: string
+  model?: string
+}
+
+export interface ProviderProbeResponse {
+  ok: boolean
+  stage: string
+  provider: string
+  message: string
+  check: string
+  ephemeral?: boolean
+  details?: Record<string, unknown>
+}
+
+export interface ProviderStatusRow {
+  name: string
+  stage: string
+  kind: string
+  display_name: string
+  display_name_en: string
+  base_url: string
+  model: string
+  api_key_env: string
+  app_id_env: string
+  api_secret_env: string
+  keyless: boolean
+  docs_url: string
+  configured: boolean
+  ready: boolean
+  missing: string[]
+  reason: string
+  primary: boolean
+  chain_index: number
+  in_chain: boolean
+  probe: { supported: boolean; check: string }
+}
+
+export interface ProviderStatusResponse {
+  providers: ProviderStatusRow[]
+  stages: Record<
+    string,
+    {
+      chain: string[]
+      primary: string
+      ready: string[]
+      not_ready: string[]
+      satisfied: boolean
+      missing: string[]
+      providers: ProviderStatusRow[]
+    }
+  >
+  catalog: Array<{
+    name: string
+    kind: string
+    stages: string[]
+    in_chain: boolean
+    api_key_env: string
+    app_id_env: string
+    api_secret_env: string
+    base_url: string
+    model: string
+  }>
+}
+
+export interface HealthWarning {
+  code: string
+  message?: string
+  hint?: string
+  device_id?: string
+  details?: Record<string, unknown>
+}
+
+export interface HealthAudioDevice {
+  id: string
+  room: string
+  enabled: boolean
+  running: boolean
+  speaker_connected: boolean
+  speaker_rejected: number
+  restarts: number
+  error: string
+  pid: number | null
+  wake_count: number
+  wake_candidates: number
+  wake_admitted: number
+  wake_admit_timeouts: number
+  wake_rejected: Record<string, number>
+  utterances: number
+}
+
+/** `GET /health` — unauthenticated and independent of `/api/v2`. */
+export interface HealthResponse {
+  status: string
+  version: string
+  config_version: number
+  config_version_supported: number
+  uptime_s: number
+  devices: number
+  enabled_devices: number
+  device_errors: number
+  adapter_plugins: { registered: string[]; warnings: number }
+  audio_plane: boolean
+  speaker_connected: boolean | null
+  speaker_device: string | null
+  speaker_last_seen: number | null
+  audio_devices: HealthAudioDevice[]
+  warnings: HealthWarning[]
+  multi_device: {
+    enabled: boolean
+    max_planes: number
+    default_output: string
+    refused: string[]
+    error: string
+  }
+  vendor: {
+    quiet_s: number
+    muted_for: number
+    vendor_wakes: number
+    yielded_turns: number
+  }
+  ack: { mode: string; note: string; wav: string; wav_exists: boolean }
+}
+
+export interface DoctorCheck {
+  name: string
+  status: 'ok' | 'warn' | 'fail' | string
+  value: string
+  hint: string
+}
+
+/** `GET /api/v1/doctor` — one row per measured or explicitly-labelled check. */
+export interface DoctorReport {
+  verdict: 'ok' | 'degraded' | 'unsupported' | string
+  aec_rtf: number
+  cpu_share: number
+  device_capacity: number
+  capacity_basis: string
+  measured_at: string
+  checks: DoctorCheck[]
+}
+
+export interface ConfigRecoveryResponse {
+  active: boolean
+  mode: string
+  bad_path: string
+  last_good_path: string
+  last_good_exists: boolean
+  at: number
+  note: string
+  config_path: string
+}
+
+export interface ConfigRecoveryRestoreResponse {
+  ok: boolean
+  message: string
+  restart_required: boolean
 }
 
 export const api = {
@@ -981,6 +1464,101 @@ export const api = {
     ),
 
   /* — transitional non-device endpoints (C-002 §1.2) ————————————————— */
+
+  /** `GET /api/v1/config` — effective config, redacted server-side. */
+  config: (): Promise<ConfigDocument> => request<ConfigDocument>('/api/v1/config'),
+
+  /** `GET /api/v1/config/catalog` — fields, groups, values and secret presence. */
+  configCatalog: (): Promise<ConfigCatalog> =>
+    request<ConfigCatalog>('/api/v1/config/catalog'),
+
+  /**
+   * `PUT /api/v1/config/values` — field-level diff only.
+   *
+   * The server validates every path against its catalog and returns 422 with
+   * `detail[].loc` (normalized to `V2ApiError.fields`); nothing is written when
+   * one field is rejected.
+   */
+  configValues: (values: Record<string, unknown>): Promise<ConfigValuesResponse> =>
+    request<ConfigValuesResponse>('/api/v1/config/values', {
+      method: 'PUT',
+      body: JSON.stringify({ values } satisfies ConfigValuesRequest),
+    }),
+
+  /** `GET /api/v1/music/sources` — registry plus presence-only credential state. */
+  musicSources: (): Promise<MusicSourcesResponse> =>
+    request<MusicSourcesResponse>('/api/v1/music/sources'),
+
+  /** `GET /api/v1/music` — playback/config status; credential values never appear. */
+  music: (): Promise<MusicStatusResponse> => request<MusicStatusResponse>('/api/v1/music'),
+
+  /**
+   * `PUT /api/v1/music/credentials` — write slot values for the active (or the
+   * body's) source. An empty string clears one slot; the response is presence only.
+   */
+  musicCredentials: (body: MusicCredentialsRequest): Promise<MusicCredentialsResponse> =>
+    request<MusicCredentialsResponse>('/api/v1/music/credentials', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+
+  /** `POST /api/v1/music/test` — ping with unsaved draft values; writes nothing. */
+  musicTest: (body: MusicCredentialsRequest = {}): Promise<MusicTestResponse> =>
+    request<MusicTestResponse>('/api/v1/music/test', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** `GET /api/v1/secrets` — names and presence only, never values. */
+  secrets: (): Promise<SecretsResponse> => request<SecretsResponse>('/api/v1/secrets'),
+
+  /** `POST /api/v1/secrets` — write (or clear, with an empty value) one secret. */
+  putSecret: (name: string, value: string): Promise<SecretWriteResponse> =>
+    request<SecretWriteResponse>('/api/v1/secrets', {
+      method: 'POST',
+      body: JSON.stringify({ name, value }),
+    }),
+
+  /** `GET /api/v1/providers/presets` — env names and labels, never key values. */
+  providerPresets: (): Promise<ProviderPresetsResponse> =>
+    request<ProviderPresetsResponse>('/api/v1/providers/presets'),
+
+  /** `GET /api/v1/providers/status` — readiness per configured chain entry. */
+  providerStatus: (): Promise<ProviderStatusResponse> =>
+    request<ProviderStatusResponse>('/api/v1/providers/status'),
+
+  /**
+   * `POST /api/v1/providers/probe` — test a preset with the *stored* keys.
+   *
+   * The body is only a preset id: the server assembles a draft in memory and
+   * reads `secrets.yaml`/the environment, so the console never re-sends a value.
+   */
+  providerProbe: (body: ProviderProbeRequest): Promise<ProviderProbeResponse> =>
+    request<ProviderProbeResponse>('/api/v1/providers/probe', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /** `GET /health` — global process/audio status (unauthenticated). */
+  health: (): Promise<HealthResponse> => request<HealthResponse>('/health'),
+
+  /** `GET /api/v1/doctor` — infrastructure, audio and dependency probes. */
+  doctor: (): Promise<DoctorReport> => request<DoctorReport>('/api/v1/doctor'),
+
+  /** `GET /api/v1/config/recovery` — whether the process started from a fallback. */
+  configRecovery: (): Promise<ConfigRecoveryResponse> =>
+    request<ConfigRecoveryResponse>('/api/v1/config/recovery'),
+
+  /** Download the failed config copy (explicit action; authenticated). */
+  recoveryBadFile: (): Promise<Blob> =>
+    requestBlob('/api/v1/config/recovery/bad'),
+
+  /** Restore a fallback after an explicit confirmation; the server requires a restart. */
+  restoreConfigRecovery: (mode: 'last-good' | 'defaults'): Promise<ConfigRecoveryRestoreResponse> =>
+    request<ConfigRecoveryRestoreResponse>('/api/v1/config/recovery/restore', {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }),
 
   /** `GET /api/v1/turns?limit=N` — newest first; `limit` is clamped to 1..200. */
   turns: (limit = 20): Promise<TurnsResponse> =>

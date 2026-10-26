@@ -14,7 +14,11 @@ import { createRouter, createWebHistory } from 'vue-router'
  *   /v2/conversation     recent turns, device/room badges and filters (M8)
  *   /v2/logs             service-log tail with level filter and copy (M8)
  *   /v2/memory           memory list + add/confirm/remove (M8)
- *   /v2/config           honest "not in this milestone" state
+ *   /v2/voice-assistant  catalog-driven assistant/session/audio config (M9a)
+ *   /v2/music            sources, playback status and write-only credentials (M9b)
+ *   /v2/credentials      secret presence, writes and provider probes (M9b)
+ *   /v2/health           health, dependency probes and config recovery (M9b)
+ *   /v2/config           compatibility redirect to /voice-assistant
  *
  * There is deliberately no import of the legacy panel registry, PanelHost, or
  * any legacy view: v2 owns its route table.
@@ -50,7 +54,20 @@ const routes = [
   },
   { path: '/logs', name: 'logs', component: () => import('./views/LogsView.vue') },
   { path: '/memory', name: 'memory', component: () => import('./views/MemoryView.vue') },
-  { path: '/config', name: 'config', component: () => import('./views/ConfigView.vue') },
+  // `/config` was a stub through M8; keep the URL working as the section entry.
+  { path: '/config', redirect: '/voice-assistant' },
+  {
+    path: '/voice-assistant',
+    name: 'voice-assistant',
+    component: () => import('./views/VoiceAssistantView.vue'),
+  },
+  { path: '/music', name: 'music', component: () => import('./views/MusicView.vue') },
+  {
+    path: '/credentials',
+    name: 'credentials',
+    component: () => import('./views/CredentialsView.vue'),
+  },
+  { path: '/health', name: 'health', component: () => import('./views/HealthView.vue') },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFoundView.vue') },
 ]
 

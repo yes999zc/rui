@@ -2714,3 +2714,463 @@ a.v2-run-badge:hover {
     margin-left: 0;
   }
 }
+
+/* — M9: config pages (voice assistant / music / credentials / health) ——— */
+
+.v2-config-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin: calc(-1 * var(--s2)) 0 var(--s3);
+}
+
+.v2-config-group-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+
+.v2-config-group-head .v2-card-title {
+  margin-bottom: 4px;
+}
+
+.v2-config-group-head .v2-card-lede {
+  margin-bottom: 0;
+}
+
+.v2-config-fields .field-row:first-of-type {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s4);
+}
+
+.v2-config-path {
+  opacity: 0.75;
+}
+
+.v2-config-readonly {
+  padding: 8px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.v2-config-switch {
+  min-height: 36px;
+}
+
+.v2-config-number {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  max-width: 260px;
+}
+
+.v2-config-unit {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.v2-config-list {
+  min-height: 72px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.v2-config-empty {
+  margin: 0;
+}
+
+.v2-config-links {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+/* device summary (read-only inside the catalog page) */
+
+.v2-device-config-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.v2-device-config-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  gap: var(--s3);
+  align-items: center;
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.v2-device-config-main {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.v2-device-config-kv {
+  display: flex;
+  gap: var(--s4);
+  margin: 0;
+  min-width: 0;
+}
+
+.v2-device-config-kv dt {
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.v2-device-config-kv dd {
+  margin: 0;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+/* music */
+
+.v2-source-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--s3);
+}
+
+.v2-source-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.v2-source-card.is-current {
+  border-color: var(--ok);
+}
+
+.v2-source-card.is-selected {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.v2-source-card.is-unavailable {
+  opacity: 0.72;
+}
+
+.v2-source-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.v2-source-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.v2-source-desc {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.v2-source-actions {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+.v2-music-test-result,
+.v2-secret-probe-result {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin-top: var(--s3);
+  padding: var(--s3);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+
+.v2-music-test-result.is-ok,
+.v2-secret-probe-result.is-ok {
+  border-left-color: var(--ok);
+}
+
+.v2-music-test-result.is-fail,
+.v2-secret-probe-result.is-fail {
+  border-left-color: var(--fail);
+  background: var(--fail-soft);
+}
+
+.v2-music-test-result strong,
+.v2-secret-probe-result strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+/* credentials */
+
+.v2-secret-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  margin: 0 0 var(--s4);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.v2-secret-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.v2-secret-row {
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.v2-secret-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.v2-secret-main {
+  min-width: 0;
+}
+
+.v2-secret-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.v2-secret-spacer {
+  flex: 1 1 20px;
+}
+
+.v2-secret-consumers {
+  margin: 6px 0 2px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.v2-secret-form {
+  margin-top: var(--s3);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  max-width: 560px;
+}
+
+.v2-secret-form .field-label {
+  margin-bottom: 6px;
+}
+
+.v2-secret-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+  margin-top: var(--s2);
+}
+
+.v2-secret-verify {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: var(--s2);
+}
+
+.v2-secret-verify .v2-select {
+  min-width: 180px;
+}
+
+.v2-secret-probe-result {
+  flex: 1 1 100%;
+}
+
+/* health */
+
+.v2-health-attention {
+  margin-bottom: var(--s4);
+  padding: var(--s5);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.v2-attention-rows {
+  list-style: none;
+  margin: var(--s3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.v2-health-attention-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.v2-health-attention-row.is-fail {
+  border-left: 3px solid var(--fail);
+  padding-left: var(--s3);
+  background: var(--fail-soft);
+}
+
+.v2-health-attention-row.is-warn {
+  border-left: 3px solid var(--warn);
+  padding-left: var(--s3);
+  background: var(--warn-soft);
+}
+
+.v2-health-attention-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.v2-health-attention-row.is-fail .v2-health-attention-dot {
+  background: var(--fail);
+}
+
+.v2-health-attention-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.v2-health-attention-body p {
+  margin: 2px 0 0;
+}
+
+.v2-health-clear {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: var(--s3) 0 0;
+  color: var(--ok);
+}
+
+.v2-health-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.v2-health-table {
+  min-width: 720px;
+}
+
+.v2-health-table tr.is-abnormal td {
+  background: var(--warn-soft);
+}
+
+.v2-health-warnings {
+  margin-top: var(--s4);
+}
+
+.v2-health-basis {
+  margin-top: var(--s3);
+}
+
+.v2-health-checks {
+  margin-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+.v2-health-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.v2-health-check-status {
+  flex: none;
+  width: 48px;
+  padding-top: 2px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
+.v2-health-check.is-fail .v2-health-check-status {
+  color: var(--fail);
+}
+
+.v2-health-check.is-warn .v2-health-check-status {
+  color: var(--warn);
+}
+
+.v2-health-check.is-ok .v2-health-check-status {
+  color: var(--ok);
+}
+
+.v2-health-check-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.v2-health-check-body p {
+  margin: 2px 0 0;
+}
+
+.v2-health-actions {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  margin-top: var(--s3);
+}
+
+@media (max-width: 720px) {
+  .v2-device-config-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .v2-device-config-kv {
+    flex-direction: column;
+    gap: var(--s2);
+  }
+
+  .v2-health-attention-row {
+    flex-wrap: wrap;
+  }
+}

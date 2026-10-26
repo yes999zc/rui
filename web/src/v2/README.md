@@ -1,4 +1,4 @@
-# Console v2 (M6 — eight-step setup wizard)
+# Console v2 (M9 — config pages)
 
 A second, side-by-side console. The legacy console at `/` keeps working and none
 of its files (`panels.ts`, `PanelHost.vue`, legacy `views/`) are imported here.
@@ -10,16 +10,19 @@ web/v2.html                    second Vite entry (multi-page build)
 web/src/v2/main.ts             app bootstrap (shared theme + language init)
 web/src/v2/router.ts           createWebHistory('/v2/')
 web/src/v2/App.vue             shell: Run / Devices / House / Config, language, theme, token
-web/src/v2/api.ts              hand-written C-002 client (`/api/v2/*` only)
+web/src/v2/api.ts              hand-written client: `/api/v2/*` + C-002 §1.2 stable non-device v1 endpoints
 web/src/v2/audio.ts            override surface + provenance row model for the audio tab
 web/src/v2/houseAudio.ts       global audio leaf directory + field-level diff helpers (M5)
 web/src/v2/setup.ts            setup-plan presentation helpers (status/evidence/field paths) (M6)
 web/src/v2/useCooldown.ts      shared 429 countdown for M5 write buttons
 web/src/v2/i18n.ts             v2-owned zh-Hans + en copy
 web/src/v2/views/              DevicesView, AddDeviceView, SetupView, DeviceDetailView, RoomsView,
-                               RunView, ConfigView, 404
+                               RunView, ConversationView, LogsView, MemoryView,
+                               VoiceAssistantView, MusicView, CredentialsView, HealthView, 404
 web/src/v2/components/         StateBlock, StatusBadge, CapabilityChips, ProvenanceTag,
                                TokenDialog, ConfirmDialog
+web/src/v2/components/config/  ConfigField, ConfigGroupCard, DeviceConfigCard (M9)
+web/src/v2/config.ts           catalog-field helpers and the field-level diff (M9)
 web/src/v2/components/house/   RoomsPanel, HousePolicyEditor, HouseAudioEditor, HouseAudioField
 web/src/v2/components/setup/   SetupWizard + one component per plan step (keys/models/prepare/
                                params/wake/connect/test/verify) (M6)
@@ -105,7 +108,25 @@ web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, AudioPan
   (scope/status/affected/duration/error, failures red). The page states that
   global values shadow the plug manifest, shows the `explicit` marker per leaf,
   and counts devices whose own `/devices/{id}/audio` overrides are non-empty.
-- `/v2/config` — honest "not in this milestone" state (links to Devices/Rooms).
+- `/v2/voice-assistant` — M9 catalog-driven config: `GET /config/catalog` supplies
+  groups, field order, kind/range/options and `effect`; `PUT /config/values` sends
+  only the changed dotted paths. `effect=restart` needs a confirmation and the
+  response's `restart_fields` stays visible. 422 `details.fields[].path`
+  (FastAPI `detail[].loc`) marks the row red. Device fields are read-only here and
+  link to `/v2/devices/{id}`.
+- `/v2/music` — M9 source registry (`/music/sources`), playback/config status
+  (`/music`), presence-only credential slots, source switch/save through
+  `PUT /music/credentials`, and a draft-only `POST /music/test`. Credential
+  inputs are `type=password`; saved values are never rendered.
+- `/v2/credentials` — M9 secret names + configured/not configured only
+  (`GET /secrets`), write-only `POST /secrets`, and a post-write
+  `POST /providers/probe`. Values stay in a local ref, are cleared after a
+  successful write, and never enter localStorage, the URL or a console log.
+- `/v2/health` — M9 `/health` + `/doctor` + `/config/recovery` in five sections
+  with an exceptions-first list; doctor checks and planes put fail/warn rows
+  first. Read-only except explicit download/restore actions (restore requires a
+  confirm dialog).
+- `/v2/config` — compatibility redirect to `/v2/voice-assistant`.
 
 ## Deploy / mount requirements (backend)
 
@@ -203,10 +224,10 @@ data, and every write disables its submit control while in flight.
 
 ## Integration status
 
-M6 is typed and built against C-002/1. The Python `/api/v2` implementation is
-being finished by a separate workstream, so **live end-to-end integration has
-not been run** from this checkout; rendering and interaction flows were checked
-with a temporary headless Playwright mock outside the repository (M6: server
-step order/status, create isolation, blocked plans, prepare confirmation,
-wake/connect/test rendering, verify second confirmation, 422 field paths,
-`action_not_allowed` lists, and both deep links).
+M9 is typed and built against C-002/1. The config pages use the stable v1
+non-device endpoints allowed by C-002 §1.2; no v1 device endpoint is called.
+Rendering and interaction flows were checked with a one-shot headless-Chrome
+harness outside the repository (catalog-driven order/fields, exactly-one-path
+PUT body, restart confirmation, 422 field marking, presence-only credentials,
+secret canary absence from DOM/storage/URL/console/network, provider probe,
+exceptions-first health, restore confirmation, and four deep links).

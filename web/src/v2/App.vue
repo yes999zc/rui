@@ -31,7 +31,7 @@ const navItems: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'run', to: '/run', labelKey: 'v2.nav.run' },
   { key: 'devices', to: '/devices', labelKey: 'v2.nav.devices' },
   { key: 'rooms', to: '/rooms', labelKey: 'v2.nav.rooms' },
-  { key: 'config', to: '/config', labelKey: 'v2.nav.config' },
+  { key: 'config', to: '/voice-assistant', labelKey: 'v2.nav.config' },
 ]
 
 /** Sub-navigation under the Run section (M7/M8): overview + three run pages. */
@@ -40,6 +40,14 @@ const runSubnav: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'conversation', to: '/conversation', labelKey: 'v2.nav.conversation' },
   { key: 'logs', to: '/logs', labelKey: 'v2.nav.logs' },
   { key: 'memory', to: '/memory', labelKey: 'v2.nav.memory' },
+]
+
+/** Sub-navigation under the Config section (M9): four config pages. */
+const configSubnav: Array<{ key: string; to: string; labelKey: MsgKey }> = [
+  { key: 'voice', to: '/voice-assistant', labelKey: 'v2.nav.voiceAssistant' },
+  { key: 'music', to: '/music', labelKey: 'v2.nav.music' },
+  { key: 'credentials', to: '/credentials', labelKey: 'v2.nav.credentials' },
+  { key: 'health', to: '/health', labelKey: 'v2.nav.health' },
 ]
 
 const section = computed(() => {
@@ -53,7 +61,15 @@ const section = computed(() => {
   ) {
     return 'run'
   }
-  if (route.path.startsWith('/config')) return 'config'
+  if (
+    route.path.startsWith('/config') ||
+    route.path.startsWith('/voice-assistant') ||
+    route.path.startsWith('/music') ||
+    route.path.startsWith('/credentials') ||
+    route.path.startsWith('/health')
+  ) {
+    return 'config'
+  }
   return ''
 })
 
@@ -62,6 +78,13 @@ const runPage = computed(() => {
   if (route.path.startsWith('/logs')) return 'logs'
   if (route.path.startsWith('/memory')) return 'memory'
   return 'run'
+})
+
+const configPage = computed(() => {
+  if (route.path.startsWith('/music')) return 'music'
+  if (route.path.startsWith('/credentials')) return 'credentials'
+  if (route.path.startsWith('/health')) return 'health'
+  return 'voice'
 })
 
 const pageLabel = computed(() => {
@@ -73,7 +96,12 @@ const pageLabel = computed(() => {
     if (runPage.value === 'memory') return t('v2.nav.memory')
     return t('v2.nav.run')
   }
-  if (section.value === 'config') return t('v2.nav.config')
+  if (section.value === 'config') {
+    if (configPage.value === 'music') return t('v2.nav.music')
+    if (configPage.value === 'credentials') return t('v2.nav.credentials')
+    if (configPage.value === 'health') return t('v2.nav.health')
+    return t('v2.nav.voiceAssistant')
+  }
   return t('v2.nav.devices')
 })
 
@@ -235,6 +263,24 @@ onUnmounted(() => {
           class="v2-subnav-link"
           :class="{ 'is-active': runPage === item.key }"
           :aria-current="runPage === item.key ? 'page' : undefined"
+        >
+          {{ t(item.labelKey) }}
+        </RouterLink>
+      </nav>
+      <!-- Config sub-navigation: voice assistant, music, credentials, health (M9). -->
+      <nav
+        v-if="section === 'config'"
+        class="v2-subnav"
+        :aria-label="t('v2.nav.configSub')"
+        data-testid="config-subnav"
+      >
+        <RouterLink
+          v-for="item in configSubnav"
+          :key="item.key"
+          :to="item.to"
+          class="v2-subnav-link"
+          :class="{ 'is-active': configPage === item.key }"
+          :aria-current="configPage === item.key ? 'page' : undefined"
         >
           {{ t(item.labelKey) }}
         </RouterLink>
