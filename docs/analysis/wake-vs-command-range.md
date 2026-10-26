@@ -24,7 +24,7 @@
 
 协议：每句「你好小瑞 → 停 1.5 s → 指令」，句间 10 s，每档 2 轮 × 4 句（hello/time/stop/bye，**去掉 `放首歌/下一首`**）。
 
-**已知污染（本文件单列拒绝原因，**不计为拾音失败**；下表分母仍是全部 8 次尝试，因此 admitted 数字里含被 `turn_open` 挡掉的那几次）**：
+**已知污染（本文件单列拒绝原因，**不计为拾音失败**；下表分母是全部 8 次尝试——含被 `turn_open` 挡掉的那几次，所以 Dot2 `1.00` 是 adm 3/8 而不是 3/6）**：
 1. 句间 10 s 偏短 → 上一轮 turn 未关，下一句被 `turn_open` 拒：Dot2 共 4 次（1.00×2、0.30×1、0.15×1），LX06 共 **8 次**（1.00×1、0.75×1、0.50×2、0.30×2、0.15×2）。
 2. `lost_playing` 残留：LX06 在 1.00 档出现 1 次（放歌队列长期占播放态）。
 3. 满幅档 1.00 在 Mac 侧有削波风险；但**本次 fleet9 日志里最大 `peak` 为 0.5866，没有出现 1.0000**，所以本次数据不能用来证明「1.00 档削波」。
@@ -69,7 +69,8 @@
 | 判定位置 | 服务端 RUI KWS（`rui.audio.kws`）；设备端 OWW **off** | 服务端 VAD + 本地 ASR | 生产 override `DOT2_OWW_ON_DEVICE=off`；`src/rui/audio/vad.py` |
 | 上行增益 | 不经过 | `DOT2_MIC_GAIN_DB=18`（bridge 侧） | 生产 override（NAS `/vol1/rui/rui-dot2-override.yml`，本机不可达，无行号） |
 | AEC | 不涉及 | `DOT2_AEC_ENABLED=1`；bridge 软件门控 `DOT2_PLAYBACK_GATE_MS=0` | 同上；`rui-dot2-bridge/src/rui_dot2_bridge/adapter.py`（`_gate_mic`） |
-| 回复后 follow-up 静音窗 | — | `post_playback_mute_ms=2500`、`ack_echo_ignore_ms=2500`（仅 `_mic_mute_until`，即**有 TTS 回复的 follow-up**） | 生产 `config.yaml`；实现见 `src/rui/audio/process.py:734-744`（只对**有 TTS 回复的 follow-up** 设 `_mic_mute_until`，caller `:2361/:2383`） |
+| 回复后 follow-up 静音窗 | — | `post_playback_mute_ms=2500`（仅对**有 TTS 回复的 follow-up** 设 `_mic_mute_until`，`process.py:734-744`，caller `:2361/:2383`） | 生产 `config.yaml` |
+| cue 回声忽略窗 | — | `ack_echo_ignore_ms=2500`（作用于 ack cue 回声判定，`process.py:719-726`、`:1848`；与上面的 follow-up 静音窗不是同一机制） | 生产 `config.yaml` |
 | 端点/超时 | 唤醒后 5 s 无语音 → `wake without speech` | VAD hold/preroll、`[seg]` 判决 | `src/rui/audio/vad.py`（`GateConfig`） |
 | 门槛 | KWS 关键词命中即出 candidate | 需 VAD 判 speech 才送 ASR | `src/rui/audio/process.py`（`admitted` 后等 `[seg]`） |
 

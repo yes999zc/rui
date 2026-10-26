@@ -10,7 +10,7 @@
 | rui 核心 | tag `v0.7.1` @ `44cff05`（`v0.7.0` = `e9db990`）；HEAD `c825091`；镜像 `rui:0.7.1-a1p` = `sha256:f446e348e871e11404cb7d081952b458750a6f4a6d6d45512f64551cfdd5285c` |
 | rui-dot2-bridge | tag `v1.3.0` @ `c71deb6`；plug `dot2-echomuse 1.3.0`（`ladder_correct=true`） |
 | rui-xiaoai-bridge | tag `v0.2.0` @ `fcff8eb`；plug `xiaoai-lx06 0.2.0` |
-| 生产 NAS 168（`/vol1/rui`） | **测试镜像 `rui-dot2:1.3.0-p22`**（= r071 + P2-1 vad.py + task-18 按房间隔离，未打 tag）；上一个稳定组合 `rui-dot2:1.3.0-r071` = `sha256:252f568ca6b1d88aa2990e79856b7d8b143a7810bac452d294e9e5fcfbe7ecba`；底座 `ghcr.io/yes999zc/rui:sha-615e682`；2026-10-26 13:36 部署、healthy |
+| 生产 NAS 168（`/vol1/rui`） | **当前 `rui-dot2:1.3.0-p22`**（= r071 + P2-1 vad.py + task-18 按房间隔离，未打 tag；部署时序：r071 13:36、p21 16:08、p22 17:15，均 healthy）；上一个稳定组合 `rui-dot2:1.3.0-r071` = `sha256:252f568ca6b1d88aa2990e79856b7d8b143a7810bac452d294e9e5fcfbe7ecba`；底座 `ghcr.io/yes999zc/rui:sha-615e682` |
 | 生产配置 | `/health.console=legacy`（M10 未切）；override：`DOT2_PLAYBACK_GATE_MS=0`、`DOT2_OWW_ON_DEVICE=off`、`DOT2_BARGE_IN_ENABLED=0`、`DOT2_CONTROL_PORT=8872`；config：`post_playback_mute_ms=2500`、`ack_echo_ignore_ms=2500`；备份 `rui-dot2-override.yml.bak.20261026-*` |
 | 设备固件 | Dot2 client `fw 20261024-1911-dev`；二进制 `echomuse-dot2-ref/artifacts/server` sha256 `65f93891…` |
 | 契约 | C-001 `rui-device/v1`；C-002/1（含 A-1..A-6）；兼容窗口 `>=0.6.0, <0.8.0`（三仓 manifest 已同步） |
@@ -70,7 +70,7 @@
    - **P1 收口时必须做的事（易忘）**：task-6 写范围只有 `docs/analysis`，P2 的代码改动**不得**塞进 task-6；P1 归因一 PASS，就把选定的 P2 拆成 1–2 张独立 `[impl]` 卡（带各自代码 write_scopes + 门禁 + A/B），并把 `task-12.blocked_by` 更新为 `task-6 + 全部 P2 卡`。
 2. **4 台联合验收**：两台新 Dot2 到位 → EQ 耳测（保留 `/loudness`）→ 清 override 的 `DOT2_CONTROL_PORT=8872` → 逐台 `listen_port`（8871/8873）→ v2 添加设备 → 逐台 添加/唤醒/应答/播放/停止/删除。步骤见 `docs/release/acceptance-4devices.md`。
 3. **M10 默认切换**：等 9 哥 点头；验收 `/health.console=v2`、`/` 302 `/v2/`、`/legacy` 200，回滚一行。
-4. **24h 稳定性复查**：自 2026-10-26 13:36 起计；提醒已设 2026-10-27 13:10（可改 13:40）；结果补进 `docs/release/v0.7.1.md`。
+4. **24h 稳定性复查**：自 **2026-10-26 17:15（p22 部署）** 起计；提醒已设 2026-10-27 13:10（将改为 17:40）；结果补进 `docs/release/v0.7.1.md`。注：13:36 那一轮因中途多次 recreate 已作废。
 5. **task-12 发布收口**：task-6 完成 + 发布号经 9 哥 确认后，更新本文件 → `phase_close` → complete。
 
 ## 采样进度（2026-10-26 16:40）
@@ -92,7 +92,7 @@
 
 - **已上线测试镜像** `rui-dot2:1.3.0-p22`（r071 + P2-1 + task-18）；回滚 = override 改回 `rui-dot2:1.3.0-r071` + `compose up -d`。
 - **task-18 真机回归待跑**：两屋同时放歌 → 各自唤醒各 5 次，期望两屋都能应答、`lost_playing` 只在同屋出现。
-- **task-16 分析稿已写**：`docs/analysis/wake-vs-command-range.md`（等 reviewer）；核心发现：电平曲线两台同量级 → 瓶颈更可能在核心 VAD/`post_playback_mute_ms`，不是设备唤醒能力；「afplay -v 2 → 3/5」证明更响更差（削波）。
+- **task-16 分析稿已提交**（`a301dce`）：`docs/analysis/wake-vs-command-range.md`；核心发现：唤醒链两台同量级（0.75→0.15 区间），差距在 admitted→ASR；H2 被代码否证；「afplay -v 2 → 3/5」仅为现场手记（低强度），不证明削波阈值。
 - **task-19（P2-2）未开工**；P2 上限 2 项已满。
 
 ## 当前状态（2026-10-26 17:30，压缩前快照）
@@ -100,7 +100,7 @@
 - **生产镜像**：`rui-dot2:1.3.0-p22`（r071 + P2-1 vad.py + task-18 按房间隔离），17:15 部署、`/health` 正常、2 台设备在线。**未打 tag**；回滚 = override 改回 `rui-dot2:1.3.0-r071` + `compose up -d`。
 - **已提交**：`87bb704`（P2-1）、`3bbf93f`（task-18）、`3b3b0d1` / `8ee75a1` / `c3eba68`（文档）。全部已 push。
 - **已过门禁**：task-15（PASS + VERIFIED）、task-18（PASS + VERIFIED + 真机回归）。
-- **task-16 分析稿**：`docs/analysis/wake-vs-command-range.md`（**未提交**），已按 reviewer 的 6 条 CHANGES 修正，等复评；采样镜像锁定 p21，数字全部重算（Dot2 0.15 = cand 5/adm 4；LX06 0.15 = cand 6/adm 4），H2 已被代码否证（`post_playback_mute_ms` 只作用于有 TTS 回复的 follow-up）。
+- **task-16 分析稿**：`docs/analysis/wake-vs-command-range.md`（已提交 `a301dce`），已按 reviewer 两轮意见全部修正；采样镜像锁定 p21，数字全部重算（Dot2 0.15 = cand 5/adm 4；LX06 0.15 = cand 6/adm 4），H2 已被代码否证（`post_playback_mute_ms` 只作用于有 TTS 回复的 follow-up）。
 - **未开工**：task-19（P2-2 音乐中短指令拾音）、task-17（AEC-lite）。P2 上限 2 项已满（P2-1 完成、P2-2 待做）。
 - **task-18 真机回归结果**：客厅放歌时卧室 Dot2 连续 4 次 admitted、`lost_playing` 0 次（修复前 6 分钟 18 次）；但音乐中 ASR 只剩碎片（`'了。'`）——归 task-19。
 - **采样环境**：Mac（Dot2 房间）用 `afplay`，荣耀服务器 `192.168.5.34`（客厅）用 `aplay -plughw:2,0`；两台 NTP 同步，跨机对齐不确定度 ≤150 ms；**采样必须串行**（两屋同时说同一唤醒词会互相饿死）。
@@ -113,7 +113,7 @@
 - **EQ 耳测未做**：测量指标改善已证，但 9 哥 尚未 A/B；`trim_db=-2.0` 未重调（A 计权响 4.1 dB）。
 - **cue 回声残留**：envelope 匹配对设备延迟 >~950 ms 或与用户语音完全重叠时回退旧行为，可能切掉 ~300 ms。
 - **多设备尚未实测**：`multi_device.enabled=true`、`max_planes=4`，但只有 1 台 Dot2 在线；唤醒词不按房间隔离（`lost_same_word`）；`DOT2_CONTROL_PORT` 是全局 env，加第 2/3 台前必须清掉；多设备默认共享 secrets。
-- **24h 稳定性未复查**：从 13:36 起计，尚未满窗。
+- **24h 稳定性未复查**：从 p22 部署（17:15）起计，尚未满窗；13:36 那轮作废。
 - **凭证**：NAS 密码 / `RUI_HA_TOKEN` / `web.auth_token` 曾在子代理会话输出中回显（未落仓库）→ 建议轮换 NAS 密码；本会话临时口令文件（本地 + 远端 `/tmp`）已删除。
 - **源码全量镜像构建仍阻塞**：NAS 上 `deb.debian.org` 超时、换清华源后仍 `Unable to locate package nasm/libopus-dev`，故当前走薄层镜像（底座 + overlay），可复现性只到「tag → 薄层 digest」。
 - **backlog**：`uv.lock` 停在 0.2.0；下游 docs 兼容窗口文案陈旧；`coordinator.turn_device`/`drop_device` 生产路径未用；`turn_tasks` 仅在 `start_audio` 时初始化；覆盖缺口（`_wake_in_flight`、output_owner/gate_speaking）；whitespace-id 归一化无用例。
