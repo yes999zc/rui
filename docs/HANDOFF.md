@@ -12,7 +12,10 @@
   - `/legacy` 旧壳 + 中英弃用横幅（`data-testid="legacy-deprecation"`，CTA 到 `/v2/`），v2 不出现；legacy 模式下 `/` 也有横幅。
   - README hero 换 v2 设备页（`docs/assets/console-v2-devices.png`，无内网 IP/token）；中英「控制台入口」段。
   - 测试：**1642 passed / 6 skipped**；`test_legacy_links.py` 15 条参数化断言精确 Location；typecheck + build 绿。
-- **待办（发版前）**：task-18 文档收口（`docs/deploy.md` §3.8 仍写「默认 legacy」——reviewer-d 的 F1，必须改；CHANGELOG/release notes 0.7.8；英文 hero；`?from=` 已知限制）。
+- **task-18 文档收口已完成待评审**（工作树未提交，6 文件）：`docs/deploy.md` §3.8 改「默认 v2 / legacy 一版回滚」、CHANGELOG 0.7.8 段（写明「未写 console 键的老配置会静默变 v2」）、新增 `docs/release/v0.7.8.md` 中英、README 英文 hero、`legacy_links` 注释修正、`?from=` 已知限制。
+- **版本口径（Lead 已定）**：**0.7.5 / 0.7.6 / 0.7.7 不单独打 tag** —— 它们的出口条件（Done 6 真机、双跑、升级回滚）要等 0.7.8 代码齐了一次做完；事后补 tag 等于假装「发版时已验证」。**0.7.8 是唯一验收节点**，CHANGELOG/release notes 必须覆盖四块（TLS、两台平面可见性、小爱摘出、审计+默认切 v2）。
+- **task-19（版本号 0.7.8）** 已建，blocked_by task-18，等 18 过闸门后开；之后才谈 tag/镜像/release。
+- **另记**：`docs/release/`（0.7.x 实际目录）与 `docs/releases/README.md` 的路径口径不一致，留一次 docs 小修。
 - **0.7.8 不发版**：剩余出口 = Done 6 c/d/e 真机 + 双跑对比 + 升级/回滚 + 人肉手册（全在白天）。
 
 ## 明早第一件事（2026-10-27 02:10）
