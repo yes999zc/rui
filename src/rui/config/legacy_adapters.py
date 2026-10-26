@@ -1,9 +1,15 @@
-"""One-minor migration table for adapter spellings that predate the plug split.
+"""0.7.x-only compatibility values; **the whole module is deleted in 0.8.0**.
 
-0.7.6 removed the in-tree LX06 plug. A config written before that may still say
-``adapter: xiaoai``; it is rewritten to the plug manifest's device id on load and a
-deprecation warning is logged. **This module is deleted in 0.8.0** together with the
-rewrite in :func:`rui.config.store.migrate`.
+It holds two things, both legacy and neither a normal configuration source:
+
+* ``_LEGACY_ADAPTERS`` / ``DEFAULT_ADAPTER`` - the pre-plug adapter spelling. A config
+  that still says ``adapter: xiaoai`` is rewritten to the plug manifest's device id on
+  load, with a deprecation warning (see :func:`rui.config.store.migrate`).
+* ``DEFAULT_LISTEN_PORT`` - the port that ``rui-device/v0`` manifests used to inherit
+  implicitly. New manifests must state ``runtime.listen_port`` themselves.
+
+0.8.0 removes this module, the rewrite in :func:`rui.config.store.migrate`, and the
+implicit port default together.
 """
 from __future__ import annotations
 
@@ -12,6 +18,11 @@ _LEGACY_ADAPTERS: dict[str, str] = {"xiaoai": "lx06"}
 
 #: Default for a config that never stated `devices[].adapter` (the external plug id).
 DEFAULT_ADAPTER = "lx06"
+
+#: Compatibility default for device manifests written before the port was required
+#: (rui-device/v0 omitted `runtime.listen_port`). 0.8.0 removes it with the rest of
+#: this module.
+DEFAULT_LISTEN_PORT = 4412
 
 #: Message shown when a legacy spelling is rewritten (kept here so the grep gate for
 #: core code only has to exclude this one file).

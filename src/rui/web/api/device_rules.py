@@ -6,16 +6,16 @@ never both work: the second bind would fail. The rule lives here (no FastAPI imp
 so ``app.py`` and ``setup_api.py`` reject the write before anything reaches disk or the
 audio plane.
 
-A null ``listen_port`` means "adapter default" (4412 for the LX06), so null and an
-explicit 4412 are the same port for conflict purposes. Outbound devices do not bind a
-listener and are ignored. Both defaults resolve the way the adapter builder does:
-the plug manifest runtime block first, then the adapter loader's cached default, then
-the LX06 literals.
+A null ``listen_port`` means "adapter default", resolved from the plug manifest's
+runtime block (then the loader's cached default). Two devices are only in conflict
+when both resolve to a known, equal port; outbound devices do not bind a listener and
+are ignored.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+from ...config.legacy_adapters import DEFAULT_LISTEN_PORT
 from ...config.schema import DeviceConfig
 from ...plugins import PlugCatalog
 
@@ -29,9 +29,8 @@ __all__ = [
     "port_conflict",
 ]
 
-# The inbound WS port an LX06 client dials when devices[].listen_port is unset.
-# Pinned by tests/test_setup.py to the adapter's own constant.
-DEFAULT_LISTEN_PORT = 4412
+# Compatibility fallback for manifests/configs that omit the inbound port (the
+# literal lives in config/legacy_adapters.py; removed in 0.8.0).
 # The transport-token secret name used when neither the config nor the plug names one.
 DEFAULT_TOKEN_ENV = "RUI_DEVICE_TOKEN"
 
@@ -57,7 +56,7 @@ def effective_listen_port(device: DeviceConfig,
 
     devices[].listen_port wins; otherwise the resolved plug manifest's
     runtime.listen_port is the default the adapter builder applies (dot2: 8870,
-    the config keeps None on purpose), and only then the LX06's 4412.
+    the config keeps None on purpose), and only then DEFAULT_LISTEN_PORT.
     """
     if device.listen_port:
         return int(device.listen_port)

@@ -1300,7 +1300,7 @@ def _session_client(app: FastAPI) -> object | None:
 
     The session is house-wide (one turn, one owner), but its voice is not: a goodbye,
     a light repaint or a stop has to land in the room the person actually spoke to.
-    Using the primary client here made the LX06 say the farewell for a Dot 2 turn.
+    Using the primary client here made one room say the farewell for another room's turn.
     """
     device_id = str(getattr(app.state, "turn_device", "") or "")
     client = _client_for(app, device_id) if device_id else None
@@ -1882,13 +1882,47 @@ def _port_conflict_warning(config: Config) -> list[dict]:
     }]
 
 
+def _residual_wake_words(app: FastAPI, config: Config) -> list[str]:
+    """Device-manifest phrases the speaker itself says (generic, no brand in core)."""
+    try:
+        catalog = PlugCatalog(config.system.data_dir)
+        words: list[str] = []
+        for device in config.devices:
+            resolved = catalog.resolve(adapter=device.adapter)
+            manifest = getattr(resolved, "device", None) if resolved is not None else None
+            for word in getattr(manifest, "wake_words_residual", []) or []:
+                if word not in words:
+                    words.append(str(word))
+        return words
+    except Exception:  # noqa: BLE001 - a missing plug must not break a turn
+        return []
+
+
+def _wake_backstop(clean: str, wake_words: list[str] | tuple[str, ...],
+                   residual_wake_words: list[str] | tuple[str, ...] = ()) -> str:
+    """A wake phrase still present after strip_wake ("" when none).
+
+    Matches the configured ``wake_words`` union the active device manifest's
+    ``wake_words_residual``. Both empty disables the backstop: the core has no phrase
+    of its own, so the later ``is_echo`` / ``is_noise`` checks are the safety net.
+    """
+    text = (clean or "").strip()
+    if not text:
+        return ""
+    for word in (*wake_words, *residual_wake_words):
+        phrase = str(word or "").strip()
+        if phrase and phrase in text:
+            return phrase
+    return ""
+
+
 def _legacy_adapter_warnings() -> list[dict]:
-    """Device-level deprecation rows for `adapter: xiaoai` rewritten on load."""
+    """Device-level rows for an adapter spelling rewritten on load."""
     return [{
         "code": "legacy_adapter_spelling",
         "message": (
             f"device {row['device']!r} says adapter {row['old']!r}; migrated to "
-            f"{row['new']!r}. Mount rui-xiaoai-bridge under /opt/rui-plugins."
+            f"{row['new']!r}. Mount the device plug under /opt/rui-plugins."
         ),
         "details": dict(row),
     } for row in legacy_adapter_rewrites()]
@@ -2700,11 +2734,14 @@ def create_app(
                     link.last_wake = None
                 text, asr_report = await runner.transcribe(pcm, trace)
                 clean = strip_wake(text, runner.wake_words)
-                if "小爱同学" in clean or clean.strip() in {"小爱", "小爱小爱"}:
-                    # Text-level backstop for the vendor wake: its StartCapture signal
-                    # may be missing on some client builds, and its final transcript
-                    # arrives after our own ASR has already decided to answer.
-                    _no_turn("vendor wake word in our transcript; yielding: %r", clean)
+                # Neutral backstop: the wake phrases come from the device config
+                # (`devices[].wake_words`, which a manifest may default). No phrase,
+                # no filtering - a transcript that still contains one is the vendor's
+                # own wake and must not start a turn.
+                leftover_wake = _wake_backstop(
+                    clean, runner.wake_words, _residual_wake_words(app, cfg))
+                if leftover_wake:
+                    _no_turn("wake word in our transcript; yielding: %r", clean)
                     vendor.vendor_spoke("wake", clean)
                     return
                 if not clean.strip():
@@ -6094,7 +6131,7 @@ def create_app(
 
     @app.get("/api/v1/devices/{device_id}/connect", dependencies=[Depends(auth)])
     async def device_connect(device_id: str, request: Request) -> dict:
-        """The exact client URL + token an LX06 must dial in with (cold-install step).
+        """The exact client URL + token the device must dial in with (cold-install step).
 
         This is deliberately the ONLY GET endpoint that returns the token value: the
         speaker's boot script needs it in the ws URL, and typing it by hand from a

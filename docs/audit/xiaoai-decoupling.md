@@ -1195,3 +1195,75 @@ All checks passed!
 | 72 | `src/rui/plugins/loader.py:252` | builtin LX06 reference plug is still v0). Logging once avoids a warning flood | builtin reference plug was still v0). Logging once avoids a warning flood |
 | 73 | `src/rui/plugins/models.py:97` | RUI = "rui" # RUI's own KWS (the LX06 path, unchanged) | RUI = "rui" # RUI's own KWS (the core path, unchanged) |
 | 74 | `src/rui/session/vendor.py:3` | The LX06 still runs 小爱. Saying "小爱同学" wakes *it*, and it answers - which is fine ⏎ until our own wake word fires on the same audio and we answer too: two assistants, one ⏎ sentence, from the old project's log at 20:47 o… | A speaker may still run its vendor assistant. Its wake word wakes *it*, and it answers - ⏎ which is fine until our own wake word fires on the same audio and we answer too: two ⏎ assistants, one sentence, from the old pr… |
+
+## 0.7.6 B1b 收口（2026-10-27）
+
+### 1. 测试移植：桥仓 41 条
+
+`rui-xiaoai-bridge/tests/` 新增/接收 5 个文件（语义用例从 core 原样移植，导入改为
+`rui_xiaoai_bridge`）：`test_xiaoai_adapter.py`、`test_xiaoai_e2e.py`、
+`test_xiaoai_led.py`、`test_xiaoai_limits.py`、`test_xiaoai_protocol.py`；加原有
+catalog/import/manifest/manifest-compat/reconnect/residual 共 **44 passed**（2026-10-27 复测）。
+`tests/conftest.py` 把 `src/` 设为 `RUI_PLUGINS_DIR`，让 core 的 registry 能发现桥 manifest。
+被删 `test_xiaoai_plug.py` 的 8 条覆盖去向：
+
+| 原测试名（`c713916^:tests/test_xiaoai_plug.py`） | 新位置 / 废弃原因 |
+|---|---|
+| `test_the_image_plug_is_a_v1_manifest_with_audio_defaults` | `rui-xiaoai-bridge/tests/test_manifest.py::test_manifest_loads_through_rui_loader` + `::test_audio_defaults_and_entrypoint_are_preserved` |
+| `test_the_catalog_finds_the_image_plug_without_an_in_code_table` | `house-ear/tests/test_plugins.py::test_loads_a_valid_multi_device_plugin`（sample-plug 经通用 catalog/loader，无 in-code 表） |
+| `test_the_old_adapter_name_is_a_one_minor_alias` | 语义变为迁移：`house-ear/tests/test_legacy_adapter_migration.py::test_legacy_spelling_is_rewritten_and_recorded`（旧 alias 本身已删） |
+| `test_an_old_config_builds_the_same_adapter_without_editing` | 同上 `::test_legacy_spelling_is_rewritten_and_recorded`（新增 `build_adapters` 断言，改写后仍构建同一 adapter） |
+| `test_the_adapter_builder_keeps_the_kit_hint_and_layout` | `rui-xiaoai-bridge/tests/test_import.py::test_build_needs_a_device_spec` + `test_manifest.py::test_device_contract_is_the_inbound_lx06_shape` |
+| `test_the_adapter_maps_volume_to_the_device_services` | 废弃：core 不再持有 adapter；桥仓当前无 volume 映射单测（12c/task-14 补） |
+| `test_the_plug_passes_the_contract_kit` | `rui-xiaoai-bridge/tests/test_import.py::test_package_imports_and_exports_the_documented_surface` + core `tests/test_plug_contract.py::test_example_plugin_passes_the_full_adapter_contract` |
+| `test_two_image_plugs_are_listed_side_by_side` | 废弃：core 不再内置任何 plug；多插件并列由桥仓 `test_catalog.py` 的单插件安装/去重用例覆盖，不再有「双镜像插件」场景 |
+
+### 2. fixture 版本号依赖
+
+`tests/fixtures/legacy_lx06/plugin.yaml` 仍是旧内置版 `0.3.0` / `rui_compat >=0.3.0`；
+core 测试只断言 manifest 结构/行为，不断言该版本字符串。删除夹具前需把
+`tests/test_plugins.py` 等改用 `tests/fixtures/sample-plug`（本卡未完成，见 §4）。
+
+### 3. `/health.adapter_plugins.registered` 口径（实测结论）
+
+`registered` **不是**「目录里发现的插件」，而是 `device/loader.py:113` 的
+`load_adapter_plugins()`：只统计显式 `RUI_ADAPTER_PLUGINS`、entry point、以及
+`<data_dir>/plugs/*` 安装的 manifest。`RUI_PLUGINS_DIR` 里的插件由 registry 的
+catalog 懒加载（日志 `image plug 'xiaoai-lx06' registered adapter 'lx06'`），不会进
+`registered`。实测（`rui:0.7.6-b2`，挂 `rui-xiaoai-bridge/src` 到 `/opt/rui-plugins`）：
+
+| 场景 | registered | audio_plane | planes |
+|---|---|---|---|
+| 只挂目录，无 env | `[]` | true | `living: running` |
+| 加 `RUI_ADAPTER_PLUGINS=lx06=...` | `["lx06"]` | true | `living: running` |
+
+**0.7.8 验收口径**：外置插件场景不要以 `adapter_plugins.registered` 为唯一判据；
+用 `planes[].state=="running"` 或 `devices>=1` + `device_errors==0`。若验收脚本坚持看
+`registered`，启动时必须**同时**带 `RUI_ADAPTER_PLUGINS` 与 `PYTHONPATH=/opt/rui-plugins`（compose 已两项都设）。只设前者会 `ModuleNotFoundError: rui_xiaoai_bridge`，`registered` 仍为 `[]` 并多一条 warning——0.7.8 验收脚本必须两项都带，否则会误判。
+
+### 4. 夹具保留（Lead 已批准的 12c 拆分）
+
+B1b（task-13）**不删除** `tests/fixtures/legacy_lx06`：core 仍有 17 个共享测试
+`import xiaoai_plug`（`test_credit`/`test_kws`/`test_led`/`test_playback`/
+`test_security_fixes`/`test_setup`/`test_setup_api`/`test_turn_audio`/`test_vendor`/
+`test_device_services`/`test_adapter_plugins`/`test_xiaoai_reconnect_reset` 等）。这些
+用例多数是设备语义（consumption pacing / LED ring / wire protocol / token 鉴权 /
+vendor 事件 / 0.7.4 重连复位回归），不能靠换 mock 等价覆盖。
+Lead 已批准拆出 **12c（task-14）**：逐文件分诊——能改用 `sample-plug`/`mock` 的留在
+core，设备语义移植到桥仓，最后删除夹具。B1b 的工作树因此**全绿且无半成品**；夹具是
+12c 的输入，不是遗留残渣。
+
+### 5. 核心门禁
+
+`git grep -in "xiaoai\|lx06\|小爱\|4412" -- src ':!src/rui/config/legacy_adapters.py'`
+→ **0 命中**。`src/rui/web` 的 15 处已中性化（唤醒词回退删除、端口默认移入
+`legacy_adapters.py`、文案改「设备插件」）；`web/src` 无命中。
+
+### 6. 已知限制：未声明 `wake_words_residual` 的第三方清单
+
+0.7.6 起，vendor 短语兜底由设备清单的 `wake_words_residual` 声明。若第三方清单
+**未声明**该字段（或声明为空），core 不再 early-yield vendor 广播/回声，只靠后续
+`is_echo` / `is_noise`；这类文本**可能进入回合**。这是已知行为变更，不是可用性保证。
+建议所有设备清单显式声明 `wake_words_residual`；内置 lx06 清单已声明
+`["小爱同学","小爱","小爱小爱"]`，保持旧行为。未补「不会进回合」的端到端测试——
+做不到，就不写成保证。

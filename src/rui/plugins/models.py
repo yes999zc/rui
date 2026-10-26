@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..config.legacy_adapters import DEFAULT_LISTEN_PORT
 from ..config.schema import AudioDefaults
 from ..device.contract import Capability, Transport
 from .semver import VersionError, parse_range, parse_version
@@ -200,7 +201,7 @@ class RuntimeSpec(BaseModel):
     mode: RuntimeMode | None = None
     entrypoint: str = ""
     image: str = ""
-    listen_port: int = Field(default=4412, ge=1, le=65535)
+    listen_port: int = Field(default=DEFAULT_LISTEN_PORT, ge=1, le=65535)
     token_env: str = "RUI_DEVICE_TOKEN"
 
     @field_validator("entrypoint")
@@ -415,6 +416,10 @@ with warnings.catch_warnings():
         # v1 only: who detects our wake word and whether the device barge hint is
         # enabled. Omitting it is the v0 default (`source: rui`, barge off).
         wake: WakeSpec | None = None
+        # v1 only (0.7.6, additive): phrases this device itself says or echoes back
+        # that must early-yield a turn (e.g. its stock assistant's wake word). The
+        # core matches them generically; a plug names the actual phrases.
+        wake_words_residual: list[str] = Field(default_factory=list)
         # v1 only (0.6): this model's hardware audio defaults. They are the bottom layer
         # of the audio merge (device default < global config < devices[].audio), so a
         # plug that declares nothing keeps the neutral core defaults - the compatibility

@@ -42,6 +42,9 @@ def test_legacy_spelling_is_rewritten_and_recorded(tmp_path: Path) -> None:
     assert legacy_adapter_rewrites() == [
         {"device": "living", "old": "xiaoai", "new": "lx06"}
     ]
+    # The rewritten config still builds the same external adapter.
+    built = registry.build_adapters(cfg)
+    assert "living" in built.adapters
 
 
 def test_health_counts_the_migration_and_names_the_device(tmp_path: Path) -> None:
@@ -61,3 +64,12 @@ def test_missing_external_plugin_points_at_the_bridge(monkeypatch) -> None:
     built = registry.build_adapters(cfg)
     assert "living" not in built.adapters
     assert "rui-xiaoai-bridge" in built.errors["living"]
+
+
+def test_wake_backstop_uses_configured_words_and_empty_disables_it() -> None:
+    from rui.web.api.app import _wake_backstop
+
+    assert _wake_backstop("hello there", []) == ""
+    assert _wake_backstop("hello there", ["hello"]) == "hello"
+    assert _wake_backstop("hello there", ["nope"]) == ""
+    assert _wake_backstop("   ", ["hello"]) == ""

@@ -651,3 +651,22 @@ Q8（sidecar）：0.3.x 只完整支持 in-process/`builtin|trusted` adapter；`
 | C9 | `plugins/builtin.py`：`rui_compat >=0.2.0 <0.4.0`、`tested_with` 含 0.3.2、import 自检 | 已实现 |
 | C10 | `examples/plugin-example`：v1 矩阵 `>=0.3.0 <0.4.0` / `rui_min 0.3.0`；adapter 音量/服务契约 | 已实现 |
 | C11 | 测试：v0+wake 拒绝、DeviceSide 非法 source/B rollback、list.max、音量两端、barge flag、manifest 缺失、DeviceWake 额外字段/类型 | 已实现（`tests/test_{contract,plugins,adapter_plugins,reference_plugin,plug_contract}.py`） |
+
+## 0.7.6 additive：`devices[].wake_words_residual`
+
+设备清单新增可选字段（v0/v1 均可，默认 `[]`）：
+
+```yaml
+wake_words_residual: ["<设备自己会说的短语>", "..."]
+```
+
+含义：**设备自身**会说出或回灌的短语（例如其原厂助手的唤醒词）。核心在 ASR 文本里
+匹配到这些短语时 early-yield，不把设备自己的话当成用户请求。匹配集合 =
+`devices[].wake_words`（用户配置的 RUI 唤醒词）∪ 本字段；两者都空则不做该兜底，
+安全边界由后续 `is_echo` / `is_noise` 承担。核心代码不含任何具体短语，短语由设备
+manifest 声明。
+
+**已知行为变更（0.7.6）**：vendor 短语兜底改由设备清单 `wake_words_residual` 声明；
+未声明 / 空的 manifest **不再** early-yield vendor 短语，只靠 `is_echo` / `is_noise`。
+内置 lx06 清单已声明三条（`小爱同学` / `小爱` / `小爱小爱`），保持旧行为；第三方清单
+未声明时，vendor 广播/回声可能进入回合。

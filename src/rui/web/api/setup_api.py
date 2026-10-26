@@ -53,9 +53,9 @@ _CONNECT_HINTS: dict[str, dict[str, str]] = {
               "usually logs 401 / close 1008; use the same value on both sides and reconnect.",
     },
     "port_blocked": {
-        "zh": "服务端端口没有在监听：检查 4412 是否被占用、容器是否映射、防火墙是否放行，"
+        "zh": "服务端端口没有在监听：检查配置的端口是否被占用、容器是否映射、防火墙是否放行，"
               "以及音频面是否启动。",
-        "en": "Nothing is listening on the port: check 4412, container mapping, firewall "
+        "en": "Nothing is listening on the port: check the configured port, container mapping, firewall "
               "and whether the audio plane is running.",
     },
     "not_applicable": {
@@ -287,7 +287,7 @@ def install_setup_routes(
                     return plugin, source, error
         # No device yet: choosing one of the installed plugs IS the wizard's first
         # step (0.6 M3). Auto-picking the first built-in is how every fresh install
-        # silently became an LX06; only a build with a single usable plug may skip the
+        # silently became a device-specific plug; only a build with one usable plug may skip the
         # question. Nothing here names a model or a vendor.
         available = [(plugin, source, error)
                      for plugin, source, error in entries.values() if not error]
@@ -1039,7 +1039,7 @@ def install_setup_routes(
                 adapter = str(
                     values.get("adapter") or base.get("adapter") or manifest.id
                 ).strip() or manifest.id
-                # A fresh LX06 has a working 18-LED ring; leaving the schema default off
+                # A fresh device may have a working LED ring; leaving the schema default off
                 # made a new install look broken ("灯不亮"). New devices with the led
                 # capability start enabled; the config/console can still turn it off.
                 if (existing is None and "led" not in base
