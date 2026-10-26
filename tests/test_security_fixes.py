@@ -17,16 +17,12 @@ import stat
 from pathlib import Path
 
 import pytest
-from xiaoai_plug.adapter import XiaoaiAdapter
 
 from rui import secrets
 from rui.config.schema import (
-    CaptureConfig,
     Config,
-    DeviceConfig,
     HaConfig,
     ProviderConfig,
-    VoiceConfig,
 )
 from rui.config.store import load_config, save_config
 from rui.log_setup import LOG_FILE_NAME, setup_logging
@@ -94,12 +90,6 @@ def test_console_secret_reaches_the_ha_bridge(secret_store: Path, tmp_path: Path
     bridge = HaBridge(HaConfig(base_url="http://ha.local", token_env=SECRET_TOKEN),
                       tmp_path / "data")
     assert bridge.client._headers["Authorization"] == f"Bearer {CONSOLE_TOKEN}"
-
-
-def test_console_secret_reaches_the_xiaoai_adapter(secret_store: Path) -> None:
-    dev = DeviceConfig(id="living", host="192.0.2.10", token_env=SECRET_TOKEN)
-    adapter = XiaoaiAdapter(dev, CaptureConfig(), VoiceConfig())
-    assert adapter.token == CONSOLE_TOKEN
 
 
 def test_environment_still_wins_over_the_console_file(secret_store: Path,

@@ -1267,3 +1267,33 @@ core，设备语义移植到桥仓，最后删除夹具。B1b 的工作树因此
 建议所有设备清单显式声明 `wake_words_residual`；内置 lx06 清单已声明
 `["小爱同学","小爱","小爱小爱"]`，保持旧行为。未补「不会进回合」的端到端测试——
 做不到，就不写成保证。
+
+## 12c-1 去向表（task-14，2026-10-27）
+
+只删「纯设备语义」测试；fixture 与 setup/registry 等通用测试保留（task-15 再删）。
+core 从 **1655 passed / 17 skipped** 变为 **1612 passed / 6 skipped**：
+`-43 passed`、`-11 skipped`，合计 **-54 collected**，与下表逐条相等。
+
+| core 删除单元 | 用例数 | 去向（桥仓） |
+|---|---:|---|
+| `tests/test_credit.py` | 5 | `rui-xiaoai-bridge/tests/test_credit.py` |
+| `tests/test_device_services.py` | 7 | `.../test_device_services.py` |
+| `tests/test_kws.py` | 5 | `.../test_kws.py` |
+| `tests/test_led.py` | 18 | `.../test_led.py` |
+| `tests/test_playback.py` | 1 | `.../test_playback.py` |
+| `tests/test_turn_audio.py` | 6 | `.../test_turn_audio.py` |
+| `tests/test_vendor.py` | 11 | `.../test_vendor.py` |
+| `test_security_fixes.py::test_console_secret_reaches_the_xiaoai_adapter` | 1 | `.../test_secret_resolution.py::test_console_secret_reaches_the_adapter` |
+| **合计** | **54** | 桥仓 **44 → 87 passed / 11 skipped**（+54 collected） |
+
+- 未删：`tests/fixtures/legacy_lx06`、`pyproject.toml` 的 pythonpath（task-15）；
+  通用安全断言（secrets/HA/cache/权限/secret-scan）保留在 core `test_security_fixes.py`（20 条）。
+- 桥仓 11 skipped 是模型/真机条件跳过，随文件一起迁移；core 的 skipped 从 17 → 6。
+
+## 7. 夹具保留到 task-15（0.7.7）
+
+`tests/fixtures/legacy_lx06` 仍被 `test_setup.py`/`test_setup_api.py`/`test_plugins.py`/
+`test_registry.py` 等通用测试使用（它们依赖 `adapter="lx06"` 的注册、4412 默认端口、
+params/device_side 等 manifest 语义）。这些不是设备行为测试，不能简单删除；替换为
+`sample-plug` 需要扩展 fixture 并改 30+ 断言，已拆到 **task-15（0.7.7）**。12c-1 不再
+触碰 fixture/pythonpath，core 全绿。
