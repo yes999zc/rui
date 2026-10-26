@@ -77,6 +77,14 @@ phase-close: task-24
 - 飞牛上 docker build 用 `DOCKER_BUILDKIT=0`。
 
 ## 已知风险与未决问题
+- **EQ 阶梯退化（已修，2026-10-26，下游已 push，未部署）**：`EQ_50/60/70.cfg` md5 相同、
+  六条 vendor 曲线只有整体增益差异；旧链 100–300 Hz 比 1–3 kHz 高 +24.7 dB、限幅器平均 −12.9 dB。
+  下游 `rui-dot2-bridge` 的 `dsp.py` 已改为按 tier 重设计六条曲线（`ladder_correct`），
+  目标在 8192 点网格设计后截 1024 taps，20–47 Hz 二阶滚降真正生效（EQ_100：20 Hz −15.9 dB、
+  47 Hz −3.0 dB，群延迟仍 10.67 ms）；实测 bass +5.86 → +2.35 dB、限幅 −1.27 dB、0 削波；
+  下游测试 133 → 141 passed。提交 `1971fc5`，已 push `main`。
+  细节/回滚/部署核对见 `docs/plan/speaker-tuning.md` §EQ 修正。**仍需 9 哥 真机 A/B 确认"不闷"**；
+  生产未重启/未部署。rui 侧测试仍 1481/17（测试在下游仓库，故本仓数字不上升）。
 - **混合房子必须写每设备覆盖**：全局 `audio.capture`/`ack.echo_ignore_ms` 会盖过 Dot2 manifest 默认 → `docs/deploy.md §7.4` + 生产配置。
 - **adapter 静音窗**：`DOT2_PLAYBACK_GATE_MS=400` 是生产规避值，默认值仍待真机再定。
 - **`lost_playing`**：告别播放瞬间唤醒会被仲裁拒绝。

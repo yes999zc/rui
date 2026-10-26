@@ -193,3 +193,147 @@
 - 曲线与 DSP 实验：把生产 `EQ_*.cfg` 拷到 `/tmp/eqdir`，用 `LoudnessProcessor(LoudnessConfig(), Path("/tmp/eqdir"), rate=48000)` 跑合成样；EQ 频响用 1024-tap FIR 的 FFT（相对 1 kHz）。
 - 未做的事：没有改任何源码、没有写生产、没有重启容器、没有触发真机语音。
 
+
+---
+
+# EQ 修正（2026-10-26，已提交，未部署）
+
+> 对应诊断 1 §4「EQ 阶梯退化」与「100–300 Hz +23 dB」。改动在**下游插头仓库**
+> `rui-dot2-bridge`（`src/rui_dot2_bridge/dsp.py`），本仓库（rui）只更新文档；
+> rui 内核、前端、部署均未改。**已 commit + push 下游 main（`1971fc5`），
+> 未部署、未重启生产。**
+
+## 1. 复现：退化是真的，而且比"三个文件相同"更彻底
+
+用生产拉下来的 `EQ_*.cfg`（1024 taps）直接做 FFT，相对 1 kHz：
+
+| 曲线 | 100 Hz | 174 Hz | 250 Hz | 2 kHz | 3 kHz | 4 kHz | 6 kHz | md5 |
+|---|---|---|---|---|---|---|---|---|
+| EQ_50 | +20.1 | +26.6 | +19.9 | −7.9 | −12.1 | −6.6 | −10.0 | `5ae935…` |
+| EQ_60 | +20.1 | +26.6 | +19.9 | −7.9 | −12.1 | −6.6 | −10.0 | `5ae935…` |
+| EQ_70 | +20.1 | +26.6 | +19.9 | −7.9 | −12.1 | −6.6 | −10.0 | `5ae935…` |
+| EQ_80 | +20.1 | +26.6 | +19.9 | −7.9 | −12.1 | −6.6 | −10.0 | `99a9c5…` |
+| EQ_90 | +20.1 | +26.6 | +19.9 | −7.9 | −12.1 | −6.6 | −10.0 | `041258…` |
+| EQ_100 | +20.1 | +26.6 | +19.9 | −7.9 | −12.1 | −6.6 | −10.0 | `ee9644…` |
+
+结论：**六条 vendor 曲线是同一个音色，只差整体增益**（峰值 0.81 / 1.22 / 1.94 / 4.34），
+`EQ_50/60/70` 连增益都相同。所以原设计意图是"6 档、按音量 50/60/70/80/90/100% 选"，
+实际只有 4 个文件、1 个音色；诊断里的"+23 dB 低频 / −2.7 dB 3–6 kHz"就是这条音色叠上
+v11 两个搁架和限幅器后的结果。
+
+复现命令（在 `rui-dot2-bridge` 下）：
+
+```bash
+.venv/bin/python tools/eq_report.py            # 生产同一条 LoudnessProcessor 路径
+.venv/bin/python tools/eq_report.py --wav artifacts/eq-prototype/00-source.wav
+```
+
+## 2. 改法：六个 tier 各自设计曲线（API/文件名不变）
+
+- 仍用 `EQ_50…EQ_100.cfg` 决定"当前是哪一档"（`curve_for_level` / `set_level` 不变），
+  但 `LoudnessConfig.ladder_correct`（默认 true）会按 **tier 0…5** 重新设计 1024-tap
+  线性相位 FIR，不再直接播放 vendor 系数：
+  - 100–300 Hz 的 shelf 设计参数随档位**单调下降**：tier 50 = 9.0 dB → tier 100 = 6.0 dB（实测 band 提升 +5.86 → +2.35）；
+  - presence（3–6 kHz）随档位**单调上升**：+0.8 → +3.5 dB；
+  - 1 kHz 绝对增益随档位**单调上升**：+2.0 → +10.0 dB（保留"越响越推"的阶梯意图，
+    但不再把 vendor 的 +13.7 dB 全量叠加）；
+  - **20–47 Hz 二阶滚降**：目标曲线在 **8192 点网格**（5.9 Hz/bin）设计，再截中心
+    **1024 taps**（群延迟仍 512 samples = 10.67 ms）。旧实现直接在 1024 点网格设计，
+    首 bin 就是 46.9 Hz，`freqs[0]=freqs[1]` 让 EQ_100 在 20 Hz 只测到 −2.6 dB，
+    等于没有滚降；现在 EQ_100 整链实测 20 Hz **−15.9 dB**、30 Hz −9.4 dB、
+    47 Hz **−3.0 dB**、60 Hz −0.1 dB（相对 1 kHz），sub-bass 不再喂限幅器。
+- 旧 v11 的 `lowcut_db=6` / `highshelf_db=2` 默认改为 **0**（字段保留，可运行时再开）：
+  修正阶梯已经接管音色，再叠会变薄。
+- `ladder_correct=false` 可一键回到原始 vendor 曲线（回滚/对照），无需重装。
+- 频率表来自新工具 `tools/eq_report.py`，它直接跑生产 `LoudnessProcessor`
+  （含 FIR、搁架、trim、限幅），不是另写一套模型。
+
+## 3. 改前/改后数字（实跑）
+
+同一段 10 s 合成节目（粉噪 + 60 Hz 鼓点、限带 8 kHz、RMS −15.4 dBFS），
+各点 dB 相对 1 kHz（频响用冲激响应测线性链，等价扫频；限幅统计用下面的粉噪+鼓点）；
+`bass` = mean(100–300) − mean(1–3k)，`pres` = mean(3–6k) − mean(1–3k)。
+
+**改前（v11：EQ_100 + lowcut −6@250 + highshelf −2@4k + trim −2）**
+
+| 曲线 | 100 | 200 | 500 | 1k | 2k | 4k | 8k | bass | pres |
+|---|---|---|---|---|---|---|---|---|---|
+| EQ_100 | +14.3 | +21.4 | +2.3 | 0.0 | −8.0 | −7.6 | +1.3 | **+24.65** | **−3.06** |
+
+限幅器：平均 **−12.85 dB**、最深 −18.11 dB、峰值 −1.01 dBFS、0 削波。
+（诊断 1 的 −10.1 dB 是另一段节目；同一段 00-source 实测 −2.70 dB，见下。）
+
+**改后（corrected：六个 tier 各自 FIR + trim −2，lowcut/highshelf 0）**
+
+| tier | 100 | 200 | 500 | 1k | 2k | 4k | 8k | bass | pres |
+|---|---|---|---|---|---|---|---|---|---|
+| EQ_50 | +6.3 | +5.6 | +1.9 | 0.0 | −0.4 | −0.2 | −0.5 | +5.86 | −0.04 |
+| EQ_60 | +5.8 | +5.2 | +1.7 | 0.0 | −0.0 | +0.3 | −0.2 | +5.17 | +0.21 |
+| EQ_70 | +5.2 | +4.7 | +1.5 | 0.0 | +0.2 | +0.8 | +0.1 | +4.46 | +0.49 |
+| EQ_80 | +4.6 | +4.2 | +1.3 | 0.0 | +0.5 | +1.3 | +0.5 | +3.76 | +0.74 |
+| EQ_90 | +4.1 | +3.8 | +1.1 | 0.0 | +0.8 | +1.8 | +0.9 | +3.06 | +1.00 |
+| EQ_100 | +3.5 | +3.3 | +0.8 | 0.0 | +1.1 | +2.4 | +1.2 | **+2.35** | **+1.27** |
+
+限幅器（同一段粉噪+鼓点）：平均 **−1.27 dB**、最深 −4.30 dB、峰值 −1.01 dBFS、0 削波；
+波峰因数 7.56 → 10.51 dB。真实 7 s 素材 `00-source.wav`：平均 −2.70 → **−0.25 dB**。
+
+A 计权（同一工具实跑）：粉噪+鼓点输出 −19.17 → **−14.19 dBFS（响 5.0 dB）**；
+`00-source.wav` −15.06 → −17.61 dBFS（轻 2.6 dB）。即"低频肥"的节目不再被限幅器
+压掉，整体反而更响；中高频为主的节目会略轻，若 9 哥 觉得不够响，把
+`ladder_gain_db_100` 从 10.0 提到 11.0 再 A/B（限幅平均只到约 −3 dB，仍远好于 −12.9）。
+
+## 4. 目标与依据
+
+- **目标**：任何档位 `bass ≤ +6.0 dB`（设计常数 `LADDER_BASS_TARGET_DB`），
+  3–6 kHz 不低于 1–3 kHz 的 −1 dB；实测最差 +5.86 / −0.04，均满足。
+  EQ_100 的 20 Hz 目标 −17 ±2 dB，实测整链 −15.9 dB（FIR 本身 −16.7 dB）。
+- **依据**：
+  1. 小喇叭在 100–300 Hz 抬 20 dB 以上，纸盆位移和互调失真先到极限，听感是"桶声"；
+     常见小音箱调音把 bass shelf 控制在 +3…+6 dB。
+  2. 等响曲线：低音量需要更多低频补偿，所以低档保留 +5.9 dB 左右，高档（driver 已接近
+     满行程）只留 +2.35 dB；presence 反过来随档位增加，抵 16 kHz 源的高频缺失。
+  3. 限幅器：旧链路平均 −12.9 dB 说明它在替 EQ 做压缩；修正后 −1.27 dB，只削峰值。
+  4. 20–47 Hz 二阶滚降：Dot 2 单喇叭放不出 20–60 Hz，旧曲线却把 100–200 Hz 抬到 +34…+40 dB、
+     20–60 Hz 仍有 +12…+19 dB，这些能量只会消耗 headroom；现在 EQ_100 在 20 Hz 已是 −15.9 dB。
+- **未做的事**：没有提高源采样率（16 kHz 上限 8 kHz 仍是物理限制）；没有动 MBCL/设备
+  侧参数；没有做真机听感结论。
+
+## 5. 回归测试（在 `rui-dot2-bridge/tests/test_dsp.py`）
+
+新增 `CorrectedLadderTest` 7 条 + `ProcessorTest.test_describe_does_not_report_a_stale_curve`：
+
+1. `test_six_tiers_are_distinct_curves`：六个档位（同一份退化 vendor 文件）响应两两差异
+   >0.5 dB，100 Hz 相对提升严格递减、4 kHz 严格递增，bass/presence 逐档单调；
+2. `test_bass_overshoot_stays_within_the_target`：每档 `bass ≤ 6.0 dB`、不低于 0
+   （保留温暖度）、3–6 kHz ≥ −1 dB、4 kHz 不低于 −0.5 dB；
+3. `test_sub_bass_rolloff_is_realised_at_1024_taps`：EQ_100 的 20 Hz = −17 ±2 dB、
+   20/30/47/60 Hz 单调上升、47 Hz ≤ −2 dB 且比 100 Hz 低 >4 dB；峰位 512（10.67 ms）、
+   仍是 1024 taps；
+4. `test_limiter_does_not_crush_and_never_clips`：粉噪+鼓点整链，峰值 ≤ −0.9 dBFS、
+   无近满刻度样本、限幅器平均在 −6…−1 dB（两端都锁，恒 0 实现无法通过）；
+5. `test_silence_and_low_level_do_not_trigger_limiting`：静音/−34 dBFS 正弦的 avg ≈ 0；
+6. `test_reset_stream_clears_limiter_statistics`：响节目后 avg ≤ −0.5，`reset_stream()`
+   后 avg、计数、min/max 全部归零；
+7. `test_legacy_mode_still_replays_the_vendor_curve`：`ladder_correct=false` 确实回到
+   vendor 系数（回滚路径有测试）；
+8. `test_describe_does_not_report_a_stale_curve`：custom/off 模式下 `GET /loudness`
+   不再报上一个 stock `curve`/tier，切回 stock 恢复 `EQ_100`。
+
+## 6. 门禁与回滚
+
+- 下游仓库：`pytest -o addopts='' -q` → **141 passed**（原 133，+8）；`ruff check src tests tools` clean。
+- 本仓库（rui）：`pytest -o addopts='' -q` → **1481 passed / 17 skipped**（与改前一致；
+  本次只改下游与文档，未新增 rui 侧测试）。
+- 提交：下游 `1971fc5`（`fix(loudness): rebuild the EQ ladder and restore the sub-bass roll-off`），已 push `main`。
+- 部署核对：`GET /loudness` 应为 `ladder.corrected: true`、`tone.lowcut_db: 0`、
+  `tone.highshelf_db: 0`；生产若存在 `/var/lib/rui/loudness.json` 或
+  `/opt/rui-secrets/loudness.json`，持久化文件优先于 manifest 默认，必须同步这三个字段
+  或删除文件。完整清单见下游 `docs/loudness-eq.md` §部署后核对清单。
+- 回滚（运行时，无需重装）：
+  ```bash
+  curl -s -X PUT 127.0.0.1:8872/loudness -d '{"ladder_correct":false}'
+  # 若要完全回到 v11 听感，再补：{"lowcut_db":6,"highshelf_db":2}
+  ```
+- 代码回滚：`git revert 1971fc5`（下游 `dsp.py` 的修正提交）。
+- 仍需 9 哥 真机 A/B：本次只证明频谱与限幅指标变好，**"不闷了"必须耳朵确认**；
+  若觉得高频过亮，把 `ladder_presence_db_100` 从 3.5 降到 2.0 再听一轮。
