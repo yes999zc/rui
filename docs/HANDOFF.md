@@ -39,7 +39,7 @@
 20. task-16 分析完成（reviewer PASS）：`docs/analysis/wake-vs-command-range.md`，结论「唤醒链两台同量级、差距在 admitted→ASR；H2（播放后静音窗）被代码否证；H1/H3/H4 未做」；提交 `a301dce` + `2c88b0e`
 21. task-19（P2-2 音乐中短指令）已开卡并把归因数据写进卡：音乐期 `[seg]` rms 中位 0.0232（比无音乐 0.0118 **更高**）、peak 到 1.000 → 失败模式是「音乐串音/削波」而非 mic 被静音
 19. task-18（P1）播放态按房间隔离：一屋放歌不再饿死另一屋唤醒；提交 `3bbf93f`，reviewer PASS + verifier VERIFIED（1617/17），生产 `rui-dot2:1.3.0-p22`
-18. 采样编排打通：Dot2 用 Mac Studio 播、LX06（`device_id=living`）用荣耀服务器 192.168.5.34 播，同一份 48k WAV、各自写 UTC 毫秒 marks，`fleet_matrix --log-tz UTC` 出两设备矩阵；设备接入索引见 `docs/device-access.md`（不含口令）
+18. 采样编排打通：Dot2 用 Mac Studio 播、LX06（`device_id=living`）用荣耀服务器（见 device-inventory.md）播，同一份 48k WAV、各自写 UTC 毫秒 marks，`fleet_matrix --log-tz UTC` 出两设备矩阵；设备接入索引见 `docs/device-access.md`（不含口令）
 
 ## 未提交
 
@@ -121,7 +121,7 @@
 - **task-16 分析稿**：`docs/analysis/wake-vs-command-range.md`（已提交 `a301dce`），已按 reviewer 两轮意见全部修正；采样镜像锁定 p21，数字全部重算（Dot2 0.15 = cand 5/adm 4；LX06 0.15 = cand 6/adm 4），H2 已被代码否证（`post_playback_mute_ms` 只作用于有 TTS 回复的 follow-up）。
 - **进行中**：task-19（P2-2 音乐中短指令拾音）。**未开工**：task-17（AEC-lite）。P2 上限 2 项已满（P2-1 完成、P2-2 待做）。
 - **task-18 真机回归结果**：客厅放歌时卧室 Dot2 连续 4 次 admitted、`lost_playing` 0 次（修复前 6 分钟 18 次）；但音乐中 ASR 只剩碎片（`'了。'`）——归 task-19。
-- **采样环境**：Mac（Dot2 房间）用 `afplay`，荣耀服务器 `192.168.5.34`（客厅）用 `aplay -plughw:2,0`；两台 NTP 同步，跨机对齐不确定度 ≤150 ms；**采样必须串行**（两屋同时说同一唤醒词会互相饿死）。
+- **采样环境**：Mac（Dot2 房间）用 `afplay`，荣耀服务器（客厅，见 device-inventory.md）用 `aplay -plughw:2,0`；两台 NTP 同步，跨机对齐不确定度 ≤150 ms；**采样必须串行**（两屋同时说同一唤醒词会互相饿死）。
 - **待批**：4 台新设备到位后手动添加；打 tag 前的版本号确认；24h 稳定性结果。
 
 ## task-19 收口（2026-10-26 18:05，**第 5 轮为 timebox 上限，9 哥 已定**）

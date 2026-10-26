@@ -8,16 +8,16 @@
 
 | 设备 | 清单条目 | 用途 | 地址 / 用户 |
 |---|---|---|---|
-| NAS 168（fnOS，rui 生产宿主） | `device-inventory.md` → `Bakey-NAS` 一节 | rui 容器、`/vol1/rui` 部署目录、容器日志、console token | `192.168.5.168` / `yes999zc`（docker 组已授权） |
+| NAS 168（fnOS，rui 生产宿主） | `device-inventory.md` → `Bakey-NAS` 一节 | rui 容器、`/vol1/rui` 部署目录、容器日志、console token | `192.168.x.x` / `yes999zc`（docker 组已授权） |
 | Mac Studio | 本机 | 开发、构建、矩阵工具、**Dot2 房间的播放音源** | 本机 / `bakeyzhang` |
-| 荣耀服务器（horner-nas） | `device-inventory.md` → `horner-nas (荣耀服务器)` 一节 | **李箱客厅 LX06 房间的播放音源**（ALSA `plughw:2,0`，ALC256 模拟输出） | `192.168.5.34` / `yes999zc`（SSH key 可用） |
+| 荣耀服务器（horner-nas） | `device-inventory.md` → `horner-nas (荣耀服务器)` 一节 | **李箱客厅 LX06 房间的播放音源**（ALSA `plughw:2,0`，ALC256 模拟输出） | `192.168.x.x` / `yes999zc`（SSH key 可用） |
 
 ## 被采样本箱
 
 | 音箱 | rui `device_id` | 房间 | 传输 / 端口 | 备注 |
 |---|---|---|---|---|
 | Dot2（EchoMuse RS03QR） | `dot2` | 卧室（与 Mac Studio 同屋） | inbound，`listen_port=8870` | 设备侧音频可调（AEC/mic gain/OWW） |
-| 小爱 LX06 | `living` | 客厅（与荣耀服务器同屋） | inbound，`listen_port=4412`，`host=192.168.5.5` | 受限，作对照 |
+| 小爱 LX06 | `living` | 客厅（与荣耀服务器同屋） | inbound，`listen_port=4412`（`host` 见 device-inventory.md） | 受限，作对照 |
 
 ## 采集约定
 
