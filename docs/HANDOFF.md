@@ -1,16 +1,16 @@
-# HANDOFF — rui 稳定版阶段快照（2026-10-26 22:05）
+# HANDOFF — rui 稳定版阶段快照（2026-10-26 22:40）
 
-> **本会话当前快照（0.7.3 收口 + 夜间无人值守）** 见下方「## 0.7.3 状态（2026-10-26 22:05）」；其下的
-> 「## 0.7.4 状态（2026-10-26 22:20，进行中）
+> **本会话当前快照**：§0.7.4 状态（进行中）+ §0.7.3 状态（已发布）；其下「## 版本与契约」「## 已完成」…
+> 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
+> 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
+
+## 0.7.4 状态（2026-10-26 22:40，进行中）
 
 - 主题按 9 哥 指示改为 **P0/P1 修复**（`docs/audit/hermes-triage.md`）：原「TLS + Done6」顺延到 0.7.5。
-- task-5（P0-A：rui#18 请求体上限 + rui#17 `_greet` 忙等）**review PASS + verify VERIFIED**：全量 **1645/17**（连续 3 次），flaky 0/20，三态实测 413/401/422，greet ticker 865/s、冷启动 3.6 ms；反向变异 5 组。
-- 交付口径偏差（记录，不阻塞）：0.7.4 的 release notes 草稿与 C-002 的最终措辞归 0.7.4 发布材料卡；413 响应缺 `Permissions-Policy`（其余 4 个安全头齐全），记为 0.7.4 发布前的小项。
+- task-5（P0-A：rui#18 请求体上限 + rui#17 `_greet` 忙等）**review PASS + verify VERIFIED**，已合入 `cf42695`：全量 **1645/17**（连续 3 次），flaky 0/20，三态实测 413/401/422，greet ticker 865/s、冷启动 3.6 ms；反向变异 5 组。
 - task-6（P0-B：rui#28 微信渠道 + rui#25/xiaoai#1 重连复位）待开（避免 tests/ 并发）。
 - 0.7.4 发布材料卡与桥版本（dot2 1.3.2 / xiaoai 0.2.2）待 task-5/6 完成后开。
-
-## 版本与契约」「## 已完成」… 是 0.7.2 及更早的快照，除被 §0.7.3 显式更新处外仍有效。
-> 明早 9 哥 第一件事：读 §0.7.3 的「待你决定」「白天项」与「生产变更日志」。
+- 交付口径偏差（记录，不阻塞）：0.7.4 release notes 归发布材料卡；413 响应缺 `Permissions-Policy`（其余 4 个安全头齐全），记为发布前小项。
 
 ## 0.7.3 状态（2026-10-26 22:05）
 
@@ -20,7 +20,7 @@
 | task-1 `[impl] 覆盖率基建与基线` | **completed** | reviewer PASS + verifier VERIFIED + CI 四绿（`d21bb5f`）；commit `d21bb5f` |
 | task-2 `[test] 未验证 batch-1（HE-03/HE-12/D2-06）` | **completed** | PASS + VERIFIED（verifier 自做变异并还原）；house `cd2d0a2`、dot2 `18ad114` |
 | task-3 `[docs] 缺口台账 + 8 处矛盾` | **completed** | 两轮 CHANGES + verifier 两轮 FAILED 后修完；house `49df73f`、dot2 `517623d`、xiaoai `0889427` |
-| task-4 `[release] 0.7.3 版本/CHANGELOG/release notes/README pin` | in_progress | impl-core 执行；之后 Lead 打 tag/发 release/构建镜像 |
+| task-4 `[release] 0.7.3 版本/CHANGELOG/release notes/README pin` | **completed** | tag `v0.7.3` + release + 镜像 digest 已记录（见下） |
 
 ### 0.7.3 发布（2026-10-26 22:05 起）
 | 项 | 值 |
