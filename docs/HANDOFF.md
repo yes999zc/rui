@@ -6,15 +6,15 @@
 
 > **下次第一件事**：0.8.0 开工前先拍板 `docs/HANDOFF-0.8.md` §3 的未决问题；**所有待拍板项已汇总到 `docs/待拍板.md`（D-001…D-006，含背景/选项/代价/建议），拍板结论回写到那里再落 HANDOFF**。在那之前不要动 0.8.0 的任何删除动作。
 
-### a. 现状事实（截至 2026-10-27 12:05）
+### a. 现状事实（截至 2026-10-27 12:30）
 
 - **版本**：core **0.7.8**；tag `v0.7.8`（`a3205e9`）；release <https://github.com/yes999zc/rui/releases/tag/v0.7.8>
 - **镜像**：GHCR 索引 `sha256:ca3b40ecaf3457158603af90e520ac2bf423e2f4570e12e36db15b2583bf24c3`（tag `0.7.8` / `0.7`）；**生产 pin 的是 amd64 平台摘要 `sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`** —— NAS 上的老 docker 不认带 attestation 的 OCI index，按索引摘要 `pull` 会报 `unsupported media type`。
 - **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。**本阶段未做任何生产变更。**
 - **回滚**：本地旧镜像已删（9 哥 决定）；**回滚走 GHCR 上一个正式版** —— `docker pull ghcr.io/yes999zc/rui:0.7.4` → 取 amd64 摘要 → 改 override 的 `image:` → **两个 `-f`** `up -d --force-recreate`（步骤见 `docs/deploy-runbook-0.7.8.md` §8）。
-- **三仓 HEAD**：rui **`16ec422`**（审计阶段末；工作树有 task-14 未提交改动）（打磨阶段最后一个提交是 CHANGELOG；用 `git log --oneline v0.7.8..HEAD` 自查）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
-- **CI（rui `599bb71`）四绿**：ci / security / secret-scan / docker-publish 全部 `success`。更早提交里出现的 `cancelled` **不是失败**，是后续 push 的并发 run 把旧 run 顶掉（`cancel-in-progress`）。查当前状态：`gh run list -L 8 --json name,headSha,status,conclusion`。
-- **进 main 未发版 59 个提交（`git rev-list --count v0.7.8..HEAD`，截至 `599bb71`）**（按「不升 minor」节奏攒着）。用户可见的：
+- **三仓 HEAD**：rui **`ddb7cbb`**（工作树干净）（打磨阶段最后一个提交是 CHANGELOG；用 `git log --oneline v0.7.8..HEAD` 自查）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
+- **CI（rui `ddb7cbb`）**：secret-scan / security 已 success，ci / docker-publish 写作时在跑（`4f75079` 是四绿）：ci / security / secret-scan / docker-publish 全部 `success`。更早提交里出现的 `cancelled` **不是失败**，是后续 push 的并发 run 把旧 run 顶掉（`cancel-in-progress`）。查当前状态：`gh run list -L 8 --json name,headSha,status,conclusion`。
+- **进 main 未发版 60 个提交（`git rev-list --count v0.7.8..HEAD`，截至 `599bb71`）**（按「不升 minor」节奏攒着）。用户可见的：
   `91cac91` 控制台把 Home Assistant 与 MCP 服务器分两段（仅呈现层，API 未动）、
   `d2c9895` dot2 音量回读取 mixer 回报值、`e85b4bb` 「唱首歌」走随机 + 老链接落页提示、
   `3ed312f` `mcp <name>: down` 重连日志节流（行为变更，已记入 CHANGELOG「已知变更」）、
@@ -116,9 +116,9 @@
 **进入「可发版」阶段（2026-10-27 12:2x 起，goal 第 1 轮）**：三张卡并行推进，**不打 tag、不部署、不做真机**。
 | 卡 | 内容 | 状态 |
 |---|---|---|
-| task-14 | 修复批次 1（C1 结束词+有歌 → 停歌且关会话；C2 收紧 `stop_intent` + 显式别名） | 实现完成、跑变异中（impl-noise）。**写范围已扩**：新增 `tests/test_session.py`（只改 2 条旧断言） |
-| task-15 | `docs/acceptance-pending.md`（真机验收累计，21/21 覆盖）+ `docs/known-limitations.md`（9 条已知限制） | 第 2 版，待 rev-inv 复评（第 1 轮 13 条 CHANGES 已全改：命令补必填参数、判据改取 metrics、L3/L7 指向修正） |
-| task-16 | **收口报告** `docs/release-candidate-0.7.9.md`（可见变化/稳定性/文档三段 + 验收清单引用 + 可直接照抄的回滚步骤 + 一句「能不能发」） | 待开（blocked by task-14/15） |
+| task-14 | 修复批次 1（C1 结束词+有歌 → 停歌且关会话；C2 收紧 `stop_intent` + 显式别名） | ✅ **completed `ddb7cbb`**；PASS（rev-nits 两轮，第 1 轮抓到「`_release_turn` 无人守护」）→ VERIFIED（ver-noise：全量 `1708 passed, 6 skipped`、两次变异、矩阵两跑一致） |
+| task-15 | `docs/acceptance-pending.md` + `docs/known-limitations.md` | ✅ **completed `4f75079`**；PASS（rev-inv 三轮）→ VERIFIED（ver-docs：21 条 `comm -3` 无缺无多、27 行四要素齐、无敏感串/漂移行号） |
+| task-16 | **收口报告** `docs/release-candidate-0.7.9.md` | 进行中（impl-audio，卡已解锁） |
 
 **已知未决（不阻塞本轮，但会影响「能不能发」的措辞）**：D-011（唤醒应答 tier 2→1 取舍）、C3（无歌说「暂停」是否算结束）、C10（别名算不算新增词）、D-001（要不要发 0.7.9 patch）、D-002（真机窗口）、D-010（HE-02 修不修）。
 
