@@ -52,7 +52,7 @@ from ..config.schema import McpServerConfig
 from ..security.netguard import OutboundPolicy, guarded_async_client
 from .contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from .ha import _clean_untrusted, _untrusted  # one sanitizer for all MCP-sourced text
-from .mcp_client import RECONNECT_MAX_S, MCPUnavailable
+from .mcp_client import RECONNECT_MAX_S, DownLogThrottle, MCPUnavailable
 
 log = logging.getLogger(__name__)
 
@@ -322,6 +322,7 @@ class ManagedServer:
         self.last_error = ""
         self.latency_ms: float | None = None
         self.last_seen: float | None = None
+        self._down_log = DownLogThrottle(cfg.name, logger=log)
 
     # ------------------------------------------------------------------ lifecycle
     @property
@@ -422,6 +423,7 @@ class ManagedServer:
                     self._connected.set()
                     self._outcome.set()
                     backoff = 1.0
+                    self._down_log.reset()
                     log.info("mcp %s (%s): connected, %d tool(s)",
                              self.cfg.name, self.cfg.transport, len(self._tools))
                     if changed:
@@ -459,8 +461,7 @@ class ManagedServer:
                 self.last_error = _safe_error(exc)
                 if not was_connected:
                     self._outcome.set()   # first attempt failed: report, keep retrying
-                log.info("mcp %s: down (%s), reconnect in %.0fs",
-                         self.cfg.name, self.last_error, backoff)
+                self._down_log.record_down(self.last_error, backoff)
                 self._drain_queue()
                 if self._stopped:
                     return

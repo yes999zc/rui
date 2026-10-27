@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 from ..config.schema import McpServerConfig
@@ -24,6 +25,60 @@ from ..security.netguard import OutboundPolicy, guarded_async_client
 log = logging.getLogger(__name__)
 
 RECONNECT_MAX_S = 15.0
+# A server that stays unreachable used to log one `down` line per attempt (~15 s at
+# most). Repeat that for an afternoon and the lines that matter drown. Identical
+# reasons are therefore kept at one INFO per five minutes; the rest go to DEBUG so
+# `--log-level debug` still shows every attempt.
+DOWN_LOG_INTERVAL_S = 300.0
+
+
+class DownLogThrottle:
+    """Rate-limit a reconnect loop's `mcp <name>: down` line to state changes.
+
+    Both reconnect loops (`MCPClient` here, `ManagedServer` in `mcp_manager`) retry
+    forever, so the same failure repeats every few seconds. The rule is "state
+    changes are INFO, an unchanged state is DEBUG":
+
+    * first failure after being up -> INFO, with the reason and the next backoff;
+    * the reason text changed      -> INFO immediately: a new error is never swallowed;
+    * the same reason again        -> INFO at most once per `interval_s`, DEBUG otherwise;
+    * a successful connect is the recovery signal (both loops already log
+      `connected, N tools`) and calls `reset()`, so the next outage is INFO again.
+
+    `clock` is injectable so tests can cross the interval without sleeping.
+    """
+
+    def __init__(self, name: str, *, interval_s: float = DOWN_LOG_INTERVAL_S,
+                 clock: Callable[[], float] | None = None,
+                 logger: logging.Logger | None = None) -> None:
+        self.name = name
+        self.interval_s = interval_s
+        self._clock = clock or time.monotonic
+        self._log = logger or log
+        self._reason = ""
+        self._last_info = 0.0
+        self._down = False
+
+    def record_down(self, reason: str, backoff_s: float) -> None:
+        """One failed attempt: INFO when the state changed (or the interval elapsed)."""
+        now = self._clock()
+        first = not self._down
+        changed = reason != self._reason
+        self._down = True
+        self._reason = reason
+        if first or changed or now - self._last_info >= self.interval_s:
+            self._last_info = now
+            self._log.info("mcp %s: down (%s), reconnect in %.0fs",
+                           self.name, reason, backoff_s)
+        else:
+            self._log.debug("mcp %s: still down (%s), reconnect in %.0fs",
+                            self.name, reason, backoff_s)
+
+    def reset(self) -> None:
+        """A connection succeeded: the next outage starts a fresh INFO streak."""
+        self._down = False
+        self._reason = ""
+        self._last_info = 0.0
 
 
 def _describe(exc: BaseException) -> str:
@@ -60,6 +115,7 @@ class MCPClient:
         self._connected = asyncio.Event()
         self.last_error = ""
         self.latency_ms: float | None = None
+        self._down_log = DownLogThrottle(cfg.name)
 
     # ------------------------------------------------------------------ session
     async def start(self) -> bool:
@@ -124,6 +180,7 @@ class MCPClient:
                             self._connected.set()
                             backoff = 1.0
                             self.latency_ms = None
+                            self._down_log.reset()
                             log.info("mcp %s: connected, %d tools", self.cfg.name, len(self._tools))
                             while True:
                                 request, future = await self._queue.get()
@@ -150,8 +207,7 @@ class MCPClient:
                 detail = _describe(exc)
                 self.last_error = detail
                 self._connected.clear()
-                log.info("mcp %s: down (%s), reconnect in %.0fs",
-                         self.cfg.name, detail, backoff)
+                self._down_log.record_down(detail, backoff)
                 self._drain_queue()
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, RECONNECT_MAX_S)
