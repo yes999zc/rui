@@ -28,6 +28,15 @@ release; no version bump for a single fix.** Everything below is committed and p
   logs at most once every 5 minutes, everything else drops to DEBUG. `--log-level
   DEBUG` still shows the full reconnect cadence. Threshold lives in
   `src/rui/tools/mcp_client.py` (`DOWN_LOG_INTERVAL_S`).
+- **被吞掉的 `ENOTCONN` 现在留一行 DEBUG** (`8321099`). When a plane socket is already
+  gone at close time the exception is still swallowed (that is what keeps the real
+  refusal reason visible), but at DEBUG level you now see
+  `audio plane: socket already gone on close: [Errno 57] ...` instead of silence.
+  Nothing changes at the default log level.
+- **audio `close()` no longer masks the plane's real error** (`2977c3a`). A child that
+  died before the handshake used to turn `audio plane refused: ... RUI_MISSING_TOKEN ...`
+  into `[Errno 57] Socket is not connected` in `/api/v1/audio`, and skipped
+  `proc.terminate()` on the way out.
 
 ### Fixed（进 `main` 未发版）
 
