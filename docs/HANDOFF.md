@@ -34,7 +34,9 @@
 - `08:33:30` 「放首歌。」→ `music transport: random (music.started)` → `playback requested: .../music_cache/...pcm` → 播起来了；随后 `08:33:39` 对话**抢占了音乐**（`output: dialogue preempts music`），符合预期
 - `08:33:57` 静默 15 s → farewell
 
-**镜像清理（08:34）**：删掉分支构建的 `ghcr.io/yes999zc/rui:edge`；NAS 上 rui 相关只剩两个——运行中的 `ghcr.io/yes999zc/rui@sha256:1f074bb3…`（本地 `74f6c560`）与回滚用的 `rui-dot2:1.3.1`（`a62e2cf4`）。
+**镜像清理（08:34–08:38）**：先删分支构建的 `ghcr.io/yes999zc/rui:edge`；随后按 9 哥 指示删掉回滚胎 `rui-dot2:1.3.1`（`a62e2cf4`）。**NAS 上 rui 相关只剩 1 个镜像**：`ghcr.io/yes999zc/rui@sha256:1f074bb3…`（本地 `74f6c560`，运行中）。
+
+> **回滚路径随之改变**：不再有本地旧镜像，回滚改走 GHCR 上一个正式版（`0.7.4` / `0.7.3` / `0.7.2` 都在），命令见 `docs/deploy-runbook-0.7.8.md` §8。
 - 数据：纯净装后只恢复了凭据与音乐资产（`secrets.yaml`/`lan_media.json`/`library_index.json`/`music_aliases.json`/`music_history.json`/`setup.json`），日志/ack/DB/缓存保持全新
 
 **验收结果**

@@ -120,14 +120,25 @@ cd /vol1/rui && docker compose -f docker-compose.yml -f rui-dot2-override.yml lo
 
 ## 8. 回滚（任一判据不满足立即执行）
 
+**本地已无旧镜像**（2026-10-27 08:38 按 9 哥 指示删除 `rui-dot2:1.3.1`），所以回滚走 GHCR 上一个正式版：
+
 ```bash
 cd /vol1/rui
-cp rui-dot2-override.yml.bak.<时间戳> rui-dot2-override.yml
-docker compose -f docker-compose.yml -f rui-dot2-override.yml config | grep -E "image:"   # 期望 rui-dot2:1.3.1
-docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d
+# 1) 取上一个正式版的 amd64 摘要（NAS 的老 docker 不认 OCI index，别用 tag/索引摘要）
+docker pull ghcr.io/yes999zc/rui:0.7.4
+docker image inspect ghcr.io/yes999zc/rui:0.7.4 --format '{{index .RepoDigests 0}}'
+
+# 2) 把 override 的 image 换成该摘要（备份先做）
+cp rui-dot2-override.yml rui-dot2-override.yml.bak.beforerollback
+sed -i 's#^\(\s*image:\s*\).*#\1ghcr.io/yes999zc/rui@sha256:<填上面摘要>#' rui-dot2-override.yml
+grep -n "image:" rui-dot2-override.yml
+
+# 3) 两个 -f 起
+docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d --force-recreate
 curl -s localhost:8080/health | python3 -c "import json,sys;d=json.load(sys.stdin);print(d['version'],d['devices'],d['device_errors'],d['console'])"
 ```
-期望回到 `0.7.2 / 2 / 0 / legacy`。只回滚控制台入口（保留 0.7.8）：config 的 `web.console` 改回 `legacy` 再 `up -d`。
+期望回到 `0.7.4`，`devices=2`、`device_errors=0`（0.7.4 里两个桥同样走外挂目录，无需换镜像结构）。
+只回滚控制台入口（保留 0.7.8）：config 的 `web.console` 改回 `legacy` 再 `up -d`。
 
 ## 9. 实测记录
 
