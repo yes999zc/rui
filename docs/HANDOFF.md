@@ -101,6 +101,12 @@
 
 **审计 B 的前提已由 9 哥 纠正（记 `docs/待拍板.md` D-011）**：v2 与旧面板是两套渲染。v2 事实：`web/src/v2/views/VoiceAssistantView.vue:74-81` 的 `SHOWN_GROUPS` 含 `ack` → **唤醒应答就在「语音助手」页、且是第 8 组（末位）**；`web/src/v2/config.ts:205 orderedGroups()` 不排序，按 catalog 数组原序渲染；生产 catalog tier 2 顺序 `devices(10)…audio.*(100-130) ack(200)` → ack 末位。**落点：改 `src/rui/config/catalog.py:127` 的 ack order 值（服务端顺序，v2 与旧面板都生效，前端不用动）**。审计初稿误用了旧面板 `PanelSpec`（`app.py:548-550`/`:581-593`）与旧面板排序（`ConfigCenter.vue:175`）。
 
+**审计进度（2026-10-27 11:50）**：
+- **task-12（审计 A）**：脚本 `tools/intent_matrix.py`（215 行，两次运行 `diff` 空）+ 文档 `docs/audit/intent-collisions.md`（289 行）已出。**11 条冲突 = P0 2 / P1 3 / P2 6**；评审 rev-inv 第 1 轮 CHANGES（「落 model」行号错 + C2 收紧会把「停止播放」打成落模型），已按方案①（`ALIASES` 显式加别名）改完，待复评。
+  关键结论：① 结束词 + 有歌 → `media_stop` 保持会话（现象来源，`app.py:966-984`）；② `停止你好` 靠 `rules.py:281-283` 的「子串 + ≤2 字」容差命中；③ 单字「停」落 model（`app.py:2813` 澄清为 False → `2825-2831`）。
+  建议第一批：C1（结束词+有歌 → 停歌+关会话）+ C2（收紧容差、保留显式别名）。
+- **task-13（审计 B）**：9 哥 亲自纠正前提后重写中（见上 D-011）；rev-facts 第 1 轮 CHANGES 3 条：`id` 不是双入口（会让设备无法改名）、`voice/capture` 顺序缺 P 级、首屏口径不自洽（5 组 vs 3 组）。
+
 **9 哥 定稿的目标策略（审计判据，修复时照此执行）**：
 1. 暂停功能保留，默认触发词**只有**「暂停」「停一下」；其他暂停词（先停这儿/停会儿/停住/停在这）从暂停表**删除**、不挪进结束词；用户可自定义。
 2. 结束词表**保持现状不新增**。
