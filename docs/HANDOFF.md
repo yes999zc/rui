@@ -1,8 +1,60 @@
-# HANDOFF — rui 稳定版阶段快照（2026-10-26 22:40）
+# HANDOFF — rui 阶段快照（0.7.8 已发布）
 
-> **本会话当前快照**：§0.7.4 状态（进行中）+ §0.7.3 状态（已发布）；其下「## 版本与契约」「## 已完成」…
-> 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
-> 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
+## 新会话入口（2026-10-27）
+
+> **只读本节 + 它指出的文件即可接手**；下面的历史节按需查，不要通读全篇。
+
+### a. 现状事实（截至 2026-10-27 09:55）
+
+- **版本**：core **0.7.8**；tag `v0.7.8`（`a3205e9`）；release <https://github.com/yes999zc/rui/releases/tag/v0.7.8>
+- **镜像**：GHCR 索引 `sha256:ca3b40ecaf3457158603af90e520ac2bf423e2f4570e12e36db15b2583bf24c3`（tag `0.7.8` / `0.7`）；**生产 pin 的是 amd64 平台摘要 `sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`** —— NAS 上的老 docker 不认带 attestation 的 OCI index，按索引摘要 `pull` 会报 `unsupported media type`。
+- **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。
+- **回滚**：本地旧镜像已删（9 哥 决定）；**回滚走 GHCR 上一个正式版** —— `docker pull ghcr.io/yes999zc/rui:0.7.4` → 取 amd64 摘要 → 改 override 的 `image:` → **两个 `-f`** `up -d --force-recreate`（步骤见 `docs/deploy-runbook-0.7.8.md` §8）。
+- **三仓 HEAD**：rui `81be912`、dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
+- **进 main 未发版**（按「不升 minor」节奏攒着）：`d2c9895` dot2 音量回读确认、`e85b4bb` 「唱首歌」走随机 + 老链接落页提示。
+
+### b. 已定决策（**不要再讨论**）
+
+1. **0.7.5 / 0.7.6 / 0.7.7 合并进 0.7.8**，0.7.8 是唯一验收节点；**不为单条修复升 minor**，修复进 main 攒着。
+2. **小爱插件彻底外置**：核心不再内置任何设备实现；仓内 `plugs/` 与 `adapter_aliases.py` 已删；`adapter: xiaoai` 在**读入时**迁移为 `lx06` 并打 WARNING（`/health.adapter_plugins.warnings`），**0.8.0 删这段迁移**。
+3. **0.8.0 只做破坏性变更**，且**桥先发双窗口版本、core 后发**（顺序不可反）。
+4. **`docs/` 禁止真实内网地址**：用 `<NAS_IP>` / `<LX06_IP>` 占位；CIDR（如 `docs/security.md`）不算，扫描器不匹配。
+5. **MCP 维持现状，不在 0.8.x 做 server 端**：rui 只有 MCP **client**（`tools.mcp_servers`，生产为空）；**Home Assistant 走专用桥 `src/rui/tools/ha.py`**（六工具白名单 + 危险域硬拒绝）——准确表述是：**HA 不进入 rui 的通用 MCP 服务器列表、不是 rui 的 MCP 实例；专用桥内部以 MCP 客户端连接 HA 自己的 MCP Server 集成**。设备能力不暴露 MCP。理由：HA 有专用桥更安全；外部 agent 直接调设备、绕道 rui 无收益。
+6. **在线音乐「接口公开、实现私有」**：只做合规版（自建库 + 官方元数据/官方试听），**不做 VIP 换源、不接聚合解析站**（调研见 §「在线音乐调研」）。
+
+### c. 扩展点地图
+
+| 想加什么 | 改哪里 | 要点 |
+|---|---|---|
+| 音乐源 | `src/rui/music/source.py` 的 `MusicSource` Protocol（`search` / `random` / `favorites` / `star` / `resolve` **五个方法**）+ `src/rui/music/sources/presets.py` 注册；现成实现：`navidrome.py` / `subsonic.py` / `jellyfin.py` | 新 provider 的**配置字段名未定**（见 d-2） |
+| 设备厂商 | 外置插件：宿主机 `plugins/<包名>/` → `-v ./plugins:/opt/rui-plugins:ro` + `PYTHONPATH=/opt/rui-plugins` + `RUI_ADAPTER_PLUGINS=<id>=<module>:build`；或 `<data_dir>/plugs/*` 自动扫描 | **不需要造下游镜像** |
+| 外部工具 | `tools.mcp_servers[]`（HTTP / stdio；stdio 有开关闸；生产为空） | HA **不在此列** |
+| 契约 | `docs/contracts/C-002-console-v2-api.md`、`docs/socket-plug-v1.md` | 三仓 `rui_compat` 必须同窗口 |
+
+### d. 未决 / 待拍板
+
+1. **MCP server 端**：**已否决**（见 b-5）；若以后要做需重新拍板，不要当成遗留缺口。
+2. **在线音乐 provider 的加载字段名**（config schema 里叫什么）：未定，登记在 `docs/ROADMAP-0.8.md`。
+3. **36 条「未验证」里 26 条真机协议**的处置（继续测 / 转已知限制 / 删）：见 `docs/audit/unverified-inventory.md`。
+
+### e. 打磨清单（下一阶段工作面，逐条可验证）
+
+1. **flaky 清点**：已知 `tests/test_audio_api.py::test_plane_failure_is_reported_with_its_reason`（TestClient 退出时 `audio/client.py:319 close()` → `OSError 57` 竞态），单跑绿、整批偶红 → 单独排期修。
+2. **CI 时长与缓存**：四个 workflow（ci / security / secret-scan / docker-publish）当前全绿，量一次时长再决定是否加缓存。
+3. **覆盖率提升**：基线在 `docs/audit/coverage-baseline.md`，只准升不准降。
+4. **日志噪音**：`mcp ha: down` 每 15 s 一条（HA 不可达时），应节流。
+5. **错误文案与中英一致性**：控制台 v2 与 phrasebook 两层（phrasebook 目前**只有中文**，见 `phrases.py:31`）。
+6. **文档与代码一致性抽查**：今天已修「HA 走 MCP」（task-25）与「dot2 带下游镜像」两处事实错误，说明这类错误还在。
+7. **升级/回滚演练文档化**：runbook §8 已改成走 GHCR；下次发版前按它真跑一遍。
+8. **未验证清单处置**：同 d-3。
+
+### f. 红线
+
+- **真机出声测试须 9 哥 在场**（唤醒/播放/音量提示音都算）。
+- **生产变更**：先备份 → 记录 digest → 写好回滚命令 → 部署后核对 `/health`；不留半升级状态。
+- **仓库禁止真实内网 IP / 密码 / token**（占位符可以）。
+- **不留半绿状态**：每张卡 review PASS + verify VERIFIED 才允许完成。
+- **每条 compose 命令必须两个 `-f`**（少一个会解析到 `.env` 里过期的 `RUI_IMAGE`）。
 
 ## 版本节奏（2026-10-27 09:10，9 哥 定）
 

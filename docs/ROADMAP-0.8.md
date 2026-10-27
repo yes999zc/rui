@@ -284,6 +284,7 @@
 2. 移除 `adapter: xiaoai` 的迁移改写与弃用告警（0.7.x 弃用期结束）——这就是「删 adapter_aliases」在 0.8.0 的落点；
 3. 契约窗口调整（三仓 `rui_compat` 上界抬到 `0.9.0` / 或按 C-003 重定）；
 4. 迁移文档 + breaking notes（桥先发双窗口版本，core 后发；禁止反序）。
+5. **把 Home Assistant 从「MCP 实例模型」里彻底摘出**（**API 语义变更**）：现在 `GET /api/v1/mcp` 把 HA 作为 `kind: "first_party"` 的 first-party instance 返回（`src/rui/tools/mcp_manifest.py:33`），控制台据此把 HA 与 MCP 并列展示。0.8.x 若彻底摘出，需要新增/改造端点（例如 HA 走独立 `/api/v1/ha`），**同时改契约 C-002**，前端工具页随之只用 MCP 端点。当前 0.7.8 只做呈现层拆分（两张段标题），不动接口——所以这项**只登记，不开工**。
 
 > **9 哥 2026-10-26 已批准这一读法**（原话：0.7.5 删插件目录 + 删 `adapter_aliases.py`，把改名搬进配置迁移 + 告警，0.8.0 再删告警）。因此 0.8.0 的「删 adapter_aliases」= 删这段迁移改写与告警，不是删一个已不存在的文件。
 
