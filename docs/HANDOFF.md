@@ -4,6 +4,19 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
+## 0.7.8 已发布（2026-10-27 08:30）
+
+| 项 | 值 |
+|---|---|
+| tag | `v0.7.8`（commit `a3205e9`） |
+| release | https://github.com/yes999zc/rui/releases/tag/v0.7.8 |
+| 镜像（多架构索引） | `ghcr.io/yes999zc/rui@sha256:ca3b40ecaf3457158603af90e520ac2bf423e2f4570e12e36db15b2583bf24c3`（tag `0.7.8` / `0.7`） |
+| amd64 平台摘要 | `sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`（**生产用这个**，本地 image `74f6c560…`） |
+| arm64 平台摘要 | `sha256:93f9930ab1b553a25ffd0c61cdeb0a6c5cc63a8f747de29c0fb1d2d5f7b5fc32` |
+| 生产 | NAS 168 跑上面 amd64 摘要；`ver 0.7.8 / dev 1 / err 0 / console v2 / speaker True / planes[卧室 dot2 running]` |
+
+> **NAS 上的坑**：老版 docker 不支持 OCI index 里的 attestation manifest（`unsupported media type application/vnd.oci.empty.v1+json`），所以**按索引摘要 pull 会失败**；要用 **amd64 平台摘要**（`1f074bb3…`）或 tag `0.7.8`（同样会解析到索引，仍可能失败）。已在 override 里 pin amd64 摘要。
+
 ## 0.7.8 生产验收（2026-10-27 08:20，真实部署）
 
 **部署形态**：官方镜像 + 外置插件，**不再造下游镜像**。
