@@ -18,7 +18,7 @@
 | a healthy | Up (healthy) | `Up (healthy)`，`/health` 200 |
 | b 设备识别 | devices/errors | `devices=1`、`device_errors=0`、`registered=["dot2","lx06"]`、`warnings=1`（`xiaoai→lx06` 迁移） |
 | c 音频平面 | planes running | `planes=[{device: dot2, room: 卧室, state: running}]`、`audio_plane=true`、`speaker_connected=true` |
-| d 真机走一遍 | 唤醒→指令→播放 | **部分**：00:08 实测 `wake 406 ms` + `led: wake` + `ASR 182 ms`（transcript `几点了？`），但当时凭据在归档里 → `llm: no ready provider`；恢复凭据后 `volc_tts` 就绪（filler/ack 渲染成功）、LLM 不再报错，**尚未有新的真实语音回合** |
+| d 真机走一遍 | 唤醒→指令→播放 | **两段都已实测，但不在同一次**：①00:08 真实语音 → `wake 406 ms` + `led: wake` + `ASR 182 ms`（transcript `几点了？`），当时凭据在归档里所以 `llm: no ready provider`；②08:26 恢复凭据后 `POST /api/v1/debug/say {"text":"现在几点了","device":"dot2"}` → `reply="现在是早上8点16分。"`、`audio_bytes=63372`、`stages.llm=deepseek_llm 703 ms`、`stages.tts=volc_tts`，**播放链路通**。单次完整「说一句→它答」仍待人对音箱做一次确认 |
 | e 升级+回滚 | 各一次 | **已做**：升级到 0.7.8 → 回滚到 `rui-dot2:1.3.1`（重建，`a62e2cf4a0be`，`rui 0.7.2`，`devices=1/errors=0`，`/` 仍 302 `/v2/`）→ 切回 0.7.8 并恢复 `speaker_connected=true` |
 
 **今晚踩过并修掉的三件事（记录，避免重犯）**
@@ -26,8 +26,11 @@
 2. **纯净装把凭据一起归档** → LLM/TTS 变「no ready provider」。恢复 `data/secrets.yaml` 即好；`data/` 归档在 `/vol1/rui/backups/0.7.8-preclean-20261027-075452/data-state/`。
 3. **CI 红**：`tests/test_console_switch.py` 用了 PyYAML（项目依赖是 ruamel），已改（`7adf5c9`、`0993d08`）。教训：本地绿 ≠ CI 绿，测试里别引入非依赖包。
 
+
+**08:26 观察（不是 0.7.8 回归，记一笔）**：`debug/say` 问「现在几点了」时 `tools=[]`，模型自己猜了「8点16分」（实际 8:26）——时间类问题没走时钟工具，后续值得单独排查工具选择。
+
 **未完成**
-- **d 的真实语音回合**（需人对音箱说话；恢复凭据后还没测过）。
+- **d 的真实语音回合**（人对音箱说一句，确认「唤醒→回答」在恢复凭据后仍通）。
 - **打 tag**：0.7.8 目前只有分支产物 `:edge`，`v0.7.8` tag / `:0.7.8` 镜像 / release 均未创建。
 - 客厅那台（lx06）本轮关闭；`warnings=1` 来自它的 `adapter: xiaoai`，想消掉就把第 23 行改成 `adapter: lx06`。
 
