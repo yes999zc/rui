@@ -94,6 +94,12 @@ def test_the_four_tiers_all_have_fields() -> None:
     assert {"system", "web", "assistant", "session"} <= groups[1]
     assert {"audio.capture", "audio.voice", "audio.playback", "audio.aec",
             "ack", "devices"} <= groups[2]
+    # D-011=A: ack keeps tier 2 and sorts before devices (order 5 < 10). This is the
+    # exact regression the decision bought: order only, the tier contract is untouched.
+    order = document(Config())["groups"]
+    ack = next(g for g in order if g["id"] == "ack")
+    assert (ack["tier"], ack["order"]) == (2, 5)
+    assert [g["id"] for g in order if g["tier"] == 2][0] == "ack"
     assert {"providers.catalog", "providers.asr", "providers.tts",
             "providers.llm"} <= groups[3]
     assert {"tools.weather", "tools.news", "tools.search", "tools.ha",

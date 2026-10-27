@@ -124,7 +124,7 @@ _GROUPS: dict[str, tuple[dict, int, int, str, dict]] = {
         "放歌时唤醒率直线下降。改完重启音频面。",
         "AEC. mix = one canceller on the weighted 6-mic mix (default, 23.5 dB measured); "
         "off means hearing itself and a much worse wake rate over music.")),
-    "ack": (_t("唤醒应答", "Wake acknowledgement"), 2, 200, "restart", _t(
+    "ack": (_t("唤醒应答", "Wake acknowledgement"), 2, 5, "restart", _t(
         "听到唤醒词后先播什么。tts 会占用麦克风约 1.2 s；earcon 是无损提示音。"
         "改文字/上限保存即生效，改模式/音效要重启音频面。",
         "What plays the instant the wake word fires. tts mutes the mic ~1.2 s; earcon is "

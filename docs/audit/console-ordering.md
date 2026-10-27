@@ -245,3 +245,13 @@
 - 无真实内网地址/凭证；行号以当前工作树为准。
 - ack 的 tier 调整会让旧面板音频 tab 丢失该组（§0.2）；「是否补偿 legacy」与「硬核组是否
   挪出语音助手页」都需 9 哥 拍板，本卡只给建议。
+
+## 7. 落地记录（2026-10-27，D-011=A）
+
+- 9 哥 拍板 **D-011=A**：只调 `order`，**不动 `tier`**。`src/rui/config/catalog.py` 的 `ack` 组 `order 200 → 5`，`tier` 保持 **2**。
+- `group_specs()` 的 tier≤2 全量（12 组，含 tier 1 的 system/web/security）：`assistant(1,10) → session(1,20) → system(1,100) → web(1,110) → security(1,120) → ack(2,5) → devices(2,10) → multi_device(2,20) → audio.capture(2,100) → audio.voice(2,110) → audio.playback(2,120) → audio.aec(2,130)`；**ack 在 tier≤2 全量里第 6 位、在 tier 2 内第 1 位**。
+- v2 语音助手页（`SHOWN_GROUPS` + `showGroup` 的 8 组）：`assistant → session → ack → devices → audio.capture → audio.voice → audio.playback → audio.aec`；**ack 第 3 组、首屏无需滚动**（§1 的 5 组口径）。
+- 旧面板「音频与唤醒」tab：tier 2 内 ack 现在排**第 1 位**（order 5 < devices 10），无需再做补偿性 tier 调整。
+- 既有断言：没有旧顺序断言被打破（`tests/test_config_catalog.py` 与 `tests/test_panels.py` 的组断言都是集合，tier 未变仍成立）；新增 1 组顺序回归断言在 `tests/test_config_catalog.py` 的 `test_the_four_tiers_all_have_fields`（`ack=(2,5)` 且 tier 2 第一），变异回 order 200 会红。
+- 结构问题「唤醒应答是否独立成页 / 是否挪出硬核组」→ `docs/backlog-0.8.md`（P1，另卡），本卡不做。
+- 证据：`uv run python -c "from rui.config.catalog import group_specs; print([(g['id'],g['tier'],g['order']) for g in group_specs() if g['tier']<=2])"`；v2 过滤序复刻见 task-18 卡面。
