@@ -71,17 +71,21 @@
 
 > 只写「卡号 / 状态 / 证据」；细节在任务板与 commit。**未 commit 的卡不算完成。**
 
-| 卡 | 内容 | 状态 | 证据 |
+| 卡 | 内容 | 状态 | 证据（commit / 结论） |
 |---|---|---|---|
-| task-1 | audio plane 关闭路径 socket-close 竞态（唯一 flaky） | ✅ completed | `2977c3a`；PASS（rev-audio，亲做变异）→ VERIFIED @`2977c3a`（ver-audio，独立 worktree：单文件 10/10、全量 3×`1668 passed, 6 skipped`、ruff 绿、用修复前文件复现 FAILED） |
-| task-2 | `mcp <name>: down` 日志节流 | ✅ completed | `3ed312f`；PASS（rev-noise）→ VERIFIED @`3ed312f`（ver-noise：`1667 passed, 6 skipped`；实跑 12 次同因 = 1 INFO + 11 DEBUG） |
-| task-3 | G0 文档事实校准 + 建 `docs/待拍板.md` | ✅ completed | `30ab5f2`+`a46fb68`+`663997f`；VERIFIED（ver-docs，4 条过期事实已回填） |
-| task-4 | CI 四 workflow 时长测量 + 决定 | ✅ completed | `3ea6726`；PASS（rev-timings，20 行全查）→ VERIFIED（ver-timings）。**决定：维持现状**；唯一候选（ci `image` 上 gha 缓存，约 30 s）已量化并推迟 |
-| task-5 | 26 条真机「未验证」逐条分类 | ✅ completed | `97e49bb`；PASS（rev-inv，第 1 轮 CHANGES 4 条全是「配方与代码相反」）→ VERIFIED（ver-inv：2 可转测试 / 21 只能真机 / 3 环境缺失，36 条无删除、无状态升格） |
-| task-6 | 文档 ↔ 代码事实核查（≥25 条） | 评审 PASS，正在收 P2 尾巴 | 38 条核查（分布 32 一致 / 3 已修正 / 2 疑似 / 1 需拍板）；已修 README dot2 刻度 0–127、console「4 类 23 组」、`legacy_adapters.py` 路径 |
-| task-7 | 覆盖率基线对比 + 提升方案 | 进行中（impl-cov） | 产出 `docs/audit/coverage-plan-2026-10-27.md`（只出方案，不动 CI） |
+| task-1 | audio plane 关闭路径 socket-close 竞态 | ✅ | `2977c3a`：PASS（rev-audio 亲变异）→ VERIFIED（ver-audio，独立 worktree，单文件 10/10、全量 3×`1668 passed`） |
+| task-2 | `mcp <name>: down` 日志节流 | ✅ | `3ed312f`：PASS → VERIFIED（12 次同因 = 1 INFO + 11 DEBUG） |
+| task-3 | G0 文档事实校准 + 建 `docs/待拍板.md` | ✅ | `30ab5f2`/`a46fb68`/`663997f`；VERIFIED（4 条过期事实已回填） |
+| task-4 | CI 四 workflow 时长 + 决定 | ✅ | `3ea6726`：**决定=维持现状**；唯一候选（ci `image` 加 gha 缓存，约 30 s）已量化并推迟 |
+| task-5 | 26 条真机「未验证」分类 | ✅ | `97e49bb`：**2 可转测试 / 21 只能真机 / 3 环境缺失**；第 1 轮 4 条 CHANGES 全是「配方与代码相反」，已改对 |
+| task-6 | 文档 ↔ 代码事实核查（40 条） | ✅ | `ed3b648`：32 一致 / **5 已修正** / 2 疑似 / 1 需拍板；dot2 刻度 0–127、catalog 23 组、`legacy_adapters.py` 路径 |
+| task-8 | 清 8 条评审/验证遗留 nit | ✅ | `8321099`：5 文件 +26/−16；全量 `1668 passed, 6 skipped`；已实证「N4 无断言守护」这一事实 |
+| task-7 | 覆盖率基线对比 + 提升方案 | 返工中（rev-cov 第 1 轮 CHANGES：数字全对，但 5 处定性归因/本机绝对路径要改） | 产出 `docs/audit/coverage-plan-2026-10-27.md` |
+| task-9 | 把 2 条「可转测试」落成真测试（HE-01/HE-02） | 进行中（impl-audio） | 只新增两个测试文件，不许改 src |
 
-**下一步（按序）**：1) task-6 收 P2 尾巴 → 验证 → 提交；2) task-7 评审+验证；3) 清一批「已知 nit」（task-1 的 3 条 + task-5 的 3 条行号/口径 + task-4 的 §4 复跑命令口径）作为一张小卡；4) 之后的可选项：phrasebook 中英（需先定是否要英文语音，属 9 哥 口径）、未验证清单里 2 条「可转测试」落成真测试。**发版/生产/真机出声/契约改动一律走 `docs/待拍板.md`。**
+**待拍板已到 9 条**（`docs/待拍板.md` D-001…D-009）：新增 D-007 README 对外口径自相矛盾、D-008 要不要英文语音（phrasebook 中英）、D-009 两仓元数据 3 条疑似。**发版/生产/真机出声/契约/改 README 承诺一律等 9 哥。**
+
+**下一步（按序）**：1) task-7 收 5 处 CHANGES → 验证 → 提交；2) task-9 评审+验证；3) 清 task-7/9 的残留 nit；4) 之后可选项：N4 的 logger 断言、ci `image` 缓存（需另立卡改 CI）。
 
 ## 版本节奏（2026-10-27 09:10，9 哥 定）
 
