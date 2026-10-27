@@ -12,13 +12,14 @@
 - **镜像**：GHCR 索引 `sha256:ca3b40ecaf3457158603af90e520ac2bf423e2f4570e12e36db15b2583bf24c3`（tag `0.7.8` / `0.7`）；**生产 pin 的是 amd64 平台摘要 `sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`** —— NAS 上的老 docker 不认带 attestation 的 OCI index，按索引摘要 `pull` 会报 `unsupported media type`。
 - **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。**本阶段未做任何生产变更。**
 - **回滚**：本地旧镜像已删（9 哥 决定）；**回滚走 GHCR 上一个正式版** —— `docker pull ghcr.io/yes999zc/rui:0.7.4` → 取 amd64 摘要 → 改 override 的 `image:` → **两个 `-f`** `up -d --force-recreate`（步骤见 `docs/deploy-runbook-0.7.8.md` §8）。
-- **三仓 HEAD**：rui 代码 HEAD `3ed312f`（此后可能又落了 docs 提交，用 `git log --oneline v0.7.8..HEAD` 自查）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
-- **CI（rui `3ed312f`）**：secret-scan / security `success`；ci 在跑；docker-publish `cancelled` —— **不是失败**，是后续 push 触发的并发 run 把它顶掉了（`gh run view`：updated 02:33:18Z）。上一个完整四绿的提交是 `22df703`。
-- **进 main 未发版 28 个提交（截至代码 HEAD `3ed312f`；`git rev-list --count v0.7.8..3ed312f`）**（按「不升 minor」节奏攒着）。用户可见的：
+- **三仓 HEAD**：rui 代码 HEAD **`2977c3a`**（audio socket-close 修复；其后的提交都是 `docs/`，用 `git log --oneline v0.7.8..HEAD` 自查当前 HEAD）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
+- **CI**：最近一次**完整四绿**的提交是 **`663997f`**（ci / security / secret-scan / docker-publish 全 `success`）。更早的提交里出现的 `cancelled` 不是失败，是后续 push 的并发 run 把旧 run 顶掉（`cancel-in-progress`）。查当前状态：`gh run list -L 8 --json name,headSha,status,conclusion`。
+- **进 main 未发版 31 个提交（截至代码 HEAD `2977c3a`；`git rev-list --count v0.7.8..2977c3a`）**（按「不升 minor」节奏攒着）。用户可见的：
   `91cac91` 控制台把 Home Assistant 与 MCP 服务器分两段（仅呈现层，API 未动）、
   `d2c9895` dot2 音量回读取 mixer 回报值、`e85b4bb` 「唱首歌」走随机 + 老链接落页提示、
-  `3ed312f` `mcp <name>: down` 重连日志节流（行为变更，已记入 CHANGELOG「已知变更」）；
-  其余为 handoff/readme/roadmap/runbook 文档校准。**生产镜像仍是 0.7.8 → 生产控制台看到的仍是旧界面。**
+  `3ed312f` `mcp <name>: down` 重连日志节流（行为变更，已记入 CHANGELOG「已知变更」）、
+  `2977c3a` audio `close()` 的 `ENOTCONN(57)` 不再覆盖 plane 的真实失败原因（并修掉该竞态导致的子进程泄漏）；
+  其余为 handoff/readme/roadmap/runbook/audit 文档。**生产镜像仍是 0.7.8 → 生产控制台看到的仍是旧界面。**
 - **事实行的维护约定**：每完成 1–2 张卡，更新本节的 HEAD / 未发版提交数 / CI 三行，不要等到收口。
 
 ### b. 已定决策（**不要再讨论**）
@@ -68,16 +69,19 @@
 
 ### g. 本阶段进展（打磨阶段，2026-10-27 10:20 起；9 哥 已授权自主推进到 0.8.0 拍板前）
 
-> 只写「卡号 / 状态 / 证据」，细节在任务板与 commit。**未 commit 的卡不算完成。**
+> 只写「卡号 / 状态 / 证据」；细节在任务板与 commit。**未 commit 的卡不算完成。**
 
 | 卡 | 内容 | 状态 | 证据 |
 |---|---|---|---|
-| task-2 | `mcp <name>: down` 日志节流 | ✅ completed | `3ed312f`；review PASS（rev-noise，亲做变异 7 failed→还原字节一致）→ verify VERIFIED @`3ed312f`（ver-noise，独立 worktree：`1667 passed, 6 skipped`；`ruff` 全绿；实跑 12 次同因 = 1 INFO + 11 DEBUG） |
-| task-3 | G0 文档事实校准 + 建 `docs/待拍板.md` | lead 自办，待独立事实校验 | 本文件 §a/§d/§e + `docs/待拍板.md` |
-| task-1 | audio plane 关闭路径竞态（flaky） | 实现完成，评审/验证中 | impl-audio：复现 384 次中 1 红（ENOTCONN 覆盖 TOKEN 原因）；单文件 10/10、全量 3/3 绿；变异红 |
-| task-4 | CI 四 workflow 时长测量 + 决定 | 进行中（impl-noise） | 产出 `docs/audit/ci-timings.md`（只测量，不改 `.github/`） |
+| task-1 | audio plane 关闭路径 socket-close 竞态（唯一 flaky） | ✅ completed | `2977c3a`；PASS（rev-audio，亲做变异）→ VERIFIED @`2977c3a`（ver-audio，独立 worktree：单文件 10/10、全量 3×`1668 passed, 6 skipped`、ruff 绿、用修复前文件复现 FAILED） |
+| task-2 | `mcp <name>: down` 日志节流 | ✅ completed | `3ed312f`；PASS（rev-noise）→ VERIFIED @`3ed312f`（ver-noise：`1667 passed, 6 skipped`；实跑 12 次同因 = 1 INFO + 11 DEBUG） |
+| task-3 | G0 文档事实校准 + 建 `docs/待拍板.md` | ✅ completed | `30ab5f2`+`a46fb68`+`663997f`；VERIFIED（ver-docs，4 条过期事实已回填） |
+| task-4 | CI 四 workflow 时长测量 + 决定 | ✅ completed | `3ea6726`；PASS（rev-timings，20 行全查）→ VERIFIED（ver-timings）。**决定：维持现状**；唯一候选（ci `image` 上 gha 缓存，约 30 s）已量化并推迟 |
+| task-5 | 26 条真机「未验证」逐条分类 | ✅ completed | `97e49bb`；PASS（rev-inv，第 1 轮 CHANGES 4 条全是「配方与代码相反」）→ VERIFIED（ver-inv：2 可转测试 / 21 只能真机 / 3 环境缺失，36 条无删除、无状态升格） |
+| task-6 | 文档 ↔ 代码事实核查（≥25 条） | 评审 PASS，正在收 P2 尾巴 | 38 条核查（分布 32 一致 / 3 已修正 / 2 疑似 / 1 需拍板）；已修 README dot2 刻度 0–127、console「4 类 23 组」、`legacy_adapters.py` 路径 |
+| task-7 | 覆盖率基线对比 + 提升方案 | 进行中（impl-cov） | 产出 `docs/audit/coverage-plan-2026-10-27.md`（只出方案，不动 CI） |
 
-**下一步（按序）**：1) task-1 过评审+验证后提交；2) task-4 收口；3) 打磨 F（phrasebook 中英）→ I（未验证清单逐条分类）→ D（覆盖率方案）。**发版/生产/真机出声/契约改动一律走 `docs/待拍板.md`。**
+**下一步（按序）**：1) task-6 收 P2 尾巴 → 验证 → 提交；2) task-7 评审+验证；3) 清一批「已知 nit」（task-1 的 3 条 + task-5 的 3 条行号/口径 + task-4 的 §4 复跑命令口径）作为一张小卡；4) 之后的可选项：phrasebook 中英（需先定是否要英文语音，属 9 哥 口径）、未验证清单里 2 条「可转测试」落成真测试。**发版/生产/真机出声/契约改动一律走 `docs/待拍板.md`。**
 
 ## 版本节奏（2026-10-27 09:10，9 哥 定）
 
