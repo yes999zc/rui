@@ -3,7 +3,7 @@
 > **Status note (2026-10):** this document was written during the v1 build-up. The layer
 > diagram, process model and IPC contract below are still authoritative; some of the
 > "not built / to build" notes in the diagram and the debt table in §6 are historical.
-> Music, Home Assistant over MCP, generic MCP, playback arbitration and the console have
+> Music, Home Assistant over its own bridge (tools/ha.py), generic MCP, playback arbitration and the console have
 > since landed. For the current shipped state see the README and
 > [`docs/remaining-work.md`](remaining-work.md).
 
@@ -67,7 +67,7 @@ listed in §6 as a debt with a name, not left as an intention.
 │  reminders (tools+scheduler) │             │  openai_compat · xfyun_tts      │
 │  music (asks for a playback  │             │  sherpa_asr · siliconflow        │
 │         for a playback claim)│             │                                  │
-│  HA via MCP                  │             │                                  │
+│  HA via tools/ha.py          │             │                                  │
 └──────────────────────────────┘             └──────────────────────────────────┘
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ L1 infrastructure   config/{schema,store} · secrets · log_setup · trace ·    │

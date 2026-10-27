@@ -779,7 +779,7 @@ export interface DeviceConnectInfo {
   hint: string
 }
 
-/** First-party MCP instance (HA): policy stays visible, tools keep their names. */
+/** First-party instance (HA, its own bridge): policy stays visible, tools keep their names. */
 export interface FirstPartyMcpInstance {
   id: string
   name: string
@@ -844,7 +844,7 @@ export interface McpState {
     entities: number
     error: string
   }
-  /** HA as an MCP instance, with its whitelist/danger policy (additive). */
+  /** HA as a first-party instance over its own bridge, with its whitelist/danger policy (additive). */
   first_party?: FirstPartyMcpInstance[]
   /** Configured generic servers, in config order, merged with live status. */
   servers: McpServerStatus[]
@@ -1429,7 +1429,7 @@ export const api = {
   probeDevice: (host: string) =>
     request<{ host: string; usable: boolean; hint: string; ssh: { port_open: boolean; banner: boolean; ms?: number; error?: string } }>(
       '/api/v1/devices/probe', { method: 'POST', body: JSON.stringify({ host }) }),
-  /** P5: HA over MCP (write endpoint/token, test a throwaway connection). */
+  /** P5: Home Assistant bridge (own bridge, not MCP): write endpoint/token, test a throwaway connection. */
   mcp: () => request<McpState>('/api/v1/mcp'),
   saveMcp: (payload: { ha?: { base_url?: string; token?: string }; servers?: McpServerPayload[] }) =>
     request<McpState>('/api/v1/mcp', { method: 'PUT', body: JSON.stringify(payload) }),

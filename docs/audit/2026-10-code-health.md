@@ -406,7 +406,7 @@ adapter 与 core 之间没有第二份 ws 协议实现（core 只经 `runtime.en
 |---|---|---|
 | Python 导入 | **364 ms / 726 模块**（实测） | `import rui.web.api.app` 计时 |
 | 配置加载 + 恢复 | 功能已测（`tests/test_config_recovery.py`）；**耗时**未测 | `__main__.py:509-528`（`load_with_recovery`） |
-| HA over MCP | 一次握手（有超时，见 `tools/mcp_manager.py:331-338`） | `app.py:2425` |
+| HA over its own bridge (not MCP; corrected 2026-10-27) | 一次握手（有超时，见 `tools/ha.py` / `tools/mcp_client.py`） | `app.py:2425` |
 | 通用 MCP | 并发启动，单服务器失败不阻塞 | `app.py:2440`，`mcp_manager.py:518-519` |
 | `runner.warm()` | **可能是最大项**：本地 ASR 1.1 GB 模型 + TTS/LLM 连接 | `turn.py:430-453`；`app.py:2447`（串行 await） |
 | 每个音频面子进程 | 建 KWS/VAD ONNX（每设备一份） | `process.py:662-710`；`fleet.py:106-133` |

@@ -5,7 +5,7 @@
  * kinds, ranges and `effect`; this module only decides *which* fields belong to
  * the tools page and how they are split into the four sections 9哥 asked for:
  *
- *   weather / news / MCP (including Home Assistant) / other tools
+ *   weather / news / Home Assistant (its own bridge) / MCP servers / other tools
  *
  * The split is derived from the catalog's group id (preferred) or, when the
  * catalog ships flat `tools` fields, from the field's own second path segment.

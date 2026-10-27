@@ -1030,7 +1030,7 @@ export interface ConfigValuesResponse {
   warnings: string[]
 }
 
-/** One Home Assistant MCP bridge, as `GET /api/v1/mcp` reports it. */
+/** The Home Assistant bridge as `GET /api/v1/mcp` reports it (it is not an MCP server). */
 export interface McpHaStatus {
   base_url: string
   token_env: string
@@ -1065,7 +1065,8 @@ export interface McpServerStatus {
 }
 
 /**
- * A built-in MCP instance (today: Home Assistant). The descriptor is owned by
+ * A first-party instance surfaced by the console (today: Home Assistant, which
+ * runs over its own bridge). The descriptor is owned by
  * `src/rui/tools/mcp_manifest.py`, so the page renders it instead of inventing
  * names/policies.
  */

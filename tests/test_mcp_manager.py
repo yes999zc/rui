@@ -603,7 +603,8 @@ def test_console_mcp_endpoint_exposes_generic_servers(app_with_mcp) -> None:
         names = http.get("/api/v1/tools").json()["names"]
         assert "mcp.files_read_file" in names
         # HA stays untouched and keeps its own shape. It is also listed as a
-        # first-party MCP instance for the MCP tab, without becoming a generic row.
+        # first-party instance (own bridge) for the console, without becoming a
+        # generic MCP row.
         assert "ha" in body and body["ha"]["wired"] is False
         first_party = body["first_party"][0]
         assert first_party["id"] == "ha" and first_party["kind"] == "first_party"

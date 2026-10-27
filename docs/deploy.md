@@ -728,9 +728,10 @@ curl -s http://127.0.0.1:8080/health | jq -r .console                           
 音乐相关的环境变量：**没有**。账号在 JSON 里，其余都是配置项。控制台「音乐」面板在
 `music.enabled: true` 后才出现。
 
-## 5. Home Assistant（MCP）
+## 5. Home Assistant（专用桥，不是通用 MCP）
 
-HA 走 **MCP over HTTP**（`ha.py`），不是直接调 HA REST。需要：
+HA 走**专用桥** `tools/ha.py`（六工具白名单 + 危险域硬拒），不是通用 `tools.mcp_servers[]`
+条目，也不是直接调 HA REST。该桥用 MCP 客户端连接 HA 自己的 MCP Server 端点。需要：
 
 1. Home Assistant 安装 MCP Server 集成并开放 `http://<ha>:8123/api/mcp`。
 2. 生成长期访问令牌，写进 `~/rui/.env`：

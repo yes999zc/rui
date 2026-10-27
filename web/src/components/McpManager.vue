@@ -75,8 +75,8 @@ const saveError = ref('')
 
 const servers = computed<McpServerStatus[]>(() => state.value?.servers ?? [])
 /**
- * HA is rendered as an MCP instance, not a second product. The manifest carries the
- * whitelist/danger policy and `local.ha_*` prefix; older control planes omit it, so
+ * HA is rendered as a first-party bridge section, not a second product and not a
+ * generic MCP row. The manifest carries the whitelist/danger policy and `local.ha_*` prefix; older control planes omit it, so
  * the fallback keeps the card readable without inventing policy.
  */
 const firstParty = computed<FirstPartyMcpInstance | null>(
@@ -610,7 +610,7 @@ onMounted(load)
   </div>
 
   <template v-if="state">
-    <!-- — HA as a first-party MCP instance; behaviour is unchanged —————— -->
+    <!-- — HA as a first-party bridge (not MCP); behaviour is unchanged —————— -->
     <section class="first-party-card">
       <div class="block-head">
         <div>

@@ -1,4 +1,5 @@
-"""Home Assistant over MCP: the mature old-build plan, generalized.
+"""Home Assistant over its own bridge (tools/ha.py), not generic MCP: the mature
+old-build plan, generalized.
 
 What is ported verbatim (the old build ran it for weeks, gap report §3):
 the six-tool whitelist, the entity list injected into the prompt as

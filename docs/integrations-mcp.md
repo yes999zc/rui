@@ -1,6 +1,6 @@
 # MCP 集成：添加一个新服务 / Adding an MCP service
 
-> 适用版本：RUI 0.3.4+ · 控制台「工具与集成 → MCP 与家庭助理」
+> 适用版本：RUI 0.3.4+ · 控制台「工具与集成 → 家庭助理（独立第一方桥）/ MCP 服务器」
 > 相关：`docs/mcp-generic.md`（运行时/隔离）、`docs/security.md`（出站 SSRF）、
 > `src/rui/tools/mcp_manifest.py`（第一方实例清单）
 
@@ -8,17 +8,18 @@ MCP 标签页里有两类东西，**不要混用**：
 
 | 类型 | 例子 | 存储 | 工具名 | 写入路径 |
 |---|---|---|---|---|
-| 第一方实例 | Home Assistant | `tools.ha` | `local.ha_*` | `PUT /api/v1/mcp {ha}` |
+| 第一方桥（不是 MCP） | Home Assistant | `tools.ha` | `local.ha_*` | `PUT /api/v1/mcp {ha}` |
 | 通用 MCP 服务 | 文件系统、笔记、Git | `tools.mcp_servers[]` | `mcp.<server>_<tool>` | `PUT /api/v1/mcp {servers}` |
 
-Home Assistant 显示成 MCP 实例，但**不进入** `tools.mcp_servers`：它保留六工具白名单、
-危险域硬拒、实体上下文与 7 天缓存。UI 的卡片只展示这些策略，不会放宽或改名。
+Home Assistant 作为**独立的第一方桥**单独成段（`tools/ha.py`），**不是 MCP 实例**，也**不进入**
+`tools.mcp_servers`：它保留六工具白名单、危险域硬拒、实体上下文与 7 天缓存。UI 的卡片
+只展示这些策略，不会放宽或改名。
 
 ## 1. 通用服务的最短路径（HTTP）
 
 1. **准备凭据**（如需鉴权）。不要把 token 写进 `config.yaml`；控制台会把表单里的
    token 写进只写密钥库 `data_dir/secrets.yaml`（0600），配置里只保留变量名。
-2. **添加**（控制台）：MCP 与家庭助理 → 通用 MCP 服务器 → 添加服务器。
+2. **添加**（控制台）：MCP 服务器 → 添加服务器。
    - `transport`: `http`
    - `url`: 服务的 MCP 端点（如 `https://notes.example/mcp`）
    - `headers`（可选）：每行 `Name=value`，仅放非敏感元数据（版本头、`Accept`）

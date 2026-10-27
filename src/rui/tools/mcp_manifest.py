@@ -1,10 +1,10 @@
-"""First-party MCP integrations, described once for the console.
+"""First-party integrations, described once for the console.
 
-Home Assistant is not a generic `mcp_servers` row: it keeps a six-tool whitelist,
-a hard refusal for dangerous domains and the `local.ha_*` tool names. The console
-shows it *as an MCP instance* anyway (the MCP tab is where an operator looks for
-"what is connected over MCP"), so the shape it renders comes from here instead of
-being re-invented in Vue. Adding another first-party integration means adding a
+Home Assistant is not a generic `mcp_servers` row and not an MCP instance: it runs
+over its own bridge (tools/ha.py) and keeps a six-tool whitelist, a hard refusal for
+dangerous domains and the `local.ha_*` tool names. The console renders it as its own
+first-party section (not inside the MCP server list), so the shape it renders comes
+from here instead of being re-invented in Vue. Adding another first-party integration means adding a
 descriptor here; a third-party server needs no code at all (`PUT /api/v1/mcp`).
 
 This module is data only. The HA bridge remains `tools/ha.py`; nothing here weakens
@@ -21,7 +21,8 @@ MCP_MANIFEST_VERSION = 1
 
 def first_party_instances(*, base_url: str, token_env: str, has_token: bool,
                           status: dict[str, Any], wired: bool) -> list[dict]:
-    """The built-in MCP instances the console renders in the MCP tab.
+    """The first-party instances the console renders (today: Home Assistant, which runs
+    over its own bridge; generic MCP servers are not in this list).
 
     `status` is `HaBridge.status` (`connected/latency_ms/tools/entities`); only
     presence is reported for the token - the value never enters this structure.

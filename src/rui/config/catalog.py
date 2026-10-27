@@ -160,14 +160,14 @@ _GROUPS: dict[str, tuple[dict, int, int, str, dict]] = {
         "Web search. Off = no live lookups; endpoint/key-variable changes apply on the "
         "next call without a restart.")),
     "tools.ha": (_t("Home Assistant", "Home Assistant"), 4, 40, "save", _t(
-        "Home Assistant（经 MCP）。填地址并保存会立刻重连，不用重启；token 值在「密钥」页或"
-        "「MCP / HA」管理页填。",
-        "Home Assistant over MCP. Saving the URL reconnects it live, no restart; the "
-        "token is entered on the Secrets or MCP / HA page.")),
+        "Home Assistant（专用桥）。填地址并保存会立刻重连，不用重启；token 值在「密钥」页或"
+        "家庭助理管理页填。",
+        "Home Assistant (its own bridge). Saving the URL reconnects it live, no restart; "
+        "the token is entered on the Secrets or Home Assistant page.")),
     "tools.mcp": (_t("MCP 服务器", "MCP servers"), 4, 50, "save", _t(
-        "通用 MCP 服务器列表（当前只有 HA 真正接线）。在「MCP / HA」页维护，这里只读展示。",
-        "Generic MCP server list (only HA is wired end to end today). Maintained on the "
-        "MCP / HA page; read-only here.")),
+        "通用 MCP 服务器列表（HTTP / stdio），在 MCP 管理页维护；这里只读展示。",
+        "Generic MCP server list (HTTP / stdio), maintained on the MCP page; "
+        "read-only here.")),
     "tools.exposure": (_t("工具暴露策略", "Tool exposure"), 4, 60, "restart", _t(
         "哪些工具让模型看见：domain = 按域模板（推荐）、whitelist = 只放白名单、all = 全放"
         "（工具太多会挤爆提示词）。改完需重启服务。",
@@ -1087,10 +1087,11 @@ def _tool_fields(cfg: Config) -> list[dict]:
                unit=_t("秒", "s"), minimum=2, maximum=60, advanced=True),
         _field("tools.ha.base_url", "tools.ha", "text",
                _t("家庭助理地址", "Home Assistant address"),
-               _t("家庭助理（Home Assistant）的 MCP 地址。填好保存会立刻重连并注册家庭助理工具，"
-                  "不用重启；留空 = 不启用家庭助理。",
-                  "Home Assistant MCP endpoint. Saving reconnects and registers the Home "
-                  "Assistant tools live, no restart; empty = Home Assistant off.")),
+               _t("家庭助理（Home Assistant）的地址（专用桥，不是通用 MCP）。填好保存会立刻重连并"
+                  "注册家庭助理工具，不用重启；留空 = 不启用家庭助理。",
+                  "Home Assistant endpoint (its own bridge, not a generic MCP server). Saving "
+                  "reconnects and registers the Home Assistant tools live, no restart; "
+                  "empty = Home Assistant off.")),
         _field("tools.ha.token_env", "tools.ha", "text",
                _t("家庭助理令牌变量（只读）", "Home Assistant token variable (read-only)"),
                _t("家庭助理长期令牌所在的变量名（不是令牌本身）。值去「密钥」页或家庭助理管理页填。"
@@ -1920,9 +1921,8 @@ def secret_presence(cfg: Config) -> dict[str, dict]:
         entries, cfg.tools.ha.token_env,
         _secret_consumer("ha", "tool:ha", "Home Assistant", "Home Assistant",
                          href="/panel/integrations"),
-        "Home Assistant 长期令牌（经 MCP）；值在「凭据（只写）」页或 «工具与集成» 的 MCP 卡片填。",
-        "Home Assistant long-lived token (MCP); enter it on the Credentials page or the "
-        "MCP card under Tools & integrations.",
+        "Home Assistant 长期令牌（专用桥）；值在「凭据（只写）」页填。",
+        "Home Assistant long-lived token (its own bridge); enter it on the Credentials page.",
     )
     for device in cfg.devices:
         _secret_entry(

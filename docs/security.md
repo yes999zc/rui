@@ -122,7 +122,7 @@ again for **every redirect hop** when `follow_redirects=True`:
 
 | Client | Call site | Notes |
 | --- | --- | --- |
-| Home Assistant over MCP | `tools/ha.py` -> `tools/mcp_client.py` | Handshake plus every tool call. |
+| Home Assistant over its own bridge | `tools/ha.py` (not MCP) | Handshake plus every tool call. |
 | Generic MCP servers (HTTP) | `tools/mcp_manager.py` (`open_session`) | One guarded client per session, closed on reconnect. stdio is a local child process, not an outbound URL. |
 | Navidrome / Subsonic | `music/sources/navidrome.py` | JSON API client and the blocking stream download. |
 | Web search | `tools/info.py` (`tools.search.base_url`) | Both the search tool and the news fallback. |

@@ -1,4 +1,4 @@
-"""P5: HA over MCP from the console - write endpoint/token, test, reconnect live.
+"""P5: Home Assistant from the console - its own bridge (not MCP); write endpoint/token, test, reconnect live.
 
 The bridge is the one place where a wrong URL used to mean "restart and hope": the
 console now reconnects at runtime, drops the old tools by name and re-registers the
