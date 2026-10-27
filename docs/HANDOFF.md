@@ -18,6 +18,10 @@
 - **0.7.9 真机未验**：C1/C2/C3/C5 与 D-011 排序都只经 headless 判定（`1716 passed, 6 skipped`）。验证项全部挂在 `docs/acceptance-pending.md`（N1/N2/N3 + R79-1…6，`☐` 一个都没勾），并入 **0.8 窗口**（第二台 dot2 到位后一起做）。
 - **本批做了**：意图层批次 1（C1 `ddb7cbb`）+ 批次 2/3（C3/C4/C5/C6/C11 `34e3629`）+ D-011=A（`ack` order 200→5、**tier 未动** `6117fb7`）+ 审计两件（`f5d3f46`/`7fde6aa`）+ 验收/限制/backlog 三份文档（`4f75079`/`715a3c2`）+ 收口报告（`35dc556`）。
 - **本批没做（明确不做，见 `docs/known-limitations.md`）**：C7/C8/C9/C10（不新增结束词）、HE-02 回声切除（D-010 不修）、D-011 的 v2 第 1 位（需 tier 2→1 或页内排序，归 0.8 P1）、控制台「唤醒应答独立成页」、桥的任何发版（`rui_compat` 窗口未变，dot2 1.3.1 / xiaoai 0.2.2 无需重发）。
+- **最终 HEAD**：`8de395a`（工作树干净、已 push；`origin/main` 与本地 0/0）。
+- **测试基线**：`uv run pytest` → **`1716 passed, 6 skipped`**（113.5 s，2026-10-27 22:5x 在 `8de395a` 实测；`ruff check src tests tools` 绿）。
+- **容器状态**：`rui` `Up (healthy)`，`created=2026-10-27T14:28:06Z`（=22:28 CST），`/health` `version 0.7.9 / devices 2 / device_errors 0 / warnings 0`。
+- **在途卡**：只有 `task-10`（HE-02）保持 blocked（D-010 不修，并入 0.8 真机窗口）；其余全部 completed，无 in_progress / pending。
 - **决策记录**：`docs/待拍板.md` 的 D-001…D-011 **全部 ANSWERED**（含结论行）；本批内我按 9 哥 授权自行裁决的两处写在 D-011 与 backlog d.1（order-only 收、ACK-1 判据 = 首屏可见）。
 
 ## 若以后重启：先读这三个文件
