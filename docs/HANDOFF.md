@@ -4,16 +4,22 @@
 
 > **只读本节 + 它指出的文件即可接手**；下面的历史节按需查，不要通读全篇。
 
-> **下次第一件事**：0.8.0 开工前先拍板 `docs/HANDOFF-0.8.md` §3 的三个未决问题（HA 是否从 MCP 端点摘出 / 音乐 provider 配置字段名 / 26 条真机协议怎么处理）；在那之前不要动 0.8.0 的任何删除动作。
+> **下次第一件事**：0.8.0 开工前先拍板 `docs/HANDOFF-0.8.md` §3 的未决问题；**所有待拍板项已汇总到 `docs/待拍板.md`（D-001…D-006，含背景/选项/代价/建议），拍板结论回写到那里再落 HANDOFF**。在那之前不要动 0.8.0 的任何删除动作。
 
-### a. 现状事实（截至 2026-10-27 09:55）
+### a. 现状事实（截至 2026-10-27 10:40）
 
 - **版本**：core **0.7.8**；tag `v0.7.8`（`a3205e9`）；release <https://github.com/yes999zc/rui/releases/tag/v0.7.8>
 - **镜像**：GHCR 索引 `sha256:ca3b40ecaf3457158603af90e520ac2bf423e2f4570e12e36db15b2583bf24c3`（tag `0.7.8` / `0.7`）；**生产 pin 的是 amd64 平台摘要 `sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`** —— NAS 上的老 docker 不认带 attestation 的 OCI index，按索引摘要 `pull` 会报 `unsupported media type`。
-- **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。
+- **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。**本阶段未做任何生产变更。**
 - **回滚**：本地旧镜像已删（9 哥 决定）；**回滚走 GHCR 上一个正式版** —— `docker pull ghcr.io/yes999zc/rui:0.7.4` → 取 amd64 摘要 → 改 override 的 `image:` → **两个 `-f`** `up -d --force-recreate`（步骤见 `docs/deploy-runbook-0.7.8.md` §8）。
-- **三仓 HEAD**：rui `81be912`、dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
-- **进 main 未发版**（按「不升 minor」节奏攒着）：`d2c9895` dot2 音量回读确认、`e85b4bb` 「唱首歌」走随机 + 老链接落页提示。
+- **三仓 HEAD**：rui `3ed312f`（工作树见下方「未提交」）、dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
+- **CI（rui `3ed312f`）**：secret-scan / security 已 success；ci / docker-publish 发版时仍在跑（此前的 `22df703` 是四绿）。
+- **进 main 未发版 28 个提交**（`git rev-list --count v0.7.8..HEAD`，按「不升 minor」节奏攒着）。用户可见的：
+  `91cac91` 控制台把 Home Assistant 与 MCP 服务器分两段（仅呈现层，API 未动）、
+  `d2c9895` dot2 音量回读取 mixer 回报值、`e85b4bb` 「唱首歌」走随机 + 老链接落页提示、
+  `3ed312f` `mcp <name>: down` 重连日志节流（行为变更，已记入 CHANGELOG「已知变更」）；
+  其余为 handoff/readme/roadmap/runbook 文档校准。**生产镜像仍是 0.7.8 → 生产控制台看到的仍是旧界面。**
+- **事实行的维护约定**：每完成 1–2 张卡，更新本节的 HEAD / 未发版提交数 / CI 三行，不要等到收口。
 
 ### b. 已定决策（**不要再讨论**）
 
@@ -35,20 +41,22 @@
 
 ### d. 未决 / 待拍板
 
+**全部待拍板项已集中到 `docs/待拍板.md`（D-001…D-006：patch 版要不要发 / 回滚演练窗口 / HA 是否摘出 / 音乐字段名 / 26 条真机协议 / MCP server 已否决），每条含背景、选项、代价、Lead 建议；拍板后回写那里再落本节。**
+
 1. **MCP server 端**：**已否决**（见 b-5）；若以后要做需重新拍板，不要当成遗留缺口。
-2. **在线音乐 provider 的加载字段名**（config schema 里叫什么）：未定，登记在 `docs/ROADMAP-0.8.md`。
-3. **36 条「未验证」里 26 条真机协议**的处置（继续测 / 转已知限制 / 删）：见 `docs/audit/unverified-inventory.md`。
+2. **在线音乐 provider 的加载字段名**（config schema 里叫什么）：未定，登记在 `docs/ROADMAP-0.8.md`（= 待拍板 D-004，建议 `music.sources[]`）。
+3. **36 条「未验证」里 26 条真机协议**的处置（继续测 / 转已知限制 / 删）：见 `docs/audit/unverified-inventory.md`（= 待拍板 D-005）。
 
 ### e. 打磨清单（下一阶段工作面，逐条可验证）
 
-1. **flaky 清点**：已知 `tests/test_audio_api.py::test_plane_failure_is_reported_with_its_reason`（TestClient 退出时 `audio/client.py:319 close()` → `OSError 57` 竞态），单跑绿、整批偶红 → 单独排期修。
-2. **CI 时长与缓存**：四个 workflow（ci / security / secret-scan / docker-publish）当前全绿，量一次时长再决定是否加缓存。
+1. ~~**flaky 清点**~~ → **本阶段进行中**：`test_plane_failure_is_reported_with_its_reason` 根因=close() 的 `wait_closed()` 重抛 macOS `ENOTCONN(57)`，把 `_greet` 的 AudioPlaneError 覆盖掉（详见任务板 task-1）。
+2. **CI 时长与缓存**：四个 workflow 当前全绿，量一次时长再决定是否加缓存（本阶段 task-4 正在做）。
 3. **覆盖率提升**：基线在 `docs/audit/coverage-baseline.md`，只准升不准降。
-4. **日志噪音**：`mcp ha: down` 每 15 s 一条（HA 不可达时），应节流。
-5. **错误文案与中英一致性**：控制台 v2 与 phrasebook 两层（phrasebook 目前**只有中文**，见 `phrases.py:31`）。
+4. ~~**日志噪音**~~ → **已完成**：`3ed312f` 给 `mcp <name>: down` 加节流（首次/原因变化/恢复各一条 INFO，同原因每 5 分钟一条，其余 DEBUG）。
+5. **错误文案与中英一致性**：控制台 v2 与 phrasebook 两层（phrasebook 只有中文，见 `src/rui/session/phrases.py` 头注释——原写法 `phrases.py:31` 少了目录）。
 6. **文档与代码一致性抽查**：今天已修「HA 走 MCP」（task-25）与「dot2 带下游镜像」两处事实错误，说明这类错误还在。
-7. **升级/回滚演练文档化**：runbook §8 已改成走 GHCR；下次发版前按它真跑一遍。
-8. **未验证清单处置**：同 d-3。
+7. **升级/回滚演练文档化**：runbook §8 已改成走 GHCR；下次发版前按它真跑一遍（= 待拍板 D-002，需窗口）。
+8. **未验证清单处置**：同 d-3（= 待拍板 D-005）。
 
 ### f. 红线
 
@@ -57,6 +65,19 @@
 - **仓库禁止真实内网 IP / 密码 / token**（占位符可以）。
 - **不留半绿状态**：每张卡 review PASS + verify VERIFIED 才允许完成。
 - **每条 compose 命令必须两个 `-f`**（少一个会解析到 `.env` 里过期的 `RUI_IMAGE`）。
+
+### g. 本阶段进展（打磨阶段，2026-10-27 10:20 起；9 哥 已授权自主推进到 0.8.0 拍板前）
+
+> 只写「卡号 / 状态 / 证据」，细节在任务板与 commit。**未 commit 的卡不算完成。**
+
+| 卡 | 内容 | 状态 | 证据 |
+|---|---|---|---|
+| task-2 | `mcp <name>: down` 日志节流 | ✅ completed | `3ed312f`；review PASS（rev-noise，亲做变异 7 failed→还原字节一致）→ verify VERIFIED @`3ed312f`（ver-noise，独立 worktree：`1667 passed, 6 skipped`；`ruff` 全绿；实跑 12 次同因 = 1 INFO + 11 DEBUG） |
+| task-3 | G0 文档事实校准 + 建 `docs/待拍板.md` | lead 自办，待独立事实校验 | 本文件 §a/§d/§e + `docs/待拍板.md` |
+| task-1 | audio plane 关闭路径竞态（flaky） | 实现完成，评审/验证中 | impl-audio：复现 384 次中 1 红（ENOTCONN 覆盖 TOKEN 原因）；单文件 10/10、全量 3/3 绿；变异红 |
+| task-4 | CI 四 workflow 时长测量 + 决定 | 进行中（impl-noise） | 产出 `docs/audit/ci-timings.md`（只测量，不改 `.github/`） |
+
+**下一步（按序）**：1) task-1 过评审+验证后提交；2) task-4 收口；3) 打磨 F（phrasebook 中英）→ I（未验证清单逐条分类）→ D（覆盖率方案）。**发版/生产/真机出声/契约改动一律走 `docs/待拍板.md`。**
 
 ## 版本节奏（2026-10-27 09:10，9 哥 定）
 

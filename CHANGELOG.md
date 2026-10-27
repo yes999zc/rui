@@ -14,6 +14,30 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [Unreleased]
+
+**Theme: polish between acceptance nodes — fixes accumulate in `main` until the next
+release; no version bump for a single fix.** Everything below is committed and pushed;
+**none of it is in the 0.7.8 image** (production still runs 0.7.8).
+
+### 已知变更（有意的行为变更，需 9 哥 知情）
+
+- **`mcp <name>: down` 重连日志降价** (`3ed312f`). A server that stays unreachable no
+  longer logs one INFO per reconnect attempt (~15 s apart). First failure, a changed
+  failure reason, and a successful reconnect each log one INFO; an unchanged reason
+  logs at most once every 5 minutes, everything else drops to DEBUG. `--log-level
+  DEBUG` still shows the full reconnect cadence. Threshold lives in
+  `src/rui/tools/mcp_client.py` (`DOWN_LOG_INTERVAL_S`).
+
+### Fixed（进 `main` 未发版）
+
+- **dot2 volume read-back** (`d2c9895`): answer the level the mixer reports, never the
+  stale one.
+- **「唱首歌」routes to random play** (`e85b4bb`), and a legacy link now explains
+  itself instead of dead-ending.
+- **控制台把 Home Assistant 与 MCP 服务器分两段** (`91cac91`) — presentation only;
+  `GET /api/v1/mcp` still returns HA with `kind: "first_party"`.
+
 ## [0.7.8] - 2026-10-27
 
 **Theme: four cards in one release — the TLS install path, per-device plane
