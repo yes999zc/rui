@@ -126,9 +126,9 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 | 唤醒 | 30/30 admitted（2026-10-26，6 句 × 5 轮，校准后 TTS 音源） | 19/20（2026-10-24，n=20） |
 | 语音指令 | 26/30（同上，含音乐占据扬声器的场景） | 未测 |
 | 播放中打断 | 8/8（2026-10-26，真机人声；**stop-push 判据**：server 停播 → 设备丢队列，非声学端到端） | 停播 205.2 ms（2026-10-24 三轮 24.2/64.5/205.2，max n=3；**stop-push，非声学端到端**） |
-| 音量控制 | 未测 | 未测 |
-| 指示灯 | 未测 | 未测 |
-| 多设备并发 | 未测 | 未测 |
+| 音量控制 | 设置生效但**回复滞后一步**（调 40 回「30%」、调 70 回「40%」，2026-10-27） | ✅ 30% → 设备刻度 76（2026-10-27） |
+| 指示灯 | 事件链 `listening → thinking → speaking → off` 正常（机器侧日志，2026-10-27） | 未测 |
+| 多设备并发 | 两台平面可同时 `running`；**同时发起第二个对话会被 409 拒绝**（`a turn is already running`，单会话 runner，2026-10-27） | 同左（同一 runner） |
 | 音乐中短指令（下一首 / 停止播放） | 10/10（2026-10-26，人声，1 m） | 未测 |
 
 ### 安装路径实测（2026-10-26）
@@ -306,9 +306,9 @@ Without a plug the device error tells you which bridge to mount; a legacy `adapt
 | Wake | 30/30 admitted (2026-10-26, 6 phrases × 5 rounds, calibrated TTS source) | 19/20 (2026-10-24, n=20) |
 | Voice commands | 26/30 (same run, including music-owns-speaker cases) | untested |
 | Barge-in during playback | 8/8 (2026-10-26, real voice; **stop-push criterion**: server stop → device queue drop, not acoustical end-to-end) | 205.2 ms stop (2026-10-24, three runs 24.2/64.5/205.2, max n=3; **stop-push, not acoustical end-to-end**) |
-| Volume control | untested | untested |
-| LED | untested | untested |
-| Concurrent multi-device | untested | untested |
+| Volume control | applied but the **reply lags one step** (40 answered as 30, 70 as 40; 2026-10-27) | ✅ 30% maps to device level 76 (2026-10-27) |
+| LED | state chain `listening → thinking → speaking → off` fires (server log, 2026-10-27) | untested |
+| Concurrent multi-device | both planes run at once, but a **second simultaneous turn is refused with 409** (`a turn is already running`, single-session runner; 2026-10-27) | same (one runner) |
 | Short commands during music (next / stop) | 10/10 (2026-10-26, human voice, 1 m) | untested |
 
 ### Install-path proof (2026-10-26)
