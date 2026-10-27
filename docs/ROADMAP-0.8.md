@@ -306,3 +306,30 @@
 5. `docs/ROADMAP-0.8.md` 对应行的状态更新（出口条件逐条标 ✅/❌ + 证据链接）；
 6. tag + release + 镜像 digest + `/api/v2/meta` 核对（发布版）；
 7. 报告给 9 哥：变更、证据、评审/验证结论、风险、下一步。
+
+## 8. Hermes issue backlog（0.7.8 发布后）
+
+> 用途：`docs/audit/hermes-replies.md` 中所有「未在 0.7.4 / 0.7.8 修复」条目的去处。
+> 0.7.x 已发布版本不再插入新修复；0.8.0 只做 §5 的兼容层删除，本表条目从 **0.8.1** 起排。
+> 桥的版本列是计划值，不代表已发布。
+
+| issue | triage 结论 / 级别 | 计划版本 | 处置 / 理由 |
+|---|---|---|---|
+| rui#19 音频面三缺口 | 成立 3/3 · P2 | 0.8.1 | claim 异常路径 / 裁决等待 / ring 告警一并修；0.7.8 未含音频面改动 |
+| rui#20 配置恢复路径 | 部分成立 · P1 | 0.8.1 | version 解析容错 + 默认值恢复的不安全绑定显式失败；需与 0.8 配置迁移一起做 |
+| rui#22 Subsonic token 日志 | 成立 · P1（安全） | 0.8.1 | `_scrub` + 404 检查 + 云元数据地址；先补失败测试（门禁 §5） |
+| rui#23 回合生命周期 | 部分成立 · P1 | 0.8.1 | ASR 超时 + TTS 错误保留 + `cfg.retries`；截断记录另列 0.8.2 |
+| rui#24 插件层 | 部分成立 · P2 | 0.8.1（①③） | ① register hook 回滚、③ 镜像同名禁用；②（`0.5` 版本号）不修：语义等同 PEP 440，误报 |
+| rui#26 控制台 | 成立 3/3 + 2 · P2 | 0.8.1 | 空串增益、401 循环、AbortController；v1 面板随 0.8 删除后部分自然消失 |
+| rui#27 cue 回声 | 部分成立 · P1 | 0.8.1 | 只在 `ack.mode=tts` + 硬静音 + cue 尾开口气氛触发；采用「缓冲区内不切除」的小修，**不采纳去均值** |
+| rui#29 5xx 空白 | 部分成立 · P2 | 0.8.1 | 裸异常补 500 JSON handler；`HTTPException` 路径已有 detail |
+| rui#30 采集循环等仲裁 | 成立 · P1 | 0.8.1 | 等待期间保持 ring 消费 + 超时；仅 multi_device 开启时触发 |
+| rui#31 ring 满丢新帧 | 成立 · P2 | 0.8.1 | drop-oldest + 节流告警（复用 `_log_drain_drop`） |
+| rui#32 audio_defaults 根 | 部分成立 · P2 | 0.8.1（文档+doctor） | 接受结构缺口；补插件根文档与 doctor 检查；**不按 pip/entry-point 语义改死**；「dot2 整机不出声」因果链不成立 |
+| rui#33 小缺陷批（33 项） | 21 成立 / 7 部分 / 1 误报 / 1 无缺陷 · P2-P3 | 0.8.1 + 0.8.2 + backlog | P30/P32（token argv、xfyun key 进 URL）优先 0.8.1；22 项 0.8.1；A1/A2/A6 等听感类 0.8.2（daytime）；A9 无独立缺陷 |
+| dot2#2 无 token 控制面 | 部分成立 · P2 | dot2 1.3.2 | 显式 `DOT2_ALLOW_OPEN_LINK=1` 才 fail-open + `compare_digest`；无 secrets 时 TLS 已拒绝启动 |
+| dot2#3 `/loudness` 零校验 | 成立 · P2 | dot2 1.3.2 | NaN/inf/类型/范围校验 + build-then-swap + 坏文件回落 |
+| dot2#4 八处状态机 | 部分成立 7/8 · P1 | dot2 1.3.2 + 1.3.3 | 2/3/6 → 1.3.2；1/4/7/8 → 1.3.3；**第 5 条不修：30000 次超时注入 0 丢失，误报** |
+| dot2#5 DSP | 部分成立 4/5 · P2 | dot2 1.3.2 + 1.3.3 | 1/2/5 → 1.3.2；3 → 1.3.3；4（全新 clone 曲线）需 vendor cfg，backlog |
+| dot2#6 交付运维批 | 成立 · P2/P3 | dot2 1.3.2 / 1.3.3 / 1.4.0 | quick wins 进 1.3.2；doctor/契约报告 1.3.3；`rm -rf` 校验与端口旋钮 1.4.0 |
+| xiaoai#2 批（10+） | 成立 10/10 · P1/P2 | xiaoai 0.2.3 | base64 token `+` 变空格、`frames()` 不结束、play 竞态、连接固定；0.2.2 只含 #1 的重连复位，不含本批 |
