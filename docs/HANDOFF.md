@@ -11,6 +11,9 @@
   `docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d --force-recreate` 后 `healthy`，
   `/health` = `version 0.7.9 / devices 2 / device_errors 0 / audio_plane true / speaker_connected true / adapter_plugins registered dot2,lx06`。
   **回滚**：把 `image:` 改回 0.7.8 的 amd64 摘要 `sha256:1f074bb3…ecaa`（或 `cp -p rui-dot2-override.yml.bak.before079`）→ 同两条 `-f` 命令。
+  **生产验收（2026-10-27 22:3x 核过）**：`/health` = `version 0.7.9 / console v2 / devices 2 / device_errors 0 / audio_plane true / speaker_connected true`，
+  `adapter_plugins.registered ["dot2","lx06"] / warnings 0`；两台 plane（`living` 客厅、`dot2` 卧室）均 `running true / speaker_connected true / restarts 0 / error ""`；
+  `GET /api/v1/config/catalog` → **200**，`ack` 的 `tier 2 / order 5`（tier2 首位）→ **v2 语音助手页第 3 位（assistant → session → ack）**，D-011 在生产生效。
   **注意**：容器已跑 0.7.9 代码，但 **0.7.9 的意图层行为仍未做真机出声验证**（真机窗口并入 0.8，见 `docs/acceptance-pending.md`）。
 - **0.7.9 真机未验**：C1/C2/C3/C5 与 D-011 排序都只经 headless 判定（`1716 passed, 6 skipped`）。验证项全部挂在 `docs/acceptance-pending.md`（N1/N2/N3 + R79-1…6，`☐` 一个都没勾），并入 **0.8 窗口**（第二台 dot2 到位后一起做）。
 - **本批做了**：意图层批次 1（C1 `ddb7cbb`）+ 批次 2/3（C3/C4/C5/C6/C11 `34e3629`）+ D-011=A（`ack` order 200→5、**tier 未动** `6117fb7`）+ 审计两件（`f5d3f46`/`7fde6aa`）+ 验收/限制/backlog 三份文档（`4f75079`/`715a3c2`）+ 收口报告（`35dc556`）。
