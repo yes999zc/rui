@@ -33,6 +33,9 @@ import test_cue_echo_excision as cuefx
 from rui.audio.vad import GateConfig, UtteranceGate
 
 RATE = cuefx.RATE
+# Deliberately the ack-cue (540 ms) parameters, not the goodbye ones: production uses
+# hold 2400 / skip 1450 for a 1200 ms reply (review verified the same conclusion with
+# that wiring). The constants are not meant to be read as production values.
 HOLD_MS = cuefx.HOLD_MS
 SKIP_MS = cuefx.SKIP_MS
 GOODBYE_MS = 1200  # a spoken farewell, longer than the 540 ms ack cue
@@ -76,3 +79,31 @@ def test_goodbye_pcm_replayed_as_mic_opens_no_turn(make_gate, lag_ms) -> None:
 
     assert captured is None, "the goodbye was captured as an utterance"
     assert gate.turns == 0, "the goodbye opened its own turn (extra turn)"
+
+
+def test_a_person_right_after_the_goodbye_is_captured_once(make_gate) -> None:
+    """Positive control: excising the echo must not swallow the person's next words.
+
+    The goodbye is the echo reference and also the first thing in the microphone;
+    one second of speech follows 1.25 s later. A gate that over-excises (or drops the
+    whole held window) loses that turn; the goodbye-only cases above cover the
+    opposite direction (the echo must not become a turn by itself).
+    """
+    gate = make_gate()
+    goodbye = cuefx._raw(GOODBYE_MS / 1000)
+    reply = cuefx._user(1.0)
+    gate.set_echo_reference(np.frombuffer(goodbye, dtype="<i2"), RATE)
+    gate.hold(HOLD_MS, skip_ms=SKIP_MS)
+
+    mic = cuefx._mix(5.0, (0.0, goodbye), (1.25, reply))
+    captured = cuefx._feed(gate, mic)
+    if captured is None:
+        captured = cuefx._close(gate)
+
+    assert captured is not None, "the person's reply was lost with the goodbye echo"
+    assert gate.turns == 1, f"expected exactly one person turn, got {gate.turns}"
+    segment = cuefx._as_float(captured[0])
+    assert cuefx._best_corr(segment, cuefx._as_float(goodbye)) < 0.4, (
+        "the goodbye reached ASR instead of being excised")
+    assert cuefx._retained_energy(segment, cuefx._as_float(reply)) >= 0.8, (
+        "the person's speech was cut by the echo excision")

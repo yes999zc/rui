@@ -231,6 +231,11 @@ def test_managed_server_loop_throttles_the_down_line(caplog, monkeypatch) -> Non
     infos = _down_infos(caplog)
     assert len(infos) == 1
     assert "notes" in infos[0].getMessage()
+    # Attribution: production constructs this throttle with the manager logger. Without
+    # this line the test would still pass if `logger=manager_module.log` were dropped,
+    # leaving the "records belong to rui.tools.mcp_manager" fix unguarded.
+    assert infos[0].name == "rui.tools.mcp_manager", (
+        f"the down line came from {infos[0].name!r}, not the manager logger")
 
 
 def test_a_successful_reconnect_is_one_info_line_not_a_burst(caplog, monkeypatch) -> None:
@@ -282,7 +287,10 @@ def test_a_successful_reconnect_is_one_info_line_not_a_burst(caplog, monkeypatch
 
     assert server.connected is True
     assert opens == 3
-    assert len(_down_infos(caplog)) == 1   # one line for the outage, repeats are DEBUG
+    downs = _down_infos(caplog)
+    assert len(downs) == 1   # one line for the outage, repeats are DEBUG
+    assert downs[0].name == "rui.tools.mcp_manager", (
+        f"the down line came from {downs[0].name!r}, not the manager logger")
     connected = [record for record in caplog.records
                  if record.levelno == logging.INFO and "connected" in record.getMessage()]
     assert len(connected) == 1
