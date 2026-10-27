@@ -2265,6 +2265,35 @@ def _voice_rate(client: object) -> int:
     return int(getattr(ready, "voice_rate", 0) or 16000)
 
 
+async def _read_back_volume(live: object, previous_pct: int, *, attempts: int = 6,
+                            delay_s: float = 0.08) -> tuple[int | None, str]:
+    """Ask the mixer again after a set until it reports a level other than `previous_pct`.
+
+    The plane already reads back after `device_volume set`, but a bridge may answer
+    from a cached device report: dot2 1.3.1's `read_volume()` returns `reported_level`,
+    one report behind (measured 2026-10-27: 「音量调到30」 answered 100%). A short poll
+    gives the device a moment to report the new level: at most **6 attempts, 80 ms
+    apart (480 ms total)** — the budget is pinned by a test so it cannot drift.
+
+    Returns `(pct, "confirmed")` when a new level is visible, `(None, "stale")` when
+    the read keeps returning the pre-set value, and `(None, "unreadable")` when the
+    mixer cannot be read at all. The caller must never answer `previous_pct` for the
+    last two: the target stands in (marked expected), or the sentence goes neutral.
+    """
+    for _ in range(attempts):
+        await asyncio.sleep(delay_s)
+        try:
+            value = await live.device_volume()  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 - a dead mixer is "unreadable", not the old value
+            return None, "unreadable"
+        if value is None:
+            return None, "unreadable"
+        pct = round(value * 100 / 255)
+        if pct != previous_pct:
+            return pct, "confirmed"
+    return None, "stale"
+
+
 async def _volume_command(app: FastAPI, clean: str, runner, client, trace,
                           traces) -> str | None:
     """Volume words reach the mixer without a model round trip (measured 09:03)."""
@@ -2274,6 +2303,7 @@ async def _volume_command(app: FastAPI, clean: str, runner, client, trace,
         return None
     result = await handler({"level": level})
     spec_key = ({"ok": "volume.set", "ok_read": "volume.read",
+                 "ok_unconfirmed": "volume.set_unconfirmed",
                  "unknown": "volume.unknown", "unreachable": "volume.failed"}
                 .get(getattr(result, "status", "")))
     if not spec_key:
@@ -3025,6 +3055,7 @@ def create_app(
                 if now is None:
                     return ToolResult(status="unreachable")
                 pct = round(now * 100 / 255)
+                previous_pct = pct
                 if level in ("", "read", "how", "now"):
                     return ToolResult(status="ok_read").slot(pct=pct)
                 if level in ("up", "down"):
@@ -3041,7 +3072,28 @@ def create_app(
                     got = await live.set_device_volume(target)
                 except Exception:  # noqa: BLE001
                     return ToolResult(status="unreachable")
-                applied = round((got if got is not None else target) * 100 / 255)
+                # Confirm the new level instead of trusting the `set` reply: on dot2
+                # that reply is the pre-set report (the bug this card fixes), on LX06
+                # it already moved and this branch answers exactly as before.
+                observed = round(got * 100 / 255) if got is not None else None
+                if observed is not None and observed != previous_pct:
+                    applied = observed
+                elif pct == previous_pct:
+                    applied = pct          # same target as before: nothing to wait for
+                else:
+                    confirmed, state = await _read_back_volume(live, previous_pct)
+                    if state == "confirmed" and confirmed is not None:
+                        applied = confirmed
+                    else:
+                        # The write landed (no exception) but the mixer did not confirm
+                        # a new level (stale bridge cache or unreadable mixer). Answer
+                        # the target as unconfirmed: never the pre-set value.
+                        log.info("volume: %s%% requested, mixer did not confirm a new "
+                                 "level (%s, was %s%%); answering the target as "
+                                 "unconfirmed", pct, state, previous_pct)
+                        return ToolResult(status="ok_unconfirmed").slot(pct=pct)
+                log.info("volume: %s%% requested, mixer now %s%% (was %s%%)",
+                         pct, applied, previous_pct)
                 # Learn it as the target: the reconciler would otherwise put the
                 # configured value back within 16 s (old build: adopt_device_volume).
                 dev_id = (str(getattr(app.state, "turn_device", "") or "")
@@ -3062,6 +3114,7 @@ def create_app(
                               "description": "up | down | mute | 0-100 | 空=查询"}}},
                 interaction=InteractionSpec(exec={
                     "ok": "volume.set", "ok_read": "volume.read",
+                    "ok_unconfirmed": "volume.set_unconfirmed",
                     "unknown": "volume.unknown",
                     "unreachable": "volume.failed"}),
             )

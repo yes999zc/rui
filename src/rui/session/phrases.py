@@ -27,6 +27,11 @@ log = logging.getLogger(__name__)
 
 # The built-in table. Keys are namespaced `domain.what`; the status templates an
 # InteractionSpec points at must exist here (a typo fails loud and early in tests).
+#
+# **This layer is Chinese-only today.** It is the spoken reply table: one template
+# per key, no locale switch (the console's zh/en dictionaries under `web/src/**`
+# translate UI copy, not what the speaker says). Adding a second language means a
+# keyed table here and a locale at render time, not a translation of this dict.
 DEFAULTS: dict[str, str] = {
     # --- music (V1's migration set) -----------------------------------------
     "music.started": "好，放《{title}》-{artist}，共 {count} 首。",
@@ -63,6 +68,9 @@ DEFAULTS: dict[str, str] = {
     "turn.stuck": "我这卡了一下，你再说一遍。",
     # --- volume (the speaker's own mixer) -----------------------------------
     "volume.set": "音量调到 {pct}%了。",
+    # The write succeeded but the mixer could not be read back: never invent a
+    # number (the old build answered the pre-set value — bug measured 2026-10-27).
+    "volume.set_unconfirmed": "已设置音量 {pct}%。",
     "volume.read": "现在音量 {pct}%。",
     "volume.failed": "音量没调成，音箱没回应。",
     "volume.unknown": "没听清要调到多少，现在是 {pct}%。",
