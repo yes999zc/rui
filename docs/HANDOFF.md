@@ -102,10 +102,11 @@
 **审计 B 的前提已由 9 哥 纠正（记 `docs/待拍板.md` D-011）**：v2 与旧面板是两套渲染。v2 事实：`web/src/v2/views/VoiceAssistantView.vue:74-81` 的 `SHOWN_GROUPS` 含 `ack` → **唤醒应答就在「语音助手」页、且是第 8 组（末位）**；`web/src/v2/config.ts:205 orderedGroups()` 不排序，按 catalog 数组原序渲染；生产 catalog tier 2 顺序 `devices(10)…audio.*(100-130) ack(200)` → ack 末位。**落点：改 `src/rui/config/catalog.py:127` 的 ack order 值（服务端顺序，v2 与旧面板都生效，前端不用动）**。审计初稿误用了旧面板 `PanelSpec`（`app.py:548-550`/`:581-593`）与旧面板排序（`ConfigCenter.vue:175`）。
 
 **审计进度（2026-10-27 11:50）**：
-- **task-12（审计 A）**：脚本 `tools/intent_matrix.py`（215 行，两次运行 `diff` 空）+ 文档 `docs/audit/intent-collisions.md`（289 行）。**11 条冲突 = P0 2 / P1 3 / P2 6**；rev-inv 两轮后 **PASS**（A 行号、B 显式 ALIASES 方案、精度 6/6 全核过），**待 verifier**（9 哥 要求：verifier 自己跑脚本 + 手推 3 格）。两条 nit 留给修复卡：语气词尾巴要闭集（排除「吗/呢/么」）、批次 1 的 grep 补 `别放了`。
+- **task-12（审计 A）**：脚本 `tools/intent_matrix.py`（215 行）+ 文档 `docs/audit/intent-collisions.md`（289 行）。**11 条冲突 = P0 2 / P1 3 / P2 6**；rev-inv 两轮 **PASS**；verifier 第 1 轮 **FAILED（仅文档字段）**：① 引用 `docs/HANDOFF.md:105-108` 实际应为 **`110-114`**（本文件的审计小节插在前面后行号漂移）；② C6/C11 两行缺「短句」字段。分析本体全部通过（脚本两次 `diff` 空 + md5 一致、3 格手工推演 = 脚本 = 生产 handler 实跑、5 条日志逐条成立）。**回修中**（禁令：引用 HANDOFF 一律用**小节名**而不是行号，避免再漂）。
+  nit 留给修复卡：语气词尾巴要闭集（排除「吗/呢/么」）、批次 1 的 grep 补 `别放了`、措辞统一为「任意位置、总长最多 +2」。
   关键结论：① 结束词 + 有歌 → `media_stop` 保持会话（现象来源，`app.py:966-984`）；② `停止你好` 靠 `rules.py:281-283` 的「子串 + ≤2 字」容差命中；③ 单字「停」落 model（`app.py:2813` 澄清为 False → `2825-2831`）。
   建议第一批：C1（结束词+有歌 → 停歌+关会话）+ C2（收紧容差、保留显式别名）。
-- **task-13（审计 B）**：已按 9 哥 纠正的 v2 前提整篇重写（`docs/audit/console-ordering.md`），**待 rev-facts 复审**。关键发现：**tier 陷阱** —— 只把 ack 的 `order 200→<10`（tier 仍 2）在 v2 只能到第 3 位；要第 1 位必须 `ack tier 2→1 + order 5`，代价是旧面板按 tier 2 过滤会丢 ack（P1 取舍待 9 哥）。另：v2 语音助手页渲染 `devices` 组但 `editableFields` 排除它 → 看着能改、保存不生效（P0）；`id` 不是双入口（唯一改名入口是 catalog `devices.N.id`）。
+- **task-13（审计 B）**：已按 9 哥 纠正的 v2 前提重写，**第 3 版待 rev-facts 复审**（前两轮 CHANGES：`id` 不是双入口 / `voice-capture` 缺 P 级 / 首屏口径 / `devices` 组其实**已经**只读+跳转（`DeviceConfigCard.vue:1-5`）/ Rooms 页漏了 `HousePolicyEditor` / tier 改动的两条落地代价）。计数 P0=1 / P1=3 / P2=3 类。关键发现：**tier 陷阱** —— 只把 ack 的 `order 200→<10`（tier 仍 2）在 v2 只能到第 3 位；要第 1 位必须 `ack tier 2→1 + order 5`，代价是旧面板按 tier 2 过滤会丢 ack（P1 取舍待 9 哥）。另：v2 语音助手页渲染 `devices` 组但 `editableFields` 排除它 → 看着能改、保存不生效（P0）；`id` 不是双入口（唯一改名入口是 catalog `devices.N.id`）。
 
 **9 哥 定稿的目标策略（审计判据，修复时照此执行）**：
 1. 暂停功能保留，默认触发词**只有**「暂停」「停一下」；其他暂停词（先停这儿/停会儿/停住/停在这）从暂停表**删除**、不挪进结束词；用户可自定义。
