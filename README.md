@@ -121,8 +121,6 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 
 ## 支持矩阵
 
-> 延迟数字来自 **0.7.1 / p21** 的实测（2026-10-26 15:01），**0.7.8 未重测延迟**；但 **0.7.8 已在真机两台部署验证**（唤醒/应答/播放/打断/音乐，2026-10-27）。未测项一律标「未测」。
-
 | 能力 | Dot2（EchoMuse RS03QR） | LX06（第三方设备） |
 |---|---|---|
 | 唤醒 | 30/30 admitted（2026-10-26，6 句 × 5 轮，校准后 TTS 音源） | 19/20（2026-10-24，n=20） |
@@ -282,8 +280,6 @@ Without a plug the device error tells you which bridge to mount; a legacy `adapt
 **Known limitations**: a third-party manifest that does not declare `wake_words_residual` gets no vendor-phrase backstop (vendor broadcasts/echoes may enter a turn); two speakers only start one plane by default unless `multi_device: {enabled: true, max_planes: 2}`; a self-signed certificate only lets the audio plane start — real-device acceptance depends on the CA the device trusts.
 
 ## Support matrix
-
-> Latencies measured on **0.7.1 / p21** on 2026-10-26 15:01 and **not re-measured on 0.7.8**; 0.7.8 itself is verified on real hardware for wake, reply, playback, barge-in and music (2026-10-27). Anything untested is marked **untested**.
 
 | Capability | Dot2 (EchoMuse RS03QR) | LX06 (third-party) |
 |---|---|---|
