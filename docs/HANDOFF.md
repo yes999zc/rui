@@ -124,8 +124,8 @@
 **收尾批次（0.7.9，2026-10-27 12:5x 起，9 哥 全权授权、出门无人应答）**：目标=批次2+3 修复 → D-011=A → 文档 → 发版 0.7.9 → 结束会话；**禁止项只有：部署生产 / 动 NAS / 真机出声**。
 | 卡 | 内容 | 状态 |
 |---|---|---|
-| task-17 | 批次 2+3（C5 暂停词收窄 / C3 无歌暂停提示 / C4 措辞 / C6 文案） | review **PASS**（rev-inv），**待 verifier** |
-| task-18 | D-011=A：`ack` order 200→5（**tier 保持 2**）+ 顺序断言同步 + 待拍板收口 + acceptance-pending 并批 | **未开始**（等 task-17 合入后派，避免同文件冲突） |
+| task-17 | 批次 2+3（C5 暂停词收窄 / C3 无歌暂停提示 / C4 措辞 / C6 文案） | ✅ **completed `34e3629`**；PASS（rev-inv）→ VERIFIED（ver-noise：全量 `1716 passed, 6 skipped`、C3 变异 3 红、运行时 `end_words` 仍 21、`pause` 只剩 2 词） |
+| task-18 | D-011=A：`ack` order 200→5（**tier 保持 2**）+ 顺序断言同步 + 待拍板收口 + acceptance-pending 并批 | 进行中（impl-audio，已派） |
 | task-19 | `docs/backlog-0.8.md`（283 行，四节含**双 dot2 同型号 6 组**）+ known-limitations L10–L16 + README（中英，0.7.9 标「候选未发布」） | review **PASS**（rev-facts 三轮），**待 verifier** |
 | 发版 | 版本号 0.7.9（pyproject / `src/rui/__init__.py` / `uv.lock`）+ CHANGELOG + tag `v0.7.9` + GitHub release（**如实写：意图层行为真机未验**） | Lead 做，在 task-17/18 合入后 |
 
