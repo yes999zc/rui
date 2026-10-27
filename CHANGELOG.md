@@ -14,11 +14,21 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
-## [Unreleased]
+## [0.7.9] - 2026-10-27
 
-**Theme: polish between acceptance nodes — fixes accumulate in `main` until the next
-release; no version bump for a single fix.** Everything below is committed and pushed;
-**none of it is in the 0.7.8 image** (production still runs 0.7.8).
+**Theme: patch release. Two behaviour changes in the intent layer (headless-verified
+only - see the honesty note), one log-noise fix, one audio error-reporting fix, plus
+the wake-acknowledgement ordering. No contract change, no bridge release: dot2 1.3.1
+and xiaoai 0.2.2 stay compatible (`rui_compat >=0.6.0 <0.8.0` unchanged).**
+
+> **真机未验 / not verified on hardware.** The two intent-layer behaviour changes
+> below are covered by headless tests only (`uv run pytest`, 1716 passed). They have
+> **not** been exercised on a speaker. Hardware verification of 0.7.9 is folded into
+> the 0.8 window (`docs/acceptance-pending.md`, items N1/N2/N3/R79-*), together with
+> the second same-model dot2 (`docs/backlog-0.8.md` §c). Do not read this release as
+> "the intent layer is fixed on device".
+>
+> **0.7.9 未部署本仓生产**；生产仍是 0.7.8，部署由 9 哥 亲手做。
 
 ### 已知变更（有意的行为变更，需 9 哥 知情）
 
@@ -31,6 +41,15 @@ release; no version bump for a single fix.** Everything below is committed and p
   的说法也不再命中**——这是有意收窄，老用户可能会觉得「以前能用现在不理我」。
 - **三条别名补进 `ALIASES`**：`停止播放→停止`、`别放了→别放`、`别放了吧→别放`（别名不是结束词表，
   不违反「结束词表保持现状」）；否则收紧容差后这几句最常用的说法会掉进模型。
+- **暂停词收窄到两个**（C5，`34e3629`）：`MUSIC_TRANSPORT["pause"]` 只剩「暂停」「停一下」；
+  `先停这儿 / 停会儿 / 停住 / 停在这` **不再触发暂停**（交模型），也**没有**被挪进结束词表。
+  暂停回复改为「好，暂停了。」。
+- **没在放音乐时说「暂停」不再结束会话**（C3，`34e3629`）：回一句「现在没在放音乐。」，
+  **会话保持**（`session_action="pause_no_music"`）。以前这两个词同时是结束词，无歌时会被
+  `bare_stop` 吃掉、直接把会话关掉。
+- **唤醒应答在控制台里被提前**（D-011=A，`6117fb7`）：catalog 的 `ack` 组 `order 200 → 5`，
+  **`tier` 未动**。v2「配置 → 语音助手」页里它从第 8 组升到**第 3 组（首屏可见）**；
+  旧面板「音频与唤醒」tab 里是第 1 位。要 v2 第 1 位需要改 `tier` 或页内显式排序，属 0.8。
 
 - **`mcp <name>: down` 重连日志降价** (`3ed312f`). A server that stays unreachable no
   longer logs one INFO per reconnect attempt (~15 s apart). First failure, a changed
