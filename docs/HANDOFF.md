@@ -22,7 +22,10 @@
 **部署形态**：官方镜像 + 外置插件，**不再造下游镜像**。
 - 镜像 `ghcr.io/yes999zc/rui@sha256:2bcbbec0f9de86affee3f2330a96b8260d629d837e410ff1112487b1c9591308`（CI 在分支 `rc/0.7.8` 上构建的多架构产物，`rui 0.7.8`）
 - 插件：`/vol1/rui/plugins/rui_dot2_bridge` + `rui_xiaoai_bridge`，只读挂到 `/opt/rui-plugins`；`RUI_ADAPTER_PLUGINS=dot2=…,lx06=…`
-- 配置：`web.console: v2`；客厅 `living` 关闭、卧室 `dot2` 开启（**本轮只保一台**）
+- 配置：`web.console: v2`；**客厅 `living` 与卧室 `dot2` 都开启**（08:31 起两台都 running）
+  - 客厅显式写 `adapter: lx06`（不再依赖 `xiaoai` 迁移），所以 `adapter_plugins.warnings` 由 1 降为 **0**
+  - `/health`：`devices=2`、`device_errors=0`、`planes=[living 客厅 running, dot2 卧室 running]`、两台 `speaker_connected=true`
+  - **没有为客厅造任何新镜像**：插件是 `/vol1/rui/plugins/rui_xiaoai_bridge` 目录，容器只读挂载即加载（这是 0.7.6 之后与 `rui-dot2:1.3.1` 那套下游镜像的根本区别）
 - 数据：纯净装后只恢复了凭据与音乐资产（`secrets.yaml`/`lan_media.json`/`library_index.json`/`music_aliases.json`/`music_history.json`/`setup.json`），日志/ack/DB/缓存保持全新
 
 **验收结果**
