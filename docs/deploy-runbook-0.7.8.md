@@ -142,9 +142,10 @@ curl -s localhost:8080/health | python3 -c "import json,sys;d=json.load(sys.stdi
 | TLS 材料 | 5 项齐 | `ca.pem device_token eq server.key server.pem` | ✅ |
 | 插件目录 | 两个（老镜像层） | `rui_dot2_bridge` `xiaoai` | ✅ |
 | 设备配置 | xiaoai + dot2 | `devices[0] adapter xiaoai host 192.168.5.5 plug_id xiaoai-lx06`；`devices[1] adapter dot2` | ✅ |
-| 镜像搬运 | 0.7.8 导入并校验 | 待执行（`docker load` 会改 NAS 镜像库，由你执行/批准） | ⏳ |
-| 切换后 health | 0.7.8 + 两台 running | 待执行 | ⏳ |
+| 镜像 | 从 CI 直接拉，不用搬运 | `docker pull ghcr.io/yes999zc/rui:edge` → 本地 `bd396ee593a1`，`rui 0.7.8` | ✅ |
+| 外置插件 | 两个包 + env | `/vol1/rui/plugins/{rui_dot2_bridge,rui_xiaoai_bridge}`；`registered=["dot2","lx06"]` | ✅ |
+| 切换后 health | 0.7.8 + 平面 running | `ver 0.7.8 / dev 1 / err 0 / console v2 / speaker True / planes[卧室 dot2 running]` | ✅ |
 | 老链接 | 302 到 v2 | 待执行（`console: legacy` 时 200 旧壳属预期） | ⏳ |
-| 回滚 | 回 1.3.1 | 待执行 | ⏳ |
+| 回滚 | 回 1.3.1 | 回滚到 `rui-dot2:1.3.1`（重建 `a62e2cf4a0be`，`rui 0.7.2`）：`devices=1`、`errors=0`、`/` 仍 302；再切回 0.7.8 恢复 | ✅ |
 
 > 标 ⏳ 的四行由你执行时回填；其余行已用只读命令核过，可随时复跑。

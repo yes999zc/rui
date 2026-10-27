@@ -4,6 +4,33 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
+## 0.7.8 生产验收（2026-10-27 08:20，真实部署）
+
+**部署形态**：官方镜像 + 外置插件，**不再造下游镜像**。
+- 镜像 `ghcr.io/yes999zc/rui@sha256:2bcbbec0f9de86affee3f2330a96b8260d629d837e410ff1112487b1c9591308`（CI 在分支 `rc/0.7.8` 上构建的多架构产物，`rui 0.7.8`）
+- 插件：`/vol1/rui/plugins/rui_dot2_bridge` + `rui_xiaoai_bridge`，只读挂到 `/opt/rui-plugins`；`RUI_ADAPTER_PLUGINS=dot2=…,lx06=…`
+- 配置：`web.console: v2`；客厅 `living` 关闭、卧室 `dot2` 开启（**本轮只保一台**）
+- 数据：纯净装后只恢复了凭据与音乐资产（`secrets.yaml`/`lan_media.json`/`library_index.json`/`music_aliases.json`/`music_history.json`/`setup.json`），日志/ack/DB/缓存保持全新
+
+**验收结果**
+| 项 | 判据 | 实测 |
+|---|---|---|
+| a healthy | Up (healthy) | `Up (healthy)`，`/health` 200 |
+| b 设备识别 | devices/errors | `devices=1`、`device_errors=0`、`registered=["dot2","lx06"]`、`warnings=1`（`xiaoai→lx06` 迁移） |
+| c 音频平面 | planes running | `planes=[{device: dot2, room: 卧室, state: running}]`、`audio_plane=true`、`speaker_connected=true` |
+| d 真机走一遍 | 唤醒→指令→播放 | **部分**：00:08 实测 `wake 406 ms` + `led: wake` + `ASR 182 ms`（transcript `几点了？`），但当时凭据在归档里 → `llm: no ready provider`；恢复凭据后 `volc_tts` 就绪（filler/ack 渲染成功）、LLM 不再报错，**尚未有新的真实语音回合** |
+| e 升级+回滚 | 各一次 | **已做**：升级到 0.7.8 → 回滚到 `rui-dot2:1.3.1`（重建，`a62e2cf4a0be`，`rui 0.7.2`，`devices=1/errors=0`，`/` 仍 302 `/v2/`）→ 切回 0.7.8 并恢复 `speaker_connected=true` |
+
+**今晚踩过并修掉的三件事（记录，避免重犯）**
+1. **arm64 镜像**：Mac 构建、NAS 是 amd64 → `exec format error`。现在只从 CI（原生双架构）取镜像。
+2. **纯净装把凭据一起归档** → LLM/TTS 变「no ready provider」。恢复 `data/secrets.yaml` 即好；`data/` 归档在 `/vol1/rui/backups/0.7.8-preclean-20261027-075452/data-state/`。
+3. **CI 红**：`tests/test_console_switch.py` 用了 PyYAML（项目依赖是 ruamel），已改（`7adf5c9`、`0993d08`）。教训：本地绿 ≠ CI 绿，测试里别引入非依赖包。
+
+**未完成**
+- **d 的真实语音回合**（需人对音箱说话；恢复凭据后还没测过）。
+- **打 tag**：0.7.8 目前只有分支产物 `:edge`，`v0.7.8` tag / `:0.7.8` 镜像 / release 均未创建。
+- 客厅那台（lx06）本轮关闭；`warnings=1` 来自它的 `adapter: xiaoai`，想消掉就把第 23 行改成 `adapter: lx06`。
+
 ## 0.7.8 状态（2026-10-27 02:20，进行中）
 
 - **D 已合入 `efab571`**（task-17，reviewer-d PASS + verifier-tests VERIFIED）：
