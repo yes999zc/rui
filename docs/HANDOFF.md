@@ -1,6 +1,26 @@
 # HANDOFF — rui 阶段快照（0.7.8 已发布）
 
-## 新会话入口（2026-10-27）
+## 收尾（0.7.9，2026-10-27）
+
+- **版本**：core **0.7.9**（patch）。版本号三处一致：`pyproject.toml` / `src/rui/__init__.py` / `uv.lock`（`07f40f4`）。
+- **tag**：`v0.7.9` @ `715a3c2`；GitHub release <https://github.com/yes999zc/rui/releases/tag/v0.7.9>（notes 如实写明「意图层只经 headless 判定、真机未验」）。
+- **镜像（GHCR `ghcr.io/yes999zc/rui:0.7.9`）**：OCI index `sha256:0f6c89ceb217d79471017bf24860dd74f1135f20b2d612e106277d5abc15bf05`；**amd64 平台摘要 `sha256:5aa362f6b4f7d7fd24a7f01d41c31e1523ce2401296ac3b203b9f684a314b9f7`**（NAS 老 docker 只认平台摘要，索引会报 `unsupported media type`）。README 的三处安装指引已换成该摘要（`ecf1342`）。
+- **CI**：tagged commit `715a3c2` 四个 workflow 全 `success`（ci / security / secret-scan / docker-publish）。
+- **生产**：**未部署，仍是 0.7.8**。部署由 9 哥 亲手做（两个 `-f`；步骤见 `docs/release-candidate-0.7.9.md` §5 与 `docs/deploy-runbook-0.7.8.md` §8）。
+- **0.7.9 真机未验**：C1/C2/C3/C5 与 D-011 排序都只经 headless 判定（`1716 passed, 6 skipped`）。验证项全部挂在 `docs/acceptance-pending.md`（N1/N2/N3 + R79-1…6，`☐` 一个都没勾），并入 **0.8 窗口**（第二台 dot2 到位后一起做）。
+- **本批做了**：意图层批次 1（C1 `ddb7cbb`）+ 批次 2/3（C3/C4/C5/C6/C11 `34e3629`）+ D-011=A（`ack` order 200→5、**tier 未动** `6117fb7`）+ 审计两件（`f5d3f46`/`7fde6aa`）+ 验收/限制/backlog 三份文档（`4f75079`/`715a3c2`）+ 收口报告（`35dc556`）。
+- **本批没做（明确不做，见 `docs/known-limitations.md`）**：C7/C8/C9/C10（不新增结束词）、HE-02 回声切除（D-010 不修）、D-011 的 v2 第 1 位（需 tier 2→1 或页内排序，归 0.8 P1）、控制台「唤醒应答独立成页」、桥的任何发版（`rui_compat` 窗口未变，dot2 1.3.1 / xiaoai 0.2.2 无需重发）。
+- **决策记录**：`docs/待拍板.md` 的 D-001…D-011 **全部 ANSWERED**（含结论行）；本批内我按 9 哥 授权自行裁决的两处写在 D-011 与 backlog d.1（order-only 收、ACK-1 判据 = 首屏可见）。
+
+## 若以后重启：先读这三个文件
+
+1. `docs/backlog-0.8.md` —— 0.8 的开工顺序（**桥先发双窗口 → core 后发**，顺序不可反）、三项破坏性变更、以及**从未验过的「双 dot2 同型号」验证组**。
+2. `docs/acceptance-pending.md` —— 真机验收累计（21 条只能真机 + 补充 + 本阶段新增），每条有可照抄命令与通过标准；0.7.9 的项全部并入 0.8 窗口。
+3. `docs/known-limitations.md` —— L1–L16 已知限制（含 HE-02 缺口、C7–C10 不做、0.7.9 真机未验）。
+
+补两份按需查：`docs/release-candidate-0.7.9.md`（这批发版依据与回滚步骤）、`docs/待拍板.md`（已答结论）。
+
+## 历史：新会话入口（2026-10-27，0.7.8 收尾时的版本）
 
 > **只读本节 + 它指出的文件即可接手**；下面的历史节按需查，不要通读全篇。
 
