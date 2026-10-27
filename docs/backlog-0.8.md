@@ -255,8 +255,10 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 
 ### d.3 真机未测项（**引用，不复制**）
 
-- 入口只有一个：`docs/acceptance-pending.md`。0.7.9 之后仍未测的是「21 条只能真机」+ HE-01 补充
-  + 本阶段新增里的 N3/ACK-1/ACK-2（N1/N2 在 0.7.9 窗口验）。
+- 入口只有一个：`docs/acceptance-pending.md`。0.7.9 之后**仍未测**的是「21 条只能真机」+ HE-01 补充
+  + 本阶段新增 5 条（N1/N2/N3/ACK-1/ACK-2）+ 0.7.9 新增 6 条（R79-1…6）。
+  **0.7.9 自己没有留下任何真机结论**：C1/C2/C3/C5 与 D-011 排序都只经 headless 判定，
+  N1/N2 没有在 0.7.9 窗口验过（原计划如此，9 哥 决定全部并入 0.8）。
 - 来源与口径：`docs/audit/unverified-inventory.md`（全量 36 条 = §1 10 条 + §2 26 条真机协议）。
   **两处条数不同**（inventory 36/26、acceptance-pending 21+补充+新增）——以 acceptance-pending
   为执行口径，inventory 只作来源索引。若以后要按「某一固定条数」对齐，先统一这两份文件的统计口径，
