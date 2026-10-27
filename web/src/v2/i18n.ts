@@ -1295,7 +1295,7 @@ const zh = {
 
   // — M9c tools ——————————————————————————————————————————————————
   'v2.tools.title': '工具',
-  'v2.tools.lede': '天气、新闻、联网搜索、MCP 与家庭助理；分组、字段、范围与生效方式都来自服务端配置目录，连接状态只读。',
+  'v2.tools.lede': '天气、新闻、联网搜索等工具；分组、字段、范围与生效方式都来自服务端配置目录，连接状态只读。',
   'v2.tools.loadFailed': '无法读取工具配置',
   'v2.tools.configFallback': '配置原文读取失败，使用目录中的当前值',
   'v2.tools.catalogNote': '以下分组与字段来自服务端配置目录；保存时只提交改动的字段。',
@@ -1307,11 +1307,15 @@ const zh = {
   'v2.tools.empty': '服务端配置目录里没有工具字段。',
   'v2.tools.section.weather': '天气',
   'v2.tools.section.news': '新闻',
-  'v2.tools.section.mcp': 'MCP（含家庭助理）',
+  'v2.tools.section.mcp': 'MCP 服务器',
   'v2.tools.section.other': '其它工具',
   'v2.tools.status.title': '连接状态',
   'v2.tools.status.lede': '只读状态，来自服务端 GET /api/v1/mcp；MCP 服务器列表的增删改不在本页。',
-  'v2.tools.status.loadFailed': '无法读取 MCP / 家庭助理连接状态',
+  'v2.tools.status.haTitle': 'Home Assistant',
+  'v2.tools.status.mcpTitle': 'MCP 服务器',
+  'v2.tools.status.haEmpty': 'Home Assistant 还没有接入。',
+  'v2.tools.status.mcpEmpty': '没有配置 MCP 服务器。',
+  'v2.tools.status.loadFailed': '无法读取连接状态',
   'v2.tools.status.checkedAt': '状态读取于 {time}',
   'v2.tools.status.available': '可用',
   'v2.tools.status.unavailable': '不可用',
@@ -1326,7 +1330,6 @@ const zh = {
   'v2.tools.status.entities': '{n} 个实体',
   'v2.tools.status.latency': '{ms} ms',
   'v2.tools.status.disabled': '已停用',
-  'v2.tools.status.empty': '没有已配置的 MCP 服务器或家庭助理。',
   'v2.tools.status.genericSummary': '通用 MCP 已连接 {connected}/{enabled}',
 
   // — M9b music ——————————————————————————————————————————————————
@@ -2824,7 +2827,7 @@ const en: Record<MsgKey, string> = {
 
   // — M9c tools ——————————————————————————————————————————————————
   'v2.tools.title': 'Tools',
-  'v2.tools.lede': 'Weather, news, web search, MCP and Home Assistant; groups, fields, ranges and effects come from the server catalog, connection state is read-only.',
+  'v2.tools.lede': 'Weather, news, web search and other tools; groups, fields, ranges and effects come from the server catalog, connection state is read-only.',
   'v2.tools.loadFailed': 'Could not load the tools config',
   'v2.tools.configFallback': 'The raw config could not be read; catalog values are used',
   'v2.tools.catalogNote': 'Groups and fields come from the server config catalog; saving sends only the fields you changed.',
@@ -2836,11 +2839,15 @@ const en: Record<MsgKey, string> = {
   'v2.tools.empty': 'The server catalog has no tool fields.',
   'v2.tools.section.weather': 'Weather',
   'v2.tools.section.news': 'News',
-  'v2.tools.section.mcp': 'MCP (incl. Home Assistant)',
+  'v2.tools.section.mcp': 'MCP servers',
   'v2.tools.section.other': 'Other tools',
   'v2.tools.status.title': 'Connection status',
   'v2.tools.status.lede': 'Read-only state from GET /api/v1/mcp; adding or editing MCP servers is not done on this page.',
-  'v2.tools.status.loadFailed': 'Could not load MCP / Home Assistant connection status',
+  'v2.tools.status.haTitle': 'Home Assistant',
+  'v2.tools.status.mcpTitle': 'MCP servers',
+  'v2.tools.status.haEmpty': 'Home Assistant is not connected yet.',
+  'v2.tools.status.mcpEmpty': 'No MCP servers are configured.',
+  'v2.tools.status.loadFailed': 'Could not load connection status',
   'v2.tools.status.checkedAt': 'Status read at {time}',
   'v2.tools.status.available': 'Available',
   'v2.tools.status.unavailable': 'Unavailable',
@@ -2855,7 +2862,6 @@ const en: Record<MsgKey, string> = {
   'v2.tools.status.entities': '{n} entities',
   'v2.tools.status.latency': '{ms} ms',
   'v2.tools.status.disabled': 'Disabled',
-  'v2.tools.status.empty': 'No MCP server or Home Assistant is configured.',
   'v2.tools.status.genericSummary': 'Generic MCP connected {connected}/{enabled}',
 
   // — M9b music ——————————————————————————————————————————————————

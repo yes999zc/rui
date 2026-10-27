@@ -151,11 +151,14 @@ const STATUS_BADGES: Record<ConnState, string> = {
 }
 
 /**
- * One row per first-party instance (HA) and per configured generic server. A
- * disabled server is still a configured row; its state reads unavailable and
- * the detail says it is turned off, so the page never implies it is missing.
+ * Two separate lists, rendered as two sections: Home Assistant (first-party
+ * instances) and the configured generic MCP servers. The data still comes from the
+ * single `GET /api/v1/mcp` call; only the presentation stopped merging them.
+ *
+ * A disabled server is still a configured row; its state reads unavailable and the
+ * detail says it is turned off, so the page never implies it is missing.
  */
-const statusRows = computed<StatusRow[]>(() => {
+const haRows = computed<StatusRow[]>(() => {
   const status: McpStatus | null = mcpStatus.value
   if (!status) return []
   const rows: StatusRow[] = []
@@ -185,6 +188,15 @@ const statusRows = computed<StatusRow[]>(() => {
       lastChecked: '',
     })
   }
+
+  return rows
+})
+
+/** Configured generic MCP servers — the second section, same response. */
+const mcpRows = computed<StatusRow[]>(() => {
+  const status: McpStatus | null = mcpStatus.value
+  if (!status) return []
+  const rows: StatusRow[] = []
 
   for (const server of status.servers ?? []) {
     const state: ConnState = server.enabled
@@ -524,7 +536,6 @@ onMounted(() => {
           <span v-if="statusCheckedLabel" class="meta" data-testid="tools-status-checked">
             {{ t('v2.tools.status.checkedAt', { time: statusCheckedLabel }) }}
           </span>
-          <span v-if="genericSummary" class="meta">{{ genericSummary }}</span>
         </header>
         <p class="v2-card-lede">{{ t('v2.tools.status.lede') }}</p>
 
@@ -533,44 +544,106 @@ onMounted(() => {
           <span v-if="mcpErrorCopy.detail" class="mono"> · {{ mcpErrorCopy.detail }}</span>
         </p>
         <template v-else-if="mcpStatus">
-          <p v-if="!statusRows.length" class="note">{{ t('v2.tools.status.empty') }}</p>
-          <div v-else class="table-wrap">
-            <table class="table v2-tools-status-table">
-              <thead>
-                <tr>
-                  <th>{{ t('v2.tools.status.name') }}</th>
-                  <th>{{ t('v2.tools.status.state') }}</th>
-                  <th>{{ t('v2.tools.status.detail') }}</th>
-                  <th>{{ t('v2.tools.status.lastChecked') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="row in statusRows"
-                  :key="row.key"
-                  data-testid="tools-status-row"
-                  :data-state="row.state"
-                >
-                  <td>
-                    <strong>{{ row.name }}</strong>
-                    <span class="meta"> · {{ row.kind }}</span>
-                  </td>
-                  <td>
-                    <span class="badge" :class="STATUS_BADGES[row.state]">
-                      {{ t(STATUS_LABELS[row.state]) }}
-                    </span>
-                  </td>
-                  <td>
-                    <span v-if="row.error" class="mono v2-break">{{ row.error }}</span>
-                    <span v-else>{{ row.details.join(' · ') || t('v2.common.na') }}</span>
-                  </td>
-                  <td class="mono">
-                    {{ row.lastChecked || t('v2.common.na') }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          <section
+            class="v2-tools-status-group"
+            data-testid="tools-status-ha"
+            aria-labelledby="tools-status-ha-title"
+          >
+            <h3 id="tools-status-ha-title" class="v2-tools-section-title">
+              {{ t('v2.tools.status.haTitle') }}
+            </h3>
+            <p v-if="!haRows.length" class="note" data-testid="tools-status-ha-empty">
+              {{ t('v2.tools.status.haEmpty') }}
+            </p>
+            <div v-else class="table-wrap">
+              <table class="table v2-tools-status-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('v2.tools.status.name') }}</th>
+                    <th>{{ t('v2.tools.status.state') }}</th>
+                    <th>{{ t('v2.tools.status.detail') }}</th>
+                    <th>{{ t('v2.tools.status.lastChecked') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in haRows"
+                    :key="row.key"
+                    data-testid="tools-status-row"
+                    :data-state="row.state"
+                  >
+                    <td>
+                      <strong>{{ row.name }}</strong>
+                      <span class="meta"> · {{ row.kind }}</span>
+                    </td>
+                    <td>
+                      <span class="badge" :class="STATUS_BADGES[row.state]">
+                        {{ t(STATUS_LABELS[row.state]) }}
+                      </span>
+                    </td>
+                    <td>
+                      <span v-if="row.error" class="mono v2-break">{{ row.error }}</span>
+                      <span v-else>{{ row.details.join(' · ') || t('v2.common.na') }}</span>
+                    </td>
+                    <td class="mono">
+                      {{ row.lastChecked || t('v2.common.na') }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section
+            class="v2-tools-status-group"
+            data-testid="tools-status-mcp"
+            aria-labelledby="tools-status-mcp-title"
+          >
+            <h3 id="tools-status-mcp-title" class="v2-tools-section-title">
+              {{ t('v2.tools.status.mcpTitle') }}
+              <span v-if="genericSummary" class="meta">{{ genericSummary }}</span>
+            </h3>
+            <p v-if="!mcpRows.length" class="note" data-testid="tools-status-mcp-empty">
+              {{ t('v2.tools.status.mcpEmpty') }}
+            </p>
+            <div v-else class="table-wrap">
+              <table class="table v2-tools-status-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('v2.tools.status.name') }}</th>
+                    <th>{{ t('v2.tools.status.state') }}</th>
+                    <th>{{ t('v2.tools.status.detail') }}</th>
+                    <th>{{ t('v2.tools.status.lastChecked') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="row in mcpRows"
+                    :key="row.key"
+                    data-testid="tools-status-row"
+                    :data-state="row.state"
+                  >
+                    <td>
+                      <strong>{{ row.name }}</strong>
+                      <span class="meta"> · {{ row.kind }}</span>
+                    </td>
+                    <td>
+                      <span class="badge" :class="STATUS_BADGES[row.state]">
+                        {{ t(STATUS_LABELS[row.state]) }}
+                      </span>
+                    </td>
+                    <td>
+                      <span v-if="row.error" class="mono v2-break">{{ row.error }}</span>
+                      <span v-else>{{ row.details.join(' · ') || t('v2.common.na') }}</span>
+                    </td>
+                    <td class="mono">
+                      {{ row.lastChecked || t('v2.common.na') }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
         </template>
       </section>
 

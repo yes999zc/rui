@@ -621,7 +621,7 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             "source": "/api/v1/config/catalog", "refresh_s": 0,
             "tabs": [
                 {"id": "builtin", "title": {"zh": "内置工具", "en": "Built-in tools"}},
-                {"id": "mcp", "title": {"zh": "MCP 与家庭助理", "en": "MCP & Home Assistant"}},
+                {"id": "mcp", "title": {"zh": "MCP 与 Home Assistant", "en": "MCP & Home Assistant"}},
                 {"id": "registry", "title": {"zh": "注册工具", "en": "Registry"}},
                 {"id": "exposure", "title": {"zh": "暴露策略", "en": "Exposure policy"}},
             ],
@@ -2659,9 +2659,9 @@ def create_app(
         app.state.last_turn = None
         vendor = VendorWindow(cfg.session.vendor_quiet_s)
         app.state.vendor = vendor
-        # HA over MCP (V2's first application): connect, register the whitelisted
-        # tools, inject the entity list per turn. A dead HA degrades its tools -
-        # the rest of the assistant never notices (old build's rule).
+        # HA runs over its own bridge (`tools/ha.py`), not over MCP: connect, register
+        # the whitelisted tools, inject the entity list per turn. A dead HA degrades
+        # its tools - the rest of the assistant never notices (old build's rule).
         ha: HaBridge | None = None
         if cfg.tools.ha.base_url:
             ha = HaBridge(cfg.tools.ha, Path(cfg.system.data_dir),
@@ -6649,10 +6649,11 @@ def create_app(
                 **status,
                 "error": getattr(getattr(bridge, "client", None), "last_error", "") or "",
             },
-            # HA is shown as a first-party MCP *instance* in the same tab, without
-            # pretending it is a `tools.mcp_servers` row: the manifest carries its
-            # whitelist/danger policy and `local.ha_*` names, and the bridge itself
-            # stays the only implementation.
+            # HA is its own first-party bridge (`tools/ha.py`) with its own console
+            # section; the MCP servers are the separate section. It is not a
+            # `tools.mcp_servers` row: the manifest carries its whitelist/danger
+            # policy and `local.ha_*` names, and the bridge itself stays the only
+            # implementation.
             "first_party": first_party_instances(
                 base_url=ha.base_url,
                 token_env=ha.token_env,
