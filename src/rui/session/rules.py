@@ -88,7 +88,7 @@ def is_dismiss(transcript: str) -> bool:
 # executed is worse than none. Short-only, like stop_intent: 「暂停以后告诉我天气」
 # is a compound request and belongs to the model.
 MUSIC_TRANSPORT: dict[str, tuple[str, ...]] = {
-    "pause": ("暂停", "停一下", "先停这儿", "停会儿", "停住", "停在这"),
+    "pause": ("暂停", "停一下"),
     "resume": ("继续", "接着放", "接着播", "恢复播放"),
     "next": ("下一首", "换一首", "切歌", "切一首", "换歌"),
     "prev": ("上一首", "前一首"),

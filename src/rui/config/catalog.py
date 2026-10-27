@@ -542,11 +542,11 @@ def _session_fields() -> list[dict]:
                advanced=True),
         _field("session.end_words", "session", "list",
                _t("结束词", "Dismiss words"),
-               _t("整句（或只多 2 个字）等于这些词才结束会话——不是子串匹配，"
+               _t("整句等于这些词（或显式别名）才结束会话——不做子串匹配，"
                   "所以「关掉客厅灯」「关闭窗帘」这类 HA 命令不会被误当散场。"
                   "增删都要小心；保存后下一轮生效。",
                   "A request ends the session only when it is exactly one of these "
-                  "phrases (or at most two characters longer) - not substring matching, "
+                  "phrases or an explicit alias - not substring matching, "
                   "so HA commands such as 关掉客厅灯 are never mistaken for a dismissal. "
                   "Next turn."),
                advanced=True),

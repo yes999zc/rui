@@ -920,6 +920,36 @@ def _release_turn(client: object) -> None:
         release()
 
 
+async def _pause_without_music(app: FastAPI, clean: str, runner, client, trace,
+                               traces) -> bool:
+    """C3: 「暂停」/「停一下」 with no music answers, it does not dismiss.
+
+    `_music_transport` falls through when the player is idle (nothing to pause), and
+    both words are also end words: without this intercept they reach `_stop_command`
+    and close the session. The person asked to pause a song that is not playing; say
+    so once and keep listening.
+    """
+    cfg = app.state.cfg
+    if rules.music_transport(clean) != "pause":
+        return False
+    service = getattr(app.state, "music", None)
+    if service is not None and service.state != "idle":
+        return False      # a real pause: `_music_transport` already handled it
+    line = phrases.book.render("music.not_playing")
+    runner.idle.touch()
+    spoken = await runner.say(line, _speaking(app, client), trace)
+    with contextlib.suppress(Exception):
+        await client.reply_finished()   # the session stays open
+    _light_after_audio(app, spoken, cfg.audio.voice.rate, "listening", live=client)
+    _record_turn(app, {
+        "transcript": clean, "reply": line, "session_action": "pause_no_music",
+        "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
+    })
+    traces.add(trace)
+    log.info("pause without music: %r -> %s", clean, line)
+    return True
+
+
 async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
                         traces) -> bool:
     """D1c ③: stop words split by whether a song is playing. True when handled.
@@ -933,6 +963,8 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
 
     Returns False for a non-stop transcript so the ordinary turn proceeds.
     """
+    if await _pause_without_music(app, clean, runner, client, trace, traces):
+        return True
     cfg = app.state.cfg
     if not rules.stop_intent(clean, cfg.session.end_words):
         return False
@@ -2797,8 +2829,8 @@ def create_app(
                 app.state.turn_device = device_id
                 app.state.last_active_room = device_id
                 # Transport words before the dismiss list: 「暂停」 and 「停一下」
-                # are both, and with a song playing they mean the player, not
-                # the session (old build: VENDOR_PAUSE_WORDS checked first).
+                # are both, and with music playing or paused they mean the player,
+                # not the session (old build: VENDOR_PAUSE_WORDS checked first).
                 if await _music_transport(app, clean, runner, link, trace,
                                           traces) is not None:
                     return

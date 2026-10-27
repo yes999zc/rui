@@ -24,7 +24,7 @@
 | 5 | clarify 澄清问回 | 信息不足反问（动词缺失问回/谎报检测强制重试） | ❌ 老 :3432-3475 是规格来源 |
 | 6 | choose 多结果选择 | 声明式三策略 first/top3/ask | ❌ 新老皆无 |
 | 7 | confirm 危险确认 | excluded 硬拒（lock/alarm/valve）或 confirm 复述确认 | ❌ contract.needs_confirm 有挂点无实现 |
-| 8 | interrupt 打断取消 | ≤300ms 静音 + 停止词三分流（停歌/退会话/让位） | ✅ |
+| 8 | interrupt 打断取消 | ≤300ms 静音 + 结束词 = 音乐清零 + 会话关闭 | ✅ |
 | 9 | close 会话收尾 | idle 超时/两档告别/退出词 | ✅ |
 | 10 | proactive 主动出声 | 提醒等空闲再发声（两路 TTS 会毁 AEC） | ✅ |
 

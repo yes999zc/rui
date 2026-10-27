@@ -23,7 +23,7 @@ Branch names are the ones the app uses in `session_action` / log lines / tool li
 
     music_random | music_pause | music_resume | music_next | music_prev
     volume | context_on | context_off
-    stop_and_dismiss | stop_elsewhere | bare_stop
+    pause_no_music | stop_and_dismiss | stop_elsewhere | bare_stop
 
 `media_stop` is `stop_scope`'s value for "music present"; the app now executes it as
 stop the song and close the session, surfaced here as `stop_and_dismiss`.
@@ -124,6 +124,9 @@ def dispatch(phrase: str, music: str, session: str, room: str) -> str:
     action = rules.music_transport(phrase)
     if action and music != "idle":
         return f"music_{action}"
+    if action == "pause":
+        # C3: the player is idle; the app answers 「现在没在放音乐」 and keeps listening.
+        return "pause_no_music"
 
     # 2. `_volume_command` (app.py:2297).
     if rules.volume_level(phrase) is not None:

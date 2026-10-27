@@ -311,7 +311,7 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
                   "required": ["query"]}),
          music_search),
         (spec("local.music_pause",
-              "音乐播放中说「暂停/停一下/先停这儿」时**必须调用本工具**真正暂停，"
+              "音乐播放中说「暂停/停一下」时**必须调用本工具**真正暂停，"
               "禁止只口头说已暂停。",
               {"ok": "music.paused", "empty": "music.not_playing"}),
          music_pause),
