@@ -924,8 +924,8 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
                         traces) -> bool:
     """D1c ③: stop words split by whether a song is playing. True when handled.
 
-    * media_stop (a song is playing): stop the queue, say 「好，不放了。」 through the
-      PhraseBook, and KEEP the session - 「停止播放」 over music is not goodbye.
+    * media_stop (music playing or paused): stop the queue and close the session
+      together (runner.dismiss) - 9哥 2026-10-27: an end word has no middle state.
     * bare_stop (nothing playing): there is nothing to stop, so the stop word means
       end the conversation (runner.dismiss, the old farewell/LED semantics).
     * explicit dismissals are bare_stop even mid-song, but must still silence the
@@ -964,24 +964,26 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
                  clean, owner)
         return True
     if rules.stop_scope(clean, music_active, cfg.session.end_words) == rules.MEDIA_STOP:
+        # End word with music present (playing or paused): stop the song AND close the
+        # session. 9哥 2026-10-27: no middle state; the old branch said 「好，不放了。」
+        # and kept listening, which is the reported failure (audit A C1).
         try:
             await service.stop()  # type: ignore[union-attr]
         except Exception as exc:  # noqa: BLE001 - never crash the app
             log.info("stop music failed: %s", exc)
-        line = phrases.book.render("music.stopped")
-        runner.idle.touch()
-        spoken = await runner.say(line, _speaking(app, client), trace)
-        with contextlib.suppress(Exception):
-            await client.reply_finished()   # the session stays open
+        spoken = await runner.dismiss(_speaking(app, client), trace)
+        # No reply_finished: the session is closing, so the plane must not open a
+        # follow-up window after the goodbye. Release the turn latch explicitly.
+        _release_turn(client)
         # The stop released the house's speaker: the next song may start anywhere.
         _release_owner(app)
         _light_after_audio(app, spoken, cfg.audio.voice.rate, "off", live=client)
         _record_turn(app, {
-            "transcript": clean, "reply": line, "session_action": "media_stop",
+            "transcript": clean, "reply": "", "session_action": "stop_and_dismiss",
             "audio_bytes": spoken, "error": "", "tools": [], "stages": {},
         })
         traces.add(trace)
-        log.info("stop intent: %r -> media stopped, session open", clean)
+        log.info("stop intent: %r -> media stopped, session closed", clean)
         return True
     # bare_stop (散场): silence any song first, then dismiss. Only the owner's room
     # stops the house's music; another room's dismissal just closes its own session.

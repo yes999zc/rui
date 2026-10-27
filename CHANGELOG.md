@@ -22,6 +22,16 @@ release; no version bump for a single fix.** Everything below is committed and p
 
 ### 已知变更（有意的行为变更，需 9 哥 知情）
 
+- **结束词 + 音乐在放 → 停歌且关会话**（C1）。以前「有歌时说停止/拜拜/停止播放」只停歌、
+  **会话保持**（`media_stop`），这就是「问完星期几说『停止』，它只把音乐停了」的那条分支；
+  现在两者一起做（`session_action="stop_and_dismiss"`）。playing 与 paused 都算「在放」——没有中间态。
+- **`stop_intent` 只认整句**（C2）。删掉「任意位置子串 + 总长最多 +2 个字」的兜底，
+  改为「整句 = 结束词 / 显式别名 / 单个闭集语气词（吧了呀啊嘛）」；疑问语气（吗/呢/么）显式排除。
+  影响：`停止你好`、`停止了吗` 不再被当命令（交模型/澄清）；**`请停止`、`我要停止` 这类「句中出现结束词」
+  的说法也不再命中**——这是有意收窄，老用户可能会觉得「以前能用现在不理我」。
+- **三条别名补进 `ALIASES`**：`停止播放→停止`、`别放了→别放`、`别放了吧→别放`（别名不是结束词表，
+  不违反「结束词表保持现状」）；否则收紧容差后这几句最常用的说法会掉进模型。
+
 - **`mcp <name>: down` 重连日志降价** (`3ed312f`). A server that stays unreachable no
   longer logs one INFO per reconnect attempt (~15 s apart). First failure, a changed
   failure reason, and a successful reconnect each log one INFO; an unchanged reason

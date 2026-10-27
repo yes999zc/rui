@@ -37,6 +37,11 @@ STOP_REPLIES = ("好。", "行，我退了。", "好，有需要再叫我。")
 # now the *only* tolerance: matching is exact-after-alias (see `stop_intent`), because a
 # fuzzy match also fired on commands that merely started with a stop word.
 ALIASES = {
+    # Explicit whole-request aliases, not length tolerance (audit A C2). These are
+    # not end words: the configured end-word list stays unchanged.
+    "停止播放": "停止",
+    "别放了": "别放",
+    "别放了吧": "别放",
     "对一下吧": "退下吧",
     "退一下吧": "退下吧",
     "推一下吧": "退下吧",
@@ -49,10 +54,11 @@ ALIASES = {
 _FILLER = re.compile(r"^[嗯啊呃哦噢唉诶哎哟呀吧呢哈嘿]?[。，、！？\.\!\?\s]*$")
 _PUNCT = re.compile(r"[\s。，、！？；：,.!?;:…—\-]")
 
-# A stop word may gather this many extra characters and still be the whole request:
-# 「停止播放」 and 「别说了吧」 are the same action, 「关掉客厅灯」 is not (it is five
-# characters around a verb that is not a stop word any more).
-_STOP_TAIL_CHARS = 2
+# A stop word may take exactly one trailing sentence particle and still be the whole
+# request: 「停止吧」「别说了呀」. The set is closed on purpose: question particles
+# (吗/呢/么) must NOT turn a question into a dismissal («停止了吗» is a question), and
+# «停止播放» is an explicit ALIAS, not length tolerance.
+_STOP_TRAILING_PARTICLES = "吧了呀啊嘛"
 
 # A stop word said while music plays means two different things: 「停止」「别放」 ends
 # the sound, 「退下吧」 dismisses the conversation. D1 split the old single stop path;
@@ -60,7 +66,7 @@ _STOP_TAIL_CHARS = 2
 DISMISS_WORDS = ("退下吧", "退下", "不聊了", "关机")
 
 # The two outcomes of a stop word. Kept as constants so the app cannot typo one.
-MEDIA_STOP = "media_stop"   # a song owns the request: stop the sound, keep listening
+MEDIA_STOP = "media_stop"   # an end word over music: stop the sound AND close the session
 BARE_STOP = "bare_stop"     # nothing is playing: the stop word ends the conversation
 
 
@@ -258,16 +264,16 @@ def is_noise(transcript: str) -> bool:
 def stop_intent(transcript: str, words: tuple[str, ...] | list[str] | None = None) -> bool:
     """True when the request is "stop / dismiss" rather than a question.
 
-    Whole-request matching only: the normalised transcript either equals a stop word, or
-    contains it with at most two extra characters (「停止播放」, 「别说了吧」). Substring
-    matching was measured destroying home automation: 「关掉客厅灯」 and 「关闭窗帘」 are
-    five characters around a verb, so a "contains 关掉/关闭" rule dismissed the session
-    before HA ever saw the command (audit 2026-10-23; the 13:22 5/5 only passed because
-    「儿童房的灯」 was long enough to escape the old length cap).
+    Whole-request matching only: after normalisation and one explicit ASR alias, the
+    transcript must equal an end word, or carry exactly one closed-set trailing particle
+    (吧/了/呀/啊/嘛). Question particles 吗/呢/么 are excluded on purpose: 「停止了吗」
+    must stay a question. 「停止播放」「别放了」「别放了吧」 are explicit aliases, not
+    length tolerance.
 
-    ASR slips are handled by `ALIASES` before matching - exact-after-alias, no fuzzy
-    fallback: pinyin/difflib tolerance was how a device command could drift into a
-    dismissal. Trailing tolerance stays small on purpose; len(t) <= len(word) + 2.
+    Substring matching was measured destroying home automation (「关掉客厅灯」/
+    「关闭窗帘」 dismissed the session before HA ran), and the old "at most two extra
+    characters anywhere" rule turned 「停止你好」 into a dismissal (audit A C2,
+    2026-10-27). ASR slips are handled by `ALIASES` only, never a fuzzy fallback.
     """
     t = normalize(transcript)
     if not t:
@@ -279,7 +285,8 @@ def stop_intent(transcript: str, words: tuple[str, ...] | list[str] | None = Non
             continue
         if t == word:
             return True
-        if word in t and len(t) <= len(word) + _STOP_TAIL_CHARS:
+        if (t.startswith(word) and len(t) == len(word) + 1
+                and t[-1] in _STOP_TRAILING_PARTICLES):
             return True
     return False
 
@@ -294,9 +301,10 @@ def stop_scope(transcript: str, music_playing: bool,
 
     The measured rule (old build, 2026-10-20; docs/music.md §2.4):
 
-    * a song is playing -> ``media_stop``: 「停止播放」「别放了」 stops the sound; the
-      conversation stays open, so the next sentence still reaches us;
-    * **no song is playing -> ``bare_stop``: 「停止播放」 means end the conversation**
+    * a song is playing **or paused** -> ``media_stop``: 「停止」 stops the sound
+      **and** ends the conversation. 9哥 2026-10-27: no middle state; the old
+      "stop the sound but keep listening" reading was the reported bug (audit A C1);
+    * **no song is playing -> ``bare_stop``: 「停止」 means end the conversation**
       (散场). There is nothing to stop, so the only useful reading is "go away".
 
     Dismiss words (「退下吧」「关机」「不聊了」) are ``bare_stop`` either way: they

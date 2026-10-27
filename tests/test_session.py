@@ -68,8 +68,9 @@ def test_stop_scope_keeps_dismissals_ending_the_conversation() -> None:
 def test_stop_intent_is_whole_request_only() -> None:
     """P0: substring matching dismissed the session before HA ran (audit 2026-10-23).
 
-    「关掉客厅灯」「关闭窗帘」 were True with the old default list; the two-char tail rule
-    keeps 「停止播放」 and 「别说了吧」 but not a five-character device command.
+    「关掉客厅灯」「关闭窗帘」 were True with the old default list; explicit aliases keep
+    「停止播放」 and one closed-set particle keeps 「别说了吧」, but a longer sentence is not
+    a stop (audit A C2 removed the "up to two extra characters anywhere" rule).
     """
     from rui.session import rules
 
@@ -77,9 +78,10 @@ def test_stop_intent_is_whole_request_only() -> None:
         assert rules.stop_intent(command) is False, command
     for request in ("停止", "停止播放", "别说了", "别说了吧", "退下吧", "对一下吧"):
         assert rules.stop_intent(request) is True, request
-    # A configured word still works, and only the two-character tail is tolerated.
+    # A configured word only matches the whole request: exact word, explicit
+    # ALIASES entry, or one closed-set particle.
     assert rules.stop_intent("下课", ["下课"]) is True
-    assert rules.stop_intent("今天下课", ["下课"]) is True     # len <= word + 2
+    assert rules.stop_intent("今天下课", ["下课"]) is False    # whole request only (C2)
     assert rules.stop_intent("今天下课以后去食堂", ["下课"]) is False
 
 
@@ -161,11 +163,10 @@ def _stop_env(monkeypatch, state: str | None):
     return app_module, app, service, _StopRunner(), _StopClient(), _StopTraces()
 
 
-def test_media_stop_stops_the_song_and_keeps_the_session(monkeypatch) -> None:
-    """D1c ③: with a song playing, 「停止播放」 stops the media, not the talk."""
+def test_stop_word_with_music_stops_the_song_and_closes_the_session(monkeypatch) -> None:
+    """Audit A C1: an end word over music stops the song AND closes the session."""
     import asyncio
 
-    from rui.session import phrases
     from rui.trace import TurnTrace
 
     app_module, app, service, runner, client, traces = _stop_env(monkeypatch, "playing")
@@ -174,10 +175,10 @@ def test_media_stop_stops_the_song_and_keeps_the_session(monkeypatch) -> None:
 
     assert handled is True
     assert service is not None and service.stops == 1
-    assert runner.said == [phrases.book.render("music.stopped")]
-    assert runner.dismissed == 0, "a media stop must not close the session"
-    assert app.state.last_turn["session_action"] == "media_stop"
-    assert client.reply_finished_calls == 1
+    assert runner.said == [], "the old 「music stopped, keep listening」 line must be gone"
+    assert runner.dismissed == 1, "an end word over music must close the session"
+    assert app.state.last_turn["session_action"] == "stop_and_dismiss"
+    assert client.reply_finished_calls == 0, "a closed session must not open a follow-up"
 
 
 def test_bare_stop_without_music_ends_the_session(monkeypatch) -> None:

@@ -23,7 +23,10 @@ Branch names are the ones the app uses in `session_action` / log lines / tool li
 
     music_random | music_pause | music_resume | music_next | music_prev
     volume | context_on | context_off
-    media_stop | stop_elsewhere | bare_stop
+    stop_and_dismiss | stop_elsewhere | bare_stop
+
+`media_stop` is `stop_scope`'s value for "music present"; the app now executes it as
+stop the song and close the session, surfaced here as `stop_and_dismiss`.
     clarify.verb | model
 
 `stop_elsewhere` is `_stop_command`'s cross-room branch (`app.py:975-999`):
@@ -136,7 +139,7 @@ def dispatch(phrase: str, music: str, session: str, room: str) -> str:
     if rules.stop_intent(phrase, END_WORDS):
         scope = rules.stop_scope(phrase, music_active, END_WORDS)
         if scope == rules.MEDIA_STOP:
-            return "media_stop" if room == "owner" else "stop_elsewhere"
+            return "stop_and_dismiss" if room == "owner" else "stop_elsewhere"
         return "bare_stop"
 
     # 5. Bare device name -> ask which way (app.py:2812).
