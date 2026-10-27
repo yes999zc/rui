@@ -13,6 +13,7 @@
 - **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。**本阶段未做任何生产变更。**
 - **回滚**：本地旧镜像已删（9 哥 决定）；**回滚走 GHCR 上一个正式版** —— `docker pull ghcr.io/yes999zc/rui:0.7.4` → 取 amd64 摘要 → 改 override 的 `image:` → **两个 `-f`** `up -d --force-recreate`（步骤见 `docs/deploy-runbook-0.7.8.md` §8）。
 - **三仓 HEAD**：rui **`35dc556`**（工作树干净；用 `git log --oneline v0.7.8..HEAD` 自查）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
+- **CI（rui `7b24d2c`）四绿**：ci / security / secret-scan / docker-publish 全部 `success`（收口后复测，满足收口报告 §6 条件 ① 的要求：最终 HEAD 也四绿；`f23e412` 同样四绿）
 - **CI（rui `f23e412`）四绿**：ci / security / secret-scan / docker-publish 全部 `success`（12:17–12:22）；`35dc556` 是纯文档提交，写作时刚 push。更早提交里出现的 `cancelled` **不是失败**，是后续 push 的并发 run 把旧 run 顶掉（`cancel-in-progress`）。查当前状态：`gh run list -L 8 --json name,headSha,status,conclusion`。
 - **进 main 未发版 64 个提交（`git rev-list --count v0.7.8..HEAD`，截至 `35dc556`）**（按「不升 minor」节奏攒着）。用户可见的：
   `91cac91` 控制台把 Home Assistant 与 MCP 服务器分两段（仅呈现层，API 未动）、
