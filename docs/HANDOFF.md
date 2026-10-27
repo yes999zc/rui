@@ -126,7 +126,7 @@
 |---|---|---|
 | task-17 | 批次 2+3（C5 暂停词收窄 / C3 无歌暂停提示 / C4 措辞 / C6 文案） | ✅ **completed `34e3629`**；PASS（rev-inv）→ VERIFIED（ver-noise：全量 `1716 passed, 6 skipped`、C3 变异 3 红、运行时 `end_words` 仍 21、`pause` 只剩 2 词） |
 | task-18 | D-011=A：`ack` order 200→5（**tier 保持 2**）+ 顺序断言同步 + 待拍板收口 + acceptance-pending 并批 | 进行中（impl-audio，已派） |
-| task-19 | `docs/backlog-0.8.md`（283 行，四节含**双 dot2 同型号 6 组**）+ known-limitations L10–L16 + README（中英，0.7.9 标「候选未发布」） | review **PASS**（rev-facts 三轮），**待 verifier** |
+| task-19 | `docs/backlog-0.8.md`（283 行，四节含**双 dot2 同型号 6 组**）+ known-limitations L1–L16 + README（中英，0.7.9 标「候选未发布」） | review **PASS**（rev-facts 三轮）；ver-docs 第 1 轮 FAILED 仅因**我授权改写在验证窗口内**（基线 14/1→17/4）+ `:29` 自述矛盾 → 改完后冻结 sha 复验 |
 | 发版 | 版本号 0.7.9（pyproject / `src/rui/__init__.py` / `uv.lock`）+ CHANGELOG + tag `v0.7.9` + GitHub release（**如实写：意图层行为真机未验**） | Lead 做，在 task-17/18 合入后 |
 
 **已定（本批内 Lead 裁决，不需再拍）**：D-011 **只改 order、不动 tier** → v2 语音助手页 ack 由第 8 位升到**第 3 位（首屏可见）**，旧面板「音频与唤醒」tab 变**第 1 位**；要 v2 第 1 位需 tier 2→1 或 v2 页内排序 → 归 0.8 P1。**ACK-1 判据 = 首屏可见，不是第 1 组**。
