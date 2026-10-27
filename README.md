@@ -88,20 +88,34 @@
 
 ```bash
 git clone --branch v0.7.8 https://github.com/yes999zc/rui.git && cd rui
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.8 bash deploy/install.sh   # pin 到本版本（默认是 :latest）
+RUI_IMAGE=ghcr.io/yes999zc/rui@sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa bash deploy/install.sh   # 0.7.8 amd64 摘要（默认 :latest）
 cat console-token.txt                       # 控制台 token（也可用 rui token 重新读取）
 ```
 
 装完打开 `http://127.0.0.1:8080/v2/`，用上面的 token 登录，在「设备」页添加第一台音箱。
 
+## 外置设备插件（0.7.6 起）
+
+核心镜像**不再内置任何设备实现**：一个核心镜像 + 一个插件目录即可，**不需要造下游镜像**。
+
+1. 宿主目录：`/vol1/rui/plugins/rui_dot2_bridge/`、`/vol1/rui/plugins/rui_xiaoai_bridge/`（即两个桥仓的 `src/<包名>`）。
+2. Compose 挂载 + 导入路径：`-v ./plugins:/opt/rui-plugins:ro`、`PYTHONPATH=/opt/rui-plugins`。
+3. 显式注册：`RUI_ADAPTER_PLUGINS=dot2=rui_dot2_bridge.adapter:build,lx06=rui_xiaoai_bridge.adapter:build`。
+
+挂载后日志出现 `adapter plugins: registered dot2, lx06`；`/health.planes` 逐台显示 `running/error/not_started`。
+不挂插件时设备错误会直接提示去 mount 对应桥；旧配置的 `adapter: xiaoai` 在**读入时迁移为 `lx06` 并打 WARNING**（0.8.0 删除该迁移）。
+
 ## 兼容性与前置条件
 
-- Python **3.11+**；Docker 与 Docker Compose（推荐镜像 `ghcr.io/yes999zc/rui:0.7.8`）。
+- Python **3.11+**；Docker 与 Docker Compose。推荐镜像（amd64 平台摘要，老版 docker 不认 OCI index）：
+  `ghcr.io/yes999zc/rui@sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`（tag `0.7.8` 指向同一构建）。
 - 需要自备 **LLM / TTS / ASR** 供应商（在配置文件里填，或使用本地模型）。没有凭据时服务能起，但对话链路不会工作。
 - 设备前置条件（第三方设备，与厂商**无官方关联**）：
   - EchoMuse Dot2（RS03QR）：固件需已具备设备本地接口，并与本服务在同一局域网；设备侧音频参数由桥接插件下发。
   - 小米 LX06 一类设备：仅支持已开放本地接口的固件版本；本项目不提供、也不建议任何刷机或越权步骤。
 - 播放音乐需要自备音乐源（如 Navidrome）；未配置时「放首歌」会明确报错，不会静默失败。
+
+**已知限制**：未声明 `wake_words_residual` 的第三方清单不做 vendor 短语兜底（vendor 广播/回声可能进入回合）；两音箱默认只起第一台设备的平面，需 `multi_device: {enabled: true, max_planes: 2}`；自签证书只保证音频平面能启动，真机是否接受取决于设备信任的 CA。
 
 ## 支持矩阵
 
@@ -234,20 +248,34 @@ No ffmpeg build needed (the image ships it)
 
 ```bash
 git clone --branch v0.7.8 https://github.com/yes999zc/rui.git && cd rui
-RUI_IMAGE=ghcr.io/yes999zc/rui:0.7.8 bash deploy/install.sh   # pin this release (default is :latest)
+RUI_IMAGE=ghcr.io/yes999zc/rui@sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa bash deploy/install.sh   # 0.7.8 amd64 digest (default: :latest)
 cat console-token.txt                       # console token (or: rui token)
 ```
 
 Open `http://127.0.0.1:8080/v2/`, log in with that token, and add your first speaker on the Devices page.
 
+## External device plugs (since 0.7.6)
+
+The core image ships **no device implementation**: one core image plus a plug directory is enough, and **no downstream image is needed**.
+
+1. Host directory: `/vol1/rui/plugins/rui_dot2_bridge/`, `/vol1/rui/plugins/rui_xiaoai_bridge/` (the `src/<package>` of each bridge repo).
+2. Compose mount + import path: `-v ./plugins:/opt/rui-plugins:ro`, `PYTHONPATH=/opt/rui-plugins`.
+3. Explicit registration: `RUI_ADAPTER_PLUGINS=dot2=rui_dot2_bridge.adapter:build,lx06=rui_xiaoai_bridge.adapter:build`.
+
+After mounting, the log says `adapter plugins: registered dot2, lx06`; `/health.planes` shows each device as `running/error/not_started`.
+Without a plug the device error tells you which bridge to mount; a legacy `adapter: xiaoai` is migrated to `lx06` on load with a WARNING (removed in 0.8.0).
+
 ## Compatibility and prerequisites
 
-- Python **3.11+**, Docker and Docker Compose (recommended image: `ghcr.io/yes999zc/rui:0.7.8`).
+- Python **3.11+**, Docker and Docker Compose. Recommended image (amd64 platform digest; old docker cannot resolve the OCI index):
+  `ghcr.io/yes999zc/rui@sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa` (tag `0.7.8` points at the same build).
 - Your own **LLM / TTS / ASR** providers (configured in the config file, or local models). The service starts without credentials, but the dialogue path stays idle.
 - Device prerequisites (third-party hardware, **not affiliated with any vendor**):
   - EchoMuse Dot2 (RS03QR): firmware must already expose the device's local interface and be on the same LAN; audio parameters are pushed by the bridge.
   - Xiaomi LX06-class devices: only firmware that already exposes a local interface is supported. No flashing, rooting or privilege-escalation steps are provided or endorsed.
 - Music needs your own source (e.g. Navidrome); without one, "play some music" fails loudly instead of silently.
+
+**Known limitations**: a third-party manifest that does not declare `wake_words_residual` gets no vendor-phrase backstop (vendor broadcasts/echoes may enter a turn); two speakers only start one plane by default unless `multi_device: {enabled: true, max_planes: 2}`; a self-signed certificate only lets the audio plane start — real-device acceptance depends on the CA the device trusts.
 
 ## Support matrix
 
