@@ -37,7 +37,7 @@
 |---|---|---|
 | **服务端（控制面）** | 会话与回合、工具调用、LLM/TTS/ASR 供应商、唤醒仲裁、v2 控制台 API、配置与密钥 | 一轮对话只由一台设备承担；播放态与回合按**房间**隔离，一屋放歌不会让另一屋变聋 |
 | **音频平面** | 每台设备一个独立进程：拾音、KWS/VAD 门限、预录缓冲、回声切除、送 ASR、播放队列 | 门限在本地做，服务端只做决策；播放与唤醒的自回声有专门的剔除路径 |
-| **设备（插件）** | 每种音箱一个 `rui-device/v1` 桥接插件：设备长连接、上下行音频、指示灯与按键 | 核心不含设备实现（仅保留 0.6→0.7 的临时 adapter 别名）；加一种音箱 = 加一个插件仓库 |
+| **设备（插件）** | 每种音箱一个 `rui-device/v1` 桥接插件：设备长连接、上下行音频、指示灯与按键 | 核心不含设备实现（旧拼写 `adapter: xiaoai` 只在**读入时**迁移为 `lx06` 并告警，该迁移 0.8.0 删除）；加一种音箱 = 加一个插件仓库 |
 
 ## 三个仓库是什么关系
 
@@ -52,6 +52,7 @@
 | rui 核心 | rui-dot2-bridge | rui-xiaoai-bridge |
 |---|---|---|
 | **0.7.8**（当前） | **1.3.1**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.3.0`（本版无改动） | **0.2.2**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.6.0` |
+| 0.7.9（**候选，未发布**）：变更见 [`docs/release-candidate-0.7.9.md`](docs/release-candidate-0.7.9.md)，镜像与 tag 未发布 | 待定：桥**须先发双窗口**版本（`>=0.7.0 <0.9.0` 形态），见 [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §a | 待定（同左） |
 | 0.7.4（历史） | 1.3.1 | 0.2.2 |
 
 > LX06 的插件**必须外置**：把 `rui-xiaoai-bridge` 挂到 `/opt/rui-plugins`，并设 `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`；挂上后日志为 `adapter plugins: registered dot2, lx06`。旧配置里的 `adapter: xiaoai` 在**读入时即迁移为 `lx06` 并打 WARNING**（`/health.adapter_plugins.warnings`），核心不再有兼容别名、也不回退内置实现；不挂插件时设备错误会明确提示去 mount 桥。该迁移在 **0.8.0 删除**。
@@ -117,7 +118,7 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
   - 小米 LX06 一类设备：仅支持已开放本地接口的固件版本；本项目不提供、也不建议任何刷机或越权步骤。
 - 播放音乐需要自备音乐源（如 Navidrome）；未配置时「放首歌」会明确报错，不会静默失败。
 
-**已知限制**：未声明 `wake_words_residual` 的第三方清单不做 vendor 短语兜底（vendor 广播/回声可能进入回合）；两音箱默认只起第一台设备的平面，需 `multi_device: {enabled: true, max_planes: 2}`；自签证书只保证音频平面能启动，真机是否接受取决于设备信任的 CA。
+**已知限制**：未声明 `wake_words_residual` 的第三方清单不做 vendor 短语兜底（vendor 广播/回声可能进入回合）；两音箱默认只起第一台设备的平面，需 `multi_device: {enabled: true, max_planes: 2}`；自签证书只保证音频平面能启动，真机是否接受取决于设备信任的 CA。（完整清单见下文「已知限制」一节与 [`docs/known-limitations.md`](docs/known-limitations.md)。）
 
 ## 支持矩阵
 
@@ -158,14 +159,17 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 | 放歌后要靠近才听得清 | 早期是测试音源电平太低造成的假象 | 先按 `docs/analysis/wake-vs-command-range.md` §7 校准音源，再判断是否设备问题 |
 | 加第二台 Dot2 后第一台失效 | `DOT2_CONTROL_PORT` 是全局环境变量 | 加设备前清掉该变量，按设备分配 `listen_port` |
 | 控制台打不开 | 端口 / 防火墙，或 token 过期 | `docker compose ps` 看容器；`rui token` 重新取 token |
-| 升级后设备掉线 | 新镜像未包含对应桥接插件版本 | 用下游组合镜像（`rui-dot2:x.y.z`），不要用纯核心镜像 |
+| 升级后设备掉线 | 新镜像未包含对应桥接插件版本 | 核心镜像 + 外置插件目录（核对该桥的版本与 `rui_compat`，必要时换桥的 tag）；不需要造下游组合镜像 |
 
 ## 已知限制
 
-- 唤醒提示音的回声在「冷启动 + 不削波 + 设备播放延迟 > 800 ms」或「用户与提示音重叠 < 110 ms」时仍可能漏进 ASR。
-- 对话运行器目前是单会话：一台设备唤醒时会中止另一台正在合成的回复（按房间隔离目前只覆盖播放与回合仲裁）。
+> 完整清单（编号 L1–L16）在 [`docs/known-limitations.md`](docs/known-limitations.md)；本节只列对外必须说的。
+
+- **HE-02 回声切除仍有缺口**：唤醒提示音的回声在「冷启动 + 不削波 + 设备播放延迟 > 800 ms」或「用户与提示音重叠 < 110 ms」时仍可能漏进 ASR；更细的门限实测是设备延迟 900–1200 ms 时不削波、1200 ms 削尾部、1200 ms 重叠时漏切（`docs/known-limitations.md` L1）。
+- **0.7.9 的意图层修复只经 headless 判定，真机未验**：C1（结束词 + 有歌 = 停歌**且**关会话）与 C2（结束词只认整句）以及随 0.7.9 落地的暂停/结束词语义，都只在单测里验过——**不要**把 0.7.9 描述成「意图层已修好」。真机验收项见 [`docs/acceptance-pending.md`](docs/acceptance-pending.md) 的 N1/N2/N3。
+- 对话运行器目前是单会话：一台设备唤醒时会中止另一台正在合成的回复（按房间隔离目前只覆盖播放与回合仲裁）；第二台同时发起对话会被 409 拒绝（2026-10-27 实测，见支持矩阵）。
 - 已播出的告别语尾音无法追回，只能阻止后续语音块。
-- 唤醒词暂不按房间隔离；多台设备的并发能力未测。
+- 唤醒词暂不按房间隔离。**两台同型号 dot2 从未验证**（现网与全部真机记录都是 dot2 + lx06 异型号），同屋双设备的行为见 [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §c。
 
 ## 致谢
 
@@ -219,7 +223,7 @@ Source: [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd); exports 
 |---|---|---|
 | **Server (control plane)** | Sessions and turns, tool calls, LLM/TTS/ASR providers, wake arbitration, the v2 console API, configuration and secrets | Exactly one device owns a turn; playing state and turns are scoped **per room**, so music in one room never deafens another |
 | **Audio plane** | One process per device: capture, KWS/VAD gate, preroll buffer, echo excision, ASR feed, playback queue | Gating stays local, decisions stay on the server; self-echo has a dedicated excision path |
-| **Devices (plugs)** | One `rui-device/v1` bridge per speaker model: device link, uplink/downlink audio, LED and buttons | The core carries no device implementation (only a temporary 0.6→0.7 adapter alias); a new speaker is a new plug repository |
+| **Devices (plugs)** | One `rui-device/v1` bridge per speaker model: device link, uplink/downlink audio, LED and buttons | The core carries no device implementation (a legacy `adapter: xiaoai` spelling is migrated to `lx06` **on load** with a warning; 0.8.0 removes that migration); a new speaker is a new plug repository |
 
 ## How the three repositories fit together
 
@@ -234,6 +238,7 @@ Two constraints must both hold: `compatibility.rui_min` in the device manifest (
 | rui core | rui-dot2-bridge | rui-xiaoai-bridge |
 |---|---|---|
 | **0.7.8** (current) | **1.3.1**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.3.0` (no change in this release) | **0.2.2**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.6.0` |
+| 0.7.9 (**candidate, unreleased**): see [`docs/release-candidate-0.7.9.md`](docs/release-candidate-0.7.9.md); no image or tag yet | TBD: the bridges must ship **dual-window** versions first (`>=0.7.0 <0.9.0`), see [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §a | TBD (same) |
 | 0.7.4 (historical) | 1.3.1 | 0.2.2 |
 
 > The LX06 plug is **external only**: mount `rui-xiaoai-bridge` under `/opt/rui-plugins` and set `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`; with it mounted the log reads `adapter plugins: registered dot2, lx06`. A config that still says `adapter: xiaoai` is **migrated to `lx06` on load with a WARNING** (`/health.adapter_plugins.warnings`); there is no compatibility alias and no built-in fallback, and without the plug the device error tells you to mount the bridge. **0.8.0 removes this migration.**
@@ -299,7 +304,7 @@ Without a plug the device error tells you which bridge to mount; a legacy `adapt
   - Xiaomi LX06-class devices: only firmware that already exposes a local interface is supported. No flashing, rooting or privilege-escalation steps are provided or endorsed.
 - Music needs your own source (e.g. Navidrome); without one, "play some music" fails loudly instead of silently.
 
-**Known limitations**: a third-party manifest that does not declare `wake_words_residual` gets no vendor-phrase backstop (vendor broadcasts/echoes may enter a turn); two speakers only start one plane by default unless `multi_device: {enabled: true, max_planes: 2}`; a self-signed certificate only lets the audio plane start — real-device acceptance depends on the CA the device trusts.
+**Known limitations**: a third-party manifest that does not declare `wake_words_residual` gets no vendor-phrase backstop (vendor broadcasts/echoes may enter a turn); two speakers only start one plane by default unless `multi_device: {enabled: true, max_planes: 2}`; a self-signed certificate only lets the audio plane start — real-device acceptance depends on the CA the device trusts. (The full list is the Known limitations section below and [`docs/known-limitations.md`](docs/known-limitations.md).)
 
 ## Support matrix
 
@@ -340,14 +345,17 @@ Self-signed only makes the plane start; real-device acceptance depends on the de
 | Commands only work up close | Earlier runs used a test source that was too quiet | Calibrate the source first (`docs/analysis/wake-vs-command-range.md` §7) before blaming the device |
 | A second Dot2 breaks the first | `DOT2_CONTROL_PORT` is a global environment variable | Unset it, then assign a `listen_port` per device |
 | Console does not load | Port/firewall, or an expired token | `docker compose ps`, then `rui token` for a fresh token |
-| Devices drop after an upgrade | The new image lacks the matching bridge version | Deploy the combined image (`rui-dot2:x.y.z`), not the bare core |
+| Devices drop after an upgrade | The new image lacks the matching bridge version | Core image plus the external plug directory (check that bridge's version and `rui_compat`, switch the bridge tag if needed); no combined downstream image is required |
 
 ## Known limitations
 
-- Cue echo can still slip into ASR on a cold start with no clipping and >800 ms device latency, or when the user overlaps the cue by less than 110 ms.
-- The dialogue runner is single-session: a wake on one device aborts a reply being synthesised for another (per-room isolation currently covers playback and turn arbitration only).
+> The full list (entries L1–L16) lives in [`docs/known-limitations.md`](docs/known-limitations.md); this section only carries what users must know.
+
+- **The HE-02 echo-excision gap is still open**: the acknowledgement cue can still slip into ASR on a cold start with no clipping and >800 ms device latency, or when the user overlaps the cue by less than 110 ms; the finer thresholds are: no excision at 900–1200 ms device lag, tail clipped at 1200 ms, missed when overlapped at 1200 ms (`docs/known-limitations.md` L1).
+- **The 0.7.9 intent-layer fix is headless-only, not verified on a real device**: C1 (an end word with music playing now stops the song **and** closes the session) and C2 (end words match the whole utterance only), plus the pause/end-word semantics landing with 0.7.9, were checked in unit tests only — do **not** describe 0.7.9 as "the intent layer is fixed". Real-device items are N1/N2/N3 in [`docs/acceptance-pending.md`](docs/acceptance-pending.md).
+- The dialogue runner is single-session: a wake on one device aborts a reply being synthesised for another (per-room isolation currently covers playback and turn arbitration only); a second simultaneous turn is refused with 409 (measured 2026-10-27, see the support matrix).
 - A goodbye that has already been spoken cannot be recalled; only queued chunks are dropped.
-- Wake words are not yet isolated per room, and concurrent multi-device behaviour is untested.
+- Wake words are not yet isolated per room. **Two same-model Dot2 units have never been verified** (production and every real-device record use the mixed dot2 + lx06 pair); see [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §c for the two-in-one-room behaviour we still have to measure.
 
 ## Credits
 
