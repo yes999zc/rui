@@ -108,6 +108,9 @@ def music_transport(transcript: str) -> str:
 MUSIC_RANDOM_WORDS = (
     "放首歌", "放点歌", "放个歌", "放音乐", "来点音乐", "来首音乐", "来首歌",
     "随便放点", "随便来点", "听点音乐", "听音乐", "放歌",
+    # 0.7.8 field log: 「唱首歌」 was parsed as a title ("唱首"), so add the sing/come
+    # variants. The 8-char cap in is_music_random still keeps long requests as titles.
+    "唱首歌", "唱个歌", "唱一首", "来一首", "来一段", "唱一段",
 )
 
 

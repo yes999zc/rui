@@ -45,6 +45,8 @@ const zh = {
   'v2.nav.memory': '记忆',
   'v2.footer.readOnly': 'M9 · 配置页组 · 语音助手 / 工具 / 音乐 / 凭据 / 体检',
   'v2.footer.version': '契约 {contract} · rui {version}',
+  'v2.legacy.from': '{path} 在 v2 暂无对应页，已回到设备页。',
+  'v2.legacy.from.close': '关闭提示',
 
   // — token ——————————————————————————————————————————————————
   'v2.token.title': '访问令牌',
@@ -1578,6 +1580,8 @@ const en: Record<MsgKey, string> = {
   'v2.nav.memory': 'Memory',
   'v2.footer.readOnly': 'M9 · Config pages · Voice assistant / Tools / Music / Credentials / Health',
   'v2.footer.version': 'Contract {contract} · rui {version}',
+  'v2.legacy.from': '{path} has no v2 page yet — you are on the devices page.',
+  'v2.legacy.from.close': 'Dismiss notice',
 
   // — token ——————————————————————————————————————————————————
   'v2.token.title': 'Access token',

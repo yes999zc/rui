@@ -6,7 +6,7 @@
  * and a readable state is shown instead of an empty shell.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import AppIcon from '../components/AppIcon.vue'
 import StateBlock from './components/StateBlock.vue'
 import TokenDialog from './components/TokenDialog.vue'
@@ -26,6 +26,19 @@ import { locale, setLocale, t, themeLabel, type MsgKey } from './i18n'
 import { resolvedTheme, setThemePref, themePref } from '../theme'
 
 const route = useRoute()
+const router = useRouter()
+
+/** A legacy link with no v2 page lands on /v2/?from=<old path>; show it once. */
+const legacyFrom = ref('')
+function consumeLegacyFrom(): void {
+  const raw = route.query.from
+  const from = Array.isArray(raw) ? raw[0] : raw
+  if (typeof from !== 'string' || !from) return
+  legacyFrom.value = from
+  const query = { ...route.query }
+  delete query.from
+  void router.replace({ path: route.path, query })
+}
 
 const navItems: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'run', to: '/run', labelKey: 'v2.nav.run' },
@@ -174,6 +187,7 @@ watch(
 )
 
 onMounted(() => {
+  consumeLegacyFrom()
   window.addEventListener('v2:unauthorized', onUnauthorized)
   void boot()
 })
@@ -305,6 +319,17 @@ onUnmounted(() => {
       </nav>
     </header>
 
+    <div
+      v-if="legacyFrom"
+      class="v2-legacy-note"
+      role="status"
+      data-testid="legacy-from-note"
+    >
+      <AppIcon name="external" :size="15" />
+      <span>{{ t('v2.legacy.from', { path: legacyFrom }) }}</span>
+      <button type="button" class="v2-legacy-note-close" :aria-label="t('v2.legacy.from.close')" @click="legacyFrom = ''">×</button>
+    </div>
+
     <main id="v2-main" class="v2-main" tabindex="-1">
       <div
         v-if="tokenNeeded && metaErrorCopy?.code !== 'unauthorized'"
@@ -373,3 +398,25 @@ onUnmounted(() => {
 
   <TokenDialog :open="tokenOpen" @close="closeToken" />
 </template>
+
+<style scoped>
+.v2-legacy-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 24px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+.v2-legacy-note-close {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+</style>
