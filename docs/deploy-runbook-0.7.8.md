@@ -1,7 +1,8 @@
 # 升级 Runbook：0.7.2（`rui-dot2:1.3.1`）→ 0.7.8 —— 由 9 哥 亲手执行
+> 真实地址见 `01_Code/device-inventory.md`（不入库）；本文用 `<NAS_IP>` / `<LX06_IP>` 占位。
 
 > **谁做什么**：命令由 Lead 在 .168 上用**只读**方式逐条核对（见 §9 实测记录），**执行人是你（9 哥）**。
-> 生产机 = `192.168.5.168`（`/vol1/rui`，容器 `rui`，8080）。**金丝雀机 .34 不参与本次升级，禁止碰**。
+> 生产机 = `<NAS_IP>`（`/vol1/rui`，容器 `rui`，8080）。**金丝雀机 .34 不参与本次升级，禁止碰**。
 > 纪律：每步都可回滚；任一判据不满足 → 立刻走 §8；不留半升级状态。
 
 ## 0. 三条铁律（踩一次就出事）
@@ -27,7 +28,7 @@
 | 挂载 | `./data→/var/lib/rui`、`./config→/config`、`./data/models→/data/models`、`./dot2-secrets→/opt/rui-secrets` | `docker inspect rui --format '{{range .Mounts}}…{{end}}'` |
 | TLS 材料 | `/opt/rui-secrets`：`ca.pem`、`device_token`、`eq/`、`server.key`、`server.pem`（owner rui） | `docker exec rui ls -la /opt/rui-secrets` |
 | 插件目录 | `/opt/rui-plugins` = `rui_dot2_bridge` + `xiaoai`（**都在老镜像层里**，无宿主机挂载） | `docker exec rui ls -1 /opt/rui-plugins` |
-| 设备配置 | `devices[0]`：`adapter: xiaoai`、`host: 192.168.5.5`、`room: 客厅`、`plug_id: xiaoai-lx06`；`devices[1]`：`adapter: dot2`、`host: 192.168.5.168`、`room: 卧室` | `grep -nE 'adapter\|host\|plug_id\|room' config/config.yaml` |
+| 设备配置 | `devices[0]`：`adapter: xiaoai`、`host: <LX06_IP>`、`room: 客厅`、`plug_id: xiaoai-lx06`；`devices[1]`：`adapter: dot2`、`host: <NAS_IP>`、`room: 卧室` | `grep -nE 'adapter\|host\|plug_id\|room' config/config.yaml` |
 | compose 版本 / 磁盘 | 2.40.3 / `/vol1` 8.6T 可用 | `docker compose version --short; df -h /vol1` |
 
 > 生产 config 里 `web.console: legacy`——**建议先保留这行**，把切 v2 当独立一步验证；要切就把 `legacy` 改 `v2` 再 `up -d`。
@@ -49,7 +50,7 @@ docker inspect rui --format '{{.Image}}' | tee /vol1/rui/.rollback-image-id
 docker build -t rui:0.7.8-rc1 .                                        # 已验证 sha256:fe65d3a2…
 cd ../rui-dot2-bridge
 docker build -f deploy/downstream/Dockerfile --build-arg RUI_IMAGE=rui:0.7.8-rc1 -t rui-dot2:1.3.1-r078 .
-docker save rui-dot2:1.3.1-r078 | ssh yes999zc@192.168.5.168 'docker load'
+docker save rui-dot2:1.3.1-r078 | ssh yes999zc@<NAS_IP> 'docker load'
 
 # NAS（导入后先验，再动生产）
 docker run --rm --entrypoint python rui-dot2:1.3.1-r078 -c "import rui;print(rui.__version__)"   # 期望 0.7.8
@@ -65,7 +66,7 @@ docker run --rm --entrypoint sh rui-dot2:1.3.1-r078 -c 'ls -1 /opt/rui-plugins' 
 **a) 插件源码放 NAS 并只读挂进容器**
 ```bash
 # Mac
-rsync -a --delete rui-xiaoai-bridge/src/ yes999zc@192.168.5.168:/vol1/rui/rui-xiaoai-bridge/src/
+rsync -a --delete rui-xiaoai-bridge/src/ yes999zc@<NAS_IP>:/vol1/rui/rui-xiaoai-bridge/src/
 ```
 `rui-dot2-override.yml` 的 `volumes:` 增加：
 ```yaml
@@ -152,7 +153,7 @@ curl -s localhost:8080/health | python3 -c "import json,sys;d=json.load(sys.stdi
 | health | 0.7.2 / 2 / 0 / legacy | `version=0.7.2 console=legacy devices=2 device_errors=0 audio_plane=true registered=["dot2"] multi_device enabled=true max_planes=4` | ✅ |
 | TLS 材料 | 5 项齐 | `ca.pem device_token eq server.key server.pem` | ✅ |
 | 插件目录 | 两个（老镜像层） | `rui_dot2_bridge` `xiaoai` | ✅ |
-| 设备配置 | xiaoai + dot2 | `devices[0] adapter xiaoai host 192.168.5.5 plug_id xiaoai-lx06`；`devices[1] adapter dot2` | ✅ |
+| 设备配置 | xiaoai + dot2 | `devices[0] adapter xiaoai host <LX06_IP> plug_id xiaoai-lx06`；`devices[1] adapter dot2` | ✅ |
 | 镜像 | 从 CI 直接拉，不用搬运 | `docker pull ghcr.io/yes999zc/rui:edge` → 本地 `bd396ee593a1`，`rui 0.7.8` | ✅ |
 | 外置插件 | 两个包 + env | `/vol1/rui/plugins/{rui_dot2_bridge,rui_xiaoai_bridge}`；`registered=["dot2","lx06"]` | ✅ |
 | 切换后 health | 0.7.8 + 平面 running | `ver 0.7.8 / dev 1 / err 0 / console v2 / speaker True / planes[卧室 dot2 running]` | ✅ |
