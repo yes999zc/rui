@@ -315,7 +315,15 @@ class AudioPlaneClient:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._read_task
         self.writer.close()
-        with contextlib.suppress(ConnectionError):
+        # Tearing down a socket whose peer already left is not a failure we can act on.
+        # On macOS the transport records the dead unix socket as a bare OSError
+        # (ENOTCONN, "Socket is not connected") and `wait_closed` re-raises it, so
+        # `suppress(ConnectionError)` missed it. Escaping here replaced the plane's real
+        # refusal reason ("audio plane refused: RUI_MISSING_TOKEN is empty: ...") with
+        # "Socket is not connected" and skipped the child's termination. Nothing real is
+        # hidden: a refused greet raises AudioPlaneError before this teardown, and a
+        # connection that dies unasked is reported by pump() via `pump_dead`/`on_dead`.
+        with contextlib.suppress(OSError):
             await self.writer.wait_closed()
 
 

@@ -1,11 +1,13 @@
 """The control plane exposes the audio plane's numbers through the API."""
 from __future__ import annotations
 
+import asyncio
 import time
 
 import psutil
 from fastapi.testclient import TestClient
 
+from rui.audio.client import AudioPlaneClient
 from rui.config import load_config
 from rui.web.api.app import create_app
 
@@ -80,3 +82,46 @@ def test_plane_failure_is_reported_with_its_reason(tmp_path, monkeypatch) -> Non
         assert body["running"] is False
         assert "TOKEN" in body["error"]
         assert "metrics" not in body
+
+
+def test_close_survives_a_socket_whose_peer_is_already_gone() -> None:
+    """Teardown must not raise when the plane's end of the socket is already gone.
+
+    The red traceback (macOS) recorded the dead unix socket as a bare OSError
+    (ENOTCONN, "Socket is not connected"); the transport keeps it as the
+    connection-lost exception and ``StreamWriter.wait_closed`` re-raises it, so the
+    ``suppress(ConnectionError)`` in ``close()`` did not cover it. That escaped the
+    failed start (replacing "audio plane refused: ... TOKEN ..." with the socket
+    error) and then failed the TestClient's shutdown. ``wait_closed`` is where the
+    transport hands that error back, which is the one thing this stub reproduces.
+    """
+
+    class _GoneWriter:
+        """The slice of StreamWriter that ``close()`` touches."""
+
+        def __init__(self) -> None:
+            self.frames: list[bytes] = []
+            self.closed = False
+
+        def write(self, data: bytes) -> None:
+            self.frames.append(data)
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            raise OSError(57, "Socket is not connected")
+
+    async def scenario() -> None:
+        writer = _GoneWriter()
+        client = AudioPlaneClient(asyncio.StreamReader(), writer)  # type: ignore[arg-type]
+        await client.close()
+        assert writer.closed, "close() must still release the transport"
+        # The supervisor closes again on the shutdown path; a second close must be
+        # just as quiet as the first (the dead peer is not a new error).
+        await client.close()
+
+    asyncio.run(scenario())
