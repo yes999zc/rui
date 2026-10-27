@@ -167,7 +167,27 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 
 ## 致谢
 
-设计上参考了同类项目的公开做法：Rhasspy 的分域式服务拆分、Wyoming 的协议层抽象、openWakeWord 对「未测 / 限制」的诚实标注。实现全部为本仓库原创代码。
+## 致谢
+
+这个项目站在很多人的工作上。按它们**在这套系统里的实际位置**分两类；许可证与分发细节见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
+**跑在链路里的**
+
+- [@coderzc/open-xiaoai](https://github.com/coderzc/open-xiaoai)（MIT）—— LX06 的设备端客户端与 WebSocket 协议；设备靠它拨进来，核心只讲协议、不内置它的代码。
+- [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)（Apache-2.0）—— 本地 ASR 与关键词唤醒运行时，镜像里的唤醒模型与 VAD 也经由它的 release 分发。
+- [snakers4/silero-vad](https://github.com/snakers4/silero-vad)（MIT）—— 语音活动检测模型。
+- [FunAudioLLM/SenseVoice](https://github.com/FunAudioLLM/SenseVoice) / [modelscope/FunASR](https://github.com/modelscope/FunASR) —— 本地中文 ASR 模型；权重按 FunASR Model License 使用，`rui fetch-models` 下载，不随镜像分发。
+- [FFmpeg](https://ffmpeg.org/)（LGPL-2.1-or-later，构建时禁用 GPL/nonfree）—— 音乐转码与渠道语音编码；镜像里随附 libopus、libmp3lame 的许可证。
+- [xiph/speexdsp](https://github.com/xiph/speexdsp)（BSD-3-Clause）—— 回声消除，播放中打断靠它。
+- [openWakeWord](https://github.com/dscripka/openWakeWord)（Apache-2.0）—— 设备端 OWW 模型（如 `hey_jarvis`）来自这套方案；目前设备端唤醒是关闭的，走服务端 KWS。
+
+**设计上参考了公开做法**
+
+- [Rhasspy](https://github.com/rhasspy/rhasspy) 的分域式服务拆分、[rhasspy/wyoming](https://github.com/rhasspy/wyoming) 的协议层抽象。
+- [wilbowes/EchoMuse](https://github.com/wilbowes/EchoMuse) —— 设备管理控制台的状态机与「可解释向导」思路（未复制代码）。
+- openWakeWord 对「未测 / 限制」照实标注的习惯，我们也沿用了。
+
+音乐播放对接 [Navidrome](https://github.com/navidrome/navidrome) / OpenSubsonic；控制台用 Vue + Vite，服务端 FastAPI。实现代码除上述依赖外均为本仓库原创。
 
 ## License
 
@@ -327,7 +347,27 @@ Self-signed only makes the plane start; real-device acceptance depends on the de
 
 ## Credits
 
-The design borrows patterns that are public in comparable projects: Rhasspy's domain split, Wyoming's protocol layer, and openWakeWord's habit of labelling untested areas. All code here is original to this repository.
+## Acknowledgements
+
+This project stands on other people's work. Grouped by where each one actually sits; licenses and distribution details live in [THIRD_PARTY.md](THIRD_PARTY.md).
+
+**In the pipeline**
+
+- [@coderzc/open-xiaoai](https://github.com/coderzc/open-xiaoai) (MIT) — the LX06 device client and WebSocket protocol. The speaker dials in through it; we speak the protocol and ship none of its code.
+- [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) — local ASR and keyword-spotting runtime; the wake-word and VAD models in the image come through its releases.
+- [snakers4/silero-vad](https://github.com/snakers4/silero-vad) (MIT) — voice-activity detection model.
+- [FunAudioLLM/SenseVoice](https://github.com/FunAudioLLM/SenseVoice) / [modelscope/FunASR](https://github.com/modelscope/FunASR) — the local Chinese ASR model; weights are used under the FunASR Model License and fetched at runtime, not shipped.
+- [FFmpeg](https://ffmpeg.org/) (LGPL-2.1-or-later, built without GPL/nonfree) — music transcoding and channel voice encoding; libopus and libmp3lame notices ship with the image.
+- [xiph/speexdsp](https://github.com/xiph/speexdsp) (BSD-3-Clause) — echo cancellation, which is what makes barge-in work.
+- [openWakeWord](https://github.com/dscripka/openWakeWord) (Apache-2.0) — the device-side OWW models (e.g. `hey_jarvis`); on-device wake is off today and the server-side KWS does the work.
+
+**Borrowed in design**
+
+- [Rhasspy](https://github.com/rhasspy/rhasspy)'s domain split and [rhasspy/wyoming](https://github.com/rhasspy/wyoming)'s protocol layering.
+- [wilbowes/EchoMuse](https://github.com/wilbowes/EchoMuse) — state machine and explainable-wizard ideas for the device console (no code copied).
+- openWakeWord's habit of labelling untested areas plainly.
+
+Music talks to [Navidrome](https://github.com/navidrome/navidrome) / OpenSubsonic; the console is Vue + Vite on top of FastAPI. Everything else here is original to this repository.
 
 ## License
 
