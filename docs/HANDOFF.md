@@ -6,14 +6,14 @@
 
 > **下次第一件事**：0.8.0 开工前先拍板 `docs/HANDOFF-0.8.md` §3 的未决问题；**所有待拍板项已汇总到 `docs/待拍板.md`（D-001…D-006，含背景/选项/代价/建议），拍板结论回写到那里再落 HANDOFF**。在那之前不要动 0.8.0 的任何删除动作。
 
-### a. 现状事实（截至 2026-10-27 10:40）
+### a. 现状事实（截至 2026-10-27 10:36）
 
 - **版本**：core **0.7.8**；tag `v0.7.8`（`a3205e9`）；release <https://github.com/yes999zc/rui/releases/tag/v0.7.8>
 - **镜像**：GHCR 索引 `sha256:ca3b40ecaf3457158603af90e520ac2bf423e2f4570e12e36db15b2583bf24c3`（tag `0.7.8` / `0.7`）；**生产 pin 的是 amd64 平台摘要 `sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`** —— NAS 上的老 docker 不认带 attestation 的 OCI index，按索引摘要 `pull` 会报 `unsupported media type`。
 - **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。**本阶段未做任何生产变更。**
 - **回滚**：本地旧镜像已删（9 哥 决定）；**回滚走 GHCR 上一个正式版** —— `docker pull ghcr.io/yes999zc/rui:0.7.4` → 取 amd64 摘要 → 改 override 的 `image:` → **两个 `-f`** `up -d --force-recreate`（步骤见 `docs/deploy-runbook-0.7.8.md` §8）。
 - **三仓 HEAD**：rui 代码 HEAD `3ed312f`（此后可能又落了 docs 提交，用 `git log --oneline v0.7.8..HEAD` 自查）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
-- **CI（rui `3ed312f`）**：secret-scan / security 已 success；ci / docker-publish 发版时仍在跑（此前的 `22df703` 是四绿）。
+- **CI（rui `3ed312f`）**：secret-scan / security `success`；ci 在跑；docker-publish `cancelled` —— **不是失败**，是后续 push 触发的并发 run 把它顶掉了（`gh run view`：updated 02:33:18Z）。上一个完整四绿的提交是 `22df703`。
 - **进 main 未发版 28 个提交（截至代码 HEAD `3ed312f`；`git rev-list --count v0.7.8..3ed312f`）**（按「不升 minor」节奏攒着）。用户可见的：
   `91cac91` 控制台把 Home Assistant 与 MCP 服务器分两段（仅呈现层，API 未动）、
   `d2c9895` dot2 音量回读取 mixer 回报值、`e85b4bb` 「唱首歌」走随机 + 老链接落页提示、
