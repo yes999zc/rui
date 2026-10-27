@@ -116,7 +116,12 @@ merge	2026-10-27T02:06:09Z	2026-10-27T02:06:21Z	12
 
 ## 4. 时间花在哪个 step（抽样 3 个 run 的 7 个 job）
 
-命令：`gh api repos/yes999zc/rui/actions/jobs/<job-id> --jq '.steps[] | ...'`（job id 从 `gh run view --json jobs` 取）。
+取证口径（2026-10-27 修订）：**job 总耗时**用 `gh run view <run-id> --json jobs` 的 `startedAt/completedAt`；
+**step 级耗时**用 `gh run view <run-id> --job <job-id> --log`，按该 step 日志块的 UTC 时间戳首末相减
+（每行前缀形如 `2026-10-27T02:01:26.354Z`）。旧的 `gh api .../actions/jobs/<id> --jq '.steps[]...'`
+写法不可靠：REST 返回的是 snake_case（`started_at`/`completed_at`），按 camelCase 取会得到 `null`
+（verifier 复跑时即整批为空），且 step 时间戳本身不保证长期可取。两种口径通常差 ≤1 s
+（例：pytest step 的 step 时间戳 278 s、日志首末 277 s）。
 
 | job | 总耗时 | 最大 step | 其余 |
 |---|---|---|---|
@@ -236,10 +241,11 @@ gh run view <run-id> --json jobs \
   --jq '.jobs[] | [.name, .startedAt, .completedAt,
         (((.completedAt|fromdateiso8601)-(.startedAt|fromdateiso8601))|tostring)] | @tsv'
 
-# step 级（job id 来自上一条输出里的 .databaseId）
-gh run view <run-id> --json jobs --jq '.jobs[] | [.name, .databaseId] | @tsv'
-gh api repos/yes999zc/rui/actions/jobs/<job-id> \
-  --jq '.steps[] | [.number, .name, .startedAt, .completedAt, .conclusion] | @tsv'
+# step 级耗时（job id 来自上一条输出里的 .databaseId）
+# `--log` 每行是 "<job>\t<step>\t<UTC 时间戳> <message>"；按 step 分组取首末时间戳相减。
+# 首行可能带 UTF-8 BOM（时间戳前的不可见字符），相减前去掉即可。
+gh run view <run-id> --job <job-id> --log \
+  | awk -F'\t' '{split($3, t, " "); ts = t[1]; if ($2 != cur) {if (cur != "") print cur "\t" first "\t" last; cur = $2; first = ts} last = ts} END {print cur "\t" first "\t" last}'
 ```
 
 只读约定：以上命令均不触发 workflow、不改仓库文件。本文不含任何真实内网地址或凭证（泄漏样例以

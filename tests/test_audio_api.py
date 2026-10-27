@@ -120,8 +120,9 @@ def test_close_survives_a_socket_whose_peer_is_already_gone() -> None:
         client = AudioPlaneClient(asyncio.StreamReader(), writer)  # type: ignore[arg-type]
         await client.close()
         assert writer.closed, "close() must still release the transport"
-        # The supervisor closes again on the shutdown path; a second close must be
-        # just as quiet as the first (the dead peer is not a new error).
+        # `_kill_child` clears `self.client` before the shutdown path, so a second
+        # close here is defensive: it must be just as quiet as the first (the dead
+        # peer is not a new error).
         await client.close()
 
     asyncio.run(scenario())

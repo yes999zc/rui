@@ -219,15 +219,15 @@
 
 | ID | 建议测试（file::test） | 断言要点 | 能测什么 | 测不了什么 |
 |---|---|---|---|---|
-| HE-01 | `tests/test_he01_goodbye_echo_no_extra_turn.py::test_goodbye_pcm_replayed_as_mic_opens_no_turn` | ① 把 D5 告别回复 PCM 设为 `UtteranceGate.set_echo_reference`，再按 lag 0/150/400 ms 当 mic 回灌（复用 `tests/test_cue_echo_excision.py` 的 `_feed/_close` 夹具）：`gate.arm()` 后捕获必须为 `None`（0 utterance）；② **idle goodbye 路径**：用 `tests/test_dismiss_turn_release.py:168-190` 的 `_ReplyHandle` + `_PlaneLink.reply_finished`，跑「idle watchdog 告别（`src/rui/web/api/app.py:3327-3329`）→ `reply_finished`」：只产生 1 个 turn、follow-up window 未开（0 额外 turn）。注意 dismissal（退下吧）**故意不调** `reply_finished`（`app.py:913-917`、`:999-1003`），不能用它测这一句 | 回声回灌下的门禁切除 + idle goodbye 的 `reply_finished` 记账；主判据「告别 PCM 当 mic 输入 → 0 额外 turn」可完整判定 | 真机扬声器→mic 的回声电平与 AEC 残差；原判据后半「真机 10 次告别」仍建议保留 |
-| HE-02 | `tests/test_he02_cue_echo_extremes.py::test_cue_echo_is_excised_at_lag_900_and_1200_ms`、`::test_a_50ms_overlap_never_feeds_the_cue_to_asr` | 用 `_one_wake(gate, cue, lag_ms=900/1200)`：`_best_corr(segment, cue) < 0.4` **且** `_max_windowed_corr(segment, cue) < 0.6`（清音/削波**同阈值**；削波用 `clip_cue=True`）；用户回复保留 ≥80%。overlap 50 ms **不能**走 `_one_wake`（负 gap 被 `_silence` 截成 0 字节，用户必从 cue 尾部起），改用 `_mix`（参照 `test_a_clipped_overlap_never_feeds_the_cue_to_asr` :236-239），让用户从 `lag + CUE_MS - 50` 处起说话，同样断言 `_best_corr < 0.4` 且 `_max_windowed_corr < 0.6`；全程 0 额外 turn | 门禁在 lag 900/1200 ms、overlap 50 ms 的切除行为（合成 PCM，完全确定；阈值与现契约一致） | 真机 AEC / 房间回声下的 A/B 听测（原判据后半） |
+| HE-01 | `tests/test_he01_goodbye_echo_no_extra_turn.py::test_goodbye_pcm_replayed_as_mic_opens_no_turn` | ① 把 D5 告别回复 PCM 设为 `UtteranceGate.set_echo_reference`，再按 lag 0/150/400 ms 当 mic 回灌（复用 `tests/test_cue_echo_excision.py` 的 `_feed/_close` 夹具）：`gate.arm()` 后捕获必须为 `None`（0 utterance）；② **idle goodbye 路径**：用 `tests/test_dismiss_turn_release.py:170-189` 的 `_ReplyHandle` + `_PlaneLink.reply_finished`，跑「idle watchdog 告别（`src/rui/web/api/app.py:3327-3330`）→ `reply_finished`」：只产生 1 个 turn、follow-up window 未开（0 额外 turn）。注意 dismissal（退下吧）**故意不调** `reply_finished`（`app.py:913-917`、`:999-1003`），不能用它测这一句 | 回声回灌下的门禁切除 + idle goodbye 的 `reply_finished` 记账；主判据「告别 PCM 当 mic 输入 → 0 额外 turn」可完整判定 | 真机扬声器→mic 的回声电平与 AEC 残差；原判据后半「真机 10 次告别」仍建议保留 |
+| HE-02 | `tests/test_he02_cue_echo_extremes.py::test_cue_echo_is_excised_at_lag_900_and_1200_ms`、`::test_a_50ms_overlap_never_feeds_the_cue_to_asr` | 用 `_one_wake(gate, cue, lag_ms=900/1200)`：`_best_corr(segment, cue) < 0.4` **且** `_max_windowed_corr(segment, cue) < 0.6`（清音/削波**同阈值**；削波用 `clip_cue=True`）；用户回复保留 ≥80%。overlap 50 ms **不能**走 `_one_wake`（负 gap 被 `_silence` 截成 0 字节，用户必从 cue 尾部起），改用 `_mix`（参照 `test_a_clipped_overlap_never_feeds_the_cue_to_asr` :245-248），让用户从 `lag + CUE_MS - 50` 处起说话，同样断言 `_best_corr < 0.4` 且 `_max_windowed_corr < 0.6`；全程 0 额外 turn | 门禁在 lag 900/1200 ms、overlap 50 ms 的切除行为（合成 PCM，完全确定；阈值与现契约一致） | 真机 AEC / 房间回声下的 A/B 听测（原判据后半） |
 
 > **附：D2-12（标签 `只能真机`）的 CI 半可以先补，但不改变标签**：
 > `rui-dot2-bridge/tests/test_d2_12_unknown_message.py::test_unknown_event_logs_debug_and_keeps_the_link`
 > （未知事件进 debug、连接不崩、后续消息仍处理）；
 > `tests/test_plugin_trust_pinned.py::test_manifest_trusted_is_honored_today_risk_pinned`
 > （钉**现行**行为：manifest 自声明 `trust: trusted` 会被采信并允许 in-process——`src/rui/plugins/models.py:558`
-> 默认 `third_party`，`loader.py:226-236` 只拦 `third_party` 的 in-process；这是**已知风险**，不是安全边界。
+> 默认 `third_party`，`loader.py:231-236` 只拦 `third_party` 的 in-process；这是**已知风险**，不是安全边界。
 > 若要钉「用户可写目录的 `trust: trusted` 应被拒绝」，那是**待实现策略**，须另立卡，不能写成当前行为）。
 
 ### 8.3 `只能真机` 分组与单窗口覆盖估算（21 条）
@@ -263,6 +263,8 @@
 | X-06 | `只能真机` | 若已无与 0.7.1/p21 同源的校准音源 → `环境缺失` | 是否要求四个矩阵数字与历史**可比**（同源音源）；不要求则可降级为「只记录新值」 |
 | HE-06 | `只能真机` | 若不允许生产 NAS 断电且无第二台 NAS → `环境缺失` | 是否允许 ≤5 min 的生产中断（`/health` + `audio_plane` 判据不变） |
 | D2-12 | `只能真机` | 若 0.2.2 固件不再维护 → 按「已知限制」处置 | 0.2.2 兼容是否还在支持范围；CI 半（未知消息/trust）可先补（§8.2 附注），但结论取决于设备 TLS/4412 实测（B 组窗口） |
+
+> 注：§8.3 的「2 个工作日 + 1 次过夜」只估算 21 条 `只能真机` 的现场执行；**D2-09（SPL 计/THD 仪器准备）与 HE-15（中文 OWW 模型训练）不含在内**，排窗口时要另算（X-03 的 4 台设备同理未计入）。
 
 ### 8.6 结论
 

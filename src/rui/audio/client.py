@@ -323,8 +323,12 @@ class AudioPlaneClient:
         # "Socket is not connected" and skipped the child's termination. Nothing real is
         # hidden: a refused greet raises AudioPlaneError before this teardown, and a
         # connection that dies unasked is reported by pump() via `pump_dead`/`on_dead`.
-        with contextlib.suppress(OSError):
+        try:
             await self.writer.wait_closed()
+        except OSError as exc:
+            # Expected when the peer already left (see above); DEBUG, not INFO:
+            # a socket the other end closed is routine on the shutdown path.
+            log.debug("audio plane: socket already gone on close: %s", exc)
 
 
 class PlaneHandle:

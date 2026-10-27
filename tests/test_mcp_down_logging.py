@@ -84,7 +84,6 @@ def test_twelve_identical_failures_keep_a_single_info_line(caplog) -> None:
 
     infos = _down_infos(caplog)
     # 12 attempts inside one five-minute window: the first is INFO, the rest DEBUG.
-    assert len(infos) <= 2
     assert len(infos) == 1
     message = infos[0].getMessage()
     assert "ha" in message
@@ -192,7 +191,6 @@ def test_mcp_client_loop_throttles_the_down_line(caplog, monkeypatch) -> None:
     assert attempts == 12
     assert "refused" in client.last_error
     infos = _down_infos(caplog)
-    assert len(infos) <= 2
     assert len(infos) == 1
     assert "ha" in infos[0].getMessage()
     assert any(record.levelno == logging.DEBUG and "still down" in record.getMessage()
@@ -220,7 +218,7 @@ def test_managed_server_loop_throttles_the_down_line(caplog, monkeypatch) -> Non
     monkeypatch.setattr(manager_module, "asyncio", _asyncio_shim(fake_sleep))
 
     server = ManagedServer(_cfg("notes"))
-    server._down_log = DownLogThrottle("notes", clock=_Clock())
+    server._down_log = DownLogThrottle("notes", clock=_Clock(), logger=manager_module.log)
 
     async def run() -> None:
         with pytest.raises(_StopLoop):
@@ -231,7 +229,6 @@ def test_managed_server_loop_throttles_the_down_line(caplog, monkeypatch) -> Non
 
     assert attempts == 12
     infos = _down_infos(caplog)
-    assert len(infos) <= 2
     assert len(infos) == 1
     assert "notes" in infos[0].getMessage()
 
@@ -263,7 +260,7 @@ def test_a_successful_reconnect_is_one_info_line_not_a_burst(caplog, monkeypatch
     monkeypatch.setattr(manager_module, "asyncio", _asyncio_shim(fake_sleep))
 
     server = ManagedServer(_cfg("notes"))
-    server._down_log = DownLogThrottle("notes", clock=_Clock())
+    server._down_log = DownLogThrottle("notes", clock=_Clock(), logger=manager_module.log)
 
     async def run() -> None:
         task = asyncio.create_task(server._run())
