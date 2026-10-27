@@ -26,6 +26,15 @@
   - 客厅显式写 `adapter: lx06`（不再依赖 `xiaoai` 迁移），所以 `adapter_plugins.warnings` 由 1 降为 **0**
   - `/health`：`devices=2`、`device_errors=0`、`planes=[living 客厅 running, dot2 卧室 running]`、两台 `speaker_connected=true`
   - **没有为客厅造任何新镜像**：插件是 `/vol1/rui/plugins/rui_xiaoai_bridge` 目录，容器只读挂载即加载（这是 0.7.6 之后与 `rui-dot2:1.3.1` 那套下游镜像的根本区别）
+
+**客厅真机实测（08:33，人在客厅说的）**
+- `08:32:57` 唤醒 →「现在几点了？」→「现在是早上8点33分。」ASR 269 ms / LLM 867 ms / TTS 803 ms / 播放起始 1761 ms，62 972 B
+- `08:33:10` 「唱首歌。」→ 走了 `music_play` 工具，但曲库匹配失败（`曲库里没找到「唱首」`，phrase 解析问题，记一笔）
+- `08:33:25` 与 `08:33:35` **两次打断**：`silence_after_ms=0`、`dropped 0.0 s`
+- `08:33:30` 「放首歌。」→ `music transport: random (music.started)` → `playback requested: .../music_cache/...pcm` → 播起来了；随后 `08:33:39` 对话**抢占了音乐**（`output: dialogue preempts music`），符合预期
+- `08:33:57` 静默 15 s → farewell
+
+**镜像清理（08:34）**：删掉分支构建的 `ghcr.io/yes999zc/rui:edge`；NAS 上 rui 相关只剩两个——运行中的 `ghcr.io/yes999zc/rui@sha256:1f074bb3…`（本地 `74f6c560`）与回滚用的 `rui-dot2:1.3.1`（`a62e2cf4`）。
 - 数据：纯净装后只恢复了凭据与音乐资产（`secrets.yaml`/`lan_media.json`/`library_index.json`/`music_aliases.json`/`music_history.json`/`setup.json`），日志/ack/DB/缓存保持全新
 
 **验收结果**
