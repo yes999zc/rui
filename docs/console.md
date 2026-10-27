@@ -217,7 +217,7 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 
 ### 12.2 配置中心（四类参数 + 效果标注）
 
-`GET /api/v1/config/catalog` 返回 4 类（tier）22 组、按配置动态生成字段（dev 157 个；Phase 2 每台设备再加 13 个 audio 覆盖字段）：
+`GET /api/v1/config/catalog` 返回 4 类（tier）23 组、按配置动态生成字段（dev 157 个；Phase 2 每台设备再加 13 个 audio 覆盖字段）：
 ① 底子（system/web：data_dir、log_level、timezone、host/port、allow_anonymous）——
    弱化 + 「改错会影响整条语音链路」警示；
 ② 音箱相关（devices 每台 26 字段含 LED/唤醒词/音量/端口，Phase 2 再加 13 个 `devices[].audio.*` 覆盖：

@@ -417,8 +417,9 @@ python -m rui plug-test plugs/xiaoai \
 > `device.probe_layout` 与 `device.device_wake_effective`。LX06 走 RUI KWS 且
 > probe 报全布局，所以没有这两条 WARN；不能用伪造 WARN 去对齐数字。
 
-迁移：`adapter: xiaoai` 在 0.6.x 仍可用（`src/rui/adapter_aliases.py` 的单 minor
-别名），新配置写 manifest 的机型 id `adapter: lx06`。旧 config 零迁移即启动。
+迁移：`adapter: xiaoai` 在 0.6.x 由 `src/rui/adapter_aliases.py` 兼容；0.7.8 起别名移入
+`src/rui/config/legacy_adapters.py`（0.8.0 删除）。新配置写 manifest 的机型 id `adapter: lx06`，
+旧 config 零迁移即启动。
 
 ## 7. 迁移与兼容
 
@@ -481,7 +482,7 @@ compatibility: {rui_min: "0.3.0", tested_with: ["0.3.2"]}
 
 **弃用**：`rui-device/v0` 在 0.3.x–0.5.x 继续支持，最早 0.6.0 移除（0.5.0 保留 v0，因为当时的 LX06 参考插头仍是 v0；0.6 M2 起自带插头已是 v1）。0.3.2 起 `load_plugin()` 每个 v0 manifest 路径每进程记一次 warning（`src/rui/plugins/loader.py:_warn_v0_once`），避免每请求刷屏；`native_kws` 自 v1 弃用（v1 manifest 直接拒绝）；`streaming_asr` 保留为未定义值；`VendorSignalMsg`/`drain_signals()`/厂商让路窗口不弃用、不改语义；任何字段移除都“先警告、后 minor、再移除”，不得在 patch 移除。
 
-**提取已完成（0.6 M2，取代旧的 0.4 计划）**：`src/rui/device/xiaoai/` 的实现已移入 `plugs/xiaoai/`，核心 registry 不再有任何设备适配器表项；`plugins/builtin.py` 只扫描镜像插头目录（`/opt/rui-plugins`）并交给同一个 manifest loader，`src/rui/plugins/builtin.py` 里没有任何机型数据；adapter entrypoint 为 `xiaoai_plug.adapter:build`，manifest 的 device id 是 `lx06`，而旧配置的 `devices[].adapter: xiaoai` 通过 `src/rui/adapter_aliases.py` 的单 minor 别名继续工作（计划 0.7.0 移除）。本切片不删除 v0 schema 支持。
+**提取已完成（0.6 M2，取代旧的 0.4 计划）**：`src/rui/device/xiaoai/` 的实现已移入 `plugs/xiaoai/`，核心 registry 不再有任何设备适配器表项；`plugins/builtin.py` 只扫描镜像插头目录（`/opt/rui-plugins`）并交给同一个 manifest loader，`src/rui/plugins/builtin.py` 里没有任何机型数据；adapter entrypoint 为 `xiaoai_plug.adapter:build`，manifest 的 device id 是 `lx06`，而旧配置的 `devices[].adapter: xiaoai` 通过 `src/rui/config/legacy_adapters.py` 的单 minor 别名继续工作（0.8.0 随该模块一并移除）。本切片不删除 v0 schema 支持。
 
 清单：
 

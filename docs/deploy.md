@@ -370,7 +370,7 @@ outbound 机型没有 inbound 回连，才用 host probe 作为通过证据。
 devices:
   - id: living
     adapter: lx06            # 0.6 起用 manifest 的机型 id；旧配置的 adapter: xiaoai
-                             # 仍可用一个 minor（src/rui/adapter_aliases.py）
+                             # 0.8.0 前可用（src/rui/config/legacy_adapters.py）
     host: <speaker-ip>        # 向导 params 步填写；inbound 下只用于显示和 doctor 的 SSH 探测
     room: 客厅
     wake_words: ["你好小瑞"]
