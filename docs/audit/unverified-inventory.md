@@ -14,6 +14,10 @@
 | 环境/流水线协议（docker 构建、计时、soak；不是 pytest） | 4 | 0.7.3 记录基线、0.7.7 补协议 |
 | 真机/人工协议（需要设备或耳朵） | 26 | 0.7.4 的 Done 6、0.7.8 手册与 release notes |
 | 其中已有部分 CI 夹具、只缺真机腿 | 9 | 0.7.3 补夹具，真机腿进 0.7.8 |
+| 真机项分类：`可转测试`（主判据可无头 pytest 判定） | 2 | HE-01 / HE-02；候选测试见 §8.2 |
+| 真机项分类：`只能真机`（设备/耳朵/声学） | 21 | 分组与单窗口覆盖估算见 §8.3；D2-12 的 CI 半见 §8.2 附注 |
+| 真机项分类：`环境缺失`（缺设备/仪器/模型） | 3 | X-03（4 台未到）/ HE-15（缺自训模型）/ D2-09（缺仪器）；见 §8.4 |
+| 真机项分类合计 | **26** | = 2 + 21 + 3，与 §2 逐条标注一致；边界项见 §8.5 |
 
 ## 1. CI 可测（batch-1 → 0.7.3；batch-2 → 0.7.7）
 
@@ -34,35 +38,39 @@
 
 > 每条都要有：命令、设备与房间、距离、音源与电平、判据、记录表。0.7.8 前至少完成 **Done 6 相关**的
 > 4 条（唤醒/指令/播放、音量、多设备、24h 初查），其余写进「已知限制」并给协议。
+>
+> **task-5（2026-10-27）**：本表 26 条已在「分类（task-5）」列逐条标注
+> `可转测试` / `只能真机` / `环境缺失`；统计、候选测试与分组见 **§8**。分类不改变任何条目的
+> 「已验证/未验证」状态（处置待 D-005 拍板）。
 
-| ID | 声明 | 位置 | 现状 | 判据 | 需要 |
-|---|---|---|---|---|---|
-| X-01 | 音量控制从未系统验证（两台设备） | 三仓 README | 未测 | 设 5 档（v2 action `volume.set` args `{"value":V}`，V=1–255；或 v1 `PUT /api/v1/device/volume` body `{"value":V,"device":"<id>"}`）→ `volume.read` 回读一致、cap 处不失真 + 耳听 | 真机 |
-| X-02 | 指示灯未测 | 三仓 README | 未测 | 唤醒/思考/告别序列与 `tests/test_led.py` 顺序一致（拍照留证） | 真机 + 照片 |
-| X-03 | 多设备并发未测（音量/LED/4 台） | 三仓 README、`release/v0.7.2.md:57` | 未测 | `acceptance-4devices.md` §5.3/§7 表格填满、0 串台、0 `lost_same_word`；任一 null = 失败 | 4 台（设备未到） |
-| X-04 | LX06 语音指令成功率未统计 | house-ear README:110、xiaoai README:91 | 未测 | 6 句 × 5 轮 ≥26/30（同 Dot2 口径） | 真机 + 人声 |
-| X-05 | LX06 唤醒 19/20、打断 205.2 ms 是 2026-10-24 历史，无 0.7.2 重测 | xiaoai README:75,89,90 | 历史实测 | `acceptance-v1.py wake --trials 20` ≥19/20；`barge --trials 3` stop-push ≤300 ms | 真机 |
-| X-06 | Dot2 矩阵（30/30、26/30、8/8、10/10）测于 0.7.1/p21，0.7.2 未重测 | house-ear README:105、dot2 README:88 | 未重测 | 同分母重采；每个数字带 `--log` 行号 | 真机 + 校准音源 |
-| X-07 | EQ/限幅只过测量，没过耳朵 | dot2 README:98、`HANDOFF` §「风险与未决」 | 无听测 | 盲听 A/B：3 首、5 分制、随机顺序、≥4/5 且无失真 | 9 哥 耳朵 |
-| HE-01 | D5 告别自回声误开 turn：加了 `reply_finished` 但仍「待验证」 | `docs/plan-to-0.6.md:21` | 仍待验证 | 把告别 PCM 当 mic 输入注入 → 0 额外 turn；真机 10 次告别 | CI 部分 + 真机 |
-| HE-02 | cue 回声在「冷启动+不削波+lag>800 ms」或「重叠<110 ms」仍可能漏 | `release/v0.7.2.md:53`、`HANDOFF` §「已知限制（0.7.2 发布时点）」 | 已知限制 | 门禁测试补 lag 900/1200 ms、overlap 50 ms；真机 A/B | 真机 |
-| HE-04 | 首声可闻延迟从未声学测量 | `docs/audio-latency.md:154` | 未测 | mic 录音 + `play_start` 时间相关，5 轮给 P50/P95（暂不设门） | 真机 + 录音 |
-| HE-05 | 3–4 m 唤醒距离从未尝试 | `docs/acceptance.md:99` | 未做 | `acceptance-v1.py wake --trials 10 --label far-field`（只记录） | 真机 |
-| HE-06 | NAS 断电自启未测 | `docs/runbook.md:173,403` | 推断 | 真断电一次：5 min 内 `/health` 200 + `audio_plane=true`，无需人工 | NAS |
-| HE-07 | 真机重连时序（Wi-Fi 抖动/IP 变化）未测 | `runbook:404`、`device-management-research.md:973` | 未测 | 断开 AP / 改 IP → `speaker connected` <10 s、重试 ≤1 | 真机 + 路由器 |
-| HE-08 | 24h/3 天长稳未满窗 | `release/v0.7.0.md:37` | 未满窗 | 0 5xx、0 plane 重启、RSS 斜率 <1 %/h | 真机 |
-| HE-15 | 中文 OWW 模型效果未知；中文 onnx stem 未试 | `plan/speaker-tuning.md:448,454` | 效果待测 | 每变体 20 次唤醒 ≥19/20，否则砍功能 | 真机 + 自训模型 |
-| HE-16 | 音乐中 2 m 短指令未测 | `HANDOFF` §「task-19 真机 A/B」 | 未测 | 10 次 ≥10/10（同 1 m 口径） | 真机 |
-| D2-01 | canary 0.6.0：无真机，唤醒/播放/AEC/音量/token 未验证 | `dot2 docs/canary-0.6.0-official-image.md:251` | 未验证 | 接设备跑 wake/play/barge + token 重连 | 真机 |
-| D2-03 | 0.2.2/0.3.4 部署从未验证设备链路；`install.sh` 未重跑 | `dot2 docs/deploy-0.3.4-user-report.md:296-299` | unverified | 设备侧部署验收 + headless 控制台点一遍 + 一次性容器重跑 `install.sh` | 真机 + 容器 |
-| D2-05 | `primeWait 14–22 ms` 未验证；那一轮没声音、没听测 | `stutter-adapter-options.md:390` | 未验证 | 日志断言 primeWait + 人工听测清单 | 真机 |
-| D2-07 | 设备 AEC 上限 20–24 dB 是估计；127 需要 31 dB | `aec-device-tuning.md:182,512` | 未实测 | 粉噪 10 min，`aec_erle_db` P50 ≥20 dB（目标 25） | 真机 |
-| D2-08 | 房间 RT60 0.3–0.5 s 是假设 | `aec-device-tuning.md:84` | 未实测 | 扫频测 RT60，只记录 | 真机 |
-| D2-09 | 绝对 SPL / +29 dB 增益失真与寿命 / #630 一致性未测 | `audit-device-audio.md:19,21,275` | 未测 | SPL 计 1 m；增益扫描 + THD + 1 h 耐久；第二台 A/B | 真机 + 仪器 |
-| D2-10 | M1 门禁：严格 20 次唤醒待补；声学 barge 待测；RSS 未暴露 | `milestone-m1.md:21,22,26` | 待补 | 20 次 ≥19/20；mic 测静音 P50 ≤600 ms；`docker stats` | 真机 |
-| D2-11 | 固件是否真的给 AEC 参考未验证 | `p3-firmware-patch.md:163` | 未验证 | 设备端 2ch 采集：`ref_active=true` 且播放时 ERLE >10 dB | 真机 |
-| D2-12 | 0.2.2 兼容只做过静态分析（TLS hostname/4412、`oww_wake` 形状、trust 自定义） | `rui-0.2.2-dot2-compat.md:576-586` | 未实测 | 设备 TLS/端口实测；未知消息进 debug 分支的单测；定 trust 策略 | 真机 + CI |
-| D2-13 | 真机第一轮遗留：音量适配、长回复噪声、仅唤醒/多轮/距离、2 min 基线太短 | `real-machine-round-1.md:51-53` | 待补 | 静音基线 3×5 min；长回复听测；逐距离各 5 次 | 真机 |
+| ID | 声明 | 位置 | 现状 | 判据 | 需要 | 分类（task-5） |
+|---|---|---|---|---|---|---|
+| X-01 | 音量控制从未系统验证（两台设备） | 三仓 README | 未测 | 设 5 档（v2 action `volume.set` args `{"value":V}`，V=1–255；或 v1 `PUT /api/v1/device/volume` body `{"value":V,"device":"<id>"}`）→ `volume.read` 回读一致、cap 处不失真 + 耳听 | 真机 | `只能真机` — 判据是两台设备的回读与失真；控制面映射只能补单测 |
+| X-02 | 指示灯未测 | 三仓 README | 未测 | 唤醒/思考/告别序列与 `tests/test_led.py` 顺序一致（拍照留证） | 真机 + 照片 | `只能真机` — 灯序已有 test_led 覆盖，缺的是真实灯珠颜色/时序照片 |
+| X-03 | 多设备并发未测（音量/LED/4 台） | 三仓 README、`release/v0.7.2.md:57` | 未测 | `acceptance-4devices.md` §5.3/§7 表格填满、0 串台、0 `lost_same_word`；任一 null = 失败 | 4 台（设备未到） | `环境缺失` — 缺 4 台同网设备（未到）；2 台填不满 §5.3 表格 |
+| X-04 | LX06 语音指令成功率未统计 | house-ear README:110、xiaoai README:91 | 未测 | 6 句 × 5 轮 ≥26/30（同 Dot2 口径） | 真机 + 人声 | `只能真机` — 需 LX06 + 人声，6 句 × 5 轮 |
+| X-05 | LX06 唤醒 19/20、打断 205.2 ms 是 2026-10-24 历史，无 0.7.2 重测 | xiaoai README:75,89,90 | 历史实测 | `acceptance-v1.py wake --trials 20` ≥19/20；`barge --trials 3` stop-push ≤300 ms | 真机 | `只能真机` — 需 LX06 真机重采唤醒/打断 |
+| X-06 | Dot2 矩阵（30/30、26/30、8/8、10/10）测于 0.7.1/p21，0.7.2 未重测 | house-ear README:105、dot2 README:88 | 未重测 | 同分母重采；每个数字带 `--log` 行号 | 真机 + 校准音源 | `只能真机` — 需 Dot2 + 与历史同源的校准音源重采四个矩阵 |
+| X-07 | EQ/限幅只过测量，没过耳朵 | dot2 README:98、`HANDOFF` §「风险与未决」 | 无听测 | 盲听 A/B：3 首、5 分制、随机顺序、≥4/5 且无失真 | 9 哥 耳朵 | `只能真机` — 盲听 A/B 必须人耳（9 哥） |
+| HE-01 | D5 告别自回声误开 turn：加了 `reply_finished` 但仍「待验证」 | `docs/plan-to-0.6.md:21` | 仍待验证 | 把告别 PCM 当 mic 输入注入 → 0 额外 turn；真机 10 次告别 | CI 部分 + 真机 | `可转测试` — 告别 PCM 可回灌为 mic 输入并断言 0 额外 turn（§8.2） |
+| HE-02 | cue 回声在「冷启动+不削波+lag>800 ms」或「重叠<110 ms」仍可能漏 | `release/v0.7.2.md:53`、`HANDOFF` §「已知限制（0.7.2 发布时点）」 | 已知限制 | 门禁测试补 lag 900/1200 ms、overlap 50 ms；真机 A/B | 真机 | `可转测试` — lag/overlap 极值是合成 PCM 参数，现有 gate 夹具可直接覆盖（§8.2） |
+| HE-04 | 首声可闻延迟从未声学测量 | `docs/audio-latency.md:154` | 未测 | mic 录音 + `play_start` 时间相关，5 轮给 P50/P95（暂不设门） | 真机 + 录音 | `只能真机` — 首声可闻延迟要 mic 录音与物理时间对齐 |
+| HE-05 | 3–4 m 唤醒距离从未尝试 | `docs/acceptance.md:99` | 未做 | `acceptance-v1.py wake --trials 10 --label far-field`（只记录） | 真机 | `只能真机` — 3–4 m 距离必须真实房间与设备 |
+| HE-06 | NAS 断电自启未测 | `docs/runbook.md:173,403` | 推断 | 真断电一次：5 min 内 `/health` 200 + `audio_plane=true`，无需人工 | NAS | `只能真机` — 需生产 NAS 断电维护窗口（≤5 min 中断） |
+| HE-07 | 真机重连时序（Wi-Fi 抖动/IP 变化）未测 | `runbook:404`、`device-management-research.md:973` | 未测 | 断开 AP / 改 IP → `speaker connected` <10 s、重试 ≤1 | 真机 + 路由器 | `只能真机` — 需可控 AP/路由器断流或改 IP |
+| HE-08 | 24h/3 天长稳未满窗 | `release/v0.7.0.md:37` | 未满窗 | 0 5xx、0 plane 重启、RSS 斜率 <1 %/h | 真机 | `只能真机` — 24 h/3 天时间窗 + 真机运行 |
+| HE-15 | 中文 OWW 模型效果未知；中文 onnx stem 未试 | `plan/speaker-tuning.md:448,454` | 效果待测 | 每变体 20 次唤醒 ≥19/20，否则砍功能 | 真机 + 自训模型 | `环境缺失` — 缺自训中文 OWW 模型/中文 onnx stem |
+| HE-16 | 音乐中 2 m 短指令未测 | `HANDOFF` §「task-19 真机 A/B」 | 未测 | 10 次 ≥10/10（同 1 m 口径） | 真机 | `只能真机` — 音乐播放中的 2 m 语音采集必须真实声场 |
+| D2-01 | canary 0.6.0：无真机，唤醒/播放/AEC/音量/token 未验证 | `dot2 docs/canary-0.6.0-official-image.md:251` | 未验证 | 接设备跑 wake/play/barge + token 重连 | 真机 | `只能真机` — 需一台 Dot2 + canary 0.6.0 arm64 镜像上机 |
+| D2-03 | 0.2.2/0.3.4 部署从未验证设备链路；`install.sh` 未重跑 | `dot2 docs/deploy-0.3.4-user-report.md:296-299` | unverified | 设备侧部署验收 + headless 控制台点一遍 + 一次性容器重跑 `install.sh` | 真机 + 容器 | `只能真机` — 核心是设备链路；install.sh 可在一次性容器复跑但不覆盖设备侧 |
+| D2-05 | `primeWait 14–22 ms` 未验证；那一轮没声音、没听测 | `stutter-adapter-options.md:390` | 未验证 | 日志断言 primeWait + 人工听测清单 | 真机 | `只能真机` — primeWait 需设备 debug 日志 + 人耳听测 |
+| D2-07 | 设备 AEC 上限 20–24 dB 是估计；127 需要 31 dB | `aec-device-tuning.md:182,512` | 未实测 | 粉噪 10 min，`aec_erle_db` P50 ≥20 dB（目标 25） | 真机 | `只能真机` — 需 Dot2 + 粉噪源实测 ERLE |
+| D2-08 | 房间 RT60 0.3–0.5 s 是假设 | `aec-device-tuning.md:84` | 未实测 | 扫频测 RT60，只记录 | 真机 | `只能真机` — RT60 是房间声学属性，必须现场扫频录音 |
+| D2-09 | 绝对 SPL / +29 dB 增益失真与寿命 / #630 一致性未测 | `audit-device-audio.md:19,21,275` | 未测 | SPL 计 1 m；增益扫描 + THD + 1 h 耐久；第二台 A/B | 真机 + 仪器 | `环境缺失` — 缺 SPL 计/THD 声学分析仪与 1 h 耐久条件 |
+| D2-10 | M1 门禁：严格 20 次唤醒待补；声学 barge 待测；RSS 未暴露 | `milestone-m1.md:21,22,26` | 待补 | 20 次 ≥19/20；mic 测静音 P50 ≤600 ms；`docker stats` | 真机 | `只能真机` — 20 次唤醒 + 声学 barge + 设备 RSS 采集 |
+| D2-11 | 固件是否真的给 AEC 参考未验证 | `p3-firmware-patch.md:163` | 未验证 | 设备端 2ch 采集：`ref_active=true` 且播放时 ERLE >10 dB | 真机 | `只能真机` — 需设备端 2ch 采集确认 ref_active/ERLE |
+| D2-12 | 0.2.2 兼容只做过静态分析（TLS hostname/4412、`oww_wake` 形状、trust 自定义） | `rui-0.2.2-dot2-compat.md:576-586` | 未实测 | 设备 TLS/端口实测；未知消息进 debug 分支的单测；定 trust 策略 | 真机 + CI | `只能真机` — 主判据是设备 TLS/4412 与 0.2.2 固件行为；未知消息/trust 只是次要子句（§8.2 附注） |
+| D2-13 | 真机第一轮遗留：音量适配、长回复噪声、仅唤醒/多轮/距离、2 min 基线太短 | `real-machine-round-1.md:51-53` | 待补 | 静音基线 3×5 min；长回复听测；逐距离各 5 次 | 真机 | `只能真机` — 静音基线/长回复/逐距离都要真实声场 |
 
 ## 3. 文档矛盾（0.7.3 终态，逐条已落地）
 
@@ -182,3 +190,87 @@
 2. **HE-12 `catalog.get("shadow-plug")` 防空断言**：当前用 `resolve()` 证明 builtin 胜出；
    补断言 `PlugCatalog.get("shadow-plug")` 的 `source == "user"`，证明 user plug 确实被加载、
    只是解析优先级输给 builtin，避免「user plug 根本没载入」也能让测试通过的空过。
+
+## 8. 真机 / 人工项分类（task-5，2026-10-27）
+
+> 范围：§2 的全部 **26 条**。本卡**只分类**，不删条目、不改任何条目的「已验证/未验证」状态；
+> 处置方式（继续测 / 转已知限制 / 删）待 9 哥 在 D-005 拍板。
+> 分类依据：条目原文的「判据」列 + 现有无头夹具（`tests/test_cue_echo_excision.py`、
+> `tests/test_dismiss_turn_release.py`、`rui-xiaoai-bridge/tests/test_led.py`、`rui-dot2-bridge/tests/*` 等）。
+
+### 8.1 口径（三选一，互斥）
+
+| 标签 | 判定标准 | 条数 |
+|---|---|---:|
+| `可转测试` | 条目**主判据**（直接复现其声称失败模式的那半句）可完整无头判定；真机半句只作确认，已在 §8.2「测不了什么」逐条列明 | **2** |
+| `只能真机` | 主判据必须依赖设备、声学环境或人耳；CI 只能覆盖次要子句（D2-12 即此类） | **21** |
+| `环境缺失` | 缺的是环境/硬件/模型/拓扑（不是测试能力），写出缺什么 | **3** |
+| **合计** | 与 §0 统计、§2 逐条标注一致 | **26** |
+
+> 注意：§0 的「其中已有部分 CI 夹具、只缺真机腿 **9** 条」**不等于**可转测试。那 9 条只是子步骤
+> （LED 顺序、音量映射、契约等）已有夹具，主判据仍要设备。本表按「**主判据**能否完整无头判定」划线：
+> HE-01/HE-02 的主判据是回声回灌与门禁极值（合成 PCM 可完整复现）；D2-12 的主判据是设备 TLS/4412 与
+> 0.2.2 固件行为，未知消息/trust 只覆盖次要子句，故归 `只能真机`（CI 半仍列在 §8.2 附注）。
+>
+> diff 说明：§2 表是为新增「分类（task-5）」一列而整行重写（`git diff` 会显示 26 行删除 + 26 行新增），
+> 原 6 列（声明/位置/现状/判据/需要）逐字节未改、条目数与 ID 集合前后一致（§1 10 条 + §2 26 条 = 36）。
+
+### 8.2 `可转测试` 候选清单（2 条，含测试名与断言要点）
+
+| ID | 建议测试（file::test） | 断言要点 | 能测什么 | 测不了什么 |
+|---|---|---|---|---|
+| HE-01 | `tests/test_he01_goodbye_echo_no_extra_turn.py::test_goodbye_pcm_replayed_as_mic_opens_no_turn` | ① 把 D5 告别回复 PCM 设为 `UtteranceGate.set_echo_reference`，再按 lag 0/150/400 ms 当 mic 回灌（复用 `tests/test_cue_echo_excision.py` 的 `_feed/_close` 夹具）：`gate.arm()` 后捕获必须为 `None`（0 utterance）；② **idle goodbye 路径**：用 `tests/test_dismiss_turn_release.py:168-190` 的 `_ReplyHandle` + `_PlaneLink.reply_finished`，跑「idle watchdog 告别（`src/rui/web/api/app.py:3327-3329`）→ `reply_finished`」：只产生 1 个 turn、follow-up window 未开（0 额外 turn）。注意 dismissal（退下吧）**故意不调** `reply_finished`（`app.py:913-917`、`:999-1003`），不能用它测这一句 | 回声回灌下的门禁切除 + idle goodbye 的 `reply_finished` 记账；主判据「告别 PCM 当 mic 输入 → 0 额外 turn」可完整判定 | 真机扬声器→mic 的回声电平与 AEC 残差；原判据后半「真机 10 次告别」仍建议保留 |
+| HE-02 | `tests/test_he02_cue_echo_extremes.py::test_cue_echo_is_excised_at_lag_900_and_1200_ms`、`::test_a_50ms_overlap_never_feeds_the_cue_to_asr` | 用 `_one_wake(gate, cue, lag_ms=900/1200)`：`_best_corr(segment, cue) < 0.4` **且** `_max_windowed_corr(segment, cue) < 0.6`（清音/削波**同阈值**；削波用 `clip_cue=True`）；用户回复保留 ≥80%。overlap 50 ms **不能**走 `_one_wake`（负 gap 被 `_silence` 截成 0 字节，用户必从 cue 尾部起），改用 `_mix`（参照 `test_a_clipped_overlap_never_feeds_the_cue_to_asr` :236-239），让用户从 `lag + CUE_MS - 50` 处起说话，同样断言 `_best_corr < 0.4` 且 `_max_windowed_corr < 0.6`；全程 0 额外 turn | 门禁在 lag 900/1200 ms、overlap 50 ms 的切除行为（合成 PCM，完全确定；阈值与现契约一致） | 真机 AEC / 房间回声下的 A/B 听测（原判据后半） |
+
+> **附：D2-12（标签 `只能真机`）的 CI 半可以先补，但不改变标签**：
+> `rui-dot2-bridge/tests/test_d2_12_unknown_message.py::test_unknown_event_logs_debug_and_keeps_the_link`
+> （未知事件进 debug、连接不崩、后续消息仍处理）；
+> `tests/test_plugin_trust_pinned.py::test_manifest_trusted_is_honored_today_risk_pinned`
+> （钉**现行**行为：manifest 自声明 `trust: trusted` 会被采信并允许 in-process——`src/rui/plugins/models.py:558`
+> 默认 `third_party`，`loader.py:226-236` 只拦 `third_party` 的 in-process；这是**已知风险**，不是安全边界。
+> 若要钉「用户可写目录的 `trust: trusted` 应被拒绝」，那是**待实现策略**，须另立卡，不能写成当前行为）。
+
+### 8.3 `只能真机` 分组与单窗口覆盖估算（21 条）
+
+> 「一个真机窗口」= 9 哥 可到场、LX06 与 Dot2 各一台在手、手机可录音、有 ≥1 h 连续操作时间。
+
+| 组 | 场景 | 条目 | 条数 | 一个窗口的估算 |
+|---|---|---|---:|---|
+| A | 1 m 单机协议（唤醒/指令/播放/音量/LED，手机录音 + 9 哥耳朵旁听） | X-01, X-02, X-04, X-05, X-06, HE-04, HE-05, HE-16, D2-05, D2-07, D2-08, D2-10, D2-11, D2-13 | 14 | **4–5 h 可全部覆盖**（每条约 10–25 min；D2-07 粉噪 10 min、D2-10 20 次唤醒最久） |
+| B | 部署/兼容（Dot2 上机、TLS/端口、一次性容器） | D2-01, D2-03, D2-12 | 3 | 2–3 h（含烧镜像/回滚；D2-03 的 `install.sh` 可在一次性容器复跑，设备链路仍需现场；D2-12 的 TLS/4412 实测约 0.5 h 并入） |
+| C | 耳听主观 | X-07 | 1 | 0.5 h（3 首盲听，需 9 哥在场；可搭 A 组窗口，A+C 共 15 条） |
+| D | 服务端/网络/长稳 | HE-06, HE-07, HE-08 | 3 | HE-06 0.5 h（含 ≤5 min 生产中断）、HE-07 0.5 h、HE-08 起跑后 24 h 读数 |
+| **合计** | | | **21** | 约「2 个工作日 + 1 次过夜」清空（设备在手的假设） |
+
+**结论：一次 4–5 h 真机窗口可覆盖 A 组 14 条（含 X-07 耳听则 15 条）；剩余 6 条（B 组 3 + D 组 3）走部署/网络窗口 + 24 h 观测。**
+
+- A 组内部分工：X-04/X-05/HE-16 偏 LX06；X-06/D2-05/D2-07/D2-08/D2-10/D2-11/D2-13 偏 Dot2；X-01/X-02/HE-04/HE-05 两台都要各做一遍。
+- 每个条目的命令、判据与记录表已在本文件 §6；窗口现场只需按表执行并落记录，不再另写协议。
+- 若只有一台设备在手：A 组按设备拆成两个半窗（各 2–2.5 h），总数不变。
+
+### 8.4 `环境缺失`（3 条，写清缺什么）
+
+| ID | 缺什么 | 现有替代 / 建议 |
+|---|---|---|
+| X-03 | 4 台同网设备（设备未到） | 先用 2 台完成 X-01/X-02 与部分并发观察；`acceptance-4devices §5.3` 的四设备表格保持 `null + 原因`，不补不猜 |
+| HE-15 | 自训中文 OWW 模型 / 中文 onnx stem（当前无该变体；**模型需先训练**，不是等设备/固件） | 先用现有模型测基线唤醒（X-05 同口径）；模型训练完成后再按每变体 20 次，≥19/20 才保留 |
+| D2-09 | SPL 计、THD 分析仪、1 h 耐久台架 | 先记录增益档位与 1 h 温升/听感；手机 SPL app 只作参考，不写入门 |
+
+### 8.5 拿不准（需 9 哥 拍板，仍计入上方统计）
+
+| ID | 当前标签 | 另一种可能 | 拍板点 |
+|---|---|---|---|
+| X-06 | `只能真机` | 若已无与 0.7.1/p21 同源的校准音源 → `环境缺失` | 是否要求四个矩阵数字与历史**可比**（同源音源）；不要求则可降级为「只记录新值」 |
+| HE-06 | `只能真机` | 若不允许生产 NAS 断电且无第二台 NAS → `环境缺失` | 是否允许 ≤5 min 的生产中断（`/health` + `audio_plane` 判据不变） |
+| D2-12 | `只能真机` | 若 0.2.2 固件不再维护 → 按「已知限制」处置 | 0.2.2 兼容是否还在支持范围；CI 半（未知消息/trust）可先补（§8.2 附注），但结论取决于设备 TLS/4412 实测（B 组窗口） |
+
+### 8.6 结论
+
+1. **本卡不改变任何条目的「已验证/未验证」状态**：26 条全部保持原状，只是各加一个处置标签；
+   删除、转「已知限制」或继续排测，均待 **D-005** 拍板。本卡不改 README、不改代码，未删任何条目。
+2. 统计：`可转测试` 2 + `只能真机` 21 + `环境缺失` 3 = **26**，与 §0 统计表、§2 逐条标注三方一致。
+3. 给 D-005 的输入建议（不代替拍板）：
+   - 2 条 `可转测试` 不需要设备，可立即排成普通 pytest 卡（§8.2）；D2-12 的 CI 半可一并补（§8.2 附注），但不改变其 `只能真机` 标签；
+   - 21 条 `只能真机` 按 §8.3 的两个工作日 + 一次过夜排窗口，其中 A 组一次 4–5 h 可清 14 条；
+   - 3 条 `环境缺失` 等设备/仪器/模型到位，或直接转「已知限制」并保留 §6 协议；
+   - §8.5 的 3 个边界项需要 9 哥 先定口径；它们只影响标签归属，不改变 26 条的总数。
