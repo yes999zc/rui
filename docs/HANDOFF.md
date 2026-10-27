@@ -121,6 +121,16 @@
 | task-15 | `docs/acceptance-pending.md` + `docs/known-limitations.md` | ✅ **completed `4f75079`**；PASS（rev-inv 三轮）→ VERIFIED（ver-docs：21 条 `comm -3` 无缺无多、27 行四要素齐、无敏感串/漂移行号） |
 | task-16 | **收口报告** `docs/release-candidate-0.7.9.md` | ✅ **completed `35dc556`**；PASS（rev-cov 两轮，抓出「本批起点」数字口径）→ VERIFIED（ver-timings 实跑 1708/6、核四绿时间戳、没把 cancelled 当绿） |
 
+**收尾批次（0.7.9，2026-10-27 12:5x 起，9 哥 全权授权、出门无人应答）**：目标=批次2+3 修复 → D-011=A → 文档 → 发版 0.7.9 → 结束会话；**禁止项只有：部署生产 / 动 NAS / 真机出声**。
+| 卡 | 内容 | 状态 |
+|---|---|---|
+| task-17 | 批次 2+3（C5 暂停词收窄 / C3 无歌暂停提示 / C4 措辞 / C6 文案） | review **PASS**（rev-inv），**待 verifier** |
+| task-18 | D-011=A：`ack` order 200→5（**tier 保持 2**）+ 顺序断言同步 + 待拍板收口 + acceptance-pending 并批 | **未开始**（等 task-17 合入后派，避免同文件冲突） |
+| task-19 | `docs/backlog-0.8.md`（283 行，四节含**双 dot2 同型号 6 组**）+ known-limitations L10–L16 + README（中英，0.7.9 标「候选未发布」） | review **PASS**（rev-facts 三轮），**待 verifier** |
+| 发版 | 版本号 0.7.9（pyproject / `src/rui/__init__.py` / `uv.lock`）+ CHANGELOG + tag `v0.7.9` + GitHub release（**如实写：意图层行为真机未验**） | Lead 做，在 task-17/18 合入后 |
+
+**已定（本批内 Lead 裁决，不需再拍）**：D-011 **只改 order、不动 tier** → v2 语音助手页 ack 由第 8 位升到**第 3 位（首屏可见）**，旧面板「音频与唤醒」tab 变**第 1 位**；要 v2 第 1 位需 tier 2→1 或 v2 页内排序 → 归 0.8 P1。**ACK-1 判据 = 首屏可见，不是第 1 组**。
+
 **收口报告已交付**：`docs/release-candidate-0.7.9.md`（`35dc556`）—— 六节：可见变化 / 稳定性（v0.7.8 **1644** → HEAD **1708** passed, 6 skipped，+64） / 文档 / 验收清单 / 回滚（两个 `-f` + amd64 摘要警告） / **能不能发：可以发**，三条条件（最终发布提交四绿、N1/N2 真机验过、接受 C2 收窄且不宣称 ACK/HE-02 已修）。**未打 tag、未部署、未做真机**。
 
 **已知未决（不阻塞本轮，但会影响「能不能发」的措辞）**：D-011（唤醒应答 tier 2→1 取舍）、C3（无歌说「暂停」是否算结束）、C10（别名算不算新增词）、D-001（要不要发 0.7.9 patch）、D-002（真机窗口）、D-010（HE-02 修不修）。
