@@ -4,6 +4,15 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
+## 支持矩阵补测（2026-10-27 08:54）
+
+- **致谢**：README 中英新增完整 `## 致谢 / Acknowledgements`（`5360a14`）——按「实际在链路里」与「设计参考」分组点名：open-xiaoai（LX06 客户端与协议）、sherpa-onnx（ASR/KWS + 模型分发）、Silero VAD、SenseVoice/FunASR（中文 ASR 权重）、FFmpeg、speexdsp、openWakeWord（设备端 OWW 模型）；设计参考 Rhasspy / Wyoming / EchoMuse；音乐对接 Navidrome。许可证细节指向 `THIRD_PARTY.md`。
+- **音量控制补测（真机，`debug/say`）**：
+  - LX06（客厅）：`音量调到30` → 回「音量调到 30%了」，日志 `device volume set to 76`（设备刻度≠百分比，见下）✅
+  - dot2（卧室）：**回复滞后一步** —— `调30`→回「100%」、`调40`→回「30%」、`调70`→回「40%」；但 `config.yaml` 写入正确（living `volume: 30`、dot2 `volume: 40`）。**结论：设置生效，回读/回复用的是变更前的值**（新 bug，待修）
+  - 另注：LX06 的 30% → 设备刻度 76，映射关系需在文档写清（或按设备刻度暴露）
+- **待测**：指示灯（需人眼确认）、多设备并发（两台同时出声）。
+
 ## GitHub 收尾（2026-10-27 08:50）
 
 - **三仓 README 已按 0.7.8 现状更新并推送**：core `b2e5713`+`8879500`、dot2 `b1a4b4c`+`0bd8a53`、xiaoai `a3abc83`+`5dab49f`。内容：0.7.8 + **默认 v2 + 15 条旧链接 302**、外置插件的三段装法（宿主目录 / `-v ./plugins:/opt/rui-plugins:ro` / `PYTHONPATH` + `RUI_ADAPTER_PLUGINS`）、「不需要造下游镜像」、amd64 摘要 `1f074bb3…`、0.7.8 兼容表 + 0.7.4 历史、已知限制三条。verifier 抓到的两处（缺「默认 v2/15 条」字样、`registered` 口径写反）已修。
