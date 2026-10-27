@@ -13,11 +13,12 @@
 #        print({k:d[k] for k in ("version","devices","device_errors","audio_plane","adapter_plugins")})'
 # 注意：deploy/install.sh 会自己起一套 8080 的实例，**不要与这个 compose 同时用**
 #
-# 实测（2026-10-26，rui:0.7.2）：`adapter_plugins.registered=["dot2","lx06"]`、
-# `devices=2`、`enabled_devices=2`、`device_errors=0`。
+# 实测（2026-10-27，rui 0.7.8 纯净装）：`adapter_plugins.registered=["dot2","lx06"]`、
+# `devices=2`、`device_errors=0`、`planes` 两台 running。
 services:
   rui:
-    image: ghcr.io/yes999zc/rui:0.7.2      # 官方镜像已内置 ffmpeg/opus，无需自行编译
+    # 0.7.8 amd64 平台摘要（老版 docker 不认 OCI index，见 README 兼容性）
+    image: ghcr.io/yes999zc/rui@sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa
     container_name: rui
     restart: unless-stopped
     ports:

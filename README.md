@@ -44,7 +44,7 @@
 | 仓库 | 角色 | 版本与发布 |
 |---|---|---|
 | **rui**（本仓） | 服务端 + 控制台：会话/回合、供应商、唤醒仲裁、音频门限、`/v2` 控制台 | 独立发布 |
-| **[rui-dot2-bridge](https://github.com/yes999zc/rui-dot2-bridge)** | Dot2（RS03QR）的 `rui-device/v1` 插件 + 下游薄层镜像 | 独立版本、独立发布 |
+| **[rui-dot2-bridge](https://github.com/yes999zc/rui-dot2-bridge)** | Dot2（RS03QR）的 `rui-device/v1` 插件 | 独立版本、独立发布 |
 | **[rui-xiaoai-bridge](https://github.com/yes999zc/rui-xiaoai-bridge)** | LX06 的 `rui-device/v1` 插件 | 独立版本、独立发布 |
 
 约束有两条，缺一不可：设备清单里的 `compatibility.rui_min`（这台设备至少要哪个 rui）与插件清单里的 `rui_compat`（这个插件支持哪一段 rui）。两者不满足时，加载器会**拒绝**这个插件，而不是带着半截功能跑。
@@ -102,6 +102,8 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 2. Compose 挂载 + 导入路径：`-v ./plugins:/opt/rui-plugins:ro`、`PYTHONPATH=/opt/rui-plugins`。
 3. 显式注册：`RUI_ADAPTER_PLUGINS=dot2=rui_dot2_bridge.adapter:build,lx06=rui_xiaoai_bridge.adapter:build`。
 
+直接可用的一份参考：`examples/two-speakers/compose.yaml`（两个桥 + TLS + 两段注册一次到位）；只想先跑单台核心可以走上面的「三行启动」（`deploy/install.sh`）。
+
 挂载后日志出现 `adapter plugins: registered dot2, lx06`；`/health.planes` 逐台显示 `running/error/not_started`。
 不挂插件时设备错误会直接提示去 mount 对应桥；旧配置的 `adapter: xiaoai` 在**读入时迁移为 `lx06` 并打 WARNING**（0.8.0 删除该迁移）。
 
@@ -119,7 +121,7 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 
 ## 支持矩阵
 
-> 数字来自 **0.7.1 / p21** 的实测（2026-10-26 15:01）；**0.7.2 未重测**，未测项一律标「未测」。
+> 延迟数字来自 **0.7.1 / p21** 的实测（2026-10-26 15:01），**0.7.8 未重测延迟**；但 **0.7.8 已在真机两台部署验证**（唤醒/应答/播放/打断/音乐，2026-10-27）。未测项一律标「未测」。
 
 | 能力 | Dot2（EchoMuse RS03QR） | LX06（第三方设备） |
 |---|---|---|
@@ -133,11 +135,11 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 
 ### 安装路径实测（2026-10-26）
 
-在 `examples/two-speakers/` 下按本文件的步骤起容器（镜像 `ghcr.io/yes999zc/rui:0.7.2`，两个插件目录 bind mount）：
+在 `examples/two-speakers/` 下按本文件的步骤起容器（镜像 `ghcr.io/yes999zc/rui@sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`，两个插件目录 bind mount）：
 
 ```console
 $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.stdin);print({k:d[k] for k in ("status","version","devices","enabled_devices","device_errors","audio_plane","adapter_plugins")})'
-{'status': 'ok', 'version': '0.7.2', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
+{'status': 'ok', 'version': '0.7.8', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
 ```
 
 如实说明：`adapter_plugins.registered`、`devices`、`device_errors` 在任何情况下都成立。**`audio_plane` 取决于「哪台设备的平面被启动」**（实测见 `docs/audit/tls-required-2026-10.md`）：
@@ -204,7 +206,7 @@ Source: [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd); exports 
 | Repo | Role | Versioning |
 |---|---|---|
 | **rui** (this repo) | Server + console: sessions/turns, providers, wake arbitration, audio gate, `/v2` console | released on its own |
-| **[rui-dot2-bridge](https://github.com/yes999zc/rui-dot2-bridge)** | `rui-device/v1` plug for Dot2 (RS03QR) plus a thin downstream image | own version, own release |
+| **[rui-dot2-bridge](https://github.com/yes999zc/rui-dot2-bridge)** | `rui-device/v1` plug for Dot2 (RS03QR) | own version, own release |
 | **[rui-xiaoai-bridge](https://github.com/yes999zc/rui-xiaoai-bridge)** | `rui-device/v1` plug for LX06 | own version, own release |
 
 Two constraints must both hold: `compatibility.rui_min` in the device manifest (the minimum core this device needs) and `rui_compat` in the plug manifest (the core range the plug supports). If either fails, the loader **refuses** the plug instead of running it half-working.
@@ -262,6 +264,8 @@ The core image ships **no device implementation**: one core image plus a plug di
 2. Compose mount + import path: `-v ./plugins:/opt/rui-plugins:ro`, `PYTHONPATH=/opt/rui-plugins`.
 3. Explicit registration: `RUI_ADAPTER_PLUGINS=dot2=rui_dot2_bridge.adapter:build,lx06=rui_xiaoai_bridge.adapter:build`.
 
+One ready-to-copy reference: `examples/two-speakers/compose.yaml` (both plugs, TLS and registration in one file). For a core-only first run use the three-line install above (`deploy/install.sh`).
+
 After mounting, the log says `adapter plugins: registered dot2, lx06`; `/health.planes` shows each device as `running/error/not_started`.
 Without a plug the device error tells you which bridge to mount; a legacy `adapter: xiaoai` is migrated to `lx06` on load with a WARNING (removed in 0.8.0).
 
@@ -279,7 +283,7 @@ Without a plug the device error tells you which bridge to mount; a legacy `adapt
 
 ## Support matrix
 
-> Measured on **0.7.1 / p21** on 2026-10-26 15:01 (0.7.2 not re-measured). Anything untested is marked **untested**.
+> Latencies measured on **0.7.1 / p21** on 2026-10-26 15:01 and **not re-measured on 0.7.8**; 0.7.8 itself is verified on real hardware for wake, reply, playback, barge-in and music (2026-10-27). Anything untested is marked **untested**.
 
 | Capability | Dot2 (EchoMuse RS03QR) | LX06 (third-party) |
 |---|---|---|
@@ -293,11 +297,11 @@ Without a plug the device error tells you which bridge to mount; a legacy `adapt
 
 ### Install-path proof (2026-10-26)
 
-Started from `examples/two-speakers/` following the steps in this file (image `ghcr.io/yes999zc/rui:0.7.2`, both plug dirs bind-mounted):
+Started from `examples/two-speakers/` following the steps in this file (image `ghcr.io/yes999zc/rui@sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`, both plug dirs bind-mounted):
 
 ```console
 $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.stdin);print({k:d[k] for k in ("status","version","devices","enabled_devices","device_errors","audio_plane","adapter_plugins")})'
-{'status': 'ok', 'version': '0.7.2', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
+{'status': 'ok', 'version': '0.7.8', 'devices': 2, 'enabled_devices': 2, 'device_errors': 0, 'audio_plane': False, 'adapter_plugins': {'registered': ['dot2', 'lx06'], 'warnings': 0}}
 ```
 
 To be precise: `adapter_plugins.registered`, `devices` and `device_errors` always hold. **`audio_plane` depends on which device's plane is started** (measured; see `docs/audit/tls-required-2026-10.md`):
