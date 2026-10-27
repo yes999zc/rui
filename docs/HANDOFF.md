@@ -6,15 +6,15 @@
 
 > **下次第一件事**：0.8.0 开工前先拍板 `docs/HANDOFF-0.8.md` §3 的未决问题；**所有待拍板项已汇总到 `docs/待拍板.md`（D-001…D-006，含背景/选项/代价/建议），拍板结论回写到那里再落 HANDOFF**。在那之前不要动 0.8.0 的任何删除动作。
 
-### a. 现状事实（截至 2026-10-27 11:21）
+### a. 现状事实（截至 2026-10-27 11:32）
 
 - **版本**：core **0.7.8**；tag `v0.7.8`（`a3205e9`）；release <https://github.com/yes999zc/rui/releases/tag/v0.7.8>
 - **镜像**：GHCR 索引 `sha256:ca3b40ecaf3457158603af90e520ac2bf423e2f4570e12e36db15b2583bf24c3`（tag `0.7.8` / `0.7`）；**生产 pin 的是 amd64 平台摘要 `sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`** —— NAS 上的老 docker 不认带 attestation 的 OCI index，按索引摘要 `pull` 会报 `unsupported media type`。
 - **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。**本阶段未做任何生产变更。**
 - **回滚**：本地旧镜像已删（9 哥 决定）；**回滚走 GHCR 上一个正式版** —— `docker pull ghcr.io/yes999zc/rui:0.7.4` → 取 amd64 摘要 → 改 override 的 `image:` → **两个 `-f`** `up -d --force-recreate`（步骤见 `docs/deploy-runbook-0.7.8.md` §8）。
-- **三仓 HEAD**：rui **`1c5583a`**（26 个提交以来的最后一项是 HE-01 回归测试；用 `git log --oneline v0.7.8..HEAD` 自查）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
-- **CI**：`8321099` 与 `44fc0c7` 均已四绿（ci / security / secret-scan / docker-publish = `success`）；`1c5583a` 在跑。更早提交里出现的 `cancelled` **不是失败**，是后续 push 的并发 run 把旧 run 顶掉（`cancel-in-progress`）。查当前状态：`gh run list -L 8 --json name,headSha,status,conclusion`。
-- **进 main 未发版 42 个提交（`git rev-list --count v0.7.8..HEAD` = 42，截至 `1c5583a`）**（按「不升 minor」节奏攒着）。用户可见的：
+- **三仓 HEAD**：rui **`f7b2484`**（最后一项是测试守护；用 `git log --oneline v0.7.8..HEAD` 自查）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
+- **CI**：`8321099`、`44fc0c7`、`1c5583a` 均四绿（ci / security / secret-scan / docker-publish = `success`）；`f7b2484` 正在跑。更早提交里出现的 `cancelled` **不是失败**，是后续 push 的并发 run 把旧 run 顶掉（`cancel-in-progress`）。查当前状态：`gh run list -L 8 --json name,headSha,status,conclusion`。
+- **进 main 未发版 44 个提交（`git rev-list --count v0.7.8..HEAD`，截至 `f7b2484`）**（按「不升 minor」节奏攒着）。用户可见的：
   `91cac91` 控制台把 Home Assistant 与 MCP 服务器分两段（仅呈现层，API 未动）、
   `d2c9895` dot2 音量回读取 mixer 回报值、`e85b4bb` 「唱首歌」走随机 + 老链接落页提示、
   `3ed312f` `mcp <name>: down` 重连日志节流（行为变更，已记入 CHANGELOG「已知变更」）、
@@ -69,27 +69,30 @@
 - **不留半绿状态**：每张卡 review PASS + verify VERIFIED 才允许完成。
 - **每条 compose 命令必须两个 `-f`**（少一个会解析到 `.env` 里过期的 `RUI_IMAGE`）。
 
-### g. 本阶段进展（打磨阶段，2026-10-27 10:20 起；9 哥 已授权自主推进到 0.8.0 拍板前）
+### g. 本阶段进展（打磨阶段，2026-10-27 10:20–11:45；9 哥 已授权自主推进到 0.8.0 拍板前）
 
-> 只写「卡号 / 状态 / 证据」；细节在任务板与 commit。**未 commit 的卡不算完成。**
+> 11 张卡，**10 张走完 review PASS + verify VERIFIED**，1 张按纪律 park（task-10，等 9 哥 拍板）。
+> 全部提交已 push 到 `main`，**未打 tag、未发版、未动生产**。测试基线从 `1668 passed, 6 skipped` 变为 **`1672 passed, 6 skipped`**（新增 2 个测试文件、11 个用例）。
 
 | 卡 | 内容 | 状态 | 证据（commit / 结论） |
 |---|---|---|---|
-| task-1 | audio plane 关闭路径 socket-close 竞态 | ✅ | `2977c3a`：走完 PASS→VERIFIED（独立 worktree，单文件 10/10、全量 3×`1668 passed`） |
-| task-2 | `mcp <name>: down` 日志节流 | ✅ | `3ed312f`：12 次同因失败 = 1 INFO + 11 DEBUG |
-| task-3 | G0 文档事实校准 + 建 `docs/待拍板.md` | ✅ | `30ab5f2`/`a46fb68`/`663997f` |
-| task-4 | CI 四 workflow 时长 + 决定 | ✅ | `3ea6726`：**决定=维持现状**；唯一候选（ci `image` 加 gha 缓存 ≈30 s）已量化并推迟 |
-| task-5 | 26 条真机「未验证」分类 | ✅ | `97e49bb`：**2 可转测试 / 21 只能真机 / 3 环境缺失** |
-| task-6 | 文档 ↔ 代码事实核查（40 条） | ✅ | `ed3b648`：32 一致 / **5 已修正** / 2 疑似 / 1 需拍板 |
-| task-7 | 覆盖率基线对比 + 提升方案 | ✅ | `44fc0c7`：行 +0.35pp / 分支 +0.22pp；**3 个真降全是删测试导致**；`--compare` 按百分比口径 exit 1 → 口径待定 |
-| task-8 | 清 8 条评审/验证遗留 nit | ✅ | `8321099`：5 文件 +26/−16，全量 `1668 passed` |
-| task-9 | 2 条「可转测试」落成真测试 | ✅（**只交 HE-01**） | `1c5583a`：3 个 lag case；**HE-02 落了测试才暴露真缺口** → 见 task-10 |
-| task-10 | HE-02 回声切除漏 cue（lag 900–1200 / 尾部 1740 ms） | 🚫 **BLOCKED**（等 D-010） | 复现 `4 failed / 2 passed`；根因 `CUE_MATCH_START_MAX_MS=800` + EMA 740±200 + contaminated 条件 + 750 ms guard |
-| task-11 | 测试卫生：N4 日志归属断言 + HE-01 常量注释/正向控制 | 进行中（impl-noise） | 只动两个测试文件 |
+| task-1 | audio plane 关闭路径 socket-close 竞态 | ✅ | `2977c3a`；独立 worktree 单文件 10/10、全量 3×绿 |
+| task-2 | `mcp <name>: down` 日志节流 | ✅ | `3ed312f`；12 次同因失败 = 1 INFO + 11 DEBUG |
+| task-3 | G0 事实校准 + 建 `docs/待拍板.md` | ✅ | `30ab5f2`/`a46fb68`/`663997f` |
+| task-4 | CI 四 workflow 时长 + 决定 | ✅ | `3ea6726`；**维持现状**；候选（ci image 缓存 ≈30 s）推迟 |
+| task-5 | 26 条真机「未验证」分类 | ✅ | `97e49bb`；**2 可转测试 / 21 只能真机 / 3 环境缺失** |
+| task-6 | 文档 ↔ 代码事实核查（40 条） | ✅ | `ed3b648`；32 一致 / 5 已修正 / 2 疑似 / 1 需拍板 |
+| task-7 | 覆盖率基线对比 + 提升方案 | ✅ | `44fc0c7`；行 +0.35pp / 分支 +0.22pp；**3 个真降全是删测试导致** |
+| task-8 | 清 8 条遗留 nit | ✅ | `8321099`；被吞的 ENOTCONN 现在留 DEBUG |
+| task-9 | 2 条「可转测试」落成真测试 | ✅（只交 HE-01） | `1c5583a`；**HE-02 落了测试才暴露真缺口** |
+| task-10 | HE-02 回声切除漏 cue（lag 900–1200 / 尾部 1740 ms） | 🚫 **BLOCKED（D-010）** | 复现 `4 failed / 2 passed`；根因链已写卡面 |
+| task-11 | 测试卫生（日志归属断言 / 常量注释 / 正向控制） | ✅ | `f7b2484`；过度切除变异**只红新用例**，证明其独有价值 |
 
 **待拍板 10 条**（`docs/待拍板.md` D-001…D-010）。**发版/生产/真机出声/契约/改 README 承诺一律等 9 哥。**
 
-**下一步（按序）**：1) task-11 评审+验证；2) 收口（HANDOFF 事实行 + 汇总）；3) 等 9 哥 对 D-001（patch 版）、D-002（回滚演练窗口）、D-010（HE-02 修不修）拍板后再开新卡。
+**9 哥 回来后的第一件事**：看 `docs/待拍板.md`，优先拍 D-001（要不要发 0.7.9 patch）、D-002（给一个真机窗口跑回滚演练+真机验收）、D-010（HE-02 修不修）。
+
+**已知残留 nit（都不阻塞，建议合成一张 micro 卡）**：T3 的能量阈值按 1740/790 标定（换生产常量会误红）；T1 用字面 logger 名；`MCPClient` 用例未对称断言 name；`make_gate` 与 `test_cue_echo_excision.py` 重复（风格债）；`ci-timings.md` 两处措辞；`tests/__pycache__/test_he02_*.pyc` 陈旧字节码（gitignore 忽略）。
 
 ## 版本节奏（2026-10-27 09:10，9 哥 定）
 
