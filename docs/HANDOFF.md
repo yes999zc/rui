@@ -4,6 +4,16 @@
 > 是 0.7.2 及更早的快照，除被这两节显式更新处外仍有效。
 > 明早 9 哥 第一件事：读 §0.7.3/§0.7.4 的「待你决定」「白天项」与「生产变更日志」。
 
+## GitHub 收尾（2026-10-27 08:50）
+
+- **三仓 README 已按 0.7.8 现状更新并推送**：core `b2e5713`+`8879500`、dot2 `b1a4b4c`+`0bd8a53`、xiaoai `a3abc83`+`5dab49f`。内容：0.7.8 + **默认 v2 + 15 条旧链接 302**、外置插件的三段装法（宿主目录 / `-v ./plugins:/opt/rui-plugins:ro` / `PYTHONPATH` + `RUI_ADAPTER_PLUGINS`）、「不需要造下游镜像」、amd64 摘要 `1f074bb3…`、0.7.8 兼容表 + 0.7.4 历史、已知限制三条。verifier 抓到的两处（缺「默认 v2/15 条」字样、`registered` 口径写反）已修。
+- **Hermes 的 24 个 OPEN issue 全部回复并关闭**（core 16 + dot2 5 + xiaoai 2，以及最后一轮补上的 rui#16）：
+  - close(fixed) 4：rui#17/#18（`cf42695`，0.7.4）、#25/#28（`4468521`，0.7.4；#25 镜像 xiaoai `8f3ac46`，0.2.2）
+  - close(duplicate) 1：xiaoai#1 = rui#25
+  - close(not planned) 19：全部登记在 `docs/ROADMAP-0.8.md` §8（0.8.1 / dot2 1.3.2·1.3.3 / xiaoai 0.2.3 / backlog），回复正文点名小节
+  - 回复包与核对命令：`docs/audit/hermes-replies.md`（每条带 commit/tag/file:line，中英双语，未承诺日期）
+- 三仓当前 **0 个 open issue**。
+
 ## 0.7.8 已发布（2026-10-27 08:30）
 
 | 项 | 值 |
