@@ -12,9 +12,9 @@
 - **镜像**：GHCR 索引 `sha256:ca3b40ecaf3457158603af90e520ac2bf423e2f4570e12e36db15b2583bf24c3`（tag `0.7.8` / `0.7`）；**生产 pin 的是 amd64 平台摘要 `sha256:1f074bb3af1ef4854ef040b12c9146ed8a6ef2b1c4a5f6cc7858ac6ccac3ecaa`** —— NAS 上的老 docker 不认带 attestation 的 OCI index，按索引摘要 `pull` 会报 `unsupported media type`。
 - **生产（NAS）**：`version=0.7.8`、`console=v2`、`devices=2`、`device_errors=0`、`adapter_plugins.registered=["dot2","lx06"]`、`warnings=0`；**一个核心镜像 + 两个外挂插件目录**（`/vol1/rui/plugins/`）。**本阶段未做任何生产变更。**
 - **回滚**：本地旧镜像已删（9 哥 决定）；**回滚走 GHCR 上一个正式版** —— `docker pull ghcr.io/yes999zc/rui:0.7.4` → 取 amd64 摘要 → 改 override 的 `image:` → **两个 `-f`** `up -d --force-recreate`（步骤见 `docs/deploy-runbook-0.7.8.md` §8）。
-- **三仓 HEAD**：rui `3ed312f`（工作树见下方「未提交」）、dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
+- **三仓 HEAD**：rui 代码 HEAD `3ed312f`（此后可能又落了 docs 提交，用 `git log --oneline v0.7.8..HEAD` 自查）；dot2 `8a236f3`、xiaoai `5f0a207`；**三仓 open issue = 0**（24 条已逐条回复并关闭）。
 - **CI（rui `3ed312f`）**：secret-scan / security 已 success；ci / docker-publish 发版时仍在跑（此前的 `22df703` 是四绿）。
-- **进 main 未发版 28 个提交**（`git rev-list --count v0.7.8..HEAD`，按「不升 minor」节奏攒着）。用户可见的：
+- **进 main 未发版 28 个提交（截至代码 HEAD `3ed312f`；`git rev-list --count v0.7.8..3ed312f`）**（按「不升 minor」节奏攒着）。用户可见的：
   `91cac91` 控制台把 Home Assistant 与 MCP 服务器分两段（仅呈现层，API 未动）、
   `d2c9895` dot2 音量回读取 mixer 回报值、`e85b4bb` 「唱首歌」走随机 + 老链接落页提示、
   `3ed312f` `mcp <name>: down` 重连日志节流（行为变更，已记入 CHANGELOG「已知变更」）；
