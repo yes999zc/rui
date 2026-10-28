@@ -355,6 +355,25 @@ def test_device_for_room_is_an_exact_match_and_prefers_an_enabled_device() -> No
     assert app_module._device_for_room(cfg, "") == ""
 
 
+def test_device_room_is_the_exact_inverse_of_device_for_room() -> None:
+    """task-31: a device id resolves to its configured room, never a guess."""
+    cfg = _cfg(living="客厅", bedroom="次卧", bare="")
+    assert app_module._device_room(cfg, "bedroom") == "次卧"
+    assert app_module._device_room(cfg, "living") == "客厅"
+    assert app_module._device_room(cfg, "bare") == ""
+    assert app_module._device_room(cfg, "missing") == ""
+    assert app_module._device_room(cfg, "") == ""
+    assert app_module._device_for_room(cfg, "次卧") == "bedroom"
+
+
+def test_speaking_device_id_reads_the_client_or_its_ready_message() -> None:
+    assert app_module._speaking_device_id(_FakeLink("dot2-b")) == "dot2-b"
+    ready = SimpleNamespace(ready=SimpleNamespace(device_id="dot2"))
+    assert app_module._speaking_device_id(ready) == "dot2"
+    assert app_module._speaking_device_id(SimpleNamespace()) == ""
+    assert app_module._speaking_device_id(SimpleNamespace(ready=None)) == ""
+
+
 def _fake_app(cfg: Config) -> SimpleNamespace:
     return SimpleNamespace(state=SimpleNamespace(cfg=cfg))
 
@@ -399,7 +418,8 @@ class _FakeIdle:
 
 
 class _FakeLink:
-    device_id = "living"
+    def __init__(self, device_id: str = "living") -> None:
+        self.device_id = device_id
 
     async def set_led(self, effect: str, repaint: bool = False) -> None:
         return None
@@ -418,8 +438,8 @@ class _FakeRunner:
         return 100
 
 
-def _voice_app(tmp_path, clock: dt.datetime = REF):
-    cfg = _cfg(living="客厅", study="书房")
+def _voice_app(tmp_path, clock: dt.datetime = REF, **devices: str):
+    cfg = _cfg(**(devices or {"living": "客厅", "study": "书房"}))
     cfg.system.data_dir = str(tmp_path / "data")
     scheduler = DueScheduler(ReminderStore(cfg.system.data_dir), clock=lambda: clock)
     app = SimpleNamespace(state=SimpleNamespace(
@@ -429,10 +449,11 @@ def _voice_app(tmp_path, clock: dt.datetime = REF):
     return app, scheduler
 
 
-def _run_voice(app, runner, sentence: str) -> bool:
+def _run_voice(app, runner, sentence: str, link: _FakeLink | None = None) -> bool:
+    link = link or _FakeLink()
     traces = TraceLog()
     return asyncio.run(app_module._voice_reminder_command(
-        app, sentence, runner, _FakeLink(), TurnTrace(device_id="living"), traces,
+        app, sentence, runner, link, TurnTrace(device_id=link.device_id), traces,
     ))
 
 
@@ -447,12 +468,43 @@ def test_voice_entry_stores_the_room_and_answers_with_the_time(tmp_path) -> None
     assert runner.idle.touched == 1
 
 
-def test_voice_entry_without_a_room_stores_none(tmp_path) -> None:
-    app, scheduler = _voice_app(tmp_path)
+def test_voice_entry_without_a_named_room_uses_the_speaking_devices_room(tmp_path) -> None:
+    """task-31: the device that heard the sentence is the source room.
+
+    An unnamed reminder used to store ``room=None`` and fall back to living at due
+    time, so a 次卧 reminder spoke in 客厅 and left the 次卧 song playing. The room is
+    now the speaking device's configured room; the confirmation stays as short as
+    before because the user never named a room.
+    """
+    app, scheduler = _voice_app(tmp_path, living="客厅", study="书房", bedroom="次卧")
     runner = _FakeRunner()
-    assert _run_voice(app, runner, "提醒我明天早上七点吃药") is True
+    assert _run_voice(app, runner, "提醒我明天早上七点吃药",
+                      link=_FakeLink("bedroom")) is True
+    item = scheduler.store.pending(now=REF)[0]
+    assert (item.text, item.room) == ("吃药", "次卧")
+    # The source room is stored, not announced as if the user had named it.
+    assert runner.spoken[0] == "好，明天07点提醒你吃药。"
+
+
+def test_a_named_room_still_beats_the_speaking_devices_room(tmp_path) -> None:
+    """The sentence's explicit 「在客厅」 wins over the device that heard it."""
+    app, scheduler = _voice_app(tmp_path, living="客厅", bedroom="次卧")
+    runner = _FakeRunner()
+    assert _run_voice(app, runner, "提醒我明天早上七点在客厅吃药",
+                      link=_FakeLink("bedroom")) is True
+    assert scheduler.store.pending(now=REF)[0].room == "客厅"
+
+
+def test_an_unknown_or_roomless_device_does_not_invent_a_room(tmp_path) -> None:
+    """No configured room for the speaking device keeps the old None behaviour."""
+    app, scheduler = _voice_app(tmp_path, living="客厅", spare="")
+    runner = _FakeRunner()
+    assert _run_voice(app, runner, "提醒我明天早上七点吃药",
+                      link=_FakeLink("spare")) is True
     assert scheduler.store.pending(now=REF)[0].room is None
-    assert "客厅" not in runner.spoken[0]
+    assert _run_voice(app, runner, "提醒我明天早上八点吃药",
+                      link=_FakeLink("not-a-device")) is True
+    assert {item.room for item in scheduler.store.pending(now=REF)} == {None}
 
 
 def test_a_failed_parse_speaks_and_creates_nothing(tmp_path) -> None:

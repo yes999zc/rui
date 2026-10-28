@@ -1246,7 +1246,9 @@ async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trac
     Only the narrow grammar in `parse_voice` is claimed. A sentence with no trigger
     returns False and the ordinary turn continues; a sentence that *is* a reminder but
     cannot be honoured (no time, no action, a time already gone) is answered clearly
-    and creates nothing. The reminder keeps the room the user named, and delivery
+    and creates nothing. The reminder keeps the room the user named; when the sentence
+    names no room it keeps the room of the device that heard it (task-31: an unnamed
+    次卧 reminder used to fall back to living and left the 次卧 song playing). Delivery
     decides the three-tier target later (§e.2) - the room may go offline meanwhile.
     """
     scheduler = getattr(app.state, "reminders", None)
@@ -1254,6 +1256,7 @@ async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trac
         return False
     cfg = app.state.cfg
     rooms = tuple(dev.room for dev in cfg.devices if dev.room.strip())
+    source_room = _device_room(cfg, _speaking_device_id(client))
     moment = scheduler.now()
     try:
         parsed = parse_voice(clean, rooms=rooms, now=moment)
@@ -1274,19 +1277,23 @@ async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trac
     if parsed is None:
         return False
 
+    room = parsed.room or source_room
     try:
-        item = scheduler.store.add(parsed.text, parsed.at, now=moment, room=parsed.room)
+        item = scheduler.store.add(parsed.text, parsed.at, now=moment, room=room)
     except ValueError:
         line = phrases.book.render("reminder.need_text")
     except OSError as exc:  # data_dir not writable: never promise a reminder
         log.warning("reminder voice: cannot save to %s: %s", scheduler.store.path, exc)
         line = phrases.book.render("reminder.save_failed")
     else:
-        key = "reminder.set_room" if item.room else "reminder.set"
+        # The spoken confirmation keeps the user's own wording: a room they named is
+        # repeated back, a source room derived from the device is only stored (and
+        # logged below), never announced as if they had chosen it.
+        key = "reminder.set_room" if parsed.room else "reminder.set"
         line = phrases.book.render(key, when=humanize_reminder(item.at, now=moment),
-                                   text=item.text, room=item.room or "")
-        log.info("reminder voice: set %s at %s for room %r",
-                 item.text, item.at.isoformat(), item.room)
+                                   text=item.text, room=parsed.room or "")
+        log.info("reminder voice: set %s at %s for room %r (named=%r, source=%r)",
+                 item.text, item.at.isoformat(), item.room, parsed.room, source_room)
     runner.idle.touch()
     spoken = await runner.say(line, _speaking(app, client), trace)
     _record_turn(app, {"transcript": clean, "reply": line, "audio_bytes": spoken,
@@ -1685,6 +1692,33 @@ def _reminder_client(app: FastAPI) -> object | None:
     return _default_output_client(app)
 
 
+def _speaking_device_id(client: object) -> str:
+    """The device id of the plane that heard the turn ("" when it is unknown).
+
+    The fleet client carries ``ready.device_id``; a test double may expose
+    ``device_id`` directly. Never fall back to a room here: an unknown id must stay
+    unknown so an unnamed reminder does not inherit a guessed default.
+    """
+    ready = getattr(client, "ready", None)
+    return str(getattr(client, "device_id", "") or getattr(ready, "device_id", "") or "")
+
+
+def _device_room(cfg: Config, device_id: str) -> str:
+    """The room configured for a device id - the source room of an unnamed reminder.
+
+    The inverse of :func:`_device_for_room`. A sentence that names no room is still
+    about the room the person is standing in, so the reminder must ring there
+    (task-31). An unknown or room-less device returns "".
+    """
+    want = (device_id or "").strip()
+    if not want:
+        return ""
+    for dev in cfg.devices:
+        if dev.id == want:
+            return dev.room.strip()
+    return ""
+
+
 def _device_for_room(cfg: Config, room: str) -> str:
     """The device a spoken room name means, matched exactly (§e.2 tier 1).
 
@@ -1735,8 +1769,11 @@ def _reminder_client_for_room(app: FastAPI, room: str) -> object | None:
 def _reminder_route(app: FastAPI, room: str | None) -> tuple[object | None, str]:
     """``(client, offline_room)`` for one reminder: the three-tier rule of §e.2.
 
-    1. a named room that is online speaks there;
-    2. a named room that is offline falls back to `default_output` and reports itself
+    ``room`` is the reminder's room: named in the sentence, or (task-31) the room of
+    the device that heard an unnamed one.
+
+    1. a room with a live plane speaks there;
+    2. a room that is offline falls back to `default_output` and reports itself
        in the second slot, so the caller can *say* 「<room>那台没在线」;
     3. no room means `default_output` (and its own recency fallback when unset).
     """
@@ -1938,10 +1975,11 @@ async def _deliver_reminder(app: FastAPI, item: Reminder, runner: object) -> boo
         _reminder_failed(app, item, "no live speaker for the reminder")
         return False
     delivery_room = _led_room(client)
-    # Only a room the user actually asked for may be silenced. The route resolved the
-    # spoken room to its device id, which is also what owner/music_room store. When the
-    # named room is offline the fallback speaker keeps whatever it is doing (other room
-    # / other song), so there is no target to yield.
+    # Only the reminder's own room may be silenced: named in the sentence, or the
+    # speaking device's room for an unnamed one (task-31). The route resolved that
+    # room to its device id, which is also what owner/music_room store. When the room
+    # is offline the fallback speaker keeps whatever it is doing (other room / song),
+    # so there is no target to yield.
     target_room = "" if offline_room else delivery_room
     _stopped, turn_here = await _reminder_yield_room(app, target_room, client, runner)
     try:

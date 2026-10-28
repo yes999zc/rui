@@ -23,8 +23,9 @@ import logging
 from types import SimpleNamespace
 
 from rui.audio.protocol import ResumeMusic, StopAudio
-from rui.config.schema import Config
-from rui.tools.reminders import ZONE, Reminder
+from rui.config.schema import Config, DeviceConfig
+from rui.tools.reminders import ZONE, DueScheduler, Reminder, ReminderStore
+from rui.trace import TraceLog, TurnTrace
 from rui.web.api import app as app_module
 
 REF = dt.datetime(2026, 10, 28, 9, 0, tzinfo=ZONE)
@@ -146,14 +147,17 @@ def item(room: str | None = "书房", text: str = "吃药") -> Reminder:
     )
 
 
-def fake_app(*, music: FakeMusic | None = None, turn_device: str = "") -> SimpleNamespace:
+def fake_app(
+    *, music: FakeMusic | None = None, turn_device: str = "", cfg: Config | None = None,
+) -> SimpleNamespace:
     state = SimpleNamespace(
-        cfg=Config(),
+        cfg=cfg or Config(),
         music=music,
         music_room="",
         output_owner="",
         turn_device=turn_device,
         last_active_room="",
+        reminders=None,
         reminder_stats=None,
         reminder_preempted={},
         wake_coordinator=None,
@@ -244,6 +248,120 @@ def test_music_playing_in_another_room_is_not_touched(monkeypatch) -> None:
     assert living.spoken == []
     assert runner.idle.stopped == 0
     assert study.spoken
+
+
+def _source_room_cfg(tmp_path) -> Config:
+    cfg = Config(devices=[
+        DeviceConfig(id="living", adapter="mock", host="127.0.0.1", room="客厅"),
+        DeviceConfig(id="dot2-b", adapter="mock", host="127.0.0.1", room="次卧"),
+    ])
+    cfg.system.data_dir = str(tmp_path / "data")
+    return cfg
+
+
+def _unnamed_reminder_from(app, runner, client: FakeClient) -> Reminder:
+    """The reported 20:07 case: a 次卧 sentence that names no room."""
+    traces = TraceLog()
+    assert asyncio.run(app_module._voice_reminder_command(
+        app, "提醒我10秒钟之后喝水", runner, client,
+        TurnTrace(device_id=client.device_id), traces,
+    )) is True
+    return app.state.reminders.store.pending(now=REF)[0]
+
+
+def _route_source_room(monkeypatch, bedroom: FakeClient, living: FakeClient) -> None:
+    monkeypatch.setattr(app_module, "_reminder_client_for_room",
+                        lambda _app, room: bedroom if room == "次卧" else None)
+    monkeypatch.setattr(app_module, "_default_output_client", lambda _app: living)
+
+
+def test_an_unnamed_second_bedroom_reminder_stops_only_that_rooms_song(
+    monkeypatch, tmp_path,
+) -> None:
+    """task-31: unnamed from 次卧 -> stored room 次卧 -> 次卧's song stops, 客厅 silent.
+
+    The reported failure: the item had ``room=None``, so it spoke on the living
+    default output while the 次卧 song kept playing. Now the source room is stored at
+    creation and delivery stops only that room - no resume, LED off, no follow-up.
+    """
+    cfg = _source_room_cfg(tmp_path)
+    bedroom, living = FakeClient("dot2-b"), FakeClient("living")
+    music = FakeMusic("playing")
+    runner = FakeRunner()
+    app = fake_app(music=music, turn_device="dot2-b", cfg=cfg)
+    app.state.reminders = DueScheduler(ReminderStore(cfg.system.data_dir), clock=lambda: REF)
+    app.state.music_room = "dot2-b"
+    app.state.output_owner = "dot2-b"
+    bedroom.metrics.output_owner = "music"
+    _route_source_room(monkeypatch, bedroom, living)
+
+    reminder = _unnamed_reminder_from(app, runner, bedroom)
+    assert reminder.room == "次卧"
+
+    assert run_delivery(app, reminder, runner, settle_s=1.0) is True
+
+    # The 次卧 queue was stopped and never resumed; 客厅 was not touched at all.
+    assert music.stops == 1 and music.resumes == 0
+    assert any(isinstance(msg, StopAudio) for msg in bedroom.sent)
+    assert living.sent == [] and living.spoken == []
+    assert bedroom.spoken and bedroom.led[-1] == "off"
+    # No reply_finished: the reminder never opens a wake-free follow-up window.
+    assert bedroom.replies == 0 and living.replies == 0
+    stats = app_module._reminder_health(app)
+    assert (stats["spoken"], stats["failed"], stats["offline"]) == (1, 0, 0)
+
+
+def test_an_unnamed_second_bedroom_reminder_leaves_the_living_song_alone(
+    monkeypatch, tmp_path,
+) -> None:
+    """The mirror case: 客厅 is playing music, so a 次卧 reminder must not cut it."""
+    cfg = _source_room_cfg(tmp_path)
+    bedroom, living = FakeClient("dot2-b"), FakeClient("living")
+    music = FakeMusic("playing")
+    runner = FakeRunner()
+    app = fake_app(music=music, turn_device="dot2-b", cfg=cfg)
+    app.state.reminders = DueScheduler(ReminderStore(cfg.system.data_dir), clock=lambda: REF)
+    app.state.music_room = "living"
+    app.state.output_owner = "living"
+    living.metrics.output_owner = "music"
+    _route_source_room(monkeypatch, bedroom, living)
+
+    reminder = _unnamed_reminder_from(app, runner, bedroom)
+    assert reminder.room == "次卧"
+
+    assert run_delivery(app, reminder, runner, settle_s=1.0) is True
+
+    assert music.stops == 0 and music.resumes == 0
+    assert not any(isinstance(msg, StopAudio) for msg in living.sent)
+    assert living.spoken == []
+    assert bedroom.spoken and bedroom.led[-1] == "off"
+    assert bedroom.replies == 0 and living.replies == 0
+
+
+def test_an_offline_source_room_falls_back_and_names_the_second_bedroom(
+    monkeypatch, tmp_path,
+) -> None:
+    """task-31 tier 3: a stored source room that went offline is named in the line."""
+    cfg = _source_room_cfg(tmp_path)
+    bedroom, living = FakeClient("dot2-b"), FakeClient("living")
+    runner = FakeRunner()
+    app = fake_app(turn_device="", cfg=cfg)
+    app.state.reminders = DueScheduler(ReminderStore(cfg.system.data_dir), clock=lambda: REF)
+    monkeypatch.setattr(app_module, "_reminder_client_for_room", lambda _app, _room: None)
+    monkeypatch.setattr(app_module, "_default_output_client", lambda _app: living)
+
+    reminder = _unnamed_reminder_from(app, runner, bedroom)
+    assert reminder.room == "次卧"
+    # Drop the setup confirmation: the assertions below are about the due delivery.
+    bedroom.spoken.clear()
+    living.spoken.clear()
+
+    assert run_delivery(app, reminder, runner, settle_s=1.0) is True
+    assert living.spoken and bedroom.spoken == []
+    assert "次卧那台没在线" in runner.texts[-1] and "喝水" in runner.texts[-1]
+    stats = app_module._reminder_health(app)
+    assert (stats["spoken"], stats["failed"], stats["offline"]) == (1, 1, 1)
+    assert stats["last_room"] == "次卧"
 
 
 def test_an_offline_target_falls_back_and_names_the_room(monkeypatch) -> None:
