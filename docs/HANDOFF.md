@@ -49,8 +49,10 @@
 - **部署前自检表**：core 0.8.1（—）；dot2 1.3.3（>=0.8.1 <0.9.0，需 core≥0.8.1）；xiaoai 0.2.3（>=0.7.0 <0.9.0，兼容）。必须用 v0.8.1 tag 的干净 commit 出镜像，不拿脏树。
 - **部署前 HANDOFF 必写一行**：「即将部署：core→0.8.1 → plugins→1.3.3」；部署后贴 /health + 三台 audio.say。
 - **task-31（提醒来源房间，0.8.3）**：固定句式不点名房间时用当前设备房间；次卧提醒不得播到客厅/停客厅歌；来源离线落 default_output+提示+计数。待 task-30 提交后做。
+- **task-31 已实现（2026-10-28 20:5x，未提交）**：`app.py` 新增 `_speaking_device_id`/`_device_room`；`_voice_reminder_command` 用 `parsed.room or source_room` 落库（来源=说这句话的设备 `ready.device_id` → `config.devices[].room`），日志带 `named/source`；回复措辞仍只复述用户点名的房间。投递链路不变（`_deliver_reminder` → `_reminder_route`），来源在线只停该房间音乐且不 resume，来源离线走 default_output +「次卧那台没在线」+ failed/offline 计数。红→绿：`tests/test_reminder_voice.py` 旧「无房间存 None」断言改为来源房间；新增 7 项（来源/点名优先/未知或空房间不猜/反查/20:07 端到端 次卧停歌+客厅不动、客厅放歌+次卧不切歌、来源离线计数）。定向 83/0；全量与 ruff 待跑。
 - **0.8.3 范围冻结**：只装 task-30（接缝）+ task-31（来源房间）；task-2/task-3 无稳定样本不改；禁新功能/UI/契约/rui_compat/barge-AEC-音量-followup。门禁：全量+ruff+CI 四绿+双 review PASS+verify；顺序 task-30 收口 → task-31 → 一起 review/verify → 0.8.3 tag/release/镜像 → 一次部署 → D5；交付 ≤10 行 Δ + 改了什么/验收怎么判表。
-- **task-30（短回复逗号卡顿）**：已定位字面「在，你说。」本就不拆；真实触发是 `在，\n你说。` + 模型 >300ms 停顿导致 hold 到期拆段。已实现：ultra-short 缓冲区到期/force/tail 合并为一次 TTS + 段/段间静音插桩（process/protocol/trace/turn + tests/scripts）；全量在跑，review/verify 待做。
+- **task-30 已提交 `6e77a0c`**（短回复合并 + 段/静音插桩，1921/6）；review 发现 barge 后 segment ledger 未复位，已修 `563c139`（`_flush_speech` 置 `_reply_open=False` + 回归，41 passed/1 skipped）。
+- **task-31（提醒来源房间）**：未点名房间用当前设备房间；实现完成（83 targeted 绿，全量 gate 中）；测试覆盖次卧不点名→room=次卧、客厅音乐不动/次卧停不恢复、离线 fallback。
 - **secret-scan 已转绿（2026-10-28 20:06）**：实际命中是 HANDOFF 里的 LAN `<LAN-IP>`（soft 类），不是 sha256；已改为 `<NAS-LAN-IP>`，run success。
 - **0.8.2 / 1.3.4 已发并部署（2026-10-28 20:0x）**：core tag `v0.8.2`→`7720709`，release https://github.com/yes999zc/rui/releases/tag/v0.8.2；桥 tag `v1.3.4`→`76b8947`，release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.4。部署：core digest `sha256:6b007a8c04e521efbc19c5624f6e397fc85160c701f8be1bd4d6da904da8d00d`，插件 1.3.4。D5：version 0.8.2/devices 3/errors 0/registered dot2+lx06；三台 say 均 ok；summaries 同前；followup 3000。
 - **⚠ 1.3.4 真机仍命中一次 >1.0s 写阻塞（20:01:48 dot2，rx271678B/tx200753B）→ abort/掉 17 chunks(1.4s)，随后恢复**。按 9哥 口径「仍偶发先记日志再讨论，不自行继续上调」；未再提高阈值。根因仍是 2.4G 抖动（RSSI/重传/6Mbps），缓解未根治。
