@@ -64,7 +64,7 @@
 - **task-23（插桩，2026-10-28）**：应答 gap 158–221ms（barge 打断→停止→告别语）只加 INFO
   `reply stall: chunk #N/total gap=...ms state=...` + trace meta 记 gaps 块序号；**不修逻辑**。part 1 已实现并提交 `ee26458`（日志 + per-reply ledger，review PASS）；part 2 trace meta 被 pydantic Metrics/进程边界挡住，需 protocol.py + trace.py 两个 additive 字段（且需防跨回复串味），等授权。等 9哥 真机复现后三选一。
 之后交 0.8.0 发布前报告（桥双窗口计划+回滚）。
-- **task-22（goal 外前置，2026-10-28 下午插设备前，已实现 1810/6，review 中）**：5 台真实布局文档 + v2 逐台 params
+- **task-22（goal 外前置，2026-10-28 下午插设备前，已实现 1810/6；review CHANGES 8 项修正中）**：5 台真实布局文档 + v2 逐台 params
   （control_port=0 / 独立 loudness_file）写盘透传测试；不碰桥仓、不改 goal 四项。C1 收口后做。
 
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
