@@ -50,6 +50,50 @@ def make_coordinator(*, senders: dict | None = None,
 def run(coro):
     return asyncio.run(coro)
 
+#: The real 2026-10-28 install (docs/release/acceptance-4devices.md §0): one Dot2 in
+#: each room off the same corridor. Same wake word everywhere is the design premise
+#: (backlog-0.8 §c: "两台能互相听见" is what the arbitration must survive), not an
+#: accident we get to avoid by giving each room a different word.
+REAL_LAYOUT = (
+    ("dot2", "儿童房"),
+    ("dot2-b", "次卧"),
+    ("dot2-c", "主卧"),
+    ("dot2-d", "卫生间"),
+)
+
+
+def make_real_coordinator() -> tuple[WakeCoordinator, dict]:
+    """The corridor install, with every room's name taken from the layout itself."""
+    return make_coordinator(devices=REAL_LAYOUT)
+
+
+def messages(sent: dict) -> list:
+    return [message for rows in sent.values() for message in rows]
+
+
+def admits(sent: dict) -> list:
+    return [m for m in messages(sent) if m.__class__.__name__ == "WakeAdmit"]
+
+
+def rejects(sent: dict, reason: str | None = None) -> list:
+    return [m for m in messages(sent)
+            if m.__class__.__name__ == "WakeReject"
+            and (reason is None or m.reason == reason)]
+
+
+def admits_by(sent: dict, wake_id: str) -> str | None:
+    """The device id that received this wake's admit (the plane is the dict key)."""
+    for device_id, rows in sent.items():
+        if any(m.__class__.__name__ == "WakeAdmit" and m.wake_id == wake_id
+               for m in rows):
+            return device_id
+    return None
+
+
+def reject_events(sent: dict) -> list[tuple[str, str]]:
+    return [(device_id, m.reason) for device_id, rows in sent.items()
+            for m in rows if m.__class__.__name__ == "WakeReject"]
+
 
 def test_a_single_candidate_is_admitted_after_the_merge_window() -> None:
     coordinator, sent = make_coordinator()
@@ -352,51 +396,111 @@ def test_cross_echo_is_rejected_counted_and_named(caplog) -> None:
     assert "room=客厅" in text
 
 
-def test_same_batch_same_word_is_one_admit_and_one_lost_same_word() -> None:
-    """b. Same room, same word in one batch: one turn, the loser is lost_same_word."""
-    coordinator, sent = make_coordinator(devices=(("lx1", "客厅"), ("lx2", "客厅")))
+def test_worst_case_turn_open_plus_same_word_is_one_speech() -> None:
+    """b. Same corridor, same word: one admit, the loser lost_same_word, no second turn.
 
-    async def scenario():
-        await coordinator.on_candidate("lx1", candidate(
-            "w-dev", source="device", score=0.9, threshold=0.5, keyword="你好小瑞"))
-        await coordinator.on_candidate("lx2", candidate(
-            "w-kws", source="rui", keyword="你好小瑞"))
-        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
-        await coordinator.close()
-
-    run(scenario())
-    messages = sent["lx1"] + sent["lx2"]
-    admits = [m for m in messages if m.__class__.__name__ == "WakeAdmit"]
-    rejects = [m for m in messages if m.__class__.__name__ == "WakeReject"]
-    assert len(admits) == 1
-    assert len(rejects) == 1
-    assert rejects[0].reason == "lost_same_word"
-    assert coordinator.counters["wake_admitted"] == 1
-    assert coordinator.metrics()["arbitration_cross_echo_suppressed"] == 0
-
-
-def test_cross_room_same_word_is_admitted_never_barges_and_keeps_playing() -> None:
-    """c. Different rooms: A playing, B wakes -> B is admitted without stealing A.
-
-    Per-room isolation (task-18): the same word in another room must not be
-    suppressed as cross_echo and must not barge the playing room.
+    Four rooms hear one spoken word. The 儿童房 plane wins the merge window (its
+    candidate came from device_wake, which outranks the core KWS source); the others
+    lose as `lost_same_word`. The winner's turn then opens — and a repeat from the
+    turn's own room is `turn_open`, not a second answer. Across the whole scenario
+    exactly one plane receives `WakeAdmit`: that is the "no double speech" count.
     """
-    coordinator, sent = make_coordinator()
-    coordinator.set_owner("living")
+    coordinator, sent = make_real_coordinator()
 
     async def scenario():
-        await coordinator.on_candidate("study", candidate(
-            "w-study", keyword="你好小瑞", barge=True, playing=True))
+        await coordinator.on_candidate("dot2", candidate(
+            "w-kid-device", source="device", score=0.9, threshold=0.5,
+            keyword="你好小瑞"))
+        for device_id in ("dot2-b", "dot2-c", "dot2-d"):
+            await coordinator.on_candidate(device_id, candidate(
+                f"w-{device_id}-kws", source="rui", keyword="你好小瑞"))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
+        # The app opens the turn when it receives the admit (app.py on_wake).
+        coordinator.set_turn_open(True, "dot2")
+        await coordinator.on_candidate("dot2", candidate(
+            "w-kid-repeat", source="device", keyword="你好小瑞"))
+        await coordinator.close()
+
+    run(scenario())
+    assert len(admits(sent)) == 1, "a second admit would be double speech"
+    assert admits_by(sent, "w-kid-device") == "dot2"
+    # Order is timing: the immediate turn_open lands before the batch is resolved.
+    assert sorted(reject_events(sent)) == sorted([
+        ("dot2-b", "lost_same_word"),
+        ("dot2-c", "lost_same_word"),
+        ("dot2-d", "lost_same_word"),
+        ("dot2", "turn_open"),
+    ])
+    assert coordinator.counters["wake_admitted"] == 1
+    assert coordinator.counters["wake_rejected"] == 4
+    assert coordinator.counters["arbitration_cross_echo_suppressed"] == 0
+    assert coordinator.arbiter.state.turn_open is True
+    assert coordinator.turn_device == "dot2"
+
+
+def test_worst_case_a_playing_b_same_word_does_not_barge_another_room() -> None:
+    """c. 儿童房 is playing; 次卧 says the same word -> admitted, but never the owner.
+
+    Per-room isolation (task-18, §12.3.2): only the output owner may barge. The other
+    room starts its own turn, the playing room keeps its output owner AND its audio
+    (no message at all reaches that plane), and this is not a cross-echo suppression.
+    """
+    coordinator, sent = make_real_coordinator()
+    coordinator.set_owner("dot2")
+
+    async def scenario():
+        await coordinator.on_candidate("dot2-b", candidate(
+            "w-guest", keyword="你好小瑞", barge=True, playing=True))
         await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
         await coordinator.close()
 
     run(scenario())
-    assert sent["study"][0].__class__.__name__ == "WakeAdmit"
+    assert len(admits(sent)) == 1
+    assert admits_by(sent, "w-guest") == "dot2-b"
     assert coordinator.last_decision is not None
     assert coordinator.last_decision.decided_by != "barge"
-    assert coordinator.arbiter.state.playing == {"living"}
-    assert coordinator.arbiter.state.owner_device == "living"
-    assert coordinator.metrics()["arbitration_cross_echo_suppressed"] == 0
+    assert coordinator.arbiter.state.owner_device == "dot2"
+    assert coordinator.arbiter.state.playing == {"dot2"}
+    assert sent["dot2"] == [], "the playing room must not be stopped or re-owned"
+    assert coordinator.counters["wake_admitted"] == 1
+    assert coordinator.counters["wake_rejected"] == 0
+    assert coordinator.counters["arbitration_cross_echo_suppressed"] == 0
+    assert rejects(sent, "lost_playing") == []
+
+
+def test_worst_case_weak_gap_b_hears_only_the_tail() -> None:
+    """d. 次卧 hears only the tail of the same word after 儿童房's turn opened.
+
+    The tail arrives in a *later* batch but inside `duplicate_window_ms` (2 s). The
+    duplicate gate is what stops a corridor echo from becoming a second turn: 次卧 is
+    rejected `duplicate`, its plane never arms, and 儿童房 keeps playing. A second
+    admit here would be the audible 双声 the acceptance doc forbids.
+    """
+    coordinator, sent = make_real_coordinator()
+
+    async def scenario():
+        await coordinator.on_candidate("dot2", candidate(
+            "w-kid", source="device", keyword="你好小瑞"))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
+        coordinator.set_turn_open(True, "dot2")
+        # 儿童房 is answering: its TTS owns the output while the tail reaches 次卧.
+        coordinator.set_owner("dot2")
+        await asyncio.sleep(0.6)  # the tail is late, but well inside 2 s
+        await coordinator.on_candidate("dot2-b", candidate(
+            "w-tail", source="rui", keyword="你好小瑞"))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
+        await coordinator.close()
+
+    run(scenario())
+    assert len(admits(sent)) == 1
+    assert admits_by(sent, "w-kid") == "dot2"
+    assert reject_events(sent) == [("dot2-b", "duplicate")]
+    assert sent["dot2"][-1].__class__.__name__ == "WakeAdmit"
+    assert coordinator.arbiter.state.playing == {"dot2"}
+    assert coordinator.arbiter.state.owner_device == "dot2"
+    assert coordinator.counters["wake_admitted"] == 1
+    assert coordinator.counters["wake_rejected"] == 1
+    assert coordinator.counters["arbitration_cross_echo_suppressed"] == 0
 
 
 def test_another_plane_in_the_turn_room_is_rejected_turn_open() -> None:

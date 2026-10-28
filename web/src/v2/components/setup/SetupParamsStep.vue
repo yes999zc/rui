@@ -41,6 +41,21 @@ const extraSpecs = computed(() => schema.value.filter((spec) => !PROMOTED.has(sp
 const visibleExtraSpecs = computed(() => extraSpecs.value.filter((spec) => spec.type !== 'secret'))
 const secretSpecs = computed(() => extraSpecs.value.filter((spec) => spec.type === 'secret'))
 
+/**
+ * C-001's two Dot2 params are *not* `required` in the bridge manifest (0 and ""
+ * are legal defaults), but leaving them empty on a multi-Dot2 install makes every
+ * plane fall back to the same global `DOT2_CONTROL_PORT=8872` / loudness file.
+ * The form therefore enforces them per device even though the manifest does not.
+ */
+const DOT2_PARAM_KEYS = ['control_port', 'loudness_file'] as const
+const isDot2 = computed(() =>
+  props.modelId === 'dot2' || props.pluginId === 'dot2-echomuse')
+const dot2ParamKeys = computed<string[]>(() => {
+  if (!isDot2.value) return []
+  return DOT2_PARAM_KEYS.filter((key) =>
+    visibleExtraSpecs.value.some((spec) => spec.key === key))
+})
+
 const id = ref('')
 const room = ref('')
 const host = ref('')
@@ -124,6 +139,19 @@ function setExtra(key: string, value: string | boolean): void {
   touch(`params.${key}`)
 }
 
+function paramRequired(spec: SetupParamSchema): boolean {
+  return spec.required || dot2ParamKeys.value.includes(spec.key)
+}
+
+/** Empty Dot2 params are a house-level failure, not a server 422: block them here. */
+function dot2ParamIssue(spec: SetupParamSchema): string {
+  if (!dot2ParamKeys.value.includes(spec.key)) return ''
+  if (String(extra.value[spec.key] ?? '').trim() !== '') return ''
+  return spec.key === 'control_port'
+    ? t('v2.setup.params.dot2ControlPortRequired')
+    : t('v2.setup.params.dot2LoudnessFileRequired')
+}
+
 const validation = computed<Record<string, string>>(() => {
   const errors: Record<string, string> = {}
   const idValue = id.value.trim()
@@ -157,6 +185,11 @@ const validation = computed<Record<string, string>>(() => {
   for (const spec of visibleExtraSpecs.value) {
     const raw = extra.value[spec.key]
     const empty = spec.type === 'bool' ? false : String(raw ?? '').trim() === ''
+    const dot2Issue = dot2ParamIssue(spec)
+    if (dot2Issue) {
+      errors[`params.${spec.key}`] = dot2Issue
+      continue
+    }
     if (spec.required && empty) {
       errors[`params.${spec.key}`] = t('v2.setup.params.missingRequired')
       continue
@@ -431,6 +464,14 @@ const conflictText = computed(() =>
       <div v-if="visibleExtraSpecs.length" class="v2-setup-subcard">
         <h5 class="v2-setup-subtitle">{{ t('v2.setup.params.extra') }}</h5>
         <p class="note">{{ t('v2.setup.params.extraHint') }}</p>
+        <p
+          v-if="dot2ParamKeys.length"
+          class="banner banner-warn v2-banner"
+          role="status"
+          data-testid="setup-params-dot2-warning"
+        >
+          {{ t('v2.setup.params.dot2Warning') }}
+        </p>
         <div
           v-for="spec in visibleExtraSpecs"
           :key="spec.key"
@@ -440,7 +481,7 @@ const conflictText = computed(() =>
           <div class="field-meta">
             <label class="field-label" :for="`setup-param-${spec.key}`">
               {{ spec.label || spec.key }}
-              <span v-if="spec.required" class="v2-setup-req">*</span>
+              <span v-if="paramRequired(spec)" class="v2-setup-req">*</span>
             </label>
             <p v-if="spec.help" class="field-hint">{{ spec.help }}</p>
           </div>
