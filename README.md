@@ -66,7 +66,7 @@
 目标：用 Docker 跑起 rui 0.7.9，接一台 Dot2 和一台 LX06。
 前置：docker compose version 通过；8080 空闲；5 GB 磁盘。
 1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.9
-2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
+2) git clone --branch v1.3.2 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) 写 ./config/config.yaml：web.auth_token、devices[]（id/adapter/room/host/listen_port；lx06 的 host 必填）
 5) TLS（dot2 的 tls_port 开启时必需）：把原 controller 证书放到 ./secrets/（server.pem + server.key）；没有就运行 `bash ../../scripts/make_dev_tls.sh` 自签。自签只保证音频平面能起，真机是否接受取决于设备信任的 CA（详见 `docs/audit/tls-required-2026-10.md`）。**默认只起第一台设备的平面；两台都起需在 config 设 `multi_device: {enabled: true, max_planes: 2}`**
@@ -253,7 +253,7 @@ Paste this into any assistant (Claude / ChatGPT / DeepSeek):
 Goal: run rui 0.7.9 with Docker, one Dot2 and one LX06.
 Preflight: docker compose version; port 8080 free; 5 GB disk.
 1) git clone --branch main https://github.com/yes999zc/rui.git && cd rui/examples/two-speakers   # main 才有本示例；镜像仍 pin 在 0.7.9
-2) git clone --branch v1.3.1 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
+2) git clone --branch v1.3.2 https://github.com/yes999zc/rui-dot2-bridge.git && git clone --branch v0.2.2 https://github.com/yes999zc/rui-xiaoai-bridge.git
 3) mkdir -p plugins && cp -r rui-dot2-bridge/src/rui_dot2_bridge rui-xiaoai-bridge/src/rui_xiaoai_bridge plugins/
 4) write ./config/config.yaml: web.auth_token and devices[] (id/adapter/room/host/listen_port; host required for lx06)
 5) TLS (required when dot2's tls_port is on): put the original controller cert into ./secrets/ (server.pem + server.key); if you do not have it, run `bash ../../scripts/make_dev_tls.sh`. Self-signed only proves the audio plane starts; whether the device accepts it depends on its trusted CA (see `docs/audit/tls-required-2026-10.md`). **By default only the first configured device gets a plane; to run both, set `multi_device: {enabled: true, max_planes: 2}` in the config**
