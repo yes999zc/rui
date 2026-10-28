@@ -7,8 +7,8 @@
 > 0.6 M3 更新：设备从**已安装 plugs**里选（内置镜像插头 + `data/plugs`），不再默认任何型号；
 > 没有设备且只有一个可用插头时自动选它，多个可用时 `GET /api/v1/setup/step` 返回 409
 > `plug_required`（`details.available` 列出全部），向导把它渲染成第 1 步「选择设备」。
-> 新建设备写插头 manifest 的 device id 作为 `adapter`（当前 LX06 为 `lx06`）；旧配置的
-> `adapter: xiaoai` 通过 `src/rui/config/legacy_adapters.py` 一个 minor 的兼容别名继续解析。
+> 新建设备写插头 manifest 的 device id 作为 `adapter`（当前 LX06 为 `lx06`）；0.8.0 起
+> `adapter` 必填且旧拼写 `adapter: xiaoai` 读入即报错（给出改成 `lx06` 的修复句），不再有兼容别名。
 
 
 > 状态：**设计稿，待评审（2026-10-24）**。在现有 `SetupView` 上增量实现；不建 DB、不做设备端自动化、不加载第三方可执行代码。

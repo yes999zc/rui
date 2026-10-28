@@ -6,10 +6,10 @@ Every console write of ``devices[]`` - the v1 routes in ``app.py``, the v2 route
 delete or disable that dangles a ``multi_device`` reference (or removes the last
 enabled speaker) would leave a file ``load_config`` refuses at the next boot.
 
-This module owns that check once: repair what can be repaired, revalidate the document
-a reload would read, and reject a port conflict before any byte reaches disk. Errors
-are console-neutral (:class:`DeviceWriteError`); v1 raises ``HTTPException`` from it and
-v2 converts it to its C-002 error object.
+This module owns that check once: reject a removed adapter spelling, repair what can
+be repaired, revalidate the document a reload would read, and reject a port conflict
+before any byte reaches disk. Errors are console-neutral (:class:`DeviceWriteError`);
+v1 raises ``HTTPException`` from it and v2 converts it to its C-002 error object.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from ...config.removed_adapters import removed_adapters_error
 from ...config.schema import (
     AecConfig,
     AudioConfig,
@@ -226,7 +227,20 @@ def check_device_write(config: Config) -> Config:
     This is the invariant itself, not a route helper: `save_config` does not validate,
     so every writer must pass through here. Raises :class:`DeviceWriteError` (422
     `invalid_values`) when the repair still leaves a document `load_config` rejects.
+
+    A removed adapter spelling is checked first. It is a plain string in
+    `DeviceConfig` (the core never guesses a model), so Pydantic alone would accept
+    it; only the read path used to reject it, and a write could therefore persist a
+    file the next boot refuses.
     """
+    rejected = removed_adapters_error(config.devices)
+    if rejected is not None:
+        index, message = rejected
+        raise DeviceWriteError(
+            422, "invalid_values", message,
+            hint="Change devices[].adapter to the plug manifest's device id.",
+            details={"fields": [field(f"devices[{index}].adapter", "invalid", message)]},
+        )
     repaired = repair_device_writes(config)
     document = validation_document(repaired)
     try:

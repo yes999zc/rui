@@ -77,6 +77,7 @@ def _write_plug(root: Path, *, plugin_id: str, device_id: str) -> None:
             runtime:
               mode: in-process
               entrypoint: "{ADAPTER_MODULE}:build"
+              listen_port: 4412
             params: []
             """
         ),

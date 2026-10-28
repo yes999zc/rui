@@ -21,7 +21,7 @@ AUTH = {"X-Auth-Token": TOKEN}
 
 
 def _device(device_id: str, *, room: str, listen_port: int | None = None,
-            adapter: str = "xiaoai") -> DeviceConfig:
+            adapter: str = "lx06") -> DeviceConfig:
     return DeviceConfig(id=device_id, adapter=adapter, host=f"{device_id}.local",
                         room=room, listen_port=listen_port,
                         params={"plug_id": "xiaoai-lx06"})

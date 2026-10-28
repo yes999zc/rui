@@ -512,7 +512,8 @@ def test_param_round_trip_and_device_upsert_idempotency(wizard) -> None:
 def test_device_params_survive_a_config_save_round_trip(tmp_path) -> None:
     path = tmp_path / "config.yaml"
     save_config(path, Config(devices=[DeviceConfig(
-        id="living", host="speaker.local", params={"plug_id": "xiaoai-lx06", "volume_max": 80})]))
+        id="living", adapter="lx06", host="speaker.local",
+        params={"plug_id": "xiaoai-lx06", "volume_max": 80})]))
     loaded = load_config(path)
     assert loaded.devices[0].params == {"plug_id": "xiaoai-lx06", "volume_max": 80}
 

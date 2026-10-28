@@ -76,7 +76,21 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
   **404**（不再 302）；`/` 仍是 v2 单入口；`rg` 在 `src/rui` 与 `web/src` 里只剩测试允许的白名单命中；
   前端构建与 `npm run typecheck` 绿。
 
-### b.2 删 `adapter: xiaoai` 的读入迁移与弃用告警
+### b.2 删 `adapter: xiaoai` 的读入迁移与弃用告警 —— **已落地 @（task-9）**
+
+- **落地结果（2026-10-28）**：`src/rui/config/legacy_adapters.py` 已删除；`store.migrate()`
+  不再改写拼写，而是在 Pydantic 之前用 `removed_adapters.py` 明确拒绝，报错原文
+  `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`。
+  `DeviceConfig.adapter` 必填（无默认值）；`RuntimeSpec.listen_port` 必填；
+  `device_rules.effective_listen_port()` 不再兜底 4412（无法解析时返回 `None`，连接 URL 返回
+  409 `listen_port_unresolved`）。`/health` 不再有 `legacy_adapter_spelling` 行或旧拼写计数。
+  recovery 策略未改：坏文件保留、按 last-good/defaults 启动、`/api/v1/config/recovery.note`
+  带同一句修复句。回归用例：`tests/test_removed_adapter_rejection.py`、
+  `tests/test_plugins.py::test_runtime_without_listen_port_is_rejected`、
+  `tests/test_setup.py::test_connect_info_reports_a_missing_listen_port_instead_of_guessing`。
+- **代码内核的白名单**：旧拼写与新拼写只允许出现在
+  `src/rui/config/removed_adapters.py`（修复句必须点名两者）；`tests/test_kernel_decoupling.py`
+  的 `ALLOWED_FILES` 已改为该文件，并删掉了原 `web` 排除项（0.8.0 已无其它品牌命中）。
 
 - **删的是什么**：`src/rui/config/legacy_adapters.py`（`_LEGACY_ADAPTERS`、`DEFAULT_ADAPTER`、
   `DEFAULT_LISTEN_PORT`、`LEGACY_ADAPTER_HINT`）+ `src/rui/config/store.py` 迁移链路里把
@@ -89,12 +103,13 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 - **怎么验**：
   ```bash
   curl -sS "$BASE/health" -H "X-Auth-Token: $TOKEN" | jq '.adapter_plugins'
-  rg -n 'legacy_adapters|LEGACY_ADAPTER_HINT|DEFAULT_LISTEN_PORT' src tests
+  rg -n 'legacy_adapters|LEGACY_ADAPTER_HINT|DEFAULT_LISTEN_PORT' src/rui
   # 反向：把一份老配置（adapter: xiaoai）喂给 0.8.0，直接起服务看报错
   ```
 - **通过标准**：老配置启动时**显式报错**且报错里给出修复句（把 `xiaoai` 改成 `lx06`），不是静默忽略、
-  也不是半加载；`/health.adapter_plugins.warnings` 不再因旧拼写出现；`rg` 无源码命中
-  （测试里如需保留一条「旧拼写会被拒绝」的回归用例，属测试白名单，不算源码命中）。
+  也不是半加载；`/health.adapter_plugins.warnings` 不再因旧拼写出现；`src/rui` 无源码命中
+  （唯一白名单是 `config/removed_adapters.py` 里的修复句；`tests/fixtures/legacy_lx06/` 是外置桥的
+  冻结夹具副本，不属于核心源码；测试里那条「旧拼写会被拒绝」的回归用例属测试白名单）。
 
 ### b.3 `rui_compat` 契约窗口调整
 

@@ -25,7 +25,6 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..config.legacy_adapters import DEFAULT_LISTEN_PORT
 from ..config.schema import AudioDefaults
 from ..device.contract import Capability, Transport
 from .semver import VersionError, parse_range, parse_version
@@ -194,6 +193,11 @@ class RuntimeSpec(BaseModel):
     ``mode`` is intentionally optional: the loader resolves it from the plugin's
     trust level (third-party -> sidecar, builtin/trusted -> in-process). A plugin
     that declares no runtime at all is manifest-only and runs no code.
+
+    ``listen_port`` is required whenever a runtime block exists (0.8.0): the core no
+    longer supplies a compatibility port for manifests written against
+    ``rui-device/v0``, so a missing port rejects the manifest instead of silently
+    binding 4412.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -201,7 +205,7 @@ class RuntimeSpec(BaseModel):
     mode: RuntimeMode | None = None
     entrypoint: str = ""
     image: str = ""
-    listen_port: int = Field(default=DEFAULT_LISTEN_PORT, ge=1, le=65535)
+    listen_port: int = Field(ge=1, le=65535)
     token_env: str = "RUI_DEVICE_TOKEN"
 
     @field_validator("entrypoint")

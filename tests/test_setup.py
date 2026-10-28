@@ -12,8 +12,7 @@ from fastapi.testclient import TestClient
 
 from rui import secrets as secrets_module
 from rui.config import Config, DeviceConfig, load_config, save_config
-from rui.web.api import app as app_module
-from rui.web.api.app import DEVICE_DEFAULT_LISTEN_PORT, create_app
+from rui.web.api.app import create_app
 
 
 @pytest.fixture()
@@ -419,7 +418,9 @@ def test_connect_info_swaps_the_console_port_and_keeps_proxy_hosts(connect,
                                                                   monkeypatch) -> None:
     _client, cfg, path = connect
     monkeypatch.setenv("RUI_DEVICE_TOKEN", "tok-xyz")
-    for listen_port, expected in ((5000, "5000"), (None, str(DEVICE_DEFAULT_LISTEN_PORT))):
+    for listen_port, expected in ((5000, "5000"), (None, "4412")):
+        # None is the LX06 manifest's runtime.listen_port (4412), not a core default:
+        # the plug contract states the port, the config only overrides it.
         updated = cfg.model_copy(update={"devices": [
             cfg.devices[0].model_copy(update={"listen_port": listen_port})]})
         save_config(path, updated)
@@ -472,8 +473,19 @@ def test_connect_info_unknown_device_is_404(connect) -> None:
     assert client.get("/api/v1/devices/ghost/connect").status_code == 404
 
 
-def test_the_connect_info_default_port_matches_the_adapter() -> None:
-    from xiaoai_plug import DEFAULT_LISTEN_PORT
-
-    assert app_module.DEVICE_DEFAULT_LISTEN_PORT == DEFAULT_LISTEN_PORT == 4412
+def test_connect_info_reports_a_missing_listen_port_instead_of_guessing(tmp_path) -> None:
+    """0.8.0 removed the 4412 fallback: no config port + no plug port -> explicit 409."""
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path / "data")
+    cfg.devices = [DeviceConfig(id="living", adapter="not-in-this-build",
+                                host="192.0.2.10")]
+    path = tmp_path / "config.yaml"
+    save_config(path, cfg)
+    client = TestClient(create_app(cfg, config_path=path))
+    response = client.get("/api/v1/devices/living/connect")
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "listen_port_unresolved"
+    assert "runtime.listen_port" in detail["message"]
+    assert "4412" not in detail["message"]
 

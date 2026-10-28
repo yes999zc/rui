@@ -276,9 +276,9 @@ def install_setup_routes(
             plug_id = str(device.params.get("plug_id") or "")
             if plug_id and plug_id in entries:
                 return entries[plug_id]
-            # adapter -> manifest, through the one-minor compatibility alias that
-            # maps the pre-0.6 adapter spelling. Same resolver the audio plane and
-            # the device endpoints use, so the wizard cannot disagree with them.
+            # adapter -> manifest by manifest id only: 0.8.0 removed the pre-0.6
+            # spelling alias. Same resolver the audio plane and the device endpoints
+            # use, so the wizard cannot disagree with them.
             resolved = resolve_device_plug(device, current.system.data_dir)
             if resolved is not None and resolved.plugin.id in entries:
                 return entries[resolved.plugin.id]
@@ -483,9 +483,9 @@ def install_setup_routes(
                         missing_params.append(key)
                 elif value in (None, "", []):
                     missing_params.append(key)
-        # The device belongs to this plug when the same resolver (alias-aware) says
-        # so; comparing adapter strings directly used to break every config written
-        # with the pre-0.6 adapter spelling.
+        # The device belongs to this plug when the same manifest-id resolver says
+        # so; comparing adapter strings directly cannot tell two manifests that
+        # share an adapter apart.
         device_resolved = (resolve_device_plug(device, current.system.data_dir)
                            if device is not None else None)
         params_ready = (

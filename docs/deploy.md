@@ -369,17 +369,24 @@ outbound 机型没有 inbound 回连，才用 host probe 作为通过证据。
 ```yaml
 devices:
   - id: living
-    adapter: lx06            # 0.6 起用 manifest 的机型 id；旧配置的 adapter: xiaoai
-                             # 0.8.0 前可用（src/rui/config/legacy_adapters.py）
+    adapter: lx06            # 必填，无机型默认值（0.8.0）。旧拼写 adapter: xiaoai
+                             # 读入即报错，按报错句改成 lx06；不再有读入迁移
     host: <speaker-ip>        # 向导 params 步填写；inbound 下只用于显示和 doctor 的 SSH 探测
     room: 客厅
     wake_words: ["你好小瑞"]
     volume: 60                # 默认 60；0 = 不接管音量，沿用原厂
-    listen_port: 4412         # 音箱 client 回连的端口
+    listen_port: 4412         # 音箱 client 回连的端口；省略时取插件 manifest 的
+                              # runtime.listen_port（0.8.0 起该字段在 manifest 里必填）
     token_env: RUI_DEVICE_TOKEN
     led:
       enabled: true           # 向导创建的新 LX06 默认开灯环
 ```
+
+> **0.8.0 升级注意（破坏性）**：`devices[].adapter` 现在必填且没有机型默认值；仍写
+> `adapter: xiaoai` 的配置**不会启动成功**，报错原文是
+> `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`。
+> 把那一行改成 `lx06` 即可。自制插件若依赖旧的 4412 兜底端口，必须在自己的
+> `devices/*.yaml` 的 `runtime.listen_port` 里写明端口，否则清单会被拒绝加载。
 
 ### 3.2 provider（`providers.catalog` + 三条链）
 

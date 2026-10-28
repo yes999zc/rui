@@ -27,7 +27,7 @@ AUTH = {"X-Auth-Token": TOKEN}
 def _device(**overrides) -> DeviceConfig:
     payload = {
         "id": "living",
-        "adapter": "xiaoai",
+        "adapter": "lx06",
         "host": "speaker.local",
         "room": "客厅",
         "params": {"plug_id": "xiaoai-lx06"},

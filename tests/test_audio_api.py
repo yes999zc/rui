@@ -66,7 +66,7 @@ def test_plane_failure_is_reported_with_its_reason(tmp_path, monkeypatch) -> Non
         "version: 2\n"
         "devices:\n"
         "  - id: living\n"
-        "    adapter: xiaoai\n"
+        "    adapter: lx06\n"
         "    host: 192.0.2.10\n"
         "    listen_port: 4599\n"
         "    token_env: RUI_MISSING_TOKEN\n",

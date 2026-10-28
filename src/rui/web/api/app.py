@@ -79,7 +79,7 @@ from ...config.schema import (
     effective_device_ack_echo_ignore_ms,
     effective_device_audio,
 )
-from ...config.store import ConfigError, legacy_adapter_rewrites, load_config, redacted, save_config
+from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.loader import load_adapter_plugins
 from ...device.registry import build_adapters
 from ...doctor import Check, run_doctor
@@ -121,7 +121,6 @@ from ...trace import TraceLog, TurnTrace
 from .body_limit import BodySizeLimitMiddleware
 from .config_view import config_raw_document
 from .device_rules import (
-    DEFAULT_LISTEN_PORT,
     DEFAULT_TOKEN_ENV,
     conflict_detail,
     effective_listen_port,
@@ -2059,18 +2058,6 @@ def _wake_backstop(clean: str, wake_words: list[str] | tuple[str, ...],
     return ""
 
 
-def _legacy_adapter_warnings() -> list[dict]:
-    """Device-level rows for an adapter spelling rewritten on load."""
-    return [{
-        "code": "legacy_adapter_spelling",
-        "message": (
-            f"device {row['device']!r} says adapter {row['old']!r}; migrated to "
-            f"{row['new']!r}. Mount the device plug under /opt/rui-plugins."
-        ),
-        "details": dict(row),
-    } for row in legacy_adapter_rewrites()]
-
-
 def _device_warnings(app: FastAPI, config: Config) -> list[dict]:
     """Per-room warnings a person can act on before blaming the speaker.
 
@@ -2541,9 +2528,6 @@ def sweep_audition_files(directory: Path, *, ttl_s: float = AUDITION_TTL_S,
     return removed
 
 
-# The inbound WS port a client dials when devices[].listen_port is unset. Kept
-# vendor-neutral here with a test pinning it to the plug contract's constant.
-DEVICE_DEFAULT_LISTEN_PORT = DEFAULT_LISTEN_PORT
 # Token rotation changes the credential a speaker dials in with, so a stuck button (or
 # a script) must not be able to lock the room out in a loop. One rotation per device
 # per window is enough for the console; the value is intentionally short.
@@ -3263,8 +3247,8 @@ def create_app(
                 except Exception:  # noqa: BLE001
                     return ToolResult(status="unreachable")
                 # Confirm the new level instead of trusting the `set` reply: on dot2
-                # that reply is the pre-set report (the bug this card fixes), on LX06
-                # it already moved and this branch answers exactly as before.
+                # that reply is the pre-set report (the bug this card fixes), on the
+                # other adapter it already moved and this branch answers as before.
                 observed = round(got * 100 / 255) if got is not None else None
                 if observed is not None and observed != previous_pct:
                     applied = observed
@@ -3722,8 +3706,7 @@ def create_app(
             # Downstream adapter hook (issue #7 Q1): names and warning count only.
             "adapter_plugins": {
                 "registered": sorted(getattr(app.state, "adapter_plugins", adapter_plugins).registered),
-                "warnings": (len(getattr(app.state, "adapter_plugins", adapter_plugins).warnings)
-                              + len(legacy_adapter_rewrites())),
+                "warnings": len(getattr(app.state, "adapter_plugins", adapter_plugins).warnings),
             },
             "audio_plane": plane["running"],
             # "Up" is not "the room can hear": this is the plane's own link report.
@@ -3741,8 +3724,7 @@ def create_app(
             # `port_conflict` finding for two enabled inbound speakers on one port.
             # Startup still accepts that config on purpose; this is where it surfaces.
             "warnings": [*_device_warnings(app, cfg_now),
-                         *_port_conflict_warning(cfg_now),
-                         *_legacy_adapter_warnings()],
+                         *_port_conflict_warning(cfg_now)],
             "multi_device": {
                 "enabled": bool(cfg_now.multi_device.enabled),
                 "max_planes": cfg_now.multi_device.max_planes,
@@ -6256,12 +6238,26 @@ def create_app(
         console port for the device's inbound port, and carries the token as
         ``?token=``. The token is quoted: a generated one is hex, but a hand-set one may
         contain characters that would otherwise split the query string.
+
+        Since 0.8.0 there is no core fallback port, so a device whose config and plug
+        manifest both omit ``listen_port`` cannot produce a truthful URL. Say that
+        explicitly instead of printing ``:None``.
         """
         cfg_now = getattr(app.state, "cfg", None)
         resolved = (PlugCatalog(cfg_now.system.data_dir).resolve(
             plug_id=_device_plug_id(device, None), adapter=device.adapter)
             if cfg_now is not None else None)
         port = effective_listen_port(device, resolved)
+        if port is None:
+            raise HTTPException(status_code=409, detail={
+                "code": "listen_port_unresolved",
+                "message": (
+                    f"device {device.id!r} has no inbound listen_port: set "
+                    "devices[].listen_port or install the plug whose manifest states "
+                    "runtime.listen_port (required since 0.8.0)"
+                ),
+                "details": {"device_id": device.id, "adapter": device.adapter},
+            })
         host, host_source, loopback = resolve_connect_host(request)
         scheme = request_ws_scheme(request)
         url = f"{scheme}://{host}:{port}/?token={quote(token, safe='')}"

@@ -129,7 +129,7 @@ def test_loads_a_valid_multi_device_plugin(tmp_path: Path) -> None:
         plugin=_plugin_doc(devices=["devices/a.yaml", "devices/b.yaml"]),
         devices={
             "devices/a.yaml": _device_doc(
-                runtime={"entrypoint": "example_plugin:build"},
+                runtime={"entrypoint": "example_plugin:build", "listen_port": 4412},
             ),
             "devices/b.yaml": _device_doc(
                 id="example-b",
@@ -137,7 +137,8 @@ def test_loads_a_valid_multi_device_plugin(tmp_path: Path) -> None:
                 device_class="B",
                 transport="outbound",
                 capabilities=["mic_array", "playback", "volume"],
-                runtime={"mode": "sidecar", "image": "ghcr.io/example/plug-b:1.0.0"},
+                runtime={"mode": "sidecar", "image": "ghcr.io/example/plug-b:1.0.0",
+                         "listen_port": 8899},
             ),
         },
     )
@@ -219,11 +220,27 @@ def test_incompatible_rui_compat_is_refused(tmp_path: Path) -> None:
     assert "refusing to load" in message
 
 
+def test_runtime_without_listen_port_is_rejected(tmp_path: Path) -> None:
+    """0.8.0: runtime.listen_port is required; there is no core 4412 fallback."""
+    root = _single(
+        tmp_path,
+        device=_device_doc(runtime={"entrypoint": "example_plugin:build"}),
+    )
+
+    with pytest.raises(PluginError) as error:
+        load_plugin(root)
+
+    message = str(error.value)
+    assert "runtime.listen_port" in message
+    assert "Field required" in message
+
+
 def test_third_party_in_process_is_rejected_not_coerced(tmp_path: Path) -> None:
     root = _single(
         tmp_path,
         plugin=_plugin_doc(trust="third-party"),
-        device=_device_doc(runtime={"mode": "in-process", "entrypoint": "evil:run"}),
+        device=_device_doc(runtime={"mode": "in-process", "entrypoint": "evil:run",
+                                    "listen_port": 4412}),
     )
 
     with pytest.raises(PluginError) as error:
@@ -239,7 +256,8 @@ def test_third_party_runtime_defaults_to_sidecar(tmp_path: Path) -> None:
     root = _single(
         tmp_path,
         plugin=_plugin_doc(trust="third-party"),
-        device=_device_doc(runtime={"image": "ghcr.io/example/plug:1.0.0"}),
+        device=_device_doc(runtime={"image": "ghcr.io/example/plug:1.0.0",
+                                    "listen_port": 4412}),
     )
 
     plugin = load_plugin(root)
@@ -252,7 +270,7 @@ def test_sidecar_requires_an_image(tmp_path: Path) -> None:
     root = _single(
         tmp_path,
         plugin=_plugin_doc(trust="third-party"),
-        device=_device_doc(runtime={"mode": "sidecar"}),
+        device=_device_doc(runtime={"mode": "sidecar", "listen_port": 4412}),
     )
 
     with pytest.raises(PluginError) as error:
@@ -332,7 +350,8 @@ def test_entrypoint_is_validated_but_never_imported(tmp_path: Path) -> None:
     module = "definitely_not_a_real_plugin_module_xyz"
     root = _single(
         tmp_path,
-        device=_device_doc(runtime={"mode": "in-process", "entrypoint": f"{module}:build"}),
+        device=_device_doc(runtime={"mode": "in-process", "entrypoint": f"{module}:build",
+                                    "listen_port": 4412}),
     )
 
     plugin = load_plugin(root)
@@ -345,8 +364,8 @@ def test_entrypoint_is_validated_but_never_imported(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "runtime",
     [
-        {"mode": "in-process", "entrypoint": "../../evil:build"},
-        {"mode": "sidecar", "image": "../evil"},
+        {"mode": "in-process", "entrypoint": "../../evil:build", "listen_port": 4412},
+        {"mode": "sidecar", "image": "../evil", "listen_port": 4412},
     ],
 )
 def test_runtime_code_references_must_not_be_paths(tmp_path: Path, runtime: dict) -> None:

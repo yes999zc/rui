@@ -37,7 +37,7 @@
 |---|---|---|
 | **服务端（控制面）** | 会话与回合、工具调用、LLM/TTS/ASR 供应商、唤醒仲裁、v2 控制台 API、配置与密钥 | 一轮对话只由一台设备承担；播放态与回合按**房间**隔离，一屋放歌不会让另一屋变聋 |
 | **音频平面** | 每台设备一个独立进程：拾音、KWS/VAD 门限、预录缓冲、回声切除、送 ASR、播放队列 | 门限在本地做，服务端只做决策；播放与唤醒的自回声有专门的剔除路径 |
-| **设备（插件）** | 每种音箱一个 `rui-device/v1` 桥接插件：设备长连接、上下行音频、指示灯与按键 | 核心不含设备实现（旧拼写 `adapter: xiaoai` 只在**读入时**迁移为 `lx06` 并告警，该迁移 0.8.0 删除）；加一种音箱 = 加一个插件仓库 |
+| **设备（插件）** | 每种音箱一个 `rui-device/v1` 桥接插件：设备长连接、上下行音频、指示灯与按键 | 核心不含设备实现（0.8.0 起 `adapter` 必填、无机型默认值；旧拼写 `adapter: xiaoai` **读入即报错**并给出改成 `lx06` 的修复句，不做静默迁移）；加一种音箱 = 加一个插件仓库 |
 
 ## 三个仓库是什么关系
 
@@ -53,10 +53,10 @@
 |---|---|---|
 | **0.7.9**（当前，patch）：意图层两处行为变更 + 唤醒应答提前，**真机未验**（见 [release notes](https://github.com/yes999zc/rui/releases/tag/v0.7.9)） | **1.3.1**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.3.0`（**本版无需重发**） | **0.2.2**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.6.0`（**本版无需重发**） |
 | 0.7.8（历史）：控制台默认 v2、TLS 安装、插件外置 | 1.3.1 | 0.2.2 |
-| 0.8.0（计划）：删 `/legacy`、删 `adapter: xiaoai` 迁移、契约窗口调整；桥**须先发双窗口**（`>=0.7.0 <0.9.0`），见 [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §a | 待定 | 待定 |
+| 0.8.0（计划，**破坏性**）：删 `/legacy`、旧 `adapter: xiaoai` 读入即拒绝（须改 `lx06`）、插件 `runtime.listen_port` 必填、契约窗口调整；桥**须先发双窗口**（`>=0.7.0 <0.9.0`），见 [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §a | 待定 | 待定 |
 | 0.7.4（历史） | 1.3.1 | 0.2.2 |
 
-> LX06 的插件**必须外置**：把 `rui-xiaoai-bridge` 挂到 `/opt/rui-plugins`，并设 `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`；挂上后日志为 `adapter plugins: registered dot2, lx06`。旧配置里的 `adapter: xiaoai` 在**读入时即迁移为 `lx06` 并打 WARNING**（`/health.adapter_plugins.warnings`），核心不再有兼容别名、也不回退内置实现；不挂插件时设备错误会明确提示去 mount 桥。该迁移在 **0.8.0 删除**。
+> LX06 的插件**必须外置**：把 `rui-xiaoai-bridge` 挂到 `/opt/rui-plugins`，并设 `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`；挂上后日志为 `adapter plugins: registered dot2, lx06`。核心不再有兼容别名、也不回退内置实现；不挂插件时设备错误会明确提示去 mount 桥。**0.8.0 起旧配置里的 `adapter: xiaoai` 不再被迁移**：读入即失败，报错含 `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`，把该行改成 `lx06` 即可。
 
 ## 让 AI 帮你装
 
@@ -107,7 +107,7 @@ cat console-token.txt                       # 控制台 token（也可用 rui to
 直接可用的一份参考：`examples/two-speakers/compose.yaml`（两个桥 + TLS + 两段注册一次到位）；只想先跑单台核心可以走上面的「三行启动」（`deploy/install.sh`）。
 
 挂载后日志出现 `adapter plugins: registered dot2, lx06`；`/health.planes` 逐台显示 `running/error/not_started`。
-不挂插件时设备错误会直接提示去 mount 对应桥；旧配置的 `adapter: xiaoai` 在**读入时迁移为 `lx06` 并打 WARNING**（0.8.0 删除该迁移）。
+不挂插件时设备错误会直接提示去 mount 对应桥；旧配置的 `adapter: xiaoai` 在 **0.8.0 读入即报错**（给出改成 `lx06` 的修复句），不再有读入迁移与弃用告警。
 
 ## 兼容性与前置条件
 
@@ -224,7 +224,7 @@ Source: [`docs/assets/architecture.mmd`](docs/assets/architecture.mmd); exports 
 |---|---|---|
 | **Server (control plane)** | Sessions and turns, tool calls, LLM/TTS/ASR providers, wake arbitration, the v2 console API, configuration and secrets | Exactly one device owns a turn; playing state and turns are scoped **per room**, so music in one room never deafens another |
 | **Audio plane** | One process per device: capture, KWS/VAD gate, preroll buffer, echo excision, ASR feed, playback queue | Gating stays local, decisions stay on the server; self-echo has a dedicated excision path |
-| **Devices (plugs)** | One `rui-device/v1` bridge per speaker model: device link, uplink/downlink audio, LED and buttons | The core carries no device implementation (a legacy `adapter: xiaoai` spelling is migrated to `lx06` **on load** with a warning; 0.8.0 removes that migration); a new speaker is a new plug repository |
+| **Devices (plugs)** | One `rui-device/v1` bridge per speaker model: device link, uplink/downlink audio, LED and buttons | The core carries no device implementation (since 0.8.0 `adapter` is required with no model default; a legacy `adapter: xiaoai` **fails on load** with a fix sentence naming `lx06`, never a silent rewrite); a new speaker is a new plug repository |
 
 ## How the three repositories fit together
 
@@ -240,10 +240,10 @@ Two constraints must both hold: `compatibility.rui_min` in the device manifest (
 |---|---|---|
 | **0.7.9** (current, patch): intent-layer behaviour + wake acknowledgement moved up, **not verified on hardware** (see [release notes](https://github.com/yes999zc/rui/releases/tag/v0.7.9)) | **1.3.1**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.3.0` (**no re-release needed**) | **0.2.2**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.6.0` (**no re-release needed**) |
 | 0.7.8 (historical): v2 console default, TLS install, external plugs | 1.3.1 | 0.2.2 |
-| 0.8.0 (planned): remove `/legacy`, remove the `adapter: xiaoai` migration, adjust the compat window; bridges must ship **dual-window** first (`>=0.7.0 <0.9.0`), see [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §a | TBD | TBD |
+| 0.8.0 (planned, **breaking**): remove `/legacy`, reject the old `adapter: xiaoai` spelling on load (change it to `lx06`), require the plug manifest's `runtime.listen_port`, adjust the compat window; bridges must ship **dual-window** first (`>=0.7.0 <0.9.0`), see [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §a | TBD | TBD |
 | 0.7.4 (historical) | 1.3.1 | 0.2.2 |
 
-> The LX06 plug is **external only**: mount `rui-xiaoai-bridge` under `/opt/rui-plugins` and set `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`; with it mounted the log reads `adapter plugins: registered dot2, lx06`. A config that still says `adapter: xiaoai` is **migrated to `lx06` on load with a WARNING** (`/health.adapter_plugins.warnings`); there is no compatibility alias and no built-in fallback, and without the plug the device error tells you to mount the bridge. **0.8.0 removes this migration.**
+> The LX06 plug is **external only**: mount `rui-xiaoai-bridge` under `/opt/rui-plugins` and set `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`; with it mounted the log reads `adapter plugins: registered dot2, lx06`. There is no compatibility alias and no built-in fallback, and without the plug the device error tells you to mount the bridge. **Since 0.8.0 a legacy `adapter: xiaoai` is no longer migrated**: it fails on load with `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`. Change that line to `lx06`; do not wait for a fallback.
 
 ## Let an AI install it
 
@@ -294,7 +294,7 @@ The core image ships **no device implementation**: one core image plus a plug di
 One ready-to-copy reference: `examples/two-speakers/compose.yaml` (both plugs, TLS and registration in one file). For a core-only first run use the three-line install above (`deploy/install.sh`).
 
 After mounting, the log says `adapter plugins: registered dot2, lx06`; `/health.planes` shows each device as `running/error/not_started`.
-Without a plug the device error tells you which bridge to mount; a legacy `adapter: xiaoai` is migrated to `lx06` on load with a WARNING (removed in 0.8.0).
+Without a plug the device error tells you which bridge to mount; since 0.8.0 a legacy `adapter: xiaoai` **fails on load** with the fix sentence naming `lx06` (no read-time migration, no warning-only path).
 
 ## Compatibility and prerequisites
 

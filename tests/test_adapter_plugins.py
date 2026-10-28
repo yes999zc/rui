@@ -604,7 +604,7 @@ def _write_runtime_manifest(
         encoding="utf-8",
     )
     runtime = (
-        f"runtime: {{mode: sidecar, image: \"{image}\"}}"
+        f"runtime: {{mode: sidecar, image: \"{image}\", listen_port: {listen_port}}}"
         if mode == "sidecar"
         else f"runtime: {{mode: in-process, entrypoint: \"fake:build\", "
         f"listen_port: {listen_port}, token_env: {token_env}}}"

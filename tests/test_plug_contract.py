@@ -74,7 +74,8 @@ def _device_doc(**overrides) -> dict:
             "install_steps": ["Install the client."],
             "rollback": "Remove the client.",
         },
-        "runtime": {"mode": "in-process", "entrypoint": "fake_adapter:build"},
+        "runtime": {"mode": "in-process", "entrypoint": "fake_adapter:build",
+                    "listen_port": 4412},
         "params": [
             {"key": "host", "label": "Address", "type": "string", "required": True},
             {"key": "wake_words", "label": "Wake words", "type": "list",
@@ -286,7 +287,8 @@ def test_third_party_in_process_is_rejected(capsys, tmp_path: Path) -> None:
     root = _plugin(
         tmp_path,
         plugin=_plugin_doc(trust="third-party"),
-        device=_device_doc(runtime={"mode": "in-process", "entrypoint": "fake:build"}),
+        device=_device_doc(runtime={"mode": "in-process", "entrypoint": "fake:build",
+                                    "listen_port": 4412}),
     )
 
     code, text = _run(capsys, str(root))
@@ -299,7 +301,8 @@ def test_third_party_sidecar_manifest_passes(capsys, tmp_path: Path) -> None:
     device = _device_doc(
         capabilities=["playback"],
         wake=None,
-        runtime={"mode": "sidecar", "image": "ghcr.io/example/plug:1.0.0"},
+        runtime={"mode": "sidecar", "image": "ghcr.io/example/plug:1.0.0",
+                 "listen_port": 4412},
     )
     root = _plugin(tmp_path, plugin=_plugin_doc(trust="third-party"), device=device)
 

@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from ..env import get as env_get
-from .legacy_adapters import LEGACY_ADAPTER_HINT, canonical, is_legacy
+from .removed_adapters import removed_adapters_error
 from .schema import (
     CONFIG_VERSION,
     AckConfig,
@@ -38,45 +38,6 @@ def default_config_path() -> Path:
     return Path.home() / ".config" / "rui" / "config.yaml"
 
 
-#: Device ids rewritten from a pre-0.7.6 adapter spelling by the last load. Read by
-#: /health to count the deprecation warning without changing the config schema.
-_LAST_LEGACY_ADAPTERS: list[tuple[str, str, str]] = []
-
-
-def legacy_adapter_rewrites() -> list[dict[str, str]]:
-    """[{device, old, new}] from the most recent load_config() (empty when clean)."""
-    return [{"device": device, "old": old, "new": new}
-            for device, old, new in _LAST_LEGACY_ADAPTERS]
-
-
-def _rewrite_legacy_adapters(raw: dict) -> dict:
-    devices = raw.get("devices")
-    if not isinstance(devices, list):
-        return raw
-    out = dict(raw)
-    rewritten: list[tuple[str, str, str]] = []
-    new_devices = []
-    for index, device in enumerate(devices):
-        if not isinstance(device, dict):
-            new_devices.append(device)
-            continue
-        old = str(device.get("adapter") or "").strip()
-        if not is_legacy(old):
-            new_devices.append(device)
-            continue
-        new = canonical(old)
-        item = dict(device)
-        item["adapter"] = new
-        new_devices.append(item)
-        rewritten.append((str(item.get("id") or f"devices[{index}]"), old, new))
-    out["devices"] = new_devices
-    _LAST_LEGACY_ADAPTERS[:] = rewritten
-    for device, old, new in rewritten:
-        log.warning("config: %s: %s", device,
-                    LEGACY_ADAPTER_HINT.format(old=old, new=new))
-    return out
-
-
 def migrate(raw: dict) -> dict:
     """Upgrade an older on-disk config in memory. Returns a dict for the current schema.
 
@@ -84,8 +45,16 @@ def migrate(raw: dict) -> dict:
     provider blocks become catalog entries behind a one-name chain. A v1 file is never
     rewritten by this function; it is only interpreted, so a downgrade keeps working
     until the first write.
+
+    Since 0.8.0 there is one exception to "interpret, never rewrite": an adapter
+    spelling removed from the core is rejected here, before Pydantic can accept it as
+    an arbitrary name. The message names the replacement; the file is left untouched.
     """
-    raw = _rewrite_legacy_adapters(raw)
+    devices = raw.get("devices")
+    if isinstance(devices, list):
+        rejected = removed_adapters_error(devices)
+        if rejected is not None:
+            raise ConfigError(rejected[1])
     version = int(raw.get("version") or 1)
     if version >= CONFIG_VERSION:
         return raw
@@ -292,6 +261,12 @@ def explicit_audio_layers(audio_paths: set[str], ack_echo: bool) -> Iterator[Non
 
 def save_config(path: str | Path, cfg: Config, keep_backups: int = 5) -> None:
     p = Path(path)
+    # Last line of defense behind `device_write.check_device_write`: no writer may
+    # persist a device list the next `load_config` refuses. The console turns this
+    # into a 422 before it gets here; a future writer cannot bypass it.
+    rejected = removed_adapters_error(cfg.devices)
+    if rejected is not None:
+        raise ConfigError(rejected[1])
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

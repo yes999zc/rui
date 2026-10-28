@@ -20,8 +20,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from .legacy_adapters import DEFAULT_ADAPTER
-
 CONFIG_VERSION = 3
 
 ExposeMode = Literal["domain", "whitelist", "all"]
@@ -251,12 +249,12 @@ class DeviceAudioOverride(BaseModel):
 
 class DeviceConfig(BaseModel):
     id: str = Field(min_length=1, max_length=32)
-    # A name, not an enum: a plug manifest declares it as its device id and the
-    # registry registers it, so config validation never rejects an adapter a future
-    # build adds. 0.7.6 removed the in-tree plug; the default is the external
-    # manifest id, and an explicit legacy spelling is rewritten in
-    # config.store.migrate (with a warning).
-    adapter: str = DEFAULT_ADAPTER
+    # Required since 0.8.0: the core has no device default and never guesses a
+    # model. A name, not an enum - a plug manifest declares it as its device id and
+    # the registry registers it, so config validation never rejects an adapter a
+    # future build adds. Removed spellings are rejected in config.store.migrate
+    # before this model sees them.
+    adapter: str = Field(min_length=1, max_length=64)
     host: str
     room: str = ""
     enabled: bool = True

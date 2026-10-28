@@ -7,20 +7,20 @@ so ``app.py`` and ``setup_api.py`` reject the write before anything reaches disk
 audio plane.
 
 A null ``listen_port`` means "adapter default", resolved from the plug manifest's
-runtime block (then the loader's cached default). Two devices are only in conflict
-when both resolve to a known, equal port; outbound devices do not bind a listener and
-are ignored.
+runtime block (then the loader's cached manifest default). There is no core fallback
+port since 0.8.0: a device whose config and manifest both omit it has no resolvable
+port, and the status row reports that instead of inventing 4412. Two devices are only
+in conflict when both resolve to a known, equal port; outbound devices do not bind a
+listener and are ignored.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from ...config.legacy_adapters import DEFAULT_LISTEN_PORT
 from ...config.schema import DeviceConfig
 from ...plugins import PlugCatalog
 
 __all__ = [
-    "DEFAULT_LISTEN_PORT",
     "DEFAULT_TOKEN_ENV",
     "conflict_detail",
     "effective_listen_port",
@@ -29,8 +29,6 @@ __all__ = [
     "port_conflict",
 ]
 
-# Compatibility fallback for manifests/configs that omit the inbound port (the
-# literal lives in config/legacy_adapters.py; removed in 0.8.0).
 # The transport-token secret name used when neither the config nor the plug names one.
 DEFAULT_TOKEN_ENV = "RUI_DEVICE_TOKEN"
 
@@ -51,12 +49,15 @@ def _runtime_default(adapter: str, key: str) -> object | None:
 
 
 def effective_listen_port(device: DeviceConfig,
-                          resolved: object | None = None) -> int:
-    """The port this device actually asks the plane to bind.
+                          resolved: object | None = None) -> int | None:
+    """The port this device actually asks the plane to bind, or None when unknown.
 
     devices[].listen_port wins; otherwise the resolved plug manifest's
     runtime.listen_port is the default the adapter builder applies (dot2: 8870,
-    the config keeps None on purpose), and only then DEFAULT_LISTEN_PORT.
+    the config keeps None on purpose); otherwise the loader's cached manifest
+    default. 0.8.0 has no core fallback: None means neither the config nor a
+    manifest states a port, which is a configuration error the caller reports
+    instead of guessing.
     """
     if device.listen_port:
         return int(device.listen_port)
@@ -65,7 +66,7 @@ def effective_listen_port(device: DeviceConfig,
     if port:
         return int(port)
     cached = _runtime_default(device.adapter, "listen_port")
-    return int(cached) if cached else DEFAULT_LISTEN_PORT
+    return int(cached) if cached else None
 
 
 def effective_token_env(device: DeviceConfig,
@@ -115,7 +116,9 @@ def port_conflict(
 
     ``devices`` is the *resulting* list (the candidate edit already merged in), so the
     caller can validate a PUT/upsert/enable without a second code path. Disabled
-    devices never conflict; null and default ports compare equal.
+    devices never conflict; null and manifest-default ports compare equal. A device
+    with no resolvable port is skipped: it cannot open a listener, and its status row
+    already says the port is missing.
     """
     catalog = PlugCatalog(data_dir)
     seen: dict[int, DeviceConfig] = {}
@@ -127,6 +130,8 @@ def port_conflict(
             plug_id=str(params.get("plug_id") or "").strip() or None,
             adapter=device.adapter)
         port = effective_listen_port(device, resolved)
+        if port is None:
+            continue
         first = seen.get(port)
         if first is None:
             seen[port] = device

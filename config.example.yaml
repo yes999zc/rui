@@ -30,12 +30,13 @@ security:
     blocked_cidrs: []
 devices:
   - id: living
-    adapter: lx06
+    adapter: lx06          # required since 0.8.0; the old "xiaoai" spelling is rejected
     host: speaker.local    # the speaker's LAN name or IP (mDNS is enough here)
     room: 客厅
     wake_words: ["你好小瑞"]
     volume: 60
-    listen_port: 4412      # the speaker's client dials us here; None = adapter default
+    listen_port: 4412      # the speaker's client dials us here; omit to use the plug
+                           # manifest's runtime.listen_port (required there since 0.8.0)
     token_env: RUI_DEVICE_TOKEN
     # The 18-LED ring. Off until you turn it on; colours are peak values, brightness is
     # applied when a frame is built. The rings are driven by writing sysfs through the

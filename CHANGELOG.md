@@ -18,6 +18,22 @@ canonical per-version record.
 
 ### Removed
 
+- **A stale adapter spelling and an implicit listen port are now load errors (0.8.0
+  breaking change).** `src/rui/config/legacy_adapters.py` and the on-load rewrite are
+  gone. `devices[].adapter` is required and has no model default, and a config that
+  still says `adapter: xiaoai` fails on load with
+  `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`.
+  Nothing is rewritten and no deprecation warning is emitted; change that line to
+  `lx06`. The 4412 compatibility port for `rui-device/v0` manifests is gone too:
+  `runtime.listen_port` is required, so a custom plug that omitted it is rejected
+  instead of silently binding 4412. `/health.adapter_plugins.warnings` no longer
+  counts old spellings, and `/health.warnings` no longer has a
+  `legacy_adapter_spelling` row. `config/recovery.py` keeps its policy: the bad file
+  is copied aside, the service starts from last-good/defaults, and the note exposed by
+  `GET /api/v1/config/recovery` carries the same fix sentence. 中文一句话：老配置不会
+  被悄悄改写，启动即报错并告诉你把 `adapter: xiaoai` 改成 `lx06`；自制插件的
+  `runtime.listen_port` 也必须写明。
+
 - **The legacy console is gone (0.8.0 breaking change).** `/legacy`, its SPA shell, the
   root catch-all that served it and the **15 old-link 302s** (`/panel/*` × 11 plus
   `/setup`, `/secrets`, `/diagnostics`, `/channels`) are deleted. Those paths answer

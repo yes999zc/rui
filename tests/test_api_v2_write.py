@@ -24,7 +24,7 @@ AUTH = {"X-Auth-Token": TOKEN}
 def _device(**overrides) -> DeviceConfig:
     payload = {
         "id": "living",
-        "adapter": "xiaoai",
+        "adapter": "lx06",
         "host": "speaker.local",
         "room": "客厅",
         "params": {"plug_id": "xiaoai-lx06"},
@@ -826,6 +826,9 @@ def _manifest_device(**overrides) -> DeviceConfig:
         "adapter": "dot2",
         "host": "dot2.local",
         "room": "书房",
+        # The manifest-only plug below declares no runtime block, so the config must
+        # state the port: 0.8.0 has no 4412 fallback for the connect URL.
+        "listen_port": 4412,
         "params": {"plug_id": "dot2"},
     }
     payload.update(overrides)

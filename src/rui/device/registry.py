@@ -23,7 +23,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config.legacy_adapters import canonical, is_legacy, unknown_adapter_hint
 from ..config.schema import Config, DeviceConfig
 from .contract import DeviceAdapter
 
@@ -193,24 +192,32 @@ def register(name: str, target: T, *, allow_builtin: bool = False) -> None:
 
 
 def available() -> list[str]:
-    """Adapter names that can be selected, including one-minor aliases.
-
-    Aliases are listed only while their canonical name is registered, so the console
-    and /health show that the old spelling still works without implying two adapters.
-    """
+    """Adapter names that can be selected in this build."""
     _ensure_image_adapters()
     return sorted(_BUILDERS)
+
+
+def _unknown_adapter_hint() -> str:
+    """Actionable, brand-free hint for an adapter that is not registered.
+
+    The core does not know which model a name belongs to (and since 0.8.0 does not
+    translate any old spelling), so the fix is always the plug: install/mount the
+    device's manifest and select the id it declares.
+    """
+    return (
+        "install the plug that owns this device under /opt/rui-plugins (or register "
+        "it through RUI_ADAPTER_PLUGINS) and set devices[].adapter to the id its "
+        "manifest declares"
+    )
 
 
 def _builder(name: str) -> Builder:
     _ensure_image_adapters()
     target = _BUILDERS.get(name)
-    if target is None and is_legacy(name):
-        target = _BUILDERS.get(canonical(name))
     if target is None:
-        hint = unknown_adapter_hint(name)
         raise AdapterUnavailable(
-            f"unknown adapter: {name!r} (this build has: {', '.join(available())}); {hint}"
+            f"unknown adapter: {name!r} (this build has: {', '.join(available())}); "
+            f"{_unknown_adapter_hint()}"
         )
     if callable(target):
         return target
@@ -253,9 +260,7 @@ def _apply_manifest_runtime(dev: DeviceConfig, resolved) -> DeviceConfig:
     sees the resolved copy, never a mutated config.
     """
     runtime = getattr(getattr(resolved, "device", None), "runtime", None)
-    cached = RUNTIME_DEFAULTS.get(dev.adapter) or RUNTIME_DEFAULTS.get(
-        canonical(dev.adapter), {}
-    )
+    cached = RUNTIME_DEFAULTS.get(dev.adapter, {})
     listen_port = (
         int(runtime.listen_port) if runtime is not None and runtime.listen_port
         else cached.get("listen_port")

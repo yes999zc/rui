@@ -49,8 +49,8 @@ def test_capture_layout_must_add_up() -> None:
 def test_duplicate_device_ids_are_rejected() -> None:
     with pytest.raises(ValidationError):
         Config(devices=[
-            DeviceConfig(id="living", host="10.0.0.2"),
-            DeviceConfig(id="living", host="10.0.0.3"),
+            DeviceConfig(id="living", adapter="mock", host="10.0.0.2"),
+            DeviceConfig(id="living", adapter="mock", host="10.0.0.3"),
         ])
 
 
@@ -92,7 +92,8 @@ def test_save_is_atomic_and_keeps_backup(tmp_path) -> None:
 
 def test_round_trip_preserves_devices(tmp_path) -> None:
     path = tmp_path / "config.yaml"
-    save_config(path, Config(devices=[DeviceConfig(id="living", host="192.0.2.11", room="客厅")]))
+    save_config(path, Config(devices=[DeviceConfig(
+        id="living", adapter="mock", host="192.0.2.11", room="客厅")]))
     cfg = load_config(path)
     assert cfg.devices[0].room == "客厅"
 

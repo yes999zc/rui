@@ -31,7 +31,7 @@ web:
   host: 127.0.0.1
 devices:
   - id: living
-    adapter: xiaoai
+    adapter: lx06
     host: 192.0.2.10
     room: 客厅
     listen_port: {port}

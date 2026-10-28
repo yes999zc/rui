@@ -391,7 +391,7 @@ LX06_CONFIG = """\
 version: 3
 devices:
   - id: lx06
-    adapter: xiaoai
+    adapter: lx06
     host: 192.0.2.10
     room: 客厅
 """
@@ -423,7 +423,7 @@ audio:
     cancel: mix
 devices:
   - id: lx06
-    adapter: xiaoai
+    adapter: lx06
     host: 192.0.2.10
     room: 客厅
 """

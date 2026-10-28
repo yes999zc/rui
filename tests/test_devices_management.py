@@ -417,11 +417,15 @@ def test_dot2_and_lx06_do_not_false_conflict_on_the_default_port(
     lx06 = DeviceConfig(id="lx06", adapter="lx06", host="lx06.local")
     catalog = PlugCatalog(data_dir)
     resolved_dot2 = catalog.resolve(adapter="dot2")
+    resolved_lx06 = catalog.resolve(adapter="lx06")
 
     assert effective_listen_port(dot2, resolved_dot2) == 8870
     assert effective_token_env(dot2, resolved_dot2) == "DOT2_EM_TOKEN"
-    assert effective_listen_port(lx06, None) == 4412
-    assert effective_token_env(lx06, None) == "RUI_DEVICE_TOKEN"
+    # 4412 now comes from the LX06 manifest's runtime.listen_port; the core has no
+    # fallback, so passing the resolved manifest is what makes the port knowable.
+    assert resolved_lx06 is not None
+    assert effective_listen_port(lx06, resolved_lx06) == 4412
+    assert effective_token_env(lx06, resolved_lx06) == "RUI_DEVICE_TOKEN"
     # The LX06's 4412 is not a collision with the dot2 plug's 8870.
     assert port_conflict([dot2, lx06], data_dir) is None
     # Two devices on the same dot2 manifest do collide -- on the manifest port.
