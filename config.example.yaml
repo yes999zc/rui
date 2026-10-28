@@ -34,7 +34,8 @@ devices:
     host: speaker.local    # the speaker's LAN name or IP (mDNS is enough here)
     room: 客厅
     wake_words: ["你好小瑞"]
-    volume: 60
+    # 45 ≈ 设备刻度 115（0-100 -> 0-255），仍可按遥控/按键在设备侧再调。
+    volume: 45             # LX06 客厅实测 60 偏吵；dot2 不需要跟着降；生产改配置需 9哥 批准
     listen_port: 4412      # the speaker's client dials us here; omit to use the plug
                            # manifest's runtime.listen_port (required there since 0.8.0)
     token_env: RUI_DEVICE_TOKEN

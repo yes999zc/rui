@@ -102,6 +102,10 @@ def test_shipped_example_config_parses() -> None:
     cfg = load_config(REPO / "config.example.yaml")
     assert cfg.version == 2
     assert cfg.devices[0].adapter == "lx06"
+    # task-4 (0.8.5): the LX06 客厅 example ships 45 - 60 was measured too loud on the
+    # real speaker. The schema default stays 60 on purpose, so a dot2 install that
+    # omits `volume` keeps its old level. See docs/lx06-volume-default-0.8.5.md.
+    assert cfg.devices[0].volume == 45
 
 
 V1_CONFIG = """\

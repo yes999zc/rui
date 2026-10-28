@@ -76,6 +76,18 @@ SOFT_ENDINGS = "，,、：:"
 # immediately: the measured first-audio lead is 343 ms, and the only extra wait here is
 # the 3 characters between the comma and the full stop.
 SOFT_MIN_CHARS = 16
+# task-3 (0.8.5, 2026-10-28): the 16-char clause window alone still split 17-20 char
+# replies whose comma sat at the boundary. 「今天沈阳多云转晴最高气温二十度，好。」 is
+# 16 chars up to the comma, so it reached TTS as a 16-char request plus a second one
+# for the 3-char tail - the same vendor head/tail seam task-32 fixed, one length band
+# higher (measured: 17/18/19/20-char comma replies each produced 2 TTS calls). A comma
+# is now a split point only once MORE than SOFT_MERGE_MAX_CHARS characters of the
+# current sentence are buffered, so any reply that reads as one short sentence (<= 20
+# chars) is one request, while a real long answer still streams its first clause. The
+# first-audio cost is bounded: a > 20-char answer releases its first clause on the
+# 21st character (at most 5 characters later than the old 16-char threshold, well
+# inside the ~343 ms first-audio lead). Sentence ends are still released at once.
+SOFT_MERGE_MAX_CHARS = 20
 # Any complete sentence is worth speaking at once: the first one decides perceived
 # latency, and a longer wait for a "nicer" split is a worse trade. The cap only exists so
 # a reply with no punctuation at all cannot hold the speaker silent.
@@ -188,9 +200,12 @@ def split_sentences(
 ) -> tuple[list[str], str]:
     """Pull speakable pieces out of a streaming buffer, keep the remainder.
 
-    `clauses=True` also breaks after a comma once the clause is long enough: the first
-    piece can go to TTS while the model is still writing, which is the only way the
-    speaker starts before the answer is finished.
+    `clauses=True` also breaks after a comma once the clause is long enough **and** more
+    than ``SOFT_MERGE_MAX_CHARS`` (20) characters of the current sentence are buffered:
+    the first piece can go to TTS while the model is still writing, which is the only
+    way the speaker starts before the answer is finished. The buffer window is what
+    keeps a 17-20 char comma reply in one vendor request (task-3); a longer answer
+    still streams its first clause, at the cost of waiting for the 21st character.
 
     `hold_short` is the streaming caller saying "this may still be a short reply": while
     the buffer is short and would split into several pieces (`_short_reply_pending`),
@@ -219,7 +234,9 @@ def split_sentences(
         if ch in SENTENCE_ENDINGS and i - start + 1 >= MIN_SENTENCE_CHARS:
             out.append(buffer[start:i + 1].strip())
             start = i + 1
-        elif clauses and ch in SOFT_ENDINGS and i - start + 1 >= SOFT_MIN_CHARS:
+        elif (clauses and ch in SOFT_ENDINGS
+              and i - start + 1 >= SOFT_MIN_CHARS
+              and len(buffer) - start > SOFT_MERGE_MAX_CHARS):
             # Never split inside a URL: the scheme colon alone is 10 characters into
             # "看这里 https://...", so the clause rule used to cut it in half and the
             # vendor spoke "a.cn，x" instead of a sentence (measured 2026-10-23).

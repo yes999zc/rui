@@ -106,8 +106,9 @@ def test_a_url_in_a_reply_is_not_spoken_as_a_url(monkeypatch) -> None:
 
 def test_a_clause_split_does_not_add_a_second_pause(monkeypatch) -> None:
     asr = FakeAsr("今天天气")
-    # 16 chars before the comma: still a streaming clause split after task-32's
-    # SOFT_MIN_CHARS=16 (a 13-char comma sentence is a single request instead).
+    # 16 chars before the comma and 21 in total: the reply is longer than the
+    # 20-char merge window (task-3), so the first clause still streams early
+    # (SOFT_MIN_CHARS=16). A 20-char comma reply is one request instead.
     llm = FakeLlm(["今天沈阳多云转晴最高气温二十度，明天有雨。"])
     tts = FakeTts()
     patch_chains(monkeypatch, asr=asr, llms=[llm], ttss=[tts])

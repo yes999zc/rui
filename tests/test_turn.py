@@ -81,13 +81,22 @@ def test_sentences_split_on_punctuation_and_length() -> None:
     # one short sentence is still a sentence: waiting for more text would only add latency
     assert split_sentences("好。") == (["好。"], "")
 
-    # a long clause (>= SOFT_MIN_CHARS) speaking early is the point; a short one is not
-    long_clause, rest = split_sentences("今天沈阳多云转晴最高气温二十度，明天有雨")
-    assert long_clause == ["今天沈阳多云转晴最高气温二十度，"]
-    assert rest == "明天有雨"
+    # a long clause (>= SOFT_MIN_CHARS) speaking early is the point; a short one is not.
+    # task-3: the split also needs more than SOFT_MERGE_MAX_CHARS (20) characters of the
+    # current sentence buffered, so a 20-char comma reply stays whole while a 21-char
+    # one still streams its first clause.
+    held = "今天沈阳多云转晴最高气温二十度，明天有雨"
+    assert len(held) == 20
+    assert split_sentences(held) == ([], held)
+    long_clause, rest = split_sentences(held + "。")
+    assert long_clause == ["今天沈阳多云转晴最高气温二十度，", "明天有雨。"]
+    assert rest == ""
     assert split_sentences("好，") == ([], "好，")
-    assert split_sentences("今天沈阳多云转晴最高气温二十度，", clauses=False) == (
-        [], "今天沈阳多云转晴最高气温二十度，")
+    # No sentence end, 21 chars: clauses=True streams the first clause, False holds it.
+    clausal = "今天沈阳多云转晴最高气温二十度，明天有小雨"
+    assert len(clausal) == 21
+    assert split_sentences(clausal)[0] == ["今天沈阳多云转晴最高气温二十度，"]
+    assert split_sentences(clausal, clauses=False) == ([], clausal)
 
 
 def test_turn_runs_asr_llm_tts_and_marks_latency(monkeypatch) -> None:
@@ -891,3 +900,44 @@ def test_a_nineteen_char_two_sentence_reply_still_splits(monkeypatch) -> None:
     tts, _result = _run_reply(monkeypatch, [text])
 
     assert tts.texts == [first, second], tts.texts
+
+
+# ------------------------------------ task-3: 17-20 char comma replies are one synth
+# The 16-char clause window (task-32) still split a reply whose comma sat at that
+# boundary: the clause went out alone and the 1-4 char tail became a second vendor
+# request, re-introducing the head/tail seam the 13-char fix removed. These four
+# shapes are all the same natural sentence at the four reported lengths; the comma is
+# the 16th character, which is exactly where the old rule split.
+@pytest.mark.parametrize(
+    ("length", "text"),
+    [
+        (17, "今天沈阳多云转晴最高气温二十度，好"),
+        (18, "今天沈阳多云转晴最高气温二十度，好。"),
+        (19, "今天沈阳多云转晴最高气温二十度，有雨。"),
+        (20, "今天沈阳多云转晴最高气温二十度，下雨了。"),
+    ],
+)
+def test_seventeen_to_twenty_char_comma_reply_is_one_synth(
+    monkeypatch, length: int, text: str
+) -> None:
+    assert len(text) == length
+    assert text.index("，") == 15, "comma must sit on the old 16-char boundary"
+    head, tail = text[:16], text[16:]
+
+    # Whole reply in one delta, and the live stream shape (comma then the tail).
+    for chunks in ([text], [head, tail]):
+        tts, result = _run_reply(monkeypatch, chunks)
+        assert tts.texts == [text], (length, chunks, tts.texts)
+        assert result.reply == text
+
+
+def test_a_long_comma_reply_still_streams_its_first_clause(monkeypatch) -> None:
+    """Above the 20-char merge window the early first clause survives: 40 chars."""
+    first = "今天沈阳多云转晴最高气温二十度，"
+    text = first + "明天有小雨，后天转多云，出门记得带伞并穿厚一点。"
+    assert len(text) == 40
+    assert split_sentences(text)[0][0] == first, split_sentences(text)
+
+    tts, _result = _run_reply(monkeypatch, [text])
+    assert tts.texts[0] == first, tts.texts
+    assert len(tts.texts) >= 2, tts.texts
