@@ -183,6 +183,10 @@ CAPTURE_ERROR_LOG_S = 30.0
 # ms late, the device still has audio), not an audible underrun. The issue's gap is
 # ~400 ms, an order of magnitude above the floor.
 PLAYBACK_GAP_MIN_MS = 20.0
+# task-23: the reply gaps heard during "barge during music -> stop -> farewell" were
+# 158-221 ms. Every gap at or above PLAYBACK_GAP_MIN_MS still counts; this threshold
+# only decides when one also gets its own INFO line with the state at that moment.
+REPLY_STALL_LOG_MS = 100.0
 # A producer that ignores SpeakFinished cannot grow the queue without bound.
 MAX_SPEAK_QUEUE_S = 120.0
 # 12 ms of ramp at the start of playback. Speech that begins on a hard sample boundary
@@ -559,6 +563,12 @@ class AudioPlane:
         self.playback_max_gap_ms = 0.0
         self._reply_gap_count = 0
         self._reply_max_gap_ms = 0.0
+        # task-23: additive per-reply ledger of [chunk_index, gap_ms] for the chunks that
+        # had to wait, reset when a reply opens. Diagnostic only; the send path never
+        # reads it. The turn trace needs a protocol field before this can cross the
+        # plane/control boundary (tests/test_playback_pacing.py:167-185 makes that
+        # constraint explicit: pydantic drops undeclared Metrics fields).
+        self.playback_gap_chunks: list[list[float]] = []
         # When the audio already sent will run out, if the reply queue was empty at the
         # last send. None = the queue was not starved, or the reply is not active.
         self._starvation_due: float | None = None
@@ -2358,8 +2368,36 @@ class AudioPlane:
             await asyncio.sleep(min(PREBUFFER_POLL_S, deadline - now))
         return False
 
-    def _record_playback_gap(self, gap_s: float) -> None:
-        """Count an audible underrun (`gap_s` seconds past the last queued audio)."""
+    def _reply_stall_state(self) -> str:
+        """Name the existing flag that best explains a reply send stall right now.
+
+        task-23 allows exactly four names, and none of them is new state: the answer is
+        read from flags the send path already maintains, and it never changes behaviour.
+
+        - ``barge``: the song is down because speech interrupted it - the barge/wake
+          path paused it (``_speech_paused`` without ``_paused_explicit``).
+        - ``paused``: the song is down because the user asked for 「暂停」.
+        - ``silence_window``: the post-playback microphone mute window is open
+          (``_mic_is_muted``; the speaker is being kept quiet on purpose).
+        - ``idle``: none of the above - the wait is in the producer/transport.
+        """
+        if self._speech_paused:
+            return "paused" if self._paused_explicit else "barge"
+        if self._mic_is_muted():
+            return "silence_window"
+        return "idle"
+
+    def _record_playback_gap(
+        self, gap_s: float, *, chunk: int | None = None, total: int | None = None,
+    ) -> None:
+        """Count an audible underrun (`gap_s` seconds past the last queued audio).
+
+        ``chunk``/``total`` are diagnostic only. When they identify the chunk that had
+        to wait, the gap is also appended to the per-reply ledger and, past
+        ``REPLY_STALL_LOG_MS``, logged with the state at that moment. The counters and
+        the send path are unchanged; a caller without a chunk index (the trailing
+        producer stall at the end of a reply) still updates them as before.
+        """
         gap_ms = gap_s * 1000.0
         if gap_ms < PLAYBACK_GAP_MIN_MS:
             return
@@ -2368,6 +2406,18 @@ class AudioPlane:
         if self._reply_open:
             self._reply_gap_count += 1
             self._reply_max_gap_ms = max(self._reply_max_gap_ms, gap_ms)
+        if chunk is None:
+            return
+        self.playback_gap_chunks.append([chunk, round(gap_ms, 1)])
+        if gap_ms >= REPLY_STALL_LOG_MS:
+            # `total` is exact once the producer has declared the end of the burst;
+            # before that it is the chunks known so far (sent + queued + this one),
+            # which is the honest number at the instant of the wait.
+            log.info(
+                "reply stall: chunk #%d/%d gap=%.0f ms state=%s",
+                chunk, total if total is not None else chunk, gap_ms,
+                self._reply_stall_state(),
+            )
 
     async def _prepare_reply_player(self, adapter: DeviceAdapter) -> bool:
         """Stop the old player before a reply only when it may still hold audio.
@@ -2437,6 +2487,7 @@ class AudioPlane:
                                      self._reply_gap_count, self._reply_max_gap_ms)
                     self._reply_gap_count = 0
                     self._reply_max_gap_ms = 0.0
+                    self.playback_gap_chunks = []
                     finished_reply = self._reply_finished
                     self._reply_finished = False
                     reply_hold, self._reply_hold = self._reply_hold, None
@@ -2519,7 +2570,16 @@ class AudioPlane:
                 # The queue was empty at the last send; compare the arrival against the
                 # moment the device ran out, not against the queue-empty moment. A block
                 # that arrives while the lead is still positive is not a gap.
-                self._record_playback_gap(time.monotonic() - self._starvation_due)
+                # task-23: this chunk had to wait - the gap belongs to it, so record the
+                # index for the per-reply ledger and the stall log. `total` is exact when
+                # the producer has already declared the end of the burst; otherwise it is
+                # the chunks known at this instant (sent + queued + this one).
+                chunk_no = reply_chunks + 1
+                self._record_playback_gap(
+                    time.monotonic() - self._starvation_due,
+                    chunk=chunk_no,
+                    total=chunk_no + self._speak_queue.qsize(),
+                )
                 self._starvation_due = None
             if isinstance(chunk, tuple):
                 chunk, segment = chunk
@@ -2564,6 +2624,7 @@ class AudioPlane:
                     # A fresh reply owns its own gap accounting.
                     self._reply_gap_count = 0
                     self._reply_max_gap_ms = 0.0
+                    self.playback_gap_chunks = []
                     self._starvation_due = None
                     # Whatever we are about to sound - an answer, the farewell, a reminder -
                     # must close a gate the previous turn left open (see below).
