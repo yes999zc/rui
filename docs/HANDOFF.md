@@ -7,11 +7,12 @@
 - **A2 d.7 volume 容差**：已落地（`VOLUME_RECONCILE_TOLERANCE = 1`，设备 0–255 刻度）；
   d.7 已写明显式代价（1 刻度假漂移不纠），新增一步差用户 set 用例；全量 `1726 passed / 6 skipped`；
   review PASS + verify VERIFIED。真机静置 5 min 计数归零待验。
-- **P0（2026-10-28 真机插入，优先于 B1）**：ack 回声漏切 → 自问自答。证据 11:01:30：
-  cue 460 ms、`cue_gate dropped=[0,403]ms` 尾漏 57 ms → `[seg] 1.18 s` → ASR「在呢？」→ 白起一轮。
-  dot2 `aec.enabled=False` + `ack_echo_ignore_ms=2500`；修法不得永久禁检测（保 barge）。卡 task-13。
-- **P1（紧随 P0）**：短回复「在，你说。」被按标点拆成两次 synth，间隔 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14。
-- **B1 已暂停**（implementer 尚无文件改动），P0/P1 收口后恢复。
+- **P0（2026-10-28 真机插入，优先于 B1）**：ack 回声漏切 → 自问自答。**根因**：`process.py:1862`
+  用设备 48k rate 除 16k 渲染的 cue → 460ms 变 153ms，skip/hold=403/2653，cue 整段 replay。
+  已实现修复（cue 用渲染 rate；hold=460+850 lead+2500，从播放结束起算；VAD 首唤醒晚 cue 先验），
+  全量 `1733 passed / 6 skipped`；review/verify 进行中。卡 task-13，证据记 known-limitations L17。
+- **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（未开工）。
+- **B1 已暂停**（task-8 释放，blocked_by task-13/14）；P0/P1 收口后恢复。
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
   不打 tag、不部署，真机与插设备等 9 哥 下午做。
 - 未完成项不宣称完成；上下文压缩后先读本节 + 任务板。
