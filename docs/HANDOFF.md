@@ -27,6 +27,7 @@
 - **P0/P1 均已收口**；B1（task-8）恢复，之后 B2→B3（桥双窗口先于 core）→C。
 - **当前 HEAD**：`7b9035a`（B1）；P0 `82d45d9`、P1 `8344085`、B1 `7b9035a`。B2/B3/C 未开工。
 - **桥仓 main 领先 v1.3.2 一个工具提交 `56e9bb8`**（onboard_device.py + docs/onboard-device.md + README 中英 + CHANGELOG；4 files，不进 src/wheel）。口径：v1.3.2 tag 仍指 `4536968`、不重打、不改 release 正文、不 bump 版本、不 force-push、不 revert；[Unreleased] 留到下次发布。
+- **P0 根治（2026-10-28 15:45 真机，装主卧/卫生间前必须修）**：新建 dot2-b audio 为空→playback 16000 vs 桥硬性 48000，每块 raise，LED 亮但无声；dot2-b ack 1200、living capture 落全局 16k，**两个 manifest 的 audio_defaults 都没生效**；/api/v2/plugins 显示 builtin 1.3.1 而实际挂 /opt/rui-plugins 1.3.2。卡：task-25（R4 catalog/runtime + 外置 audio_defaults）→ task-26（R1/R2 manifest 硬件事实 + fail-closed + 值/来源）→ task-24（R3 运行期 wire 自检 + 错误上报）。**与 task-22（params/layout）分开**；dot2-b 手工补 audio 救机由 9哥 决定。
 - **task-22 存量 null-params 决策 = (b) 明确不兜底**：读配置不做隐式补齐（不改桥/adapter 默认、不改 schema 默认）；task-22 文档必须写「对已有 null-params 设备执行一次补齐」的手工步骤 + 三台最终值：
   living（lx06, 4412）params 不适用/留空；dot2（儿童房, 8870）`control_port: 0`、`loudness_file: /var/lib/rui/loudness-dot2.json`；dot2-b（次卧, 8871）`control_port: 0`、`loudness_file: /var/lib/rui/loudness-dot2-b.json`。
   生效时机：params 在平面启动时读取，补齐后需重启该平面；建议与 0.8.0 生产部署合并为一次重启。真机现状已记：3 台在线，dot2-b 在次卧 8871，日志原文 `dot2 adapter: loudness control on 127.0.0.1:8872 unavailable ([Errno 98] address already in use); continuing without it`。
