@@ -317,3 +317,74 @@ ssh yes999zc@<NAS-LAN-IP> \
 - **不能断言已恢复**：22:12 本地重启后 1011 消失，但同窗口 `rx=0B` + HANDOFF 的 `token_missing`
   说明设备那时根本没在正常上行；22:45 重启后的新窗口（约 20 min）尚无 1011，也不足以证明节拍消失。
 - **没有改任何东西**：本文件是诊断，0.8.5 不含行为改动；桥仓、`.github/`、`src/` 均未触碰。
+
+> 补充：桥仓后续（**未发版**）已加“关闭计数日志”，见 §10；§0–§9 的结论全部保留、口径不变。
+
+## 10. 0.8.5 桥侧计数日志（已加，**未发版**）
+
+§2 的 36 次样本是靠事后脚本（§8）从全文日志重算 uptime/gap 的；桥侧原日志只有单行
+`data plane closed (...) code=1011 ... rx=..B tx=..B`，**没有“第几次关闭 / 距上次多久 / 累计丢帧”**，
+线上排查必须先下载日志再 awk。D4 在桥仓 main 补了这几个只读计数（**纯诊断，零行为变化**）。
+
+- 桥仓提交：`516c0e8`（`feat(link): count data-plane closes in the close log`，日志/统计）+
+  `b6deb86`（`fix(check): use the renamed rui package in the config probe`，0.2.0 包重命名后
+  遗留的 `house_ear.config` → `rui.config` 一行修复，与日志无关）。
+- 版本状态：**未发版、未打 tag**；`pyproject.toml`/`CHANGELOG.md` 仍是 **1.3.4**，
+  `rui_compat`/manifest 未动。生产 NAS 当前仍是 1.3.4——**线上日志暂时看不到新字段**，
+  要等下一次桥侧发版部署后才生效。
+- 改动位置：`src/rui_dot2_bridge/device_link.py` 的 `LinkStats` 与 `_lose_data()`；
+  新增单测 `tests/test_link.py::AbnormalCloseResetTest::test_data_plane_close_counters_are_logged`。
+- **没有改**：keepalive 参数（`ping_interval=20.0` / `ping_timeout=40.0`）、任何 abort/丢弃/重连
+  判定、关闭码；也**没有**新增第二条同义日志，仍是原来那一条行（`quiet` 时 INFO，否则 WARNING），
+  只在行尾追加字段。
+
+新格式（数值沿用 §2.1 同一条事件，便于对照）：
+
+```
+dot2 link: data plane closed (dot2) code=1011 dir=data rx=5597592B tx=356440B close#7 interval=305.1s dropped=0; data plane down
+```
+
+| 字段 | 含义 | 判读 |
+|---|---|---|
+| `close#N` | 本进程启动以来第 N 次“**仍持有 `/data` 槽位**”的关闭（含 1011/1000/1006 等） | 进程重启后从 1 重计；被新连接顶替的旧 socket 的 `late data close` **不计**，避免重拨竞争把节律算乱 |
+| `interval` | 距上一次计数关闭的 monotonic 间隔（0.1 s 精度）；首次关闭没有前序，打 `n/a` | 对 keepalive 1011 而言 = **5.1 s 重拨 + 本次 uptime**，与 §2.2「距上次关闭」同口径（305.1 s 档 = 300 s uptime + 5.1 s 重拨） |
+| `rx=` / `tx=` | 本条连接收/发字节（**原有字段，未变**） | 与 §2.2 表同源；`LinkStats.data_close_rx_total` 为历次关闭 rx 之和（另提供，供进程内/健康面读取） |
+| `dropped=` | 自上一次计数关闭以来，**桥侧 mic 队列满而丢掉的 80 ms 上行块数**（`LinkStats.dropped_audio` 的增量） | `0` = 这段期间没有因 rui 消费不及时丢上行块；`data_close_dropped_total` 为各期间累计。**注意**：它与 rui 侧 `link lost: dropped N speech chunks`（播放队列丢块）**不是同一个计数器**，两者不要混读 |
+
+线上怎么读（NAS 只读，`grep` 即可，不必跑 §8 的 perl）：
+
+```bash
+# 每次关闭一行：次数 / 间隔 / rx / tx / 丢帧
+grep 'data plane closed' /vol1/rui/data/service.log | tail -20
+
+# 只看 1011 的节律：抽出 close#N 与 interval（305.1 s 档是否复现）
+grep -E 'code=1011.*close#' /vol1/rui/data/service.log \
+  | grep -oE 'close#[0-9]+ interval=[^ ]+' | tail -20
+
+# interval 分布（看众数是否仍是 305.1 / 205.1 / 105.1…）
+grep -E 'code=1011.*close#' /vol1/rui/data/service.log \
+  | grep -oE 'interval=[^ ]+' | sort | uniq -c | sort -rn | head
+```
+
+判读规则：
+
+- `interval` 若持续出现 **305.1 / 205.1 / 105.1 / 405.1 s**，即与 §2.2 的节律完全同构
+  （= 20 s 网格上的某次 ping 失败 + 5.1 s 重拨），§3.3 的 keepalive 指纹直接被单行日志复现；
+- `interval=n/a` 反复出现 → 进程在重启（`close#` 从 1 起算），**不是**新的节律；
+- `close#` 最大的那条 = 本进程生命周期内的关闭总数，可直接替代 §8 脚本里的“36 次”统计；
+- `dropped>0` 与关闭同现时，先确认是**桥侧 mic 队列丢块**（本字段）还是 **rui 播放队列丢块**
+  （看相邻的 `link lost: dropped N speech chunks`），后者才对应 §2.3 的 12:01:49 例外。
+
+与既有 36 次样本结论的关系：
+
+- **不改** §0/§2 的任何结论：20 s 网格、305 s 众数、5.1 s 重拨、0 丢已排队播放、约 1.77% 上行
+  空洞仍以 1.3.4 的只读日志为准；新字段只是把同一批事实**固化进单行**，让下一轮真机窗口不用再
+  下载全文/跑脚本即可验证节律。
+- **不能**回答“pong 为什么丢”：计数日志仍没有 `sent`/`rcvd` close code 区分（§7 第 1 项未做），
+  也看不到 keepalive DEBUG。**口径保持**：1011 由桥侧 websockets keepalive（`keepalive ping
+  timeout` → INTERNAL_ERROR=1011）发出，是**强推断**（20 s 网格 + 设备固件无 Close 帧 +
+  库实现对照），**不是日志实证**；**pong 丢失（§4 H6/H7）仍未证明**。本改动不改变 §5 的影响
+  评估（关闭仍 5.1 s 重拨、播放不重放、上行空洞仍在）。
+- 验证：该单测用 `assertLogs` 断言 `close#1 interval=n/a`、`close#2 interval=<数字>s`、
+  `close#N` 递增及 `data_close_rx_total` / `data_close_dropped_total` 累计；桥仓
+  `./scripts/check.sh --nodevice` 全绿（183 tests / config probe / ruff / doctor 0 fail）。
