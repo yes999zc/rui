@@ -167,6 +167,10 @@ export interface AudioLayer {
   global: unknown
   global_explicit?: boolean
   device: unknown
+  /** Device-reported probe value (task-25); null/absent means "not reported". */
+  reported?: unknown
+  /** Where `reported` came from, e.g. "probe (dot2 ...)"; "" when not reported. */
+  reported_source?: string
 }
 
 /** One explicit global value that disagreed with the model manifest (0.8.0). */
@@ -177,6 +181,15 @@ export interface AudioConflict {
   effective: unknown
   winner: 'device-manifest' | 'global-config' | string
   kind: 'hardware' | 'negotiated' | 'acoustic' | string
+  message: string
+}
+
+/** A device-reported wire value that disagrees with the effective config (task-25). */
+export interface AudioReportedConflict {
+  path: string
+  effective: unknown
+  reported: unknown
+  source: string
   message: string
 }
 
@@ -191,6 +204,16 @@ export interface DeviceAudio {
   manifest_error?: string
   /** "global X vs model Y, using Y" - never silent (0.8.0 P0). */
   conflicts?: AudioConflict[]
+  /** The probe's whole capture wire, or null when the device reported none. */
+  device_reported?: {
+    rate: number | null
+    channels: number | null
+    mic_channels: number | null
+    ref_channels: number | null
+    source: string
+  } | null
+  /** Device-reported values that disagree with the effective config (task-25). */
+  reported_conflicts?: AudioReportedConflict[]
 }
 
 export interface DevicePlane {

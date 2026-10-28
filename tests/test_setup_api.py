@@ -9,6 +9,7 @@ from __future__ import annotations
 import itertools
 import json
 import stat
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -196,6 +197,140 @@ def test_user_plugs_load_and_broken_ones_are_data(tmp_path, monkeypatch) -> None
     failed = [plug for plug in body["plugs"] if plug["id"] is None]
     assert failed and "plugin.yaml" in failed[0]["error"]
     assert failed[0]["available"] is False
+
+
+# ------------------------------------- task-25: a gated data_dir plug is not a duplicate
+
+GATED_MODULE = "setup_api_gated_adapter"
+
+
+@pytest.fixture()
+def gated_catalog(monkeypatch):
+    """No entry points, no leaked adapter registration, fresh builtin scan caches."""
+    from rui.device import loader, registry
+    from rui.plugins import builtin
+    from rui.plugins.resolve import clear_adapter_plugins
+
+    before = dict(registry._BUILDERS)
+    monkeypatch.setattr(loader.metadata, "entry_points", lambda **_: [])
+    clear_adapter_plugins()
+    builtin._CACHE.clear()
+    yield
+    clear_adapter_plugins()
+    builtin._CACHE.clear()
+    registry._BUILDERS.clear()
+    registry._BUILDERS.update(before)
+    registry.RUNTIME_DEFAULTS.clear()
+    sys.modules.pop(GATED_MODULE, None)
+
+
+def _gated_plug(root, *, version: str) -> None:
+    """``dot2-echomuse`` with one inbound device, as image and data_dir copies."""
+    (root / "devices").mkdir(parents=True, exist_ok=True)
+    (root / "plugin.yaml").write_text(_yaml_text(
+        "schema: rui-plugin/v0",
+        "id: dot2-echomuse",
+        "name: Dot2 test plug",
+        f"version: {version}",
+        'rui_compat: ">=0.0.1 <999.0.0"',
+        "license: MIT",
+        "maintainer: Test <test@example.invalid>",
+        "trust: trusted",
+        "devices:",
+        "  - devices/dot2.yaml",
+    ), encoding="utf-8")
+    (root / "devices" / "dot2.yaml").write_text(_yaml_text(
+        "schema: rui-device/v1",
+        "id: dot2",
+        "model: TEST-dot2",
+        "name: Echo Dot 2 (test)",
+        "vendor: Test",
+        "class: B",
+        "transport: inbound",
+        'protocol: {kind: wss, version: "1"}',
+        "capabilities: [playback]",
+        "runtime: {mode: in-process, entrypoint: \""
+        f"{GATED_MODULE}:build\", listen_port: 8870}}",
+        "params: []",
+    ), encoding="utf-8")
+
+
+def _adapter_module(directory) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{GATED_MODULE}.py").write_text(
+        "def build(device=None, config=None):\n"
+        "    return {'device': getattr(device, 'id', '')}\n",
+        encoding="utf-8",
+    )
+
+
+def test_gated_data_dir_manifest_is_not_reported_as_its_own_duplicate(
+        tmp_path, monkeypatch, gated_catalog) -> None:
+    """Image 1.3.1 + ``data/plugs`` 1.3.2 gated by a mounted adapter: one plug.
+
+    The catalog labels the gated ``<data_dir>/plugs`` manifest ``source="adapter"``
+    (it had to outrank the image's older same-id plug), so a duplicate check that only
+    looks at the source label used to list the winning file as a failed user plug.
+    """
+    from rui.device import loader
+    from rui.plugins import builtin
+
+    image_root = tmp_path / "image-plugs"
+    _gated_plug(image_root / "dot2", version="1.3.1")
+    data_dir = tmp_path / "data"
+    _gated_plug(data_dir / "plugs" / "dot2-echomuse", version="1.3.2")
+    _adapter_module(tmp_path / "mounted-code")
+    monkeypatch.setenv("RUI_PLUGINS_DIR", str(image_root))
+    monkeypatch.syspath_prepend(str(tmp_path / "mounted-code"))
+    monkeypatch.setenv("RUI_ADAPTER_PLUGINS", f"dot2={GATED_MODULE}:build")
+    builtin._CACHE.clear()
+    report = loader.load_adapter_plugins(data_dir=data_dir)
+    assert report.warnings == [], report.warnings
+
+    cfg = Config()
+    cfg.system.data_dir = str(data_dir)
+    body = TestClient(create_app(cfg)).get("/api/v1/plugs").json()
+    matches = [plug for plug in body["plugs"] if plug["id"] == "dot2-echomuse"]
+    assert len(matches) == 1, matches
+    assert (matches[0]["version"], matches[0]["source"], matches[0]["available"]) == \
+        ("1.3.2", "adapter", True)
+    assert [plug for plug in body["plugs"] if plug["id"] is None] == []
+    assert not any("duplicate" in (plug["error"] or "") for plug in body["plugs"])
+
+
+def test_a_different_gated_manifest_still_reports_the_shadowed_user_plug(
+        tmp_path, monkeypatch, gated_catalog) -> None:
+    """Suppressing the self-duplicate must not hide a real one.
+
+    External adapter ships its own 1.4.0 manifest; ``data/plugs`` 1.3.2 is then a
+    genuinely different manifest, and the wizard must still say it will not run.
+    """
+    from rui.device import loader
+    from rui.plugins import builtin
+
+    image_root = tmp_path / "image-plugs"
+    _gated_plug(image_root / "dot2", version="1.3.1")
+    data_dir = tmp_path / "data"
+    _gated_plug(data_dir / "plugs" / "dot2-echomuse", version="1.3.2")
+    mounted = tmp_path / "mounted" / "dot2"
+    _gated_plug(mounted, version="1.4.0")
+    _adapter_module(mounted)
+    monkeypatch.setenv("RUI_PLUGINS_DIR", str(image_root))
+    monkeypatch.syspath_prepend(str(mounted))
+    monkeypatch.setenv("RUI_ADAPTER_PLUGINS", f"dot2={GATED_MODULE}:build")
+    builtin._CACHE.clear()
+    report = loader.load_adapter_plugins(data_dir=data_dir)
+    assert report.warnings == [], report.warnings
+
+    cfg = Config()
+    cfg.system.data_dir = str(data_dir)
+    body = TestClient(create_app(cfg)).get("/api/v1/plugs").json()
+    winning = next(plug for plug in body["plugs"] if plug["id"] == "dot2-echomuse")
+    assert (winning["version"], winning["source"]) == ("1.4.0", "adapter")
+    failed = [plug for plug in body["plugs"] if plug["id"] is None]
+    assert [plug["error"] for plug in failed] == [
+        f"{data_dir / 'plugs' / 'dot2-echomuse'}: duplicate plugin id "
+        "'dot2-echomuse'; the adapter plug wins"]
 
 
 def test_plug_detail_includes_device_manifests_and_unknown_is_404(wizard) -> None:

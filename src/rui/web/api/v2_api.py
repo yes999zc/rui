@@ -75,7 +75,6 @@ from ...plugins import (
     PlugCatalog,
     RuntimeMode,
     TrustLevel,
-    discover_plugins,
 )
 from ...providers import keycheck
 from .device_rules import (
@@ -617,7 +616,36 @@ def _device_pid(app: FastAPI, device_id: str) -> int | None:
     return int(pid) if isinstance(pid, (int, float)) and not isinstance(pid, bool) else None
 
 
-def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
+def _reported_capture_wire(info: DeviceInfo | None, probe_error: str) -> WireFormat | None:
+    """What the device probe says it sends, with the same inbound-only rule as the plane.
+
+    ``DeviceInfo`` describes the capture wire only (there is no playback field), and an
+    outbound adapter owns its own wire, so its effective capture block is advisory.
+    """
+    if info is None or probe_error:
+        return None
+    if getattr(info, "transport", None) is not Transport.INBOUND:
+        return None
+    rate = int(getattr(info, "sample_rate", 0) or 0) or None
+    channels = int(getattr(info, "channels", 0) or 0) or None
+    mic_channels = int(getattr(info, "mic_channels", 0) or 0)
+    ref_channels = int(getattr(info, "ref_channels", 0) or 0)
+    if rate is None and channels is None and not mic_channels and not ref_channels:
+        return None
+    return WireFormat(
+        rate=rate,
+        channels=channels,
+        mic_channels=mic_channels,
+        ref_channels=ref_channels,
+        source=(
+            f"probe ({getattr(info, 'adapter', '?')} "
+            f"{getattr(info, 'model', '?')})"
+        ).strip(),
+    )
+
+
+def _audio_provenance(cfg: Config, device: DeviceConfig,
+                      *, reported: WireFormat | None = None) -> dict[str, Any]:
     """The audio layers per field, with the source that won and every conflict.
 
     Values come from the schema's own merge functions; this function only reports
@@ -628,6 +656,12 @@ def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
     layout the manifest declares also owns the fields it omits: those carry the
     neutral core value, so their source is ``device-manifest`` even though the layer's
     own value is absent (see ``capture_layout_neutral_fills``).
+
+    ``reported`` is the device probe's capture wire (task-25). Each capture layer then
+    carries ``reported``/``reported_source`` besides manifest/global, so the device page
+    can show the three values side by side; a disagreement with the effective value is
+    also listed in ``reported_conflicts`` (never folded into the manifest-vs-global
+    ``conflicts`` - a probe value is evidence, not a config layer).
     """
     conflicts: list = []
     effective = effective_device_audio(cfg, device, conflicts=conflicts)
@@ -651,6 +685,14 @@ def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
     sources: dict[str, str] = {}
     layers: dict[str, dict[str, Any]] = {}
     override = device.audio
+    reported_values = {
+        "capture.rate": getattr(reported, "rate", None) if reported else None,
+        "capture.channels": getattr(reported, "channels", None) if reported else None,
+        "capture.mic_channels": (getattr(reported, "mic_channels", None)
+                                 if reported else None),
+        "capture.ref_channels": (getattr(reported, "ref_channels", None)
+                                 if reported else None),
+    }
 
     def add(path: str, *, value: Any, core: Any, manifest: Any,
             global_value: Any, device_value: Any, global_explicit: bool) -> None:
@@ -687,6 +729,12 @@ def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
             "global": global_value,
             "global_explicit": global_explicit,
             "device": device_value,
+            # Task-25: the device-reported probe value, when the path is one the
+            # probe describes. `None` means "not reported", never "equals effective".
+            "reported": reported_values.get(path),
+            "reported_source": (reported.source
+                                if reported is not None
+                                and reported_values.get(path) is not None else ""),
         }
 
     for name, (block_cls, global_block) in blocks.items():
@@ -730,6 +778,31 @@ def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
             else:
                 overrides.append(block)
 
+    reported_conflicts: list[dict[str, Any]] = []
+    if reported is not None:
+        wire = check_wire_format(
+            capture_configured=WireFormat(
+                rate=effective.capture.rate,
+                channels=effective.capture.channels,
+                mic_channels=effective.capture.mic_channels,
+                ref_channels=effective.capture.ref_channels,
+                source="effective config (audio.capture + devices[].audio)",
+            ),
+            capture_reported=reported,
+        )
+        reported_conflicts = [
+            {
+                "path": problem.path,
+                "effective": problem.configured,
+                "reported": problem.actual,
+                "source": problem.source,
+                "message": (f"{problem.path}: effective {problem.configured} vs "
+                            f"device-reported {problem.actual} (source: "
+                            f"{problem.source})"),
+            }
+            for problem in wire.problems
+        ]
+
     return {
         "effective": {**effective_dump, "ack_echo_ignore_ms": ack_value},
         "sources": sources,
@@ -742,6 +815,17 @@ def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
         # model that declares nothing.
         "manifest_error": info.error,
         "conflicts": [conflict.as_dict() for conflict in conflicts],
+        # Task-25: the third column the device page shows. `device_reported` is the
+        # whole probe wire (null when the device did not report or is outbound);
+        # `reported_conflicts` names every field where it disagrees with `effective`.
+        "device_reported": ({
+            "rate": reported.rate,
+            "channels": reported.channels,
+            "mic_channels": reported.mic_channels,
+            "ref_channels": reported.ref_channels,
+            "source": reported.source,
+        } if reported is not None else None),
+        "reported_conflicts": reported_conflicts,
     }
 
 
@@ -879,7 +963,9 @@ def _device_manifest_public(device: object) -> dict[str, Any]:
     }
 
 
-def _plugin_public(plugin: object, source: str, error: str) -> dict[str, Any]:
+def _plugin_public(plugin: object, source: str, error: str,
+                   *, origin: str = "", shadowed: list[dict[str, Any]] | None = None
+                   ) -> dict[str, Any]:
     first = plugin.devices[0]
     capabilities: list[str] = []
     for device in plugin.devices:
@@ -898,6 +984,11 @@ def _plugin_public(plugin: object, source: str, error: str) -> dict[str, Any]:
         "available": not error,
         "error": error or None,
         "source": source,
+        # 0.8.0 task-25: the version/source above describe the manifest this process
+        # actually loaded. `source_path` names the directory, and `shadowed` lists the
+        # same-id candidates that lost the explicit adapter > builtin > user rule.
+        "source_path": origin,
+        "shadowed": list(shadowed or []),
         "devices": [_device_manifest_public(device) for device in plugin.devices],
     }
 
@@ -917,17 +1008,35 @@ def _device_test_record(saved: dict[str, Any],
     return setup_store.device_test_record(saved, device.id)
 
 
-def _catalog_entries(data_dir: str | Path | None) -> tuple[dict[str, Any], list[str]]:
-    """(plugin id -> (plugin, source, error), load errors) from the shared resolver."""
+def _catalog_entries(data_dir: str | Path | None
+                     ) -> tuple[dict[str, tuple[Any, str, str, str, list[dict]]],
+                                list[str]]:
+    """(plugin id -> (plugin, source, error, source_path, shadowed)) + load errors.
+
+    One catalog for every v2 route, so a plug's version/source is the one the shared
+    resolver would use: the loaded adapter's manifest, then the image, then user plugs.
+    """
     catalog = PlugCatalog(data_dir)
-    entries = {
-        plugin_id: (entry.plugin, entry.source, _plug_error(entry.plugin))
-        for plugin_id, entry in catalog.entries.items()
-    }
-    # A broken user manifest stays data (the log names it) and never hides the plugs
-    # that did load; v2 lists installable entries only because its schema requires an id.
-    scan = discover_plugins(data_dir)
-    return entries, list(scan.errors)
+    entries: dict[str, tuple[Any, str, str, str, list[dict]]] = {}
+    for plugin_id, entry in catalog.entries.items():
+        shadowed = [
+            {
+                "id": str(loser.plugin.id),
+                "source": loser.source,
+                "version": str(loser.plugin.version),
+                "source_path": loser.origin,
+            }
+            for loser in catalog.shadowed.get(plugin_id, ())
+        ]
+        entries[plugin_id] = (
+            entry.plugin, entry.source, _plug_error(entry.plugin),
+            entry.origin, shadowed,
+        )
+    # A broken manifest stays data (the log names it) and never hides the plugs that
+    # did load; v2 lists installable entries only because its schema requires an id.
+    # Since task-25 this includes broken builtin/image manifests, so a parse failure is
+    # visible in the list response instead of only in the service log.
+    return entries, list(catalog.errors)
 
 
 def install_v2_routes(
@@ -1118,33 +1227,22 @@ def install_v2_routes(
     def _device_wire_check(
         config: Config,
         device: DeviceConfig,
-        info: object | None,
+        reported: WireFormat | None,
         *,
-        probe_error: str,
         summary_audio: dict[str, Any],
     ) -> WireCheck:
         """The same comparison the plane refuses on (task-24), computed independently.
 
         The console must be able to say "配置与设备不符" even when the plane is stopped,
-        so this does not read plane state: probe (capture wire) and the model manifest
-        (playback wire) are compared with the effective config the API already merged.
+        so this does not read plane state: the probe's capture wire and the model
+        manifest (playback wire) are compared with the effective config the API already
+        merged. ``reported`` is computed once by :func:`_reported_capture_wire` and
+        shared with the provenance payload so the page and the refusal cannot disagree.
         """
         defaults_info = device_audio_defaults_info(device, config.system.data_dir)
         defaults = defaults_info.defaults
         capture = summary_audio["capture"]
         playback = summary_audio["playback"]
-        reported = None
-        if info is not None and not probe_error:
-            reported = WireFormat(
-                rate=int(getattr(info, "sample_rate", 0) or 0) or None,
-                channels=int(getattr(info, "channels", 0) or 0) or None,
-                mic_channels=int(getattr(info, "mic_channels", 0) or 0) or None,
-                ref_channels=int(getattr(info, "ref_channels", 0) or 0) or None,
-                source=(
-                    f"probe ({getattr(info, 'adapter', '?')} "
-                    f"{getattr(info, 'model', '?')})"
-                ).strip(),
-            )
         expected_playback = None
         if defaults is not None and defaults.playback is not None:
             expected_playback = WireFormat(
@@ -1155,11 +1253,6 @@ def install_v2_routes(
                     f"({defaults_info.plug_id or '?'})"
                 ),
             )
-        # Same transport rule as the plane: only an inbound device is told the
-        # capture layout; an outbound adapter owns its wire and delivers
-        # self-describing frames, so its effective capture block is advisory.
-        if reported is not None and getattr(info, "transport", None) is not Transport.INBOUND:
-            reported = None
         return check_wire_format(
             capture_configured=WireFormat(
                 rate=capture["rate"],
@@ -1247,11 +1340,15 @@ def install_v2_routes(
         rows, effective, unknown = _capability_rows(
             declared, probed, resolved is not None)
 
+        # Task-25: one probe-derived wire shared by the refusal check and the
+        # three-value provenance table, so the page never shows a different
+        # device-reported value than the one the plane refuses on.
+        reported = _reported_capture_wire(info, probe_error)
         summary_audio = app_module._device_audio_summary(config, device)
         # task-24: the plane refuses on this exact comparison before Ready; the
         # console computes it independently so a stopped plane still explains why.
         wire = (_device_wire_check(
-            config, device, info, probe_error=probe_error,
+            config, device, reported,
             summary_audio=summary_audio,
         ) if device.enabled else WireCheck())
         codes: list[str] = []
@@ -1350,7 +1447,7 @@ def install_v2_routes(
             "missing_for_barge_in": _missing_for_barge(
                 effective, device_id=device.id, adapter=device.adapter,
                 model=model, host=device.host),
-            "audio": _audio_provenance(config, device),
+            "audio": _audio_provenance(config, device, reported=reported),
             # task-24: same values/source/fix the plane refuses on, machine-readable.
             "audio_wire": wire.as_dict(),
             "plane": {
@@ -1495,10 +1592,14 @@ def install_v2_routes(
     # ------------------------------------------------------------------ plugins
     @app.get("/api/v2/plugins", dependencies=[Depends(v2_auth)])
     async def plugins() -> dict[str, Any]:
-        entries, _errors = _catalog_entries(cfg_now().system.data_dir)
-        items = [_plugin_public(plugin, source, error)
-                 for plugin, source, error in entries.values()]
-        return {"items": items, "total": len(items)}
+        entries, errors = _catalog_entries(cfg_now().system.data_dir)
+        items = [
+            _plugin_public(plugin, source, error, origin=origin, shadowed=shadowed)
+            for plugin, source, error, origin, shadowed in entries.values()
+        ]
+        # `errors` is additive (C-002 §7.7): a manifest that exists but cannot be
+        # parsed is reported here instead of silently disappearing from the list.
+        return {"items": items, "total": len(items), "errors": errors}
 
     @app.get("/api/v2/plugins/{plugin_id}", dependencies=[Depends(v2_auth)])
     async def plugin_detail(request: Request, plugin_id: str) -> dict[str, Any]:
@@ -1506,8 +1607,9 @@ def install_v2_routes(
         found = entries.get(plugin_id)
         if found is None:
             raise _not_found("plugin", plugin_id)
-        plugin, source, error = found
-        payload = _plugin_public(plugin, source, error)
+        plugin, source, error, origin, shadowed = found
+        payload = _plugin_public(plugin, source, error, origin=origin,
+                                 shadowed=shadowed)
         first = plugin.devices[0]
         payload.update({
             "schema": str(getattr(plugin, "schema", "rui-plugin/v0")),
@@ -1553,7 +1655,19 @@ def install_v2_routes(
     async def device_audio(request: Request, device_id: str) -> dict[str, Any]:
         config = cfg_now()
         device = device_or_404_req(request, device_id, config)
-        return _audio_provenance(config, device)
+        # Task-25: the standalone audio read carries the same device-reported wire as
+        # the device detail. A failed/absent probe is "not reported" (null), never an
+        # invented value.
+        reported = None
+        if device.enabled:
+            adapters_now = getattr(app.state, "adapters", None)
+            adapter = (adapters_now.adapters.get(device.id)
+                       if adapters_now is not None else None)
+            if adapter is not None:
+                probe = await safe_probe(adapter, device_id=device.id,
+                                         adapter_name=device.adapter)
+                reported = _reported_capture_wire(probe.info, probe.error)
+        return _audio_provenance(config, device, reported=reported)
 
     @app.get("/api/v2/devices/{device_id}/activity", dependencies=[Depends(v2_auth)])
     async def device_activity(request: Request, device_id: str) -> dict[str, Any]:
@@ -2063,7 +2177,7 @@ def install_v2_routes(
                 hint="Install the plug or pick one from /api/v2/plugins.",
                 details={"plugin_id": wanted_plugin, "error": "not_found"},
             )
-        plugin, _source, plug_error = found
+        plugin, _source, plug_error, _origin, _shadowed = found
         if plug_error:
             raise V2Error(
                 409, "plug_unavailable",
@@ -2504,7 +2618,9 @@ def install_v2_routes(
         fresh_device = device_or_404_req(request, device_id, fresh)
         row = await device_view(fresh_device, fresh, house_warnings(fresh), detail=True)
         return {
-            "audio": _audio_provenance(fresh, fresh_device),
+            # device_view already computed the provenance with the device-reported
+            # wire; reuse it so the PATCH response and the detail cannot disagree.
+            "audio": row["audio"],
             "device": row,
             "restart": _restart_payload(fresh, error, duration),
         }
@@ -3001,7 +3117,7 @@ def install_v2_routes(
                            "message": f"no such plug: {wanted_plugin}",
                            "plugin_id": wanted_plugin}
             else:
-                plugin, source, error = found
+                plugin, source, error, _origin, _shadowed = found
                 if error:
                     blocked = {"code": "plug_unavailable",
                                "message": f"plug {wanted_plugin!r} is not usable in "

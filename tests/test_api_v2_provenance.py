@@ -49,7 +49,13 @@ def _provenance(tmp_path, raw: dict) -> dict:
 def test_manifest_default_wins_over_unstated_core(tmp_path):
     body = _provenance(tmp_path, {"devices": [_device().model_dump(mode="json")]})
     assert body["sources"]["capture.rate"] == "device-manifest"
-    assert body["layers"]["capture.rate"] == {
+    # Task-25 adds the third value the device page shows: the probe's wire. The LX06
+    # fixture reports 48 kHz, which agrees with its manifest here (no conflict).
+    layer = body["layers"]["capture.rate"]
+    assert {key: layer[key] for key in (
+        "effective", "source", "core", "manifest", "global", "global_explicit",
+        "device",
+    )} == {
         "effective": 48000,
         "source": "device-manifest",
         "core": 16000,
@@ -58,6 +64,9 @@ def test_manifest_default_wins_over_unstated_core(tmp_path):
         "global_explicit": False,
         "device": None,
     }
+    assert layer["reported"] == 48000
+    assert layer["reported_source"].startswith("probe (lx06 ")
+    assert body["reported_conflicts"] == []
     assert body["sources"]["capture.mic_channels"] == "device-manifest"
     assert body["sources"]["voice.rate"] == "core-default"
     assert body["layers"]["voice.rate"]["manifest"] is None

@@ -294,48 +294,34 @@ def _find_manifest(
 ) -> tuple[tuple[Any, Any] | None, str]:
     """Find the (plugin, device) manifest that backs ``name``; ``(None, "")`` if absent.
 
-    Search order: the in-image builtin catalog, user plugs under ``data_dir``, then a
-    ``plugin.yaml`` shipped next to the adapter module/package (the downstream-image
-    recipe). A manifest file that exists but cannot be loaded is a hard failure, not a
-    fall-through: a broken upper bound must never degrade into "no manifest".
+    Search order (0.8.0 task-25) starts from where the imported code lives:
+
+    * a ``plugin.yaml`` shipped next to the adapter module/package is always checked
+      first - that manifest belongs to the code this process actually imported, so its
+      version is the plug's version;
+    * an **external** module (not under a builtin/image plug root; the
+      ``PYTHONPATH`` / ``RUI_ADAPTER_PLUGINS`` mount) then prefers ``<data_dir>/plugs``
+      over the image catalog. The operator's mounted manifest is what describes the
+      mounted code; the image's older same-id manifest must not win.
+    * a module **inside** a builtin root keeps the image catalog first, then data_dir.
+
+    Before task-25 the builtin catalog always came first, so a mounted adapter could
+    run 1.3.2 while ``/api/v2/plugins`` reported the image's older 1.3.1. A manifest
+    file that exists but cannot be loaded is a hard failure, not a fall-through: a
+    broken upper bound must never degrade into "no manifest".
     """
     try:
         from ..plugins.builtin import builtin_plugins
     except Exception as exc:  # pragma: no cover - import cycle guard
         return None, f"cannot read the builtin plug catalog: {_brief(exc)}"
 
-    for plugin in builtin_plugins():
-        # Strict match: the single builtin device must not become a universal
-        # trust grant for an arbitrary env entry name.
-        device = _match_device(plugin, name, allow_single=False)
-        if device is not None:
-            return (plugin, device), ""
-
-    scan_problem = ""
-    if data_dir is not None:
-        try:
-            from ..plugins.loader import discover_plugins
-        except Exception as exc:  # pragma: no cover - import cycle guard
-            return None, f"cannot read the plug loader: {_brief(exc)}"
-        scan = discover_plugins(data_dir)
-        for plugin in scan.plugins:
-            device = _match_device(plugin, name, allow_single=False)
-            if device is not None:
-                return (plugin, device), ""
-        # Broken user plugs never authorize anything. Keep the first failures as the
-        # explanation only if no co-located manifest resolves the name either.
-        if scan.errors:
-            detail = "; ".join(error.splitlines()[0] for error in scan.errors[:2])
-            scan_problem = (
-                f"no loadable plug declares adapter {name!r} under {data_dir}: {detail}"
-            )
+    try:
+        from ..plugins.loader import discover_plugins, load_plugin
+    except Exception as exc:  # pragma: no cover - import cycle guard
+        return None, f"cannot read the plug loader: {_brief(exc)}"
 
     root_problem = ""
     for root in _module_plugin_roots(module):
-        try:
-            from ..plugins.loader import load_plugin
-        except Exception as exc:  # pragma: no cover - import cycle guard
-            return None, f"cannot read the plug loader: {_brief(exc)}"
         try:
             plugin = load_plugin(root)
         except Exception as exc:  # noqa: BLE001 - include our own path in the warning
@@ -348,19 +334,112 @@ def _find_manifest(
             # A co-located manifest is invisible to PlugCatalog's image/data_dir scan;
             # register it so the audio resolver sees the same hardware facts the
             # adapter was gated against (0.8.0 cold-start: ack 1200 vs manifest 2500).
-            try:
-                from ..plugins.resolve import register_adapter_plugin
-
-                register_adapter_plugin(plugin)
-            except Exception:  # noqa: BLE001 - catalog registration is never fatal
-                pass
+            _register_manifest(plugin, root)
             return (plugin, device), ""
+
         root_problem = (
             f"manifest {root / 'plugin.yaml'} has no device {name!r} and declares "
             f"{len(plugin.devices)} device(s); name the env entry after a device id "
             "or add a matching devices/<model>.yaml"
         )
+
+    builtin = builtin_plugins()
+    scan_problem = ""
+    user_plugins: list[Any] = []
+    if data_dir is not None:
+        scan = discover_plugins(data_dir)
+        user_plugins = list(scan.plugins)
+        # Broken user plugs never authorize anything. Keep the first failures as the
+        # explanation only if no manifest resolves the name at all.
+        if scan.errors:
+            detail = "; ".join(error.splitlines()[0] for error in scan.errors[:2])
+            scan_problem = (
+                f"no loadable plug declares adapter {name!r} under {data_dir}: {detail}"
+            )
+
+    # External code (mounted via PYTHONPATH) is described by the operator's mounted
+    # manifest first; a module inside a builtin root is described by the image first.
+    sources = [("builtin", builtin), ("user", user_plugins)]
+    if _module_is_external(module):
+        sources.reverse()
+    for _source, plugins in sources:
+        for plugin in plugins:
+            # Strict match for the catalog sources: the single device of a builtin/image
+            # plug must not become a universal trust grant for an arbitrary env name.
+            device = _match_device(plugin, name, allow_single=False)
+            if device is not None:
+                # No explicit label: _register_manifest marks an image-owned manifest
+                # `builtin` and anything else (`<data_dir>/plugs`, mounted) `adapter`,
+                # so the gating manifest outranks a same-id image manifest in the
+                # catalog exactly when it is not the image's own file.
+                _register_manifest(plugin, Path(str(plugin.source_dir)))
+                return (plugin, device), ""
     return None, root_problem or scan_problem
+
+
+def _module_is_external(module: Any) -> bool:
+    """Whether the imported adapter module lives outside every builtin plug root.
+
+    A module with no ``__file__`` (or an unreadable path) is treated as external: a
+    mounted manifest is the safer description for code the image cannot place.
+    """
+    path = getattr(module, "__file__", None)
+    if not path:
+        return True
+    try:
+        resolved = Path(path).resolve()
+        from ..plugins.builtin import plugin_dirs
+
+        roots = plugin_dirs()
+    except Exception:  # noqa: BLE001 - misclassification must never block loading
+        return True
+    for root in roots:
+        try:
+            resolved.relative_to(Path(root).resolve())
+            return False
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return True
+
+
+def _register_manifest(plugin: Any, origin: Path, *, source: str = "") -> None:
+    """Tell the process catalog which manifest gated this loaded adapter.
+
+    ``source`` is ``builtin`` when the adapter lives inside an image plug root (the
+    image manifest is the truth) and ``adapter`` otherwise - including a
+    ``<data_dir>/plugs`` manifest and a mounted/PYTHONPATH directory. Labelling the
+    gating manifest ``adapter`` is what lets it outrank an older same-id image plug in
+    :class:`~rui.plugins.resolve.PlugCatalog`; ``origin`` says where it came from.
+    Registration is never fatal.
+    """
+    try:
+        from ..plugins.resolve import register_adapter_plugin
+
+        register_adapter_plugin(
+            plugin,
+            source=source or ("builtin" if _is_builtin_origin(origin) else "adapter"),
+            origin=str(origin),
+        )
+    except Exception:  # noqa: BLE001 - catalog registration is never fatal
+        pass
+
+
+def _is_builtin_origin(origin: Path) -> bool:
+    """Whether one manifest directory is inside a builtin/image plug root."""
+    try:
+        resolved = Path(origin).resolve()
+        from ..plugins.builtin import plugin_dirs
+
+        roots = plugin_dirs()
+    except Exception:  # noqa: BLE001 - classification must never block the loader
+        return False
+    for root in roots:
+        try:
+            resolved.relative_to(Path(root).resolve())
+            return True
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return False
 
 
 def _match_device(plugin: Any, name: str, *, allow_single: bool) -> Any | None:

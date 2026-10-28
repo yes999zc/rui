@@ -866,6 +866,21 @@ class AudioDefaultsInfo:
         return self.defaults is not None
 
 
+def _catalog_load_error(data_dir: str | None) -> str:
+    """One bounded manifest-load failure for the console; "" when the catalog is clean.
+
+    Only called on the unresolved path, so the extra catalog read never touches the
+    hot path. Imported lazily for the same cycle reason as the resolver below.
+    """
+    try:
+        from ..plugins.resolve import PlugCatalog
+
+        errors = PlugCatalog(data_dir).errors
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must never raise
+        return f"{type(exc).__name__}: {exc}"
+    return errors[0] if errors else ""
+
+
 def device_audio_defaults_info(
     device: DeviceConfig | None, data_dir: str | None
 ) -> AudioDefaultsInfo:
@@ -896,6 +911,13 @@ def device_audio_defaults_info(
             if plug_id
             else f"no installed plug declares adapter {device.adapter!r}"
         )
+        # Task-25: "did not load" is not enough to act on. The catalog keeps one
+        # bounded line per broken manifest (missing file, YAML/pydantic error, bad
+        # rui_compat); append the first so the WARN and the device page name the file
+        # and field instead of only the plug id.
+        detail = _catalog_load_error(data_dir)
+        if detail:
+            error = f"{error}: {detail}"
         key = (str(getattr(device, "id", "") or ""), plug_id,
                str(getattr(device, "adapter", "") or ""))
         if key not in _LOGGED_MANIFEST_MISSES:

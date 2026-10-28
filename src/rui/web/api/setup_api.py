@@ -151,6 +151,21 @@ def install_setup_routes(
                 return "sidecar_not_supported"
         return ""
 
+    def _same_manifest_dir(origin: str, plugin: Plugin) -> bool:
+        """Whether the winning entry *is* the manifest directory this scan loaded.
+
+        A ``<data_dir>/plugs`` manifest that gated a mounted adapter is labelled
+        ``source="adapter"``, not ``user`` (0.8.0 task-25). Comparing the source label
+        alone would then report the winning file as its own duplicate; ``origin`` is
+        the identity that survives that relabelling.
+        """
+        if not origin or not plugin.source_dir:
+            return False
+        try:
+            return Path(origin).resolve() == Path(plugin.source_dir).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return str(origin) == str(plugin.source_dir)
+
     def _plugin_catalog() -> tuple[dict[str, tuple[Plugin, str, str]], list[dict]]:
         # One catalog for the whole wizard: PlugCatalog already merges the image plugs
         # (source "builtin") with user plugs under data_dir, with the same precedence
@@ -166,11 +181,17 @@ def install_setup_routes(
         scan = discover_plugins(_current().system.data_dir)
         for plugin in scan.plugins:
             entry = catalog.entries.get(plugin.id)
-            if entry is not None and entry.source == "builtin":
+            # The winner can be an adapter-loaded manifest too, not only an image plug;
+            # name the actual source so the wizard says why this user plug will not be
+            # the one that runs. Skip the case where the "loser" is the gated file the
+            # catalog already reports (source="adapter", same directory): one manifest,
+            # not a duplicate - the production image 1.3.1 / data_dir 1.3.2 layout.
+            if (entry is not None and entry.source != "user"
+                    and not _same_manifest_dir(entry.origin, plugin)):
                 failed.append(_failed_plug(
                     None,
                     f"{plugin.source_dir}: duplicate plugin id {plugin.id!r}; "
-                    "the image plug wins"))
+                    f"the {entry.source} plug wins"))
         for message in scan.errors:
             failed.append(_failed_plug(None, message))
         return entries, failed

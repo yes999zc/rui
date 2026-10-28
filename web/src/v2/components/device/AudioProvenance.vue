@@ -42,6 +42,13 @@ interface AudioRow {
   value: unknown
   source: string
   layer: AudioLayer | null
+  /** A manifest-vs-global conflict reported by the server for this path. */
+  manifestConflict: boolean
+  /** The device-reported probe value (undefined = the device reported nothing). */
+  reported: unknown
+  /** `reported` exists and disagrees with the effective value. */
+  reportedConflict: boolean
+  conflictMessage: string
 }
 
 const AUDIO_GROUP_ORDER = ['capture', 'voice', 'playback', 'aec']
@@ -63,32 +70,59 @@ function normalizeOverride(path: string): string {
   return path === 'voice.ack_echo_ignore_ms' ? 'ack.echo_ignore_ms' : path
 }
 
+const manifestConflicts = computed(
+  () => new Map((props.audio?.conflicts ?? []).map((conflict) => [conflict.path, conflict])),
+)
+const reportedConflicts = computed(
+  () => new Map((props.audio?.reported_conflicts ?? []).map((conflict) => [conflict.path, conflict])),
+)
+
 const audioRows = computed<AudioRow[]>(() => {
   const data = props.audio
   if (!data) return []
   const rows: AudioRow[] = []
   for (const [path, source] of Object.entries(data.sources ?? {})) {
+    const layer = data.layers?.[path] ?? null
+    const reported = layer?.reported
+    const reportedConflict = reported !== undefined && reported !== null
+      && reported !== dottedValue(data.effective, path)
+    const manifestConflict = manifestConflicts.value.has(path)
     rows.push({
       path,
       value: dottedValue(data.effective, path),
       source,
-      layer: data.layers?.[path] ?? null,
+      layer,
+      reported,
+      manifestConflict,
+      reportedConflict,
+      conflictMessage: reportedConflicts.value.get(path)?.message
+        ?? manifestConflicts.value.get(path)?.message
+        ?? '',
     })
   }
   for (const raw of data.overrides ?? []) {
     const path = normalizeOverride(raw)
     if (rows.some((row) => row.path === path)) continue
+    const layer = data.layers?.[path] ?? null
     rows.push({
       path,
       value: dottedValue(data.effective, path),
       source: 'device-override',
-      layer: data.layers?.[path] ?? null,
+      layer,
+      reported: layer?.reported,
+      manifestConflict: false,
+      reportedConflict: false,
+      conflictMessage: '',
     })
   }
   return rows.sort(
     (a, b) => audioRank(a.path) - audioRank(b.path) || a.path.localeCompare(b.path),
   )
 })
+
+function rowHasConflict(row: AudioRow): boolean {
+  return row.manifestConflict || row.reportedConflict
+}
 
 const hasManifestDefaults = computed(
   () => Object.keys(props.audio?.manifest_defaults ?? {}).length > 0,
@@ -145,6 +179,25 @@ const manifestDefaultsText = computed(() => jsonText(props.audio?.manifest_defau
           </li>
         </ul>
       </div>
+      <div
+        v-if="audio.reported_conflicts && audio.reported_conflicts.length"
+        class="note v2-warn-text"
+        data-testid="audio-reported-conflicts"
+      >
+        <h3>
+          <AppIcon name="alert" :size="16" />
+          {{ t('v2.audio.reportedConflicts') }}
+        </h3>
+        <ul>
+          <li v-for="conflict in audio.reported_conflicts" :key="conflict.path" class="mono">
+            {{ conflict.message }}
+          </li>
+        </ul>
+      </div>
+
+      <p v-if="audio.device_reported" class="note" data-testid="audio-device-reported-source">
+        {{ t('v2.audio.reportedFrom', { source: audio.device_reported.source }) }}
+      </p>
 
       <div class="table-wrap">
         <table class="table v2-audio-table">
@@ -153,38 +206,29 @@ const manifestDefaultsText = computed(() => jsonText(props.audio?.manifest_defau
               <th>{{ t('v2.audio.field') }}</th>
               <th>{{ t('v2.audio.value') }}</th>
               <th>{{ t('v2.audio.source') }}</th>
-              <th>{{ t('v2.audio.layers') }}</th>
+              <th>{{ t('v2.audio.layer.manifest') }}</th>
+              <th>{{ t('v2.audio.layer.global') }}</th>
+              <th>{{ t('v2.audio.layer.reported') }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in audioRows" :key="row.path">
-              <td class="mono">{{ row.path }}</td>
-              <td class="mono">{{ displayValue(row.value) }}</td>
-              <td><ProvenanceTag :source="row.source" /></td>
-              <td>
+            <tr
+              v-for="row in audioRows"
+              :key="row.path"
+              :class="{ 'is-conflict': rowHasConflict(row) }"
+              :data-testid="rowHasConflict(row) ? 'audio-conflict-row' : undefined"
+            >
+              <td class="mono">
+                {{ row.path }}
+                <span v-if="rowHasConflict(row)" class="tag v2-conflict-badge">
+                  {{ t('v2.audio.conflictBadge') }}
+                </span>
                 <details v-if="row.layer" class="v2-layers">
-                  <summary>{{ t('v2.audio.layers') }}</summary>
+                  <summary>{{ t('v2.audio.moreLayers') }}</summary>
                   <dl class="v2-layer-grid">
                     <div>
                       <dt>{{ t('v2.audio.layer.core') }}</dt>
                       <dd class="mono">{{ displayValue(row.layer.core) }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t('v2.audio.layer.manifest') }}</dt>
-                      <dd class="mono">{{ displayValue(row.layer.manifest) }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t('v2.audio.layer.global') }}</dt>
-                      <dd class="mono">
-                        {{ displayValue(row.layer.global) }}
-                        <span v-if="row.layer.global_explicit !== undefined" class="tag">
-                          {{
-                            row.layer.global_explicit
-                              ? t('v2.audio.globalExplicit')
-                              : t('v2.audio.globalImplicit')
-                          }}
-                        </span>
-                      </dd>
                     </div>
                     <div>
                       <dt>{{ t('v2.audio.layer.device') }}</dt>
@@ -192,7 +236,38 @@ const manifestDefaultsText = computed(() => jsonText(props.audio?.manifest_defau
                     </div>
                   </dl>
                 </details>
-                <span v-else class="meta">{{ t('v2.common.na') }}</span>
+              </td>
+              <td class="mono">{{ displayValue(row.value) }}</td>
+              <td><ProvenanceTag :source="row.source" /></td>
+              <td
+                class="mono"
+                :title="row.manifestConflict ? row.conflictMessage : undefined"
+              >
+                {{ displayValue(row.layer?.manifest) }}
+              </td>
+              <td
+                class="mono"
+                :title="row.manifestConflict ? row.conflictMessage : undefined"
+              >
+                {{ displayValue(row.layer?.global) }}
+                <span v-if="row.layer?.global_explicit !== undefined" class="tag">
+                  {{
+                    row.layer.global_explicit
+                      ? t('v2.audio.globalExplicit')
+                      : t('v2.audio.globalImplicit')
+                  }}
+                </span>
+              </td>
+              <td
+                class="mono"
+                :title="row.reportedConflict
+                  ? row.conflictMessage
+                  : (row.layer?.reported_source || undefined)"
+              >
+                <template v-if="row.reported !== undefined && row.reported !== null">
+                  {{ displayValue(row.reported) }}
+                </template>
+                <span v-else class="meta">{{ t('v2.audio.notReported') }}</span>
               </td>
             </tr>
           </tbody>

@@ -510,6 +510,12 @@ Activity（设备维度事件流）
       "capabilities": ["playback", "led", "keys", "volume", "device_wake", "barge_via_device"],
       "available": true,
       "error": null,
+      "source": "adapter",
+      "source_path": "/vol1/rui/plugins/dot2",
+      "shadowed": [
+        {"id": "dot2-echomuse", "source": "builtin", "version": "1.3.1",
+         "source_path": "/opt/rui-plugins/dot2"}
+      ],
       "devices": [
         {
           "model_id": "dot2",
@@ -545,10 +551,17 @@ Activity（设备维度事件流）
 - `params` 是 manifest schema；`secret` 类型只给 key/label/required，不给值、不给 default（C-001 禁止 secret default）。
 - `available=false` 时 `error` 给原因；坏 manifest 不致命，列表仍返回。
 - `class` 仅展示/提示，核心不按 class 分支。
+- **`version`/`source` 必须是本进程实际加载的那份 manifest（0.8.0 task-25）。** `source` 取值与同 id 选择规则（高→低）：
+  1. `adapter`：adapter loader 实际 gate 的 manifest（`RUI_ADAPTER_PLUGINS` / entry point；manifest 可与模块同目录，即 `PYTHONPATH` 挂载目录）。`source_path` 给该目录。
+  2. `builtin`：镜像/内置插头目录（`/opt/rui-plugins`；源码树 `plugs/` 或测试的 `RUI_PLUGINS_DIR`）。
+  3. `user`：`<data_dir>/plugs`。
+- **被 gate 的 `<data_dir>/plugs` manifest 报 `source="adapter"`，不是 `user`（0.8.0 task-25 修复）。** 当本进程的 in-process adapter 是由 `<data_dir>/plugs` 里那份 manifest 对齐/授权时，它和挂载目录里的 manifest 一样是「实际在跑的那份」，因此同样取 `adapter`（否则同 id 时会输给镜像里的旧 plug）。位置由 `source_path` 给出：可用它区分镜像内置、`PYTHONPATH` 挂载目录与 `<data_dir>/plugs`。所以 **不能** 用 `source != "user"` 判断「这个用户 plug 是否落选」；wizard 的同 id 冲突检查必须比较 manifest 目录（`source_path` / `origin`），否则会把胜出的 data_dir 文件误报成它自己的重复项（生产形态：镜像 1.3.1 + `data/plugs` 1.3.2 + 外部 adapter，实际只有一份 manifest 在跑）。只有目录确实不同的同 id manifest 才算落选。
+  同 id 落选者必须放进 `shadowed[]`（`{id, source, version, source_path}`），不得静默隐藏；生产曾出现“目录里 1.3.2、catalog 报 builtin 1.3.1”，这条规则就是回归门。
+- `errors[]`：本次 catalog 扫描中**存在但无法加载**的 manifest（缺文件、YAML/pydantic 解析失败、`rui_compat` 不兼容等），每项一行、已限长。坏 manifest 不进入 `items`，但必须在这里可见。
 
 ### 7.8 `GET /api/v2/plugins/{plugin_id}`
 
-- 返回同一 plugin 的完整公开 manifest 子集：`schema`、`id`、`name`、`version`、`rui_compat`、`license`、`maintainer`、`homepage`、`trust`、`devices[]`（插件层）与每个 device 的 `id`、`model`、`name`、`vendor`、`class`、`transport`、`protocol`、`capabilities`、`wake`、`audio_defaults`、`device_side`、`runtime`、`params`、`compatibility`、`acceptance`。
+- 返回同一 plugin 的完整公开 manifest 子集：`schema`、`id`、`name`、`version`、`source`、`source_path`、`shadowed`、`rui_compat`、`license`、`maintainer`、`homepage`、`trust`、`devices[]`（插件层）与每个 device 的 `id`、`model`、`name`、`vendor`、`class`、`transport`、`protocol`、`capabilities`、`wake`、`audio_defaults`、`device_side`、`runtime`、`params`、`compatibility`、`acceptance`。`source`/`source_path`/`shadowed` 语义与 §7.7 相同。
 - 404 `not_found` 未知 plugin。
 - 不返回 `entrypoint` 的可执行细节（trust 边界，C-001 不变）。
 
@@ -741,16 +754,21 @@ Activity（设备维度事件流）
   "layers": {
     "capture.rate": {"effective": 16000, "source": "device-manifest",
                      "core": 16000, "manifest": 16000, "global": 16000,
-                     "global_explicit": true, "device": null},
+                     "global_explicit": true, "device": null,
+                     "reported": 16000,
+                     "reported_source": "probe (dot2 Echo Dot 2 (RS03QR))"},
     "playback.rate": {"effective": 48000, "source": "device-manifest",
                       "core": 16000, "manifest": 48000, "global": 16000,
-                      "global_explicit": false, "device": null},
+                      "global_explicit": false, "device": null,
+                      "reported": null, "reported_source": ""},
     "aec.who": {"effective": "device", "source": "device-override",
                 "core": "controller", "manifest": null, "global": "controller",
-                "global_explicit": true, "device": "device"},
+                "global_explicit": true, "device": "device",
+                "reported": null, "reported_source": ""},
     "ack.echo_ignore_ms": {"effective": 2500, "source": "device-override",
                            "core": 1200, "manifest": 2500, "global": 1200,
-                           "global_explicit": true, "device": 2500}
+                           "global_explicit": true, "device": 2500,
+                           "reported": null, "reported_source": ""}
   },
   "overrides": ["aec.who", "aec.enabled", "voice.ack_echo_ignore_ms"],
   "manifest_defaults": {"capture": {"rate": 16000, "channels": 1},
@@ -758,7 +776,10 @@ Activity（设备维度事件流）
                         "ack_echo_ignore_ms": 2500},
   "plug_resolved": true,
   "manifest_error": "",
-  "conflicts": []
+  "conflicts": [],
+  "device_reported": {"rate": 16000, "channels": 1, "mic_channels": 1,
+                      "ref_channels": 0, "source": "probe (dot2 Echo Dot 2 (RS03QR))"},
+  "reported_conflicts": []
 }
 ```
 
@@ -790,6 +811,17 @@ Activity（设备维度事件流）
   `plug_resolved=false`。此时不能把未声明的字段伪装成 `core-default`。
 - 设备列表/详情的 `warnings` 追加 `{code:"audio_conflict", path, global, manifest,
   effective, message, hint}`，值与 §7.15 的 `conflicts` 同源。
+- **第三份值：设备上报（0.8.0 task-25）。** `layers[path].reported` 是 probe 返回的采集
+  wire（`capture.rate/channels/mic_channels/ref_channels`），`reported_source` 形如
+  `probe (<adapter> <model>)`；其余 leaf（`voice.*`、`playback.*`、`aec.*`、`ack`）为
+  `null`/`""`，因为 `DeviceInfo` 不声明播放 wire。outbound adapter 不参与采集协商，
+  同样给 `null`。这不是配置层，绝不参与 merge/优先级。
+- 顶层 `device_reported` 是整份 probe wire（`{rate,channels,mic_channels,ref_channels,
+  source}`）或 `null`；`reported_conflicts` 是 `{path,effective,reported,source,message}`
+  列表，只在 probe 值与 `effective` 不一致时出现，且**不并入** `conflicts`
+  （`conflicts` 只表示 manifest-vs-global 的配置冲突）。
+- 设备页必须并排展示 manifest 声明 / 全局配置 / 设备上报三份值；任一行出现在
+  `conflicts` 或 `reported_conflicts` 中都要高亮（前端 `data-testid="audio-conflict-row"`）。
 
 - 示例只列 4 个 leaf 以说明来源；实际 `sources/layers` 覆盖**全部 leaf**（capture/voice/playback/aec 的所有字段 + ack）。
 - `layers` 同时给四层原始值 + `global_explicit`；UI 不得用“值相等”推断继承（显式设备值可以等于全局值，`app.py:1113-1115`）。

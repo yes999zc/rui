@@ -74,6 +74,17 @@ P0/P1 batch that landed on `main` after 0.7.9.
 
 ### P0/P1 fixes
 
+- **P0 — the catalog now reports the plug the process actually loaded** (task-25,
+  tree only). Production showed `dot2-echomuse 1.3.1` as `source: builtin` while the
+  mounted `PYTHONPATH` adapter was `1.3.2`. The adapter loader now reads a co-located
+  `plugin.yaml` **before** the image catalog, registers which manifest gated the
+  adapter, and `PlugCatalog` applies the explicit same-id rule
+  `adapter > builtin > user`, exposing the winning `source_path` and the losing
+  candidates as `shadowed[]`. `GET /api/v2/plugins` also returns `errors[]` for
+  manifests that exist but cannot be parsed. The device page shows manifest
+  declaration / global config / **device-reported probe** values side by side, with
+  manifest-vs-global (`conflicts`) and probe-vs-effective (`reported_conflicts`)
+  disagreements highlighted. No config migration, no bridge change.
 - **P0 — the wake acknowledgement is no longer replayed as a user turn** (`82d45d9`;
   known limitation L17). The echo gate computed the cue length with the *device* playback
   rate (48 kHz) against a 16 kHz rendered cue, so a 460 ms "在呢" became 153 ms of cue and

@@ -879,11 +879,21 @@
 /* — audio provenance ——————————————————————————————————— */
 
 .v2-audio-table {
-  min-width: 640px;
+  min-width: 820px;
 }
 
 .v2-audio-table td:nth-child(2) {
   word-break: break-word;
+}
+
+/* Task-25: a row whose manifest/global or device-reported values disagree. */
+.v2-audio-table tr.is-conflict td {
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+
+.v2-conflict-badge {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
 }
 
 .v2-layers summary {
