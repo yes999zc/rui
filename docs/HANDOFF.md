@@ -11,6 +11,13 @@
   用设备 48k rate 除 16k 渲染的 cue → 460ms 变 153ms，skip/hold=403/2653，cue 整段 replay。
   已实现修复（cue 用渲染 rate；hold=460+850 lead+2500，从播放结束起算；VAD 首唤醒晚 cue 先验），
   全量 `1733 passed / 6 skipped`；review PASS + verify VERIFIED（修掉 1 处核心禁词注释）。卡 task-13，证据记 known-limitations L17。
+- **P1 LED/会话收敛追加（2026-10-28 04:29 真机，并入 task-17）**：`stop intent -> session closed` 后
+  13s 又 `led: listening` 并 repaint 卡住。要求：session closed（stop/结束词/farewell）后不得重回 listening；
+  若保留 followup 窗口 N=8s，窗口结束立即 disarm + `led: off`；任何一轮结束 LED 事件最后一条必须是 `off`；
+  repaint 有最大次数/超时；回归：stop 后 LED 序列以 off 结尾且 30s 无新 listening。
+- **P2 物理按键（task-18，blocked_by 15/17）**：桥 `device_link.py:461-467` 收到 button 但全仓无 `on_button` 注入，
+  按键全丢；设备上报 `clickType` + `muted`。需注入 handler、映射 mute/volume_up/down/action、health+控制台+LED `muted`；
+  静音时照常转写/亮灯但跳过 ack。`DOT2_MUTE` 是部署 env，别混。
 - **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（已实现；review PASS + verify VERIFIED，全量 1738/6；残余风险写入 d.10）。
 - **P0/P1 均已收口**；B1（task-8）恢复，之后 B2→B3（桥双窗口先于 core）→C。
 - **当前 HEAD**：`7b9035a`（B1）；P0 `82d45d9`、P1 `8344085`、B1 `7b9035a`。B2/B3/C 未开工。
@@ -993,3 +1000,13 @@ gh release view v0.7.1 --json tagName,url                                      #
   UI 已删」；`App.vue` 空 `<style scoped>` 删除；`known-limitations.md` 新增 **L18**（HA `base_url` 在 v2 ToolsView 仍可改；缺 HA token 表单 与
   `/api/v1/config/raw` 视图，API 仍在）。删除项已在 Lead 的 `c28e5e4`（本地未 push）；
   B1 已最终 review PASS + verify VERIFIED，re-commit 为 `7b9035a`（feat(console)!，已 push）。验证：目标 54 passed；全量 1710/6；ruff 绿；typecheck 绿。
+
+### P1 / task-17 进行中（implementer，2026-10-28，HEAD `4b8b8b0`）
+
+- **范围**：会话关闭必须 disarm（或明确 followup 窗口 N），并修 `idle goodbye in inf s`；不改 ack/chime/barge/music/契约。
+- **已查明根因（下一轮直接实现，不要重新考古）**：
+  1. `inf` 不是配置超时：`src/rui/session/idle.py` 的 `IdleWatch.remaining()` 在「没有打开的会话」或 `timeout_s<=0` 时返回哨兵 `float("inf")`；`app.py` 的 `on_wake_idle` 用 `log.info("... idle goodbye in %.0f s", runner.idle.remaining())` 直接打印， farewell 已 `idle.stop()` 后就会打 `inf s`。修法：日志按 `idle.active` 分支——活动时打印有限剩余秒数，非活动时打印「session already closed / no countdown」；不改 `remaining()` 语义（其他调用方依赖哨兵）。
+  2. `session closed` 不 disarm：`app.py:idle_watch` 在说完告别后调用 `client.reply_finished()`（本意是让音频面开 post-playback mute），但 `process.py:_arm_followup_later` 收到 `ReplyFinished` 后会用 `max_wait_ms = session.timeout_s*1000`（15000）重新武装 followup gate → 告别后最多 15 s 的免唤醒窗口（04:15:26 close → 04:15:43 turn）。
+  3. 选定语义：**有限 followup 窗口 N 秒**（不是无限监听）。`VoiceConfig` 新增 `followup_max_wait_ms`（默认 8000，0=立即关闭/不续听），plane 用 `min(session.timeout_s*1000, followup_max_wait_ms)` 作为 gate `max_wait_ms`；告别后的窗口因此 ≤8 s，20 s 后必须唤醒词。文档写清 N，known-limitations/backlog 各登记一条。
+- **必测（先红后绿）**：告别后 1 s 说话 → 固定为「接受（followup 窗口内）」；告别后 20 s 说话 → 无唤醒必须拒绝；`idle goodbye in inf s` 不再出现（日志断言/单测 `remaining()` 非活动时日志文案）。
+- **未做**：代码/测试/文档、验证、commit。工作区干净（本卡尚未动文件）。
