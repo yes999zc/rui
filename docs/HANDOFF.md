@@ -33,6 +33,10 @@
   每块 raise、LED 亮但无声。顺序改为：**task-26（字段归属/冲突：manifest 胜全局 explicit + WARN/拒绝）→
   task-24（R3 运行期自检 + 桥 play ValueError 上报为设备错误）→ task-25（catalog/runtime 一致性 + 三份值可见性）**。
   **与 task-22（params/layout）分开**。
+- **P0 追加三点（2026-10-28 15:5x）**：
+  1) **冷启动时序疑点**：dot2-b 初次生效 ack=1200（manifest 2500、全局未写 ack，优先级解释不了）；怀疑冷启动时 catalog/plug 未就绪，重启后 `plug_resolved` 才 true。task-26 必须复现“冷启动读一次 effective”，确认时序问题并一并修（否则根治后仍有间歇性）。
+  2) **dot2-b `devices[].audio` 覆盖决定：保留**（等同显式声明该型号硬件参数）；根治后不删除，根修也不得覆盖/抹掉设备级显式值。
+  3) **硬门槛：主卧/卫生间在 task-26 + task-24 收口（review PASS + verify VERIFIED + commit）前不插**。
 - **dot2-b 已由 9哥 授权修好（2026-10-28 15:52）**：只给该设备加 `devices[].audio`（playback 48000 / capture 16k·1ch /
   ack 2500 / aec.enabled=false）；备份 `config.yaml.bak-20261028-155210`；PATCH `/api/v2/devices/dot2-b/audio` +
   restart scope=fleet（三台各 5.3s，客厅配置未变）。验证：audio_summary 48000/2500；audio.say 70670 B、gaps 0；
