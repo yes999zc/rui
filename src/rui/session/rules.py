@@ -60,6 +60,24 @@ _PUNCT = re.compile(r"[\s。，、！？；：,.!?;:…—\-]")
 # «停止播放» is an explicit ALIAS, not length tolerance.
 _STOP_TRAILING_PARTICLES = "吧了呀啊嘛"
 
+# The one fixed exception (d.6, 2026-10-28). ASR keeps the wake word audible while the
+# segment still holds it, so the measured 「停止你好」 (N2) was the same dismissal with a
+# tail glued on. This is *not* length or position tolerance coming back: the set is
+# closed, only a tail is peeled, only once, and what remains must still pass the
+# whole-request match below. Longest first so a shorter tail can never win a longer one.
+_WAKE_TAIL_WORDS = (
+    "你好小瑞", "你好晓智", "你好小志", "你好小智", "嗨小瑞", "嗨小智", "你好",
+)
+
+
+def _strip_wake_tail(t: str) -> str:
+    """Peel at most one fixed wake tail. Never empties the transcript."""
+    for tail in _WAKE_TAIL_WORDS:
+        if len(t) > len(tail) and t.endswith(tail):
+            return t[: -len(tail)]
+    return t
+
+
 # A stop word said while music plays means two different things: 「停止」「别放」 ends
 # the sound, 「退下吧」 dismisses the conversation. D1 split the old single stop path;
 # `stop_scope` below is the pure decision the app wires (D1c ③).
@@ -264,20 +282,30 @@ def is_noise(transcript: str) -> bool:
 def stop_intent(transcript: str, words: tuple[str, ...] | list[str] | None = None) -> bool:
     """True when the request is "stop / dismiss" rather than a question.
 
-    Whole-request matching only: after normalisation and one explicit ASR alias, the
-    transcript must equal an end word, or carry exactly one closed-set trailing particle
-    (吧/了/呀/啊/嘛). Question particles 吗/呢/么 are excluded on purpose: 「停止了吗」
-    must stay a question. 「停止播放」「别放了」「别放了吧」 are explicit aliases, not
-    length tolerance.
+    Whole-request matching only: after normalisation, one wake-tail strip and one
+    explicit ASR alias, the transcript must equal an end word, or carry exactly one
+    closed-set trailing particle (吧/了/呀/啊/嘛). Question particles 吗/呢/么 are
+    excluded on purpose: 「停止了吗」 must stay a question. 「停止播放」「别放了」
+    「别放了吧」 are explicit aliases, not length tolerance.
 
     Substring matching was measured destroying home automation (「关掉客厅灯」/
     「关闭窗帘」 dismissed the session before HA ran), and the old "at most two extra
     characters anywhere" rule turned 「停止你好」 into a dismissal (audit A C2,
     2026-10-27). ASR slips are handled by `ALIASES` only, never a fuzzy fallback.
+
+    The single exception allowed on top of that, and why (d.6, 2026-10-28): when the
+    transcript still carries the wake word at its tail, the speaker really did say the
+    stop request - ASR simply kept the just-heard wake word in the same segment. The
+    measured 「停止你好」 (N2) therefore fell through to the model and was answered as
+    chit-chat. Only a closed, named tail list is peeled (`_WAKE_TAIL_WORDS`), only from
+    the tail, only once, and the remainder must still be an end word / alias / end word
+    + one particle; anything else stays a non-stop. That keeps the auditable set tiny
+    instead of reintroducing a length or position tolerance.
     """
     t = normalize(transcript)
     if not t:
         return False
+    t = _strip_wake_tail(t)
     t = ALIASES.get(t, t)
     for raw in sorted(words or STOP_WORDS, key=len, reverse=True):
         word = normalize(raw)

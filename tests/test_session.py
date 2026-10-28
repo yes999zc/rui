@@ -85,6 +85,31 @@ def test_stop_intent_is_whole_request_only() -> None:
     assert rules.stop_intent("今天下课以后去食堂", ["下课"]) is False
 
 
+def test_stop_intent_strips_one_fixed_wake_tail() -> None:
+    """d.6 (2026-10-28): 「停止你好」 is a stop, worked out from a closed tail list.
+
+    ASR appends the wake word while it is still audible at the segment boundary, so the
+    measured 「停止你好」 was a dismissal that fell through to the model (N2). The fix
+    strips exactly one fixed wake tail from the tail only, then runs the same
+    whole-request match - no length or position tolerance comes back.
+    """
+    from rui.session import rules
+
+    # The five required cases.
+    assert rules.stop_intent("停止你好") is True
+    assert rules.stop_intent("停止播放你好") is True        # through ALIASES
+    assert rules.stop_intent("你好小瑞") is False           # pure wake word
+    assert rules.stop_intent("你好停止") is False           # tail only, never the head
+    assert rules.stop_intent("停止了吗") is False           # a question stays a question
+
+    # Boundaries: the longest tail wins, a tail never rescues a question, and a second
+    # tail is not peeled (one strip only).
+    assert rules.stop_intent("停止你好小瑞") is True
+    assert rules.stop_intent("停止你好吗") is False
+    assert rules.stop_intent("") is False
+    assert rules.stop_intent("停止你好你好") is False
+
+
 def test_stop_scope_returns_empty_for_non_stop_requests() -> None:
     from rui.session import rules
 

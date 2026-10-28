@@ -127,7 +127,9 @@ def test_end_word_without_music_only_closes(monkeypatch, phrase) -> None:
     assert app.state.last_turn["session_action"] == "bare_stop"
 
 
-@pytest.mark.parametrize("phrase", ["停止你好", "停止了吗", "你好停止", "停下来了吗"])
+# d.6 (2026-10-28) intentionally changed 「停止你好」 to a stop (fixed wake tail peeled
+# once); the positive case lives in tests/test_session.py, so it is no longer listed here.
+@pytest.mark.parametrize("phrase", ["停止了吗", "你好停止", "停下来了吗"])
 def test_substrings_and_questions_are_not_stops(monkeypatch, phrase) -> None:
     handled, app, runner, _handle = _stop(monkeypatch, phrase, "playing")
 
@@ -145,7 +147,9 @@ def test_stop_intent_accepts_end_words_aliases_and_one_particle(phrase) -> None:
 
 
 @pytest.mark.parametrize("phrase", [
-    "停止你好", "停止了吗", "停止呢", "停止么", "你好停止", "停下来了吗", "停止啊啊",
+    # d.6 (2026-10-28): 「停止你好」 moved to the accepted side (fixed wake tail, one
+    # strip only); the positive case lives in tests/test_session.py.
+    "停止了吗", "停止呢", "停止么", "你好停止", "停下来了吗", "停止啊啊",
 ])
 def test_stop_intent_rejects_substrings_questions_and_double_tails(phrase) -> None:
     assert rules.stop_intent(phrase, END_WORDS) is False
