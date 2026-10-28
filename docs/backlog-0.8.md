@@ -391,6 +391,26 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
   全量 + ruff 见本卡报告。**真机复验：9 哥 2026-10-28 下午**。
 - **已知限制**：`docs/known-limitations.md` **L17**（与 L1/HE-02 同族、触发条件不同，不合并）。
 
+### d.10 P1 短回复不拆句（217 ms 空隙）—— **已落地 @（本卡）**
+
+- **真机（2026-10-28 11:01:35）**：`reply: 1 gaps, max 217 ms`（`process.py` 的 underrun 指标）。
+  先按卡的要求用 FakeTts 数 **vendor synth 请求数**，不把 gaps 日志直接当成两次 synth。
+- **根因**：唯一拆句点是 `turn.py:split_sentences`；旧代码下**只有「短回复内部有 `\n`」**
+  （`SENTENCE_ENDINGS` 含换行）会被拆成 2 段，每段一次 `_speak_sentence` → 两次 synth 之间留出空隙。
+  `在，你说。` 本来就是 1 段；**无句末标点**的短回复旧代码走 tail 也是 1 次——那条测试是回归保护，
+  不是「旧代码会拆」的证明。
+- **修复**：`split_sentences(..., hold_short=True)` 在整段仍短（`SHORT_REPLY_CHARS=8`）且「会被拆成多段」
+  （含内部换行，或 ≥2 个句末标点）时不发段；hold 有界——下一个使窗口结束的 delta、force/tail、
+  或 `SHORT_REPLY_HOLD_MS=300` 释放。长回复/单句短回复不 hold，首段仍在首个句末标点发出。
+  单请求仍受 `MAX_SENTENCE_CHARS=45` 与 turn 的字符预算约束。
+- **残余风险（300 ms 不是墙钟定时器）**：hold 只在**下一个 delta 到达时**评估，没有独立计时器。若模型在
+  短回复中间停顿 >300 ms，停顿后的首个 delta 会释放 hold → 该句仍拆 2 段。`好。行。` 在**同一 delta** 内
+  达到 1 次 synth；分两个 delta 到达时仍 2 次。长回复首句 ≤8 字且同一 chunk 带 `\n` 时会多 hold 一个
+  delta（内容不合并，只是延后；下次 delta 超过 8 字即恢复）。
+- **验证**：`tests/test_turn.py` 新增 5 条（`在，\n你说。`→1 次 synth；`在，你说。`→1；
+  长回复仍多段且首段不被合并；无句末标点的短回复 tail 1 次；hold 边界 300 ms/force）。真机复验留 9 哥 下午。
+
+
 ## e. 房间策略待 9 哥 拍板
 
 > **状态：两项均已于 2026-10-28 拍板（ANSWERED）。本批只登记，不实现；落地卡见 §f。**

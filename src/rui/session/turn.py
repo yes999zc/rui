@@ -73,6 +73,28 @@ SOFT_MIN_CHARS = 10
 # a reply with no punctuation at all cannot hold the speaker silent.
 MIN_SENTENCE_CHARS = 2
 MAX_SENTENCE_CHARS = 45
+# A short reply must reach TTS as ONE request. Splitting 「在，\n你说。」 on the newline
+# (or forcing its tail) gave the vendor two calls and an audible gap between the two
+# renditions (measured 2026-10-28 11:01:35: `reply: 1 gaps, max 217 ms`). The streaming
+# path therefore holds pieces back while the whole buffer is still short AND would
+# otherwise split into more than one piece (an internal newline, or several sentence
+# ends). A single short sentence already yields one piece, so holding it would only add
+# latency - that is why the condition is not "short" alone. The hold is bounded: a delta
+# that ends the short window releases it, so does an explicit force/tail, and
+# `SHORT_REPLY_HOLD_MS` caps it when the model pauses mid-reply.
+SHORT_REPLY_CHARS = 8
+SHORT_REPLY_HOLD_MS = 300.0
+
+
+def _short_reply_pending(buffer: str) -> bool:
+    """True while `buffer` could still be one short reply that must not be split."""
+    text = buffer.strip()
+    if not text or len(text) > SHORT_REPLY_CHARS:
+        return False
+    # Check the raw buffer: stripping removes a trailing newline, which is exactly the
+    # structural break that must not split a short reply.
+    return "\n" in buffer or sum(text.count(ch) for ch in SENTENCE_ENDINGS) > 1
+
 
 # Where a reply may be cut when it runs past the console's budget: a sentence end reads
 # as punctuation, a clause end as a pause, and anything else is an unavoidable character
@@ -150,14 +172,26 @@ DIRECT_HISTORY_LIMIT = 800
 
 
 def split_sentences(
-    buffer: str, force: bool = False, clauses: bool = True
+    buffer: str, force: bool = False, clauses: bool = True, *,
+    hold_short: bool = False, short_wait_ms: float = 0.0,
 ) -> tuple[list[str], str]:
     """Pull speakable pieces out of a streaming buffer, keep the remainder.
 
     `clauses=True` also breaks after a comma once the clause is long enough: the first
     piece can go to TTS while the model is still writing, which is the only way the
     speaker starts before the answer is finished.
+
+    `hold_short` is the streaming caller saying "this may still be a short reply": while
+    the buffer is short and would split into several pieces (`_short_reply_pending`),
+    nothing is emitted, so 「在，\n你说。」 reaches TTS as one request instead of two
+    (2026-10-28: the second synth left a 217 ms gap). It is a bounded hold - a delta
+    that ends the short window, a `force`/tail call, or
+    `short_wait_ms >= SHORT_REPLY_HOLD_MS` releases it. Callers that are not streaming
+    (a verbatim briefing) leave it off and keep the old split.
     """
+    if (hold_short and not force and _short_reply_pending(buffer)
+            and short_wait_ms < SHORT_REPLY_HOLD_MS):
+        return [], buffer
     out: list[str] = []
     start = 0
     for i, ch in enumerate(buffer):
@@ -833,6 +867,9 @@ class TurnRunner:
             parts: list[str] = []
             calls: list[dict] = []
             first_sentence_ms = [0.0]
+            # When the buffer first became short enough to be a single short reply.
+            # `None` once it grows past SHORT_REPLY_CHARS; reset after an emission.
+            short_since: float | None = None
 
             def take(speakable: str) -> str:
                 """One sanitised piece against this turn's cap; "" means do not speak it.
@@ -887,7 +924,7 @@ class TurnRunner:
                 the last token arrived - a 4-5 s first-sentence latency, and the log blamed
                 the model for it.
                 """
-                nonlocal buffer
+                nonlocal buffer, short_since
                 calls.extend(chunk.tool_calls or [])
                 turn_tools.extend(call.get("name", "") for call in chunk.tool_calls or [])
                 if chunk.finish_reason == "length":
@@ -898,7 +935,17 @@ class TurnRunner:
                 if not chunk.delta:
                     return []
                 buffer += chunk.delta
-                sentences, buffer = split_sentences(buffer)
+                now = time.monotonic()
+                if _short_reply_pending(buffer):
+                    if short_since is None:
+                        short_since = now
+                else:
+                    short_since = None
+                waited_ms = 0.0 if short_since is None else (now - short_since) * 1000.0
+                sentences, buffer = split_sentences(
+                    buffer, hold_short=True, short_wait_ms=waited_ms)
+                if sentences:
+                    short_since = now if _short_reply_pending(buffer) else None
                 out: list[str] = []
                 for sentence in sentences:
                     # A model without a tool layer writes the call as text (DSML), and the

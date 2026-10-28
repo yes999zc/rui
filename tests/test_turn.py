@@ -792,3 +792,63 @@ def test_a_farewell_stopped_by_a_wake_does_not_speak(monkeypatch) -> None:
 
     assert line  # the session still closes
     assert spoken == [] and spoken_sentences == [], "the aborted goodbye still played"
+
+
+# --------------------------------------------------- P1 (2026-10-28): one synth for short replies
+def _run_reply(monkeypatch, chunks: list[str]) -> tuple[FakeTts, object]:
+    """Run one turn whose LLM streams `chunks`; return the TTS fake and the result."""
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("你好"), llms=[FakeLlm(chunks)], ttss=[tts])
+
+    async def speak(_pcm: bytes, *, segment_start: bool = False) -> None:
+        return None
+
+    result = asyncio.run(
+        TurnRunner(Config().providers).run(b"\x00\x00" * 800, speak, TurnTrace(device_id="living"))
+    )
+    return tts, result
+
+
+def test_a_short_reply_with_an_internal_newline_is_one_synth(monkeypatch) -> None:
+    """P1 2026-10-28 11:01:35: 「在，\\n你说。」 split on the newline → two vendor calls
+    and a 217 ms gap. One short reply must reach TTS as one request."""
+    tts, result = _run_reply(monkeypatch, ["在，\n", "你说。"])
+
+    assert len(tts.texts) == 1, tts.texts
+    assert "在" in tts.texts[0] and "你说" in tts.texts[0]
+    assert result.reply == "在，\n你说。"
+
+
+def test_a_plain_short_reply_is_still_one_synth(monkeypatch) -> None:
+    tts, _result = _run_reply(monkeypatch, ["在，你说。"])
+
+    assert len(tts.texts) == 1, tts.texts
+
+
+def test_a_long_reply_still_streams_its_first_sentence_early(monkeypatch) -> None:
+    """The hold is for short replies only: the first sentence goes out as it arrives."""
+    first = "今天北京晴，气温二十度。"
+    tts, _result = _run_reply(monkeypatch, [first, "明天多云转晴。", "后天有小雨。"])
+
+    assert tts.texts[0] == first, tts.texts
+    assert len(tts.texts) >= 2, tts.texts
+
+
+def test_a_short_reply_without_end_punctuation_synthesises_once(monkeypatch) -> None:
+    tts, _result = _run_reply(monkeypatch, ["在，你说"])
+
+    assert tts.texts == ["在，你说"], tts.texts
+
+
+def test_the_short_reply_hold_is_bounded() -> None:
+    """The hold releases on force/tail, on a longer buffer, and after ~300 ms."""
+    text = "在，\n你说。"
+    assert split_sentences(text, hold_short=True) == ([], text)
+    assert split_sentences(text, hold_short=True, short_wait_ms=299) == ([], text)
+    assert split_sentences(text, hold_short=True, short_wait_ms=300) == (
+        ["在，", "你说。"], ""), "hold did not expire"
+    # `force` bypasses the hold (`not force`): the old split runs unchanged.
+    assert split_sentences(text, hold_short=True, force=True) == (["在，", "你说。"], "")
+    # A short *single* sentence is not held: it already is one piece.
+    assert split_sentences("第一句话。", hold_short=True) == (["第一句话。"], "")
+    assert split_sentences("在，你说。", hold_short=True) == (["在，你说。"], "")
