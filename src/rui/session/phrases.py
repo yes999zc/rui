@@ -90,6 +90,9 @@ DEFAULTS: dict[str, str] = {
     "reminder.need_text": "要提醒你什么事？再说一遍，比如「七点提醒我吃药」。",
     "reminder.past_time": "这个时间已经过了，说个以后的时间吧。",
     "reminder.save_failed": "提醒没能存下来（数据目录不可写），这次定不了。",
+    # Spoken at delivery time when the reminder's room is reachable (§e.2 tier 1/2).
+    # Without the framing the speaker said a bare 「起床」 and the room had no idea why.
+    "reminder.due": "时间到了，{text}。",
     # Spoken at delivery time when the named room is offline (§e.2 tier 3).
     "reminder.offline": "{room}那台没在线，我在这儿提醒你：{text}",
     # --- devices over HA (V2's first application) ----------------------------

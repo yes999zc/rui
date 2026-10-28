@@ -2,13 +2,14 @@
 
 The LLM tool path (`local.set_reminder`) keeps its four time shapes; this file pins the
 *voice* path that runs before the model: a deliberately narrow sentence grammar
-(trigger + 今天/明天/后天 + 早上/晚上 + 七点半 + action + optional 在<room>), and the
-three-tier delivery rule from backlog §e.2:
+(trigger + 今天/明天/后天 or N秒/分钟后 + 早上/晚上 + 七点半 + action + optional 在<room>),
+and the three-tier delivery rule from backlog §e.2:
 
     specified room (online)  >  default_output  >  default_output + 「<room>那台没在线」
 
 Everything runs on a fixed Shanghai clock. 「23 点 59 分」 has its own test because that
-is the boundary where "today" stops meaning "later today".
+is the boundary where "today" stops meaning "later today". The action must be **one
+sentence**: a name claim or second instruction after it (「我是小志」) goes to the model.
 """
 from __future__ import annotations
 
@@ -24,10 +25,10 @@ from rui.tools import reminders as reminders_module
 from rui.tools.reminders import (
     ZONE,
     DueScheduler,
+    Reminder,
     ReminderStore,
     VoiceParseError,
     humanize,
-    parse_at,
     parse_voice,
 )
 from rui.trace import TraceLog, TurnTrace
@@ -156,14 +157,90 @@ def test_no_room_means_none() -> None:
     assert parsed("提醒我明天早上七点吃药").room is None
 
 
-def test_relative_times_stay_on_the_llm_tool_path() -> None:
-    """「十分钟后」 is `parse_at`'s job; the fixed grammar must not answer "when?"."""
-    assert parsed("提醒我十分钟后关火") is None
+def test_unclaimed_relative_times_stay_on_the_llm_tool_path() -> None:
+    """Hour/day/week and interval shapes stay with the model (`parse_at` has +10m).
+
+    B (0.8.5): the standard 「N分钟(之)后」 shape is now claimed (see the table below);
+    these shapes are the ones the narrow grammar still must not answer "什么时候?" to.
+    """
     assert parsed("提醒我半小时后关火") is None
     assert parsed("提醒我1个半小时以后关火") is None
     assert parsed("提醒我过20分钟关火") is None
+    assert parsed("提醒我3小时后关火") is None
+    assert parsed("提醒我3天后关火") is None
     # 「七点以后」 is an interval, not a moment.
     assert parsed("提醒我明天七点以后关火") is None
+
+
+@pytest.mark.parametrize(
+    ("sentence", "minutes", "text", "room"),
+    [
+        # B (0.8.5): 「一分钟后提醒我喝水。」 used to reach the model even though the
+        # sentence already said when. The grammar now claims the standard shape and
+        # computes it with the tool's own `parse_at("+Nm")`.
+        ("一分钟后提醒我喝水。", 1, "喝水", None),
+        ("一分钟后提醒我喝水", 1, "喝水", None),
+        ("提醒我一分钟后喝水", 1, "喝水", None),
+        ("提醒我十分钟后关火", 10, "关火", None),
+        ("提醒我十分钟之后喝水", 10, "喝水", None),
+        ("提醒我10分钟以后喝水", 10, "喝水", None),
+        ("十分钟后提醒我关火。", 10, "关火", None),
+        ("提醒我三十分钟后在客厅喝水", 30, "喝水", "客厅"),
+        ("三十分钟后提醒我在书房关火", 30, "关火", "书房"),
+        ("提醒我九十九分钟后喝水", 99, "喝水", None),
+    ],
+)
+def test_voice_minutes_are_claimed_and_mean_minutes(
+    sentence: str, minutes: int, text: str, room: str | None,
+) -> None:
+    item = parsed(sentence)
+    assert item is not None, sentence
+    assert item.at - REF == dt.timedelta(minutes=minutes), sentence
+    # The old bug class: the unit must never be re-read as the other unit.
+    assert item.at - REF != dt.timedelta(seconds=minutes), sentence
+    assert item.text == text
+    assert item.room == room
+
+
+def test_voice_minutes_use_the_same_parser_as_the_tool(monkeypatch) -> None:
+    """B: both entry points ask `parse_at`, not two arithmetic copies."""
+    seen: list[str] = []
+    real = reminders_module.parse_at
+
+    def spy(spec: str, now: dt.datetime | None = None) -> dt.datetime:
+        seen.append(spec)
+        return real(spec, now=now)
+
+    monkeypatch.setattr(reminders_module, "parse_at", spy)
+    item = parsed("一分钟后提醒我喝水。")
+    assert item is not None and item.at == REF + dt.timedelta(minutes=1)
+    assert seen == ["+1m"]
+
+
+def test_the_minute_unit_does_not_match_a_doubled_zhong() -> None:
+    """「十分钟钟后」 is a typo, not 「十分钟后」: never compute it as ten minutes.
+
+    It is still a time cue, so the whole sentence is handed to the model (None)
+    instead of the fixed grammar answering "什么时候?".
+    """
+    assert reminders_module._MINUTES_REL.match("十分钟钟后喝水") is None
+    assert parsed("提醒我十分钟钟后喝水") is None
+
+
+def test_a_second_sentence_after_the_action_goes_to_the_model() -> None:
+    """B boundary: the action is one sentence, so a name claim is not reminder text.
+
+    The task-32 real-machine sentence carried a name claim. Claiming it here would
+    store 「喝水。我是小志」 and speak it at due time; the model owns that utterance
+    (it keeps the room from `_tool_context`, see test_app_fleet).
+    """
+    assert parsed("一分钟后提醒我喝水。我是小志。") is None
+    assert parsed("提醒我十秒后喝水。我是小志。") is None
+    assert parsed("七点提醒我吃药。别忘了带伞") is None
+    assert parsed("提醒我七点吃药；顺便关灯") is None
+    # A single sentence, however heavily punctuated at its end, is still ours.
+    assert parsed("一分钟后提醒我喝水。").text == "喝水"
+    assert parsed("一分钟后提醒我喝水！！").text == "喝水"
 
 
 @pytest.mark.parametrize(
@@ -212,9 +289,11 @@ def test_voice_seconds_use_the_same_parser_as_the_tool(monkeypatch) -> None:
 
 
 def test_voice_seconds_do_not_change_the_minutes_path() -> None:
-    """A minute-scale relative time still belongs to the tool (narrow grammar rule)."""
-    assert parsed("提醒我2分钟后喝水") is None
-    assert parse_at("+2m", now=REF) == REF + dt.timedelta(minutes=2)
+    """A minute-scale relative time is claimed by the grammar, not read as seconds."""
+    item = parsed("提醒我2分钟后喝水")
+    assert item is not None
+    assert item.at - REF == dt.timedelta(minutes=2)
+    assert item.at - REF != dt.timedelta(seconds=2)
 
 
 def test_voice_seconds_at_2359_cross_midnight() -> None:
@@ -399,13 +478,49 @@ def test_no_room_uses_the_default_output(monkeypatch) -> None:
     assert app_module._reminder_route(app, None) == ("client:living", "")
 
 
-def test_the_offline_line_says_which_room_is_missing() -> None:
-    from rui.tools.reminders import Reminder
+# ------------------------------------------------------------ the due line
+# 0.8.5: an online due reminder is no longer a bare 「起床」. The stored text is the
+# action, wrapped in the time-is-up sentence; the setter's trigger verb is stripped
+# because the wrapper already supplies the announcement.
+def _due_item(text: str) -> Reminder:
+    return Reminder(id="abc123", text=text, at=moment(29, 7), created_at=REF)
 
-    item = Reminder(id="abc123", text="吃药", at=moment(29, 7), created_at=REF)
-    line = app_module._reminder_line(item, "客厅")
-    assert "客厅那台没在线" in line and "吃药" in line
-    assert app_module._reminder_line(item, "") == "吃药"
+
+def test_the_online_due_line_is_the_time_is_up_template() -> None:
+    assert app_module._reminder_line(_due_item("喝水"), "") == "时间到了，喝水。"
+
+
+def test_the_online_due_line_keeps_a_long_text_with_commas() -> None:
+    text = "下午三点在客厅开周会，记得带上笔记本和充电器"
+    assert len(text) > 20
+    assert app_module._reminder_line(_due_item(text), "") == f"时间到了，{text}。"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The trigger the user said while setting it is not part of the announcement.
+        ("叫你起床", "时间到了，起床。"),
+        ("提醒我 吃药", "时间到了，吃药。"),
+        ("让我关火", "时间到了，关火。"),
+        # One sentence-final mark only, and no second period from the template.
+        ("吃药。", "时间到了，吃药。"),
+        ("吃药！", "时间到了，吃药。"),
+        ("吃药？", "时间到了，吃药。"),
+        ("吃药!?", "时间到了，吃药。"),
+        # Degenerate text never speaks 「时间到了，。」 and never raises.
+        ("", "时间到了。"),
+        ("   ", "时间到了。"),
+        ("提醒我", "时间到了。"),
+    ],
+)
+def test_the_online_due_line_normalises_the_text(text: str, expected: str) -> None:
+    assert app_module._reminder_line(_due_item(text), "") == expected
+
+
+def test_the_offline_line_is_unchanged_and_still_names_the_room() -> None:
+    assert (app_module._reminder_line(_due_item("吃药"), "客厅")
+            == "客厅那台没在线，我在这儿提醒你：吃药")
 
 
 # ------------------------------------------------------------ spoken entry
@@ -505,6 +620,45 @@ def test_an_unknown_or_roomless_device_does_not_invent_a_room(tmp_path) -> None:
     assert _run_voice(app, runner, "提醒我明天早上八点吃药",
                       link=_FakeLink("not-a-device")) is True
     assert {item.room for item in scheduler.store.pending(now=REF)} == {None}
+
+
+def test_voice_minute_reminder_keeps_the_speaking_devices_room(tmp_path) -> None:
+    """B: the new minute claim goes through the same source-room resolver as seconds."""
+    app, scheduler = _voice_app(tmp_path, living="客厅", bedroom="次卧")
+    runner = _FakeRunner()
+    assert _run_voice(app, runner, "一分钟后提醒我喝水。",
+                      link=_FakeLink("bedroom")) is True
+    item = scheduler.store.pending(now=REF)[0]
+    assert (item.text, item.room, item.at) == (
+        "喝水", "次卧", REF + dt.timedelta(minutes=1))
+    assert runner.spoken[0] == "好，1 分钟后提醒你喝水。"
+
+
+def test_voice_and_tool_paths_share_the_room_resolver(tmp_path, monkeypatch) -> None:
+    """B: one resolver (`_reminder_room`) for the fixed sentence and `_tool_context`.
+
+    The LLM end-to-end case (a `set_reminder` tool call from 次卧 stores room=次卧) is
+    pinned in tests/test_app_fleet.py; this test proves both entry points *call* the
+    same function instead of carrying a copy of the device->room lookup.
+    """
+    app, scheduler = _voice_app(tmp_path, living="客厅", bedroom="次卧")
+    cfg = app.state.cfg
+    seen: list[str | None] = []
+    real = app_module._reminder_room
+
+    def spy(cfg_, client, named=None):
+        seen.append(named)
+        return real(cfg_, client, named)
+
+    monkeypatch.setattr(app_module, "_reminder_room", spy)
+    runner = _FakeRunner()
+    assert _run_voice(app, runner, "一分钟后提醒我喝水。",
+                      link=_FakeLink("bedroom")) is True
+    context = app_module._tool_context(cfg, _FakeLink("bedroom"))
+    assert context.room == "次卧"
+    # Fixed path: source room + (no) named room; tool path: source room. One function.
+    assert seen == [None, None, None]
+    assert scheduler.store.pending(now=REF)[0].room == "次卧"
 
 
 def test_a_failed_parse_speaks_and_creates_nothing(tmp_path) -> None:

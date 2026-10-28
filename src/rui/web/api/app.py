@@ -1813,11 +1813,32 @@ def _reminder_route(app: FastAPI, room: str | None) -> tuple[object | None, str]
     return _default_output_client(app), ""
 
 
+# Setting a reminder spells the trigger out (「提醒我…」), announcing it does not: the
+# due line already says 「时间到了」, so a stored trigger must not become
+# 「时间到了，叫你起床。」. Only the leading occurrence is stripped, whitespace allowed.
+# 叫你 is the same announcement addressee as 叫我 (the stored text comes from the setter).
+_DUE_TRIGGER_RE = re.compile(r"^\s*(?:提醒我|叫我|让我|叫你)\s*")
+# `reminder.due` supplies the final period; a mark already on the text must not double it.
+_DUE_TRAILING_MARKS = "。！？!?"
+
+
+def _reminder_due_line(text: str) -> str:
+    """The due line for a reachable room: the action wrapped in 「时间到了，…。」."""
+    body = _DUE_TRIGGER_RE.sub("", text or "").strip()
+    body = body.rstrip(_DUE_TRAILING_MARKS).strip()
+    line = phrases.book.render("reminder.due", text=body)
+    if body:
+        return line
+    # Empty (or trigger-only) text renders the template's dangling 「，。」. Drop the
+    # comma clause instead of speaking punctuation; the template still owns the words.
+    return line.replace("，", "", 1)
+
+
 def _reminder_line(item: Reminder, offline_room: str) -> str:
     """What a due reminder says: its text, prefixed when its room is unreachable."""
     if offline_room:
         return phrases.book.render("reminder.offline", room=offline_room, text=item.text)
-    return item.text
+    return _reminder_due_line(item.text)
 
 
 # ---------------------------------------------------------------- reminder delivery (C2)

@@ -208,7 +208,8 @@ def test_a_playing_target_room_is_stopped_only_there_and_never_resumed(monkeypat
     assert not any(isinstance(msg, ResumeMusic) for msg in study.sent + living.sent)
     assert music.resumes == 0
     # The announcement went to the target room, and the other room said nothing.
-    assert runner.texts == ["吃药"]
+    # 0.8.5: the stored text is wrapped in the time-is-up line, not spoken bare.
+    assert runner.texts == ["时间到了，吃药。"]
     assert study.spoken and not living.spoken
     # Other room's session was untouched; the reminder opened no reply/follow-up.
     assert runner.idle.stopped == 0

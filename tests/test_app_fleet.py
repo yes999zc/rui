@@ -609,9 +609,9 @@ def test_a_due_reminder_is_spoken_exactly_once(tmp_path, monkeypatch) -> None:
         deadline = time.monotonic() + 5.0
         while not spoken and time.monotonic() < deadline:
             time.sleep(0.05)
-        assert spoken == ["吃药"]
+        assert spoken == ["时间到了，吃药。"]   # 0.8.5 due line, not a bare text
         time.sleep(1.2)   # a second tick must not enqueue the fired item again
-        assert spoken == ["吃药"]
+        assert spoken == ["时间到了，吃药。"]
         assert app.state.reminders.store.pending() == []
 
 
@@ -1092,9 +1092,12 @@ class _OneChunkTts:
 def test_an_llm_set_reminder_keeps_the_speaking_devices_room(tmp_path, monkeypatch) -> None:
     """task-32: 「一分钟后提醒我喝水。我是小志。」 in 次卧 must store room=次卧.
 
-    The fixed-sentence path only claims relative seconds; 「一分钟后」 goes to the LLM
-    tool. Before this, `local.set_reminder` called `store.add(text, at)` with no room,
-    so the reminder fell back to the living default and played there.
+    The fixed-sentence path now claims minute-scale relative times too; this utterance
+    reaches the LLM because it carries a second sentence (「我是小志」), which the
+    one-sentence boundary of task-2 (0.8.5) defers. The task-32 behaviour — LLM path
+    stores room=次卧 — must stay green. Before task-32, `local.set_reminder` called
+    `store.add(text, at)` with no room, so the reminder fell back to the living
+    default and played there.
     """
     FakeFleet.instances.clear()
     config = CONFIG.replace("room: 书房", "room: 次卧").replace(

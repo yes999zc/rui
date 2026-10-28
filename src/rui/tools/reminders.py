@@ -263,11 +263,13 @@ _VOICE_TIME = re.compile(
 )
 _LEADING_JUNK = " \t，,、：:。.！!？?；;"
 _TRAILING_JUNK = " \t，,、：:。.！!？?；;"
-# Relative times in minutes/hours belong to the LLM tool (`parse_at` takes +10m); the
-# voice grammar must not claim them and answer "when?" to a sentence that already said
-# when. Seconds are the exception: they are claimed below and computed by `parse_at`.
+# Relative times the strict grammar does not compute still belong to the LLM tool
+# (`parse_at` takes +10m etc.); a sentence that already said when must not be answered
+# with "什么时候?". Minutes are claimed only in the exact 「N分钟(之)后」 shape below;
+# 过N分钟 / 半小时 / 小时 / 天 / 周 / 刻 / 区间 land here and are deferred. A doubled
+# 「分钟钟」 is a typo, not a claim: it still cues a time, so it is deferred too.
 _RELATIVE_TIME = re.compile(
-    r"(?:分钟|秒钟|秒|小时|钟头)\s*(?:之?后|以后)"
+    r"(?:分钟钟|分钟|秒钟|秒|小时|钟头)\s*(?:之?后|以后)"
     r"|过\s*(?:\d+|[零〇一二两三四五六七八九十百]+|几)\s*"
     r"(?:分钟|秒钟|秒|小时|钟头)"
 )
@@ -276,6 +278,15 @@ _RELATIVE_TIME = re.compile(
 # `parse_at`; the voice path and the tool path therefore cannot disagree.
 _SECONDS_REL = re.compile(
     rf"(?P<seconds>{_NUM})\s*(?:秒钟|秒)\s*(?:之?后|以后)"
+)
+# task-B (0.8.5): 「一分钟后提醒我喝水。」 is the same exact moment, one unit up; it used
+# to fall to the model while 「一分钟后」 already said when. Only the standard
+# N分钟(之)后 shape is claimed - not 过N分钟 / N个半小时 / hours / days / weeks /
+# quarters / intervals. 「分钟钟」 must not match: after the unit only 后/之后/以后 is
+# accepted, so the doubled 钟 falls through (deferred as a time cue above, never stored
+# as minutes).
+_MINUTES_REL = re.compile(
+    rf"(?P<minutes>{_NUM})\s*分钟\s*(?:之?后|以后)"
 )
 # Any of these means the sentence already said when, even when the narrow grammar
 # cannot compute that shape. Asking "什么时候?" there is a wrong clarify; the LLM
@@ -293,6 +304,22 @@ _TIME_CUE = re.compile(
 def _looks_like_time(text: str) -> bool:
     """True when the sentence names a time the fixed grammar did not claim."""
     return bool(_TIME_CUE.search(text) or _RELATIVE_TIME.search(text))
+
+
+# The action is one sentence. A sentence-final mark with more text after it means the
+# utterance carries a second sentence - typically a name claim (「我是小志」), sometimes
+# another instruction. This narrow grammar cannot structure that tail, and pasting it
+# into the reminder's text would speak it at due time; the model owns such sentences.
+_SENTENCE_END = re.compile(r"[。！？!?；;]")
+
+
+def _has_second_sentence(action: str) -> bool:
+    """True when ``action`` is more than one sentence (trailing marks excluded)."""
+    body = action.strip(_TRAILING_JUNK)
+    match = _SENTENCE_END.search(body)
+    if match is None:
+        return False
+    return bool(body[match.end():].strip(_LEADING_JUNK + _TRAILING_JUNK))
 
 
 def _lstrip_junk(text: str) -> str:
@@ -463,18 +490,27 @@ def parse_voice(
         明天早上七点叫我在客厅吃药
         10秒钟之后提醒我喝水
         提醒我十秒后在客厅关火
+        一分钟后提醒我喝水
+        提醒我十分钟之后在客厅关火
 
     Time words: 今天/明天/后天 (optional; absent means "the next occurrence"),
     早上/上午/中午/下午/晚上, an hour with Chinese or Arabic digits, and 半 / 一刻 /
-    三刻 / N分; plus second-scale relative times (``N秒后`` / ``N秒钟之后`` / ``N秒以后``
-    with Chinese or Arabic digits), whose arithmetic comes from :func:`parse_at`. The
-    action is the remainder; a leading ``在<room>`` is a routing target only when the
-    room equals a configured ``devices[].room`` exactly.
+    三刻 / N分; plus relative times of seconds and minutes (``N秒后`` / ``N秒钟之后`` /
+    ``N秒以后`` / ``N分钟后`` / ``N分钟之后`` / ``N分钟以后``, Chinese or Arabic digits),
+    whose arithmetic comes from :func:`parse_at`. The action is the remainder; a leading
+    ``在<room>`` is a routing target only when the room equals a configured
+    ``devices[].room`` exactly.
+
+    The action must be **one sentence**. A sentence-final mark (。！？!?；;) with more
+    text after it means the utterance carries a second sentence - a name claim
+    (「我是小志」) or another instruction - which this grammar cannot structure; the
+    model handles it instead of the reminder text swallowing the tail.
 
     Returns None for a sentence without a trigger (the LLM path owns it), and for a
     triggered sentence that names a time shape this grammar does not compute
-    (「明早八点」「3天后」「每周一」「七点零一刻」「十分钟后」): a wrong "什么时候?" is worse
-    than handing it to the model. The weak trigger 「叫我」 also returns None without a
+    (「明早八点」「3天后」「每周一」「七点零一刻」「半小时后」「过20分钟」): a wrong
+    "什么时候?" is worse than handing it to the model. Multi-sentence utterances are
+    deferred for the same reason. The weak trigger 「叫我」 also returns None without a
     parseable time, because it is commonly a rename (「叫我小王」).
 
     Raises :class:`VoiceParseError` for a sentence that *is* a reminder but is missing
@@ -490,12 +526,14 @@ def parse_voice(
     time_first = taken is None
     trigger, rest = ("", raw) if taken is None else taken
     relative = _SECONDS_REL.match(rest)
+    if relative is None:
+        relative = _MINUTES_REL.match(rest)
     match = None if relative is not None else _VOICE_TIME.match(rest)
     if relative is None and match is None:
         if time_first:
             return None  # no trigger at the start and no leading time: not a reminder
         if _looks_like_time(rest):
-            # 「提醒我十分钟后关火」「提醒我今晚八点吃药」: the LLM tool handles these.
+            # 「提醒我今晚八点吃药」「提醒我过20分钟关火」: the LLM tool handles these.
             return None
         if trigger in _WEAK_TRIGGERS:
             # 「叫我小王」「叫我怎么相信你」: a rename or other intent, not a reminder.
@@ -520,15 +558,22 @@ def parse_voice(
         return None
 
     if relative is not None:
-        seconds = _cn_number(relative.group("seconds"))
-        if seconds is None:
+        # One arithmetic for both entry points: the tool passes "+10s" / "+10m" here too.
+        groups = relative.groupdict()
+        unit = "s" if "seconds" in groups else "m"
+        amount = _cn_number(groups.get("seconds") or groups.get("minutes") or "")
+        if amount is None:
             raise VoiceParseError("time")
-        # One arithmetic for both entry points: the tool passes "+10s" here too.
-        at = parse_at(f"+{seconds}s", now=base)
+        at = parse_at(f"+{amount}{unit}", now=base)
     else:
         at = _voice_moment(match, base)
 
     room, action = _take_room(after_time, rooms)
+    if _has_second_sentence(action):
+        # B (0.8.5): a name claim or a second instruction after the action is not
+        # reminder text; the model owns the whole utterance (it used to store
+        # 「喝水。我是小志」 as the reminder and speak it at due time).
+        return None
     text = " ".join(action.strip(_TRAILING_JUNK).split())
     if not text:
         raise VoiceParseError("text")
