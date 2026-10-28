@@ -1065,7 +1065,7 @@ class MultiDeviceConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
-    max_planes: int = Field(default=4, ge=1, le=8)
+    max_planes: int = Field(default=5, ge=1, le=8)  # D4: 4 -> 5 (2026-10-28)
     # Fallback output for reminders/notifications that have no source room (K1/K4).
     default_output: str | None = None
     arbitration: ArbitrationConfig = Field(default_factory=ArbitrationConfig)

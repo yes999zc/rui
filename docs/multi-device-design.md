@@ -253,7 +253,7 @@ devices:
 
 multi_device:
   enabled: true                 # 默认 false：保持 0.4.x 单平面行为
-  max_planes: 4                 # 资源上限，超过则只启用前 N 台并警告
+  max_planes: 5                 # 资源上限，超过则只启用前 N 台并警告（2026-10-28 由 4 上调，见 §9.2 D4）
   default_output: lx06          # 无来源输出（提醒/通知）的 fallback；可选
   arbitration:
     mode: score                 # score | room_priority | last_active（首版只用 score + 静态 priority）
@@ -299,7 +299,7 @@ multi_device:
 | audio.aec.who | device｜controller｜both｜none | controller（LX06 现状） | v3 新；device 时 rui 不跑 AEC，依赖设备；none 只允许 ASR 无 barge |
 | devices[].audio.voice.followup_* | 同全局 | 继承 | Dot2 用 2500/false；LX06 保持 1000/true |
 | multi_device.enabled | bool | false | true 时才允许多个 enabled inbound 平面 |
-| multi_device.max_planes | int | 4 | 超过上限的 enabled 设备不启动并给明确 warning（不是静默） |
+| multi_device.max_planes | int | 5（2026-10-28 由 4 上调，§9.2 D4） | 超过上限的 enabled 设备不启动并给明确 warning（不是静默） |
 | multi_device.default_output | device id | 空 | 必须是 enabled、inbound、playback 能力的设备；空 = 用最近活跃房间 |
 | arbitration.duplicate_window_ms | int | 2000 | 50–10000；同词全局去重，与合并窗口分离 |
 | arbitration.candidate_merge_window_ms | int | 400 | 100–2000；同一 utterance 跨设备命中的合并窗口（§11 Q3） |
@@ -345,7 +345,7 @@ multi_device:
 ### 6.3 资源与端口规划（NAS）
 
 - 每平面重复加载 KWS/VAD/AEC 模型（LX06 侧数 MB 级 ONNX；Dot2 侧 KWS 若也启用）；4 台以内预计可控，但需要在 NAS 上实测 RSS/CPU（§7 验收）。
-- 上限先设 4 台（max_planes 可配），超过上限明确告警而不是排队。
+- 上限默认 5 台（max_planes 可配，2026-10-28 由 4 上调，见 §9.2 D4；5 台以上需先在 NAS 上实测 RSS/CPU），超过上限明确告警而不是排队。
 - 端口：4412/8870 由各自平面绑定；未来设备默认从 8880 起分配；配置保存时做冲突检查。
 - 隐私：LX06 持续上行（KWS 在 rui）；Dot2 的 device_wake 就位后只在唤醒后上行。控制台应显示每台设备的 wake.source 与“是否持续上行”，让用户知道自己开了什么。
 
@@ -450,7 +450,7 @@ multi_device:
 | D1 | 赢家无后续语音 | `on_no_speech: end`，不自动晋升第二名（避免“换房间突然回答”） |
 | D2 | 音乐 | 第一版单房间全局 owner；A 放歌时 B 的回合**不**自动暂停 A |
 | D3 | “停止”作用域 | 只停当前输出 owner 房间；不提供“全屋停止”口令（第一版） |
-| D4 | 资源上限 | `max_planes: 4`，超限明确告警、不排队；每平面独立重启 |
+| D4 | 资源上限 | `max_planes: 5`（**2026-10-28 决定：由 4 上调至 5**，为 lx06 + dot2×4 同时在线留位；可配窗口 1–8 不变），超限明确告警、不排队；每平面独立重启 |
 | D5 | 隐私 | 允许 KWS 持续上行设备全屋部署；控制台设备列表/详情显示 `wake.source` 与“持续采集”标记 |
 | D6 | Dot2 device_wake 前置 | OWW 运行时/模型未就位前 Dot2 走 KWS（持续上行），控制台按 D5 标注 |
 | D7 | 房间模型 | 不引入顶层 `rooms`；用 `devices[].room` + `arbitration.room_priority`；`multi_device.enabled=true` 时 `room` 必填 |
@@ -460,6 +460,7 @@ multi_device:
 ### 9.3 变更记录
 
 - **2026-10-25**：冻结 K1–K6 + 接受 D1–D9（9 哥 确认，Lead 记录）。同时并入 dot2 #11 的三点补充：同房间交叉回声抑制（§4.5）、来源分层/不跨来源比 score（K3）、可解释 trace 字段（§11 Q6）。
+- **2026-10-28**：D4 资源上限 `max_planes` 默认 4 → **5**（第 3 台 dot2 到货，目标 lx06 + dot2×4 同时在线）；可配窗口 1–8 不变，超限仍是明确告警 + 不排队。代码：`src/rui/config/schema.py`；测试：`tests/test_config_v3.py`。
 
 ## 10. 参考（代码/文档路径）
 
@@ -486,7 +487,7 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 | Q4 | 同房间交叉回声抑制是否 RUI 做？room 是否必填？ | RUI 做（§4.5）；`multi_device.enabled=true` 时 `room` 必填（D7）。 |
 | Q5 | barge 是否只允许“正在播放的设备”？ | 是：只有当前输出 owner 设备可接管 barge；其他设备同 utterance 的 barge 丢弃并计数（§4.2/§4.5）。 |
 | Q6 | trace/metrics 字段命名 | 采纳 #11 E 表：`arbitration_candidates`、`arbitration_winner` / `arbitration_reason`、`arbitration_dropped{device}`、`arbitration_ties`、`arbitration_cross_echo_suppressed`、每候选 `wake_source`（Phase 2 实现）。 |
-| Q7 | 单实例多设备的进程/资源上限 | `max_planes: 4`（D4），超限告警不排队；NAS 上实测 RSS/CPU 后再调（§7.3）。 |
+| Q7 | 单实例多设备的进程/资源上限 | `max_planes: 5`（D4；2026-10-28 由 4 上调，见 §9.3），超限告警不排队；NAS 上实测 RSS/CPU 后再调（§7.3）。 |
 
 其它确认：
 

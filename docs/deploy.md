@@ -578,7 +578,7 @@ docker run --rm --user 1000:1000 -v ~/rui/data:/data \
 ```yaml
 multi_device:
   enabled: true
-  max_planes: 4           # 至少 = devices 里 enabled 的数量（默认 4）
+  max_planes: 4           # 至少 = devices 里 enabled 的数量（默认 5）
   default_output: living  # 没有 turn_device 时的默认输出房间；留空 = 最近活跃房间
 
 audio:

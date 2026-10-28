@@ -87,7 +87,9 @@ def test_current_schema_version_is_three() -> None:
 def test_multi_device_defaults_match_the_frozen_decisions() -> None:
     md = MultiDeviceConfig()
     assert md.enabled is False  # 0.4.x behaviour is the default (§9.2 D9)
-    assert md.max_planes == 4  # §9.2 D4
+    # §9.2 D4: raised 4 -> 5 on 2026-10-28 for lx06 + four dot2; the ge/le window
+    # (1..8) is unchanged, see test_max_planes_window_stays_one_to_eight.
+    assert md.max_planes == 5
     assert md.default_output is None
     arb = md.arbitration
     # §9.1 K3: group by source, never compare a device score with a KWS score.
@@ -96,6 +98,15 @@ def test_multi_device_defaults_match_the_frozen_decisions() -> None:
     assert arb.candidate_merge_window_ms == 400
     assert arb.duplicate_window_ms == 2000
     assert arb.on_no_speech == "end"  # §9.2 D1
+
+
+def test_max_planes_window_stays_one_to_eight() -> None:
+    # D4 only moved the default (4 -> 5); the accepted window did not change.
+    assert MultiDeviceConfig(max_planes=1).max_planes == 1
+    assert MultiDeviceConfig(max_planes=8).max_planes == 8
+    for bad in (0, 9):
+        with pytest.raises(ValueError):
+            MultiDeviceConfig(max_planes=bad)
 
 
 def test_aec_ownership_defaults_to_the_controller() -> None:
@@ -337,6 +348,32 @@ def test_warnings_flag_too_many_planes(tmp_path: Path) -> None:
     config = V3_CONFIG.replace("enabled: true\n  default_output", "enabled: true\n  max_planes: 1\n  default_output")
     messages = config_warnings(load_config(_write(tmp_path, config)))
     assert any("max_planes=1" in m for m in messages)
+
+
+def _fleet_config(count: int) -> Config:
+    """`count` enabled inbound devices under the default multi_device block."""
+    return Config(
+        multi_device={"enabled": True},
+        devices=[
+            {
+                "id": f"dev{i}",
+                "adapter": "mock",
+                "host": f"192.0.2.{10 + i}",
+                "room": f"房间{i}",
+            }
+            for i in range(count)
+        ],
+    )
+
+
+def test_five_planes_fit_within_the_default_and_the_sixth_is_refused() -> None:
+    # D4 (2026-10-28): lx06 + four dot2 = 5 planes, exactly the default budget.
+    assert not any("max_planes" in m for m in config_warnings(_fleet_config(5)))
+    # The sixth is refused and named - never silently truncated, never queued.
+    messages = config_warnings(_fleet_config(6))
+    assert any(
+        "multi_device.max_planes=5 but 6 devices are enabled" in m for m in messages
+    )
 
 
 def test_clean_v2_config_has_no_warnings(tmp_path: Path) -> None:

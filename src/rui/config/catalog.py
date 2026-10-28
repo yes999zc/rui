@@ -1569,10 +1569,10 @@ def _multi_device_fields(cfg: Config) -> list[dict]:
                effect="restart"),
         _field("multi_device.max_planes", "multi_device", "number",
                _t("音频面上限", "Max audio planes"),
-               _t("最多同时运行几个音频面（1–8，默认 4）。超出的设备不会启动、也不排队，"
+               _t("最多同时运行几个音频面（1–8，默认 5）。超出的设备不会启动、也不排队，"
                   "/health 会点名被拒的设备；每多一台就多一份 KWS/VAD/AEC 的 CPU 与内存。"
                   "改完重启服务。",
-                  "How many planes may run at once (1-8, default 4). Extra devices do not "
+                  "How many planes may run at once (1-8, default 5). Extra devices do not "
                   "start and are not queued; /health names them. Each plane adds a "
                   "KWS/VAD/AEC CPU and memory footprint. Restart the service."),
                effect="restart", minimum=1, maximum=8),

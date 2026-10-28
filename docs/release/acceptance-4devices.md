@@ -19,7 +19,7 @@
 |---|---|---|
 | `multi_device.enabled` | 必须为 `true`；默认是 **`false`** | 【代码证实】`src/rui/config/schema.py:1067` |
 | 关掉 `multi_device` 的后果 | 只起 **一个** plane（第一台 enabled inbound），其余设备有配置但没人驱动，`/health.warnings` 出现 `multiple_enabled_inbound` | 【代码证实】`src/rui/web/api/app.py:2992-2993`、`:1774` |
-| `multi_device.max_planes` | 默认 **4**，本场景正好用满；第 5 台会被拒绝并写进 `/health.multi_device.refused`（不排队） | 【代码证实】`src/rui/config/schema.py:1068`、`src/rui/audio/fleet.py:129-135`、`src/rui/web/api/app.py:2907` |
+| `multi_device.max_planes` | 默认 **5**（2026-10-28 由 4 上调，为 lx06 + dot2×4 留位）；本 runbook 的 4 台**不触顶**，第 6 台才会被拒绝并写进 `/health.multi_device.refused`（不排队） | 【代码证实】`src/rui/config/schema.py:1068`、`src/rui/audio/fleet.py:129-135`、`src/rui/web/api/app.py:2907` |
 | 每台必须有 `devices[].room` | `multi_device.enabled=true` 时缺 room 直接 422 / 配置校验失败 | 【代码证实】`src/rui/config/schema.py:1144-1150`、`src/rui/web/api/v2_api.py:1947-1951` |
 | 每台必须有**独立** `listen_port` | 两台 enabled inbound 用同一生效端口 → `422 port_conflict`（写盘前拒绝） | 【代码证实】`src/rui/web/api/device_rules.py:112-155`、`src/rui/web/api/device_write.py:258-269` |
 | `listen_port` 不写会怎样 | 所有 Dot2 都回落到 manifest 的 `runtime.listen_port: 8870` → 第二台起必冲突 | 【代码证实】`src/rui/web/api/device_rules.py:54-69`、`rui-dot2-bridge/src/rui_dot2_bridge/devices/rs03qr.yaml:31` |
