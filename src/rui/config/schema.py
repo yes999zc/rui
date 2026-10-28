@@ -1167,6 +1167,29 @@ class Config(BaseModel):
         return self
 
 
+IMPLICIT_DEFAULT_DEVICE_ID = "living"
+IMPLICIT_DEFAULT_ROOM = "客厅"
+
+
+def implicit_default_output_id(cfg: Config) -> str:
+    """The device an unset ``multi_device.default_output`` means (D-013).
+
+    D-013 pins the living room as the house's shared speaker: a reminder with no
+    source room must not follow whoever happened to wake last. An enabled device with
+    id ``living`` wins, then the first enabled device whose room is 客厅. An empty
+    string means the house has no living-room speaker, so the caller must fall back
+    to the most recently active room (and say so in a warning).
+    """
+    enabled = [device for device in cfg.devices if device.enabled]
+    for device in enabled:
+        if device.id == IMPLICIT_DEFAULT_DEVICE_ID:
+            return device.id
+    for device in enabled:
+        if device.room.strip() == IMPLICIT_DEFAULT_ROOM:
+            return device.id
+    return ""
+
+
 def config_warnings(cfg: Config) -> list[str]:
     """Legal configurations that still misbehave; surfaced in the log, not as errors.
 
@@ -1195,8 +1218,17 @@ def config_warnings(cfg: Config) -> list[str]:
             "enabled; the extra planes will not start (there is no queueing)"
         )
     if md.enabled and md.default_output is None:
-        warnings.append(
-            "multi_device.default_output is empty; reminders with no source room will "
-            "fall back to the most recently active room"
-        )
+        implicit = implicit_default_output_id(cfg)
+        if implicit:
+            warnings.append(
+                "multi_device.default_output is empty; reminders with no source room go "
+                f"to {implicit!r} (D-013: id living / room 客厅) while it runs, then "
+                "fall back to the most recently active room"
+            )
+        else:
+            warnings.append(
+                "multi_device.default_output is empty and no enabled device is id "
+                "'living' or room 客厅; reminders with no source room will fall back to "
+                "the most recently active room"
+            )
     return warnings

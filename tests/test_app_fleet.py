@@ -7,6 +7,7 @@ child processes (those are covered by test_audio_fleet.py).
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import time
 from types import SimpleNamespace
 
@@ -519,21 +520,98 @@ def test_goodbye_uses_the_room_that_spoke(tmp_path, monkeypatch) -> None:
         assert app_module._session_client(app) is fleet.supervisor("living").client
 
 
-def test_reminder_room_is_default_output_then_last_active(tmp_path, monkeypatch) -> None:
-    """A reminder has no source room: default_output, else the last active room."""
+def test_reminder_room_prefers_default_output_then_living_then_last_active(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    """D-013: an unset default_output still means the living room.
+
+    ``living`` is the house's shared speaker, so a 09:00 reminder must not follow
+    whoever woke last while a living-room device is enabled. Only a house without
+    one falls back to recency (with a warning).
+    """
     FakeFleet.instances.clear()
     app = _app(tmp_path, monkeypatch)          # default_output: living
     with TestClient(app) as client:
         fleet = app.state.audio_fleet
         client.portal.call(
             fleet.handle("study").on_wake, Wake(ts_ms=1.0, keyword="\u4f60\u597d\u5c0f\u745e"))
+        assert app.state.last_active_room == "study"
         assert app_module._reminder_client(app) is fleet.supervisor("living").client
-        # K1/K4: an empty default_output falls back to the most recently active room.
+
+        # No explicit default: id `living` (room 客厅) still wins over recency.
         app.state.cfg.multi_device.default_output = None
-        assert app_module._reminder_client(app) is fleet.supervisor("study").client
+        assert app_module._default_room(app) == "living"
+        assert app_module._reminder_route(app, None) == (
+            fleet.supervisor("living").client, "")
+
+        # Without a living-room speaker, the most recently active room is next, and
+        # the implicit fallback is a warning rather than a silent reroute.
+        next(dev for dev in app.state.cfg.devices if dev.id == "living").enabled = False
+        with caplog.at_level("WARNING"):
+            assert app_module._default_room(app) == "study"
+            # `_reminder_client` asks `_default_room` again: one warning for the run,
+            # not one per call (the fallback is latched by `implicit_default_warned`).
+            assert app_module._reminder_client(app) is not None
+        warnings = [record for record in caplog.records
+                    if "default_output is unset" in record.getMessage()]
+        assert len(warnings) == 1
         # A room that is no longer configured must not win the fallback.
         app.state.last_active_room = "gone"
         assert app_module._reminder_client(app) is not None
+
+
+def test_a_named_reminder_room_wins_and_an_offline_one_falls_back(
+    tmp_path, monkeypatch
+) -> None:
+    """§e.2 tier 1/3: the named room, else default_output plus an honest phrase."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)          # 客厅=living, 书房=study
+    with TestClient(app):
+        fleet = app.state.audio_fleet
+        spoken, offline = app_module._reminder_route(app, "书房")
+        assert spoken is fleet.supervisor("study").client
+        assert offline == ""
+
+        fleet.supervisor("study").running = False
+        spoken, offline = app_module._reminder_route(app, "书房")
+        assert spoken is fleet.supervisor("living").client
+        assert offline == "书房"
+
+        # No room: default_output, no offline complaint.
+        spoken, offline = app_module._reminder_route(app, None)
+        assert spoken is fleet.supervisor("living").client
+        assert offline == ""
+
+
+def test_a_due_reminder_is_spoken_exactly_once(tmp_path, monkeypatch) -> None:
+    """C1 review: the 1 s tick is the sole producer of delivery work.
+
+    A listener used to enqueue the same item as well, so every reminder was spoken
+    twice. Pin one copy, then let a second tick prove the fired receipt stops a replay.
+    """
+    FakeFleet.instances.clear()
+    config = CONFIG.replace(
+        "web:\n  host: 127.0.0.1",
+        f"system:\n  data_dir: {tmp_path / 'data'}\nweb:\n  host: 127.0.0.1",
+    )
+    app = _app(tmp_path, monkeypatch, config=config)
+    with TestClient(app):
+        spoken: list[str] = []
+
+        async def say(text: str, _speak, _trace) -> int:
+            spoken.append(text)
+            return 0
+
+        monkeypatch.setattr(app.state.runner, "say", say)
+        app.state.reminders.store.add(
+            "吃药", app.state.reminders.now() - dt.timedelta(seconds=1))
+        deadline = time.monotonic() + 5.0
+        while not spoken and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert spoken == ["吃药"]
+        time.sleep(1.2)   # a second tick must not enqueue the fired item again
+        assert spoken == ["吃药"]
+        assert app.state.reminders.store.pending() == []
 
 
 def test_music_starts_in_the_turn_room_and_transport_follows_the_owner(

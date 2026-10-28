@@ -1558,7 +1558,8 @@ def _multi_device_fields(cfg: Config) -> list[dict]:
     device_ids = [device.id for device in cfg.devices]
     output_options = [{
         "value": "",
-        "label": _t("（未设置：回落最近活跃房间）", "(unset: most recently active room)"),
+        "label": _t("（未设置：优先客厅 living）",
+                    "(unset: living room first)"),
     }]
     output_options += [
         {"value": device.id,
@@ -1588,11 +1589,13 @@ def _multi_device_fields(cfg: Config) -> list[dict]:
                effect="restart", minimum=1, maximum=8),
         _field("multi_device.default_output", "multi_device", "select",
                _t("默认输出房间", "Default output"),
-               _t("没有来源房间的提示音/提醒/通知走这里（K4）；留空 = 回落最近活跃房间。"
+               _t("没有来源房间的提示音/提醒/通知走这里（K4）；留空 = 优先 id `living`"
+                  "（或房间「客厅」），没有这台才回落最近活跃房间并记 warning。"
                   "它只影响无来源输出，不参与唤醒归属。改完重启服务。",
                   "Where reminders and notifications with no source room go (K4); empty = "
-                  "the most recently active room. It never decides wake ownership. Restart "
-                  "the service."),
+                  "prefer device `living` (or room 客厅), then the most recently active "
+                  "room with a warning. It never decides wake ownership. Restart the "
+                  "service."),
                effect="restart", options=output_options, nullable=True),
         _field("multi_device.arbitration.source_priority", "multi_device", "list",
                _t("唤醒来源优先级", "Wake source priority"),

@@ -83,6 +83,15 @@ DEFAULTS: dict[str, str] = {
     "memory.recall": "我记住的有：{items}。",
     "context.off": "好，之后每句话我都当新的一句，不带上下文。",
     "context.on": "好，之后会接着上下文聊。",
+    # --- spoken reminders (fixed-sentence entry, backlog §f.2) ---------------
+    "reminder.set": "好，{when}提醒你{text}。",
+    "reminder.set_room": "好，{when}在{room}提醒你{text}。",
+    "reminder.need_time": "要提醒你什么时候？说明天/今天加早上/晚上再加几点，比如「明天早上七点提醒我吃药」。",
+    "reminder.need_text": "要提醒你什么事？再说一遍，比如「七点提醒我吃药」。",
+    "reminder.past_time": "这个时间已经过了，说个以后的时间吧。",
+    "reminder.save_failed": "提醒没能存下来（数据目录不可写），这次定不了。",
+    # Spoken at delivery time when the named room is offline (§e.2 tier 3).
+    "reminder.offline": "{room}那台没在线，我在这儿提醒你：{text}",
     # --- devices over HA (V2's first application) ----------------------------
     "device.done": "好，{device}{action}。",
     "device.unreachable": "{device}这会儿连不上，没能执行，别当我成功了。",

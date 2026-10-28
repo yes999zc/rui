@@ -376,6 +376,32 @@ def test_five_planes_fit_within_the_default_and_the_sixth_is_refused() -> None:
     )
 
 
+def test_warning_names_the_living_room_when_default_output_is_unset() -> None:
+    """D-013: the warning must describe the implicit living-room default, not recency."""
+    with_living = Config(
+        multi_device={"enabled": True},
+        devices=[
+            {"id": "living", "adapter": "mock", "host": "192.0.2.10", "room": "客厅"},
+            {"id": "study", "adapter": "mock", "host": "192.0.2.11", "room": "书房"},
+        ],
+    )
+    messages = config_warnings(with_living)
+    assert any("living" in message and "客厅" in message for message in messages)
+    assert not any("no enabled device" in message for message in messages)
+
+    no_living = Config(
+        multi_device={"enabled": True},
+        devices=[
+            {"id": "study", "adapter": "mock", "host": "192.0.2.11", "room": "书房"},
+        ],
+    )
+    messages = config_warnings(no_living)
+    assert any(
+        "no enabled device" in message and "most recently active room" in message
+        for message in messages
+    )
+
+
 def test_clean_v2_config_has_no_warnings(tmp_path: Path) -> None:
     assert config_warnings(load_config(_write(tmp_path, V2_CONFIG))) == []
 

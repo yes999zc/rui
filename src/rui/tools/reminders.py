@@ -38,7 +38,7 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -165,6 +165,305 @@ def humanize(at: dt.datetime, now: dt.datetime | None = None) -> str:
     return f"{label}{at.hour:02d}点{at.minute:02d}分"
 
 
+class VoiceParseError(ValueError):
+    """A sentence that *is* a reminder request but cannot be turned into one.
+
+    ``reason`` is the stable part the caller maps to a spoken line; the message is for
+    the log. The three cases are deliberately separate: "ask for a time", "ask what
+    to remind about", and "that time is already gone" need different answers.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+@dataclass(frozen=True)
+class VoiceReminder:
+    """The three elements a fixed-sentence reminder may carry (backlog §f.2)."""
+
+    text: str
+    at: dt.datetime
+    room: str | None = None
+
+
+# The voice grammar is intentionally tiny: 「提醒我 / 叫我 / 提醒」 + day + period +
+# hour + action + optional 在<room>. Anything outside it still reaches the LLM tool.
+_STRONG_TRIGGERS = ("提醒我", "提醒一下", "提醒")
+# 「叫我」 is also a rename ("叫我小王"): it qualifies only with a parseable time.
+_WEAK_TRIGGERS = ("叫我",)
+_TRIGGERS = (*_STRONG_TRIGGERS, *_WEAK_TRIGGERS)
+_DAY_WORDS = {"今天": 0, "今日": 0, "明天": 1, "明日": 1, "后天": 2}
+_PERIODS = ("凌晨", "早晨", "早上", "上午", "中午", "下午", "傍晚", "晚上", "夜里")
+_CN_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+# 一刻 = 15 min, 三刻 = 45 min. 二刻 follows the same scale (30); 四刻 would be the
+# next hour and is deliberately not claimed.
+_QUARTERS = {"一": 15, "二": 30, "三": 45}
+_NUM = r"[0-9零〇一二两三四五六七八九十]{1,3}"
+_VOICE_TIME = re.compile(
+    rf"(?:(?P<day>{'|'.join(_DAY_WORDS)}))?\s*"
+    rf"(?:(?P<period>{'|'.join(_PERIODS)}))?\s*"
+    rf"(?:"
+    rf"(?P<hour>{_NUM})\s*[点时]"
+    rf"(?:\s*(?:(?P<half>半)|(?P<quarter>[一二三])刻(?:钟)?"
+    rf"|(?P<minute>{_NUM})\s*分?|(?P<zheng>整)))?"
+    rf"|(?P<clock_h>\d{{1,2}})[:：](?P<clock_m>\d{{2}})"
+    rf")"
+)
+_LEADING_JUNK = " \t，,、：:。.！!？?；;"
+_TRAILING_JUNK = " \t，,、：:。.！!？?；;"
+# Relative times belong to the LLM tool (`parse_at` takes +10m); the voice grammar
+# must not claim them and answer "when?" to a sentence that already said when.
+_RELATIVE_TIME = re.compile(
+    r"(?:分钟|秒钟|秒|小时|钟头)\s*(?:之?后|以后)"
+    r"|过\s*(?:\d+|[零〇一二两三四五六七八九十百]+|几)\s*"
+    r"(?:分钟|秒钟|秒|小时|钟头)"
+)
+# Any of these means the sentence already said when, even when the narrow grammar
+# cannot compute that shape. Asking "什么时候?" there is a wrong clarify; the LLM
+# tool (parse_at) owns those forms. Note this is only consulted when the strict
+# grammar fails, so 「七点一刻」 is parsed below rather than deferred.
+_TIME_CUE = re.compile(
+    r"今天|今日|明天|明日|后天|明早|明晚|今早|今晚|"
+    r"每天|每晚|每日|"
+    r"凌晨|早晨|早上|上午|中午|下午|傍晚|晚上|夜里|"
+    r"(?:\d+|[零〇一二两三四五六七八九十百]+|几)\s*天\s*(?:之?后|以后)|"
+    r"周|星期|礼拜|刻"
+)
+
+
+def _looks_like_time(text: str) -> bool:
+    """True when the sentence names a time the fixed grammar did not claim."""
+    return bool(_TIME_CUE.search(text) or _RELATIVE_TIME.search(text))
+
+
+def _lstrip_junk(text: str) -> str:
+    return text.lstrip(_LEADING_JUNK)
+
+
+def _cn_number(token: str) -> int | None:
+    """`七` / `十五` / `二十三` / `零五` / `23` -> int, None when not a number."""
+    token = (token or "").strip()
+    if not token:
+        return None
+    if token.isdigit():
+        return int(token)
+    if token in _CN_DIGITS:
+        return _CN_DIGITS[token]
+    if token[0] in ("零", "〇") and len(token) == 2 and token[1] in _CN_DIGITS:
+        return _CN_DIGITS[token[1]]
+    if "十" not in token:
+        return None
+    left, _, right = token.partition("十")
+    if "十" in right:
+        return None
+    tens = _CN_DIGITS.get(left) if left else 1
+    ones = _CN_DIGITS.get(right) if right else 0
+    if tens is None or ones is None:
+        return None
+    return tens * 10 + ones
+
+
+def _take_trigger(text: str) -> tuple[str, str] | None:
+    """Consume a leading trigger and return ``(trigger, rest)``, or None when absent."""
+    for trigger in _TRIGGERS:
+        if text.startswith(trigger):
+            rest = _lstrip_junk(text[len(trigger):])
+            # 「提醒一下我…」 / 「提醒我一下…」: both fillers are optional.
+            if rest.startswith("一下"):
+                rest = _lstrip_junk(rest[2:])
+            if rest.startswith("我"):
+                rest = _lstrip_junk(rest[1:])
+            return trigger, rest
+    return None
+
+
+def _take_room(rest: str, rooms: Sequence[str]) -> tuple[str | None, str]:
+    """`在<room>` at the start of the action, matched exactly against configured rooms.
+
+    An unknown room is *not* an error: 「在卧室关灯」 is a valid action, and guessing a
+    room from a near-match would route a reminder somewhere the user did not ask for.
+    Longest names win, so 「客厅」 and 「客厅阳台」 cannot shadow each other.
+    """
+    if not rest.startswith("在"):
+        return None, rest
+    body = rest[1:]
+    known = sorted({room.strip() for room in rooms if room and room.strip()},
+                   key=len, reverse=True)
+    for room in known:
+        if not body.startswith(room):
+            continue
+        tail = body[len(room):]
+        for suffix in ("那边", "那台", "里"):
+            if tail.startswith(suffix):
+                tail = tail[len(suffix):]
+                break
+        return room, _lstrip_junk(tail)
+    return None, rest
+
+
+def _apply_period(period: str | None, hour: int) -> tuple[int, int]:
+    """Normalise a clock hour + Chinese period to 24h, plus a midnight day shift."""
+    if hour == 24:
+        return 0, 1
+    if period is None:
+        if not 0 <= hour <= 23:
+            raise VoiceParseError("time")
+        return hour, 0
+    if period == "凌晨":
+        if hour == 12:
+            return 0, 0
+        if not 0 <= hour <= 6:
+            raise VoiceParseError("time")
+        return hour, 0
+    if period in ("早晨", "早上", "上午"):
+        if not 0 <= hour <= 12:
+            raise VoiceParseError("time")
+        return hour, 0
+    if period == "中午":
+        if hour in (11, 12):
+            return hour, 0
+        if 1 <= hour <= 3:
+            return hour + 12, 0
+        raise VoiceParseError("time")
+    if period in ("下午", "傍晚"):
+        if hour == 12:
+            return 12, 0
+        if 1 <= hour <= 11:
+            return hour + 12, 0
+        if 13 <= hour <= 23:
+            # 「下午15点」 already names 24h: adding 12 would invent 27:00.
+            return hour, 0
+        raise VoiceParseError("time")
+    # 晚上 / 夜里: 12 is the midnight after this evening.
+    if hour == 12:
+        return 0, 1
+    if hour == 0:
+        return 0, 0
+    if 1 <= hour <= 11:
+        return hour + 12, 0
+    if 13 <= hour <= 23:
+        # 「晚上21:30」 / 「晚上22点」 are already 24h; keep them as spoken.
+        return hour, 0
+    raise VoiceParseError("time")
+
+
+def _voice_moment(match: re.Match[str], base: dt.datetime) -> dt.datetime:
+    """Turn one regex match into an aware Shanghai datetime (past explicit days fail)."""
+    if match.group("clock_h") is not None:
+        raw_hour, minute = int(match.group("clock_h")), int(match.group("clock_m"))
+        if raw_hour > 24 or minute > 59 or (raw_hour == 24 and minute != 0):
+            raise VoiceParseError("time")
+        hour, day_shift = _apply_period(match.group("period"), raw_hour)
+    else:
+        parsed_hour = _cn_number(match.group("hour") or "")
+        if parsed_hour is None:
+            raise VoiceParseError("time")
+        if match.group("quarter") is not None:
+            minute = _QUARTERS[match.group("quarter")]
+        elif match.group("minute") is not None:
+            parsed_minute = _cn_number(match.group("minute"))
+            if parsed_minute is None:
+                raise VoiceParseError("time")
+            minute = parsed_minute
+        else:
+            minute = 30 if match.group("half") else 0
+        if not 0 <= minute <= 59:
+            raise VoiceParseError("time")
+        hour, day_shift = _apply_period(match.group("period"), parsed_hour)
+
+    day_word = match.group("day")
+    explicit = day_word is not None
+    offset = _DAY_WORDS[day_word] if explicit else 0
+    target = dt.datetime.combine(
+        base.date() + dt.timedelta(days=offset + day_shift),
+        dt.time(hour, minute),
+        ZONE,
+    )
+    if explicit:
+        if target <= base:
+            raise VoiceParseError("past")
+        return target
+    if target <= base:
+        target += dt.timedelta(days=1)
+    return target
+
+
+def parse_voice(
+    sentence: str,
+    *,
+    rooms: Sequence[str] = (),
+    now: dt.datetime | None = None,
+) -> VoiceReminder | None:
+    """The fixed-sentence reminder grammar (backlog §f.2), or None when not ours.
+
+    Accepted shapes::
+
+        提醒我明天早上七点吃药
+        叫我后天晚上八点半在客厅关火
+        下午三点提醒我在书房开会
+        明天早上七点叫我在客厅吃药
+
+    Time words: 今天/明天/后天 (optional; absent means "the next occurrence"),
+    早上/上午/中午/下午/晚上, an hour with Chinese or Arabic digits, and 半 / 一刻 /
+    三刻 / N分. The action is the remainder; a leading ``在<room>`` is a routing target
+    only when the room equals a configured ``devices[].room`` exactly.
+
+    Returns None for a sentence without a trigger (the LLM path owns it), and for a
+    triggered sentence that names a time shape this grammar does not compute
+    (「明早八点」「3天后」「每周一」「七点零一刻」): a wrong "什么时候?" is worse than
+    handing it to the model. The weak trigger 「叫我」 also returns None without a
+    parseable time, because it is commonly a rename (「叫我小王」).
+
+    Raises :class:`VoiceParseError` for a sentence that *is* a reminder but is missing
+    a usable time or an action, or names a past time: the caller must answer clearly
+    and must not create anything.
+    """
+    raw = " ".join((sentence or "").split()).strip()
+    if not raw:
+        return None
+    base = _aware(now) if now is not None else dt.datetime.now(ZONE)
+
+    taken = _take_trigger(raw)
+    time_first = taken is None
+    trigger, rest = ("", raw) if taken is None else taken
+    match = _VOICE_TIME.match(rest)
+    if match is None:
+        if time_first:
+            return None  # no trigger at the start and no leading time: not a reminder
+        if _looks_like_time(rest):
+            # 「提醒我十分钟后关火」「提醒我今晚八点吃药」: the LLM tool handles these.
+            return None
+        if trigger in _WEAK_TRIGGERS:
+            # 「叫我小王」「叫我怎么相信你」: a rename or other intent, not a reminder.
+            return None
+        raise VoiceParseError("time")
+    after_time = _lstrip_junk(rest[match.end():])
+    if time_first:
+        triggered = _take_trigger(after_time)
+        if triggered is None:
+            return None  # a bare time is not a reminder request
+        _, after_time = triggered
+    if (after_time.startswith("刻")
+            or re.match(r"(?:差|过)[一二三]刻", after_time)):
+        # An unhandled quarter shape (七点零一刻 / 差一刻 / 过一刻) matched the hour
+        # but left the quarter in the action. Storing 07:01 or 07:00 would be wrong;
+        # let the model parse the sentence instead.
+        return None
+    if after_time.startswith(("以后", "之后", "以前", "之前")):
+        # 「七点以后」 is an interval, not a moment: let the LLM ask or convert it.
+        return None
+
+    room, action = _take_room(after_time, rooms)
+    text = " ".join(action.strip(_TRAILING_JUNK).split())
+    if not text:
+        raise VoiceParseError("text")
+    return VoiceReminder(text=text, at=_voice_moment(match, base), room=room)
+
+
 @dataclass(frozen=True)
 class Reminder:
     """One pending (or once-fired) reminder. Frozen: state changes go through the store."""
@@ -174,6 +473,8 @@ class Reminder:
     at: dt.datetime
     created_at: dt.datetime
     fired_at: dt.datetime | None = None
+    # The room the user named out loud; None means "wherever default_output is" (§e.2).
+    room: str | None = None
 
     @property
     def fired(self) -> bool:
@@ -187,6 +488,9 @@ def _to_json(item: Reminder) -> dict[str, Any]:
         "at": item.at.isoformat(),
         "created_at": item.created_at.isoformat(),
         "fired_at": item.fired_at.isoformat() if item.fired_at else None,
+        # Written as null for an unrouted reminder. A 0.8.0 file has no key at all;
+        # `_from_json` reads both as None (backward compatible).
+        "room": item.room,
     }
 
 
@@ -216,6 +520,7 @@ def _from_json(entry: Any) -> Reminder | None:
         at=_aware(at),
         created_at=_aware(created),
         fired_at=_aware(fired) if fired else None,
+        room=str(entry.get("room") or "").strip() or None,
     )
 
 
@@ -289,10 +594,12 @@ class ReminderStore:
         os.replace(tmp, self.path)
         os.chmod(self.path, 0o600)
 
-    def add(self, text: str, at: dt.datetime, *, now: dt.datetime | None = None) -> Reminder:
+    def add(self, text: str, at: dt.datetime, *, now: dt.datetime | None = None,
+            room: str | None = None) -> Reminder:
         clean = " ".join((text or "").split())[:MAX_TEXT]
         if not clean:
             raise ValueError("提醒内容不能为空")
+        clean_room = str(room or "").strip() or None
         base = _aware(now) if now is not None else dt.datetime.now(ZONE)
         items = self.load(base)
         pending = [it for it in items if not it.fired]
@@ -305,7 +612,7 @@ class ReminderStore:
         rid = uuid.uuid4().hex[:6]
         while rid in taken:
             rid = uuid.uuid4().hex[:6]
-        item = Reminder(id=rid, text=clean, at=_aware(at), created_at=base)
+        item = Reminder(id=rid, text=clean, at=_aware(at), created_at=base, room=clean_room)
         items.append(item)
         self._write(items)
         return item

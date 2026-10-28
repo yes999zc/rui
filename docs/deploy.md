@@ -586,7 +586,7 @@ docker run --rm --user 1000:1000 -v ~/rui/data:/data \
 multi_device:
   enabled: true
   max_planes: 4           # 至少 = devices 里 enabled 的数量（默认 5）
-  default_output: living  # 没有 turn_device 时的默认输出房间；留空 = 最近活跃房间
+  default_output: living  # 默认输出房间；留空 = 优先 living/客厅，再回落最近活跃
 
 audio:
   # 全局默认跟着第一台设备；每台设备用 devices[].audio 覆盖自己不同的部分。

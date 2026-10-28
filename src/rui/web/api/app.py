@@ -78,6 +78,7 @@ from ...config.schema import (
     device_audio_defaults,
     effective_device_ack_echo_ignore_ms,
     effective_device_audio,
+    implicit_default_output_id,
 )
 from ...config.store import ConfigError, load_config, redacted, save_config
 from ...device.loader import load_adapter_plugins
@@ -117,6 +118,14 @@ from ...tools.mcp_manager import test_server as test_generic_mcp_server
 from ...tools.mcp_manifest import first_party_instances
 from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
+from ...tools.reminders import (
+    Reminder,
+    VoiceParseError,
+    parse_voice,
+)
+from ...tools.reminders import (
+    humanize as humanize_reminder,
+)
 from ...trace import TraceLog, TurnTrace
 from .body_limit import BodySizeLimitMiddleware
 from .config_view import config_raw_document
@@ -1173,6 +1182,62 @@ async def _context_command(app: FastAPI, clean: str, runner, client, trace,
     return line
 
 
+async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trace,
+                                  traces) -> bool:
+    """Fixed-sentence reminders spoken directly, before the verbless/LLM path (C1).
+
+    Only the narrow grammar in `parse_voice` is claimed. A sentence with no trigger
+    returns False and the ordinary turn continues; a sentence that *is* a reminder but
+    cannot be honoured (no time, no action, a time already gone) is answered clearly
+    and creates nothing. The reminder keeps the room the user named, and delivery
+    decides the three-tier target later (§e.2) - the room may go offline meanwhile.
+    """
+    scheduler = getattr(app.state, "reminders", None)
+    if scheduler is None:
+        return False
+    cfg = app.state.cfg
+    rooms = tuple(dev.room for dev in cfg.devices if dev.room.strip())
+    moment = scheduler.now()
+    try:
+        parsed = parse_voice(clean, rooms=rooms, now=moment)
+    except VoiceParseError as exc:
+        key = {
+            "time": "reminder.need_time",
+            "text": "reminder.need_text",
+            "past": "reminder.past_time",
+        }.get(exc.reason, "reminder.need_time")
+        line = phrases.book.render(key)
+        runner.idle.touch()
+        spoken = await runner.say(line, _speaking(app, client), trace)
+        _record_turn(app, {"transcript": clean, "reply": line, "audio_bytes": spoken,
+                           "error": "", "tools": ["reminder.voice"], "stages": {}})
+        traces.add(trace)
+        log.info("reminder voice: %r -> %s (nothing created)", clean, exc.reason)
+        return True
+    if parsed is None:
+        return False
+
+    try:
+        item = scheduler.store.add(parsed.text, parsed.at, now=moment, room=parsed.room)
+    except ValueError:
+        line = phrases.book.render("reminder.need_text")
+    except OSError as exc:  # data_dir not writable: never promise a reminder
+        log.warning("reminder voice: cannot save to %s: %s", scheduler.store.path, exc)
+        line = phrases.book.render("reminder.save_failed")
+    else:
+        key = "reminder.set_room" if item.room else "reminder.set"
+        line = phrases.book.render(key, when=humanize_reminder(item.at, now=moment),
+                                   text=item.text, room=item.room or "")
+        log.info("reminder voice: set %s at %s for room %r",
+                 item.text, item.at.isoformat(), item.room)
+    runner.idle.touch()
+    spoken = await runner.say(line, _speaking(app, client), trace)
+    _record_turn(app, {"transcript": clean, "reply": line, "audio_bytes": spoken,
+                       "error": "", "tools": ["reminder.voice"], "stages": {}})
+    traces.add(trace)
+    return True
+
+
 # The old build capped the injected memory at 800 characters; without a budget a long
 # list quietly eats the room the prompt needs for the actual turn. The cap is on the
 # text handed to the model, not on what the store keeps.
@@ -1510,19 +1575,31 @@ def _last_active_room(app: FastAPI) -> str:
 
 
 def _default_room(app: FastAPI) -> str:
-    """Where an output with no source room belongs (K1/K4).
+    """Where an output with no source room belongs (K1/K4 + D-013).
 
-    `multi_device.default_output` when its plane is live, otherwise the most recently
-    active room, and only then the first running plane. `_primary_device_id` already
-    prefers `default_output`; this wrapper adds the recency step the reminder rule needs
-    and keeps the choice in one place for music and debug callers.
+    `multi_device.default_output` when its plane is live. When that field is unset,
+    D-013 makes the living room (id ``living``, else room 客厅) the implicit default,
+    so an unrouted reminder does not follow whoever woke last. Only a house without a
+    living-room speaker falls back to the most recently active room (one warning).
     """
     cfg_now = getattr(app.state, "cfg", None)
-    default = str(getattr(getattr(cfg_now, "multi_device", None), "default_output", "") or "")
+    configured = str(
+        getattr(getattr(cfg_now, "multi_device", None), "default_output", "") or "")
+    default = configured
+    if not default and cfg_now is not None:
+        default = implicit_default_output_id(cfg_now)
     if default and _client_for(app, default) is not None:
         return default
     room = _last_active_room(app)
     if room and _client_for(app, room) is not None:
+        if not configured and not getattr(app.state, "implicit_default_warned", False):
+            missing = (f"device {default!r} is not available" if default
+                       else "no enabled device has id 'living' or room 客厅")
+            log.warning(
+                "multi_device.default_output is unset and %s; routing this output to "
+                "the most recently active room %r", missing, room,
+            )
+            app.state.implicit_default_warned = True
         return room
     return _primary_device_id(app)
 
@@ -1536,13 +1613,84 @@ def _default_output_client(app: FastAPI) -> object | None:
 
 
 def _reminder_client(app: FastAPI) -> object | None:
-    """Where a due reminder speaks: `default_output`, else the last active room.
+    """Where an unrouted reminder speaks: `default_output`, else the last active room.
 
     Deliberately not `_owner_client`: the owner decides *when* the reminder may speak
     (the caller waits for a free speaker), never *where*. Following the owner would put
     a 09:00 reminder in whichever room happened to play music last.
     """
     return _default_output_client(app)
+
+
+def _device_for_room(cfg: Config, room: str) -> str:
+    """The device a spoken room name means, matched exactly (§e.2 tier 1).
+
+    An enabled device wins when two share a room; a disabled match still comes back,
+    because "书房那台没在线" is the honest answer for a room that is configured but
+    not running. An unknown room returns "" - the caller must not guess.
+    """
+    want = (room or "").strip()
+    if not want:
+        return ""
+    matches = [dev for dev in cfg.devices if dev.room.strip() == want]
+    for dev in matches:
+        if dev.enabled:
+            return dev.id
+    return matches[0].id if matches else ""
+
+
+def _reminder_client_for_room(app: FastAPI, room: str) -> object | None:
+    """The live client for a spoken room, or None when that room is not online."""
+    cfg = getattr(app.state, "cfg", None)
+    if cfg is None:
+        return None
+    device_id = _device_for_room(cfg, room)
+    if not device_id:
+        return None
+    fleet = _audio_fleet(app)
+    if fleet is None:
+        # Single-plane path: one supervisor whose `_pick_device` names the room it
+        # actually runs. A different named room is offline, not "the only speaker".
+        supervisor = getattr(app.state, "audio", None)
+        pick = getattr(supervisor, "_pick_device", None)
+        if callable(pick):
+            try:
+                picked = str(pick() or "")
+            except Exception:  # noqa: BLE001 - a status helper must never raise
+                picked = ""
+            if picked and picked != device_id:
+                return None
+        return _client_for(app, device_id)
+    try:
+        if not fleet.running(device_id):
+            return None
+    except (AttributeError, KeyError):
+        return None
+    return _client_for(app, device_id)
+
+
+def _reminder_route(app: FastAPI, room: str | None) -> tuple[object | None, str]:
+    """``(client, offline_room)`` for one reminder: the three-tier rule of §e.2.
+
+    1. a named room that is online speaks there;
+    2. a named room that is offline falls back to `default_output` and reports itself
+       in the second slot, so the caller can *say* 「<room>那台没在线」;
+    3. no room means `default_output` (and its own recency fallback when unset).
+    """
+    if room:
+        client = _reminder_client_for_room(app, room)
+        if client is not None:
+            return client, ""
+        log.info("reminder: room %r is offline; falling back to the default output", room)
+        return _default_output_client(app), room
+    return _default_output_client(app), ""
+
+
+def _reminder_line(item: Reminder, offline_room: str) -> str:
+    """What a due reminder says: its text, prefixed when its room is unreachable."""
+    if offline_room:
+        return phrases.book.render("reminder.offline", room=offline_room, text=item.text)
+    return item.text
 
 
 def _music_target(app: FastAPI, msg: object) -> tuple[object | None, str]:
@@ -2933,6 +3081,13 @@ def create_app(
                     return
                 if await _stop_command(app, clean, runner, link, trace, traces):
                     return
+                # Fixed-sentence reminders are decided here, before the verbless
+                # clarify and the model: the three elements go into the store, and a
+                # sentence that looks like one but cannot be honoured is answered
+                # instead of silently reaching the LLM (C1, backlog §f.2).
+                if await _voice_reminder_command(app, clean, runner, link, trace,
+                                                 traces):
+                    return
                 # A bare device name is a question, not a command (old build,
                 # measured 5/5 guessing the direction): ask which way.
                 if rules.verbless_device_name(clean):
@@ -3526,9 +3681,11 @@ def create_app(
         # speaks them. A due reminder must not talk over a turn or over whatever already
         # owns the speaker (a cue, an answer, a song): it waits, because its fired state
         # is already on disk and waiting loses nothing.
-        reminder_queue: asyncio.Queue[str] = asyncio.Queue()
+        # The item, not its text, crosses the queue: delivery needs the room the user
+        # named (§e.2). There is exactly one producer (the tick). A listener used to
+        # enqueue the same item as well, so every reminder was spoken twice.
+        reminder_queue: asyncio.Queue[Reminder] = asyncio.Queue()
         scheduler = build_scheduler(cfg)
-        scheduler.add_listener(lambda item: reminder_queue.put_nowait(item.text))
         app.state.reminders = scheduler
 
         async def reminder_tick() -> None:
@@ -3536,34 +3693,34 @@ def create_app(
                 await asyncio.sleep(1.0)
                 try:
                     for item in scheduler.collect_due():
-                        log.info("reminder due: %s", item.text)
-                        reminder_queue.put_nowait(item.text)
+                        log.info("reminder due: %s (room=%r)", item.text, item.room)
+                        reminder_queue.put_nowait(item)
                 except Exception as exc:  # noqa: BLE001 - a tick must not die
                     log.exception("reminders: tick failed: %s", exc)
 
         async def reminder_speak() -> None:
             while True:
-                text = await reminder_queue.get()
+                item = await reminder_queue.get()
                 waited = 0.0
                 spoken = False
                 while waited < 120.0:
-                    # K4: a reminder has no source room. It speaks in
-                    # multi_device.default_output, or the most recently active room when
-                    # that field is empty - never in whichever room currently owns the
-                    # output. The owner is only relevant while it blocks (a reminder
-                    # never talks over a turn or a song).
-                    client = _reminder_client(app)
+                    # §e.2: a named online room wins; an offline named room falls back
+                    # to default_output and says so; no room is default_output. The
+                    # owner is only relevant while it blocks (a reminder never talks
+                    # over a turn or a song).
+                    client, offline_room = _reminder_route(app, item.room)
                     if (client is not None and not runner.busy
                             and not _any_output_owner(app)):
                         await runner.say(
-                            text, client.speak, TurnTrace(device_id="reminder")
+                            _reminder_line(item, offline_room), client.speak,
+                            TurnTrace(device_id="reminder"),
                         )
                         spoken = True
                         break
                     await asyncio.sleep(0.5)
                     waited += 0.5
                 if not spoken:
-                    log.warning("reminder not spoken (no free speaker): %s", text)
+                    log.warning("reminder not spoken (no free speaker): %s", item.text)
 
         app.state.reminder_tick = asyncio.create_task(reminder_tick(), name="reminder-tick")
         app.state.reminder_task = asyncio.create_task(reminder_speak(), name="reminder-speak")

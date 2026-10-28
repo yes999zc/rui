@@ -194,7 +194,7 @@ dot2 侧的相关诉求与记录：/tmp/rui-dot2-bridge/docs/rui-0.3-requirement
 - **重复抑制**：全局 2 s 窗口（multi_device.duplicate_window_ms）；每设备 500 ms 去抖保留；同一词在窗口内只 admit 一个；计数器 wake_candidates/wake_admitted/wake_lost_same_word/wake_lost_playing/wake_barge/wake_duplicate 按设备+全局统计。
 - **播放所有权**：
   - 语音回答 → 起源房间（唤醒/打断的那台设备）。
-  - 定时提醒/无来源通知 → multi_device.default_output（fallback output）；若未配置则用最近活跃房间（开放项）。
+  - 定时提醒/无来源通知 → multi_device.default_output（fallback output）；若未配置则优先 enabled 的 `living`（或 room 客厅），都没有才回落最近活跃房间并记 warning（D-013，§e.2 三级落点）。
   - 音乐 → 第一版只允许一个房间播放（全局 owner）；在 A 房间放歌时 B 房间的回合不应自动停 A 的歌（除非用户说“全场停止”，见开放项）。
   - 停止/打断：只作用于当前输出 owner 所在设备；“停止”在非 owner 房间只结束该房间的会话，不跨房间停播（第一版）。
   - **不做**“所有房间同时播同一段回答”（多房间回声/延迟问题，非当前产品需求）。
@@ -254,7 +254,7 @@ devices:
 multi_device:
   enabled: true                 # 默认 false：保持 0.4.x 单平面行为
   max_planes: 5                 # 资源上限，超过则只启用前 N 台并警告（2026-10-28 由 4 上调，见 §9.2 D4）
-  default_output: lx06          # 无来源输出（提醒/通知）的 fallback；可选
+  default_output: lx06          # 无来源输出（提醒/通知）的 fallback；空 = living/客厅，再最近活跃
   arbitration:
     mode: score                 # score | room_priority | last_active（首版只用 score + 静态 priority）
     source_priority: [device_wake, kws]   # 组间优先级（§9.1 K3）：组内比 score，不跨来源比
@@ -300,7 +300,7 @@ multi_device:
 | devices[].audio.voice.followup_* | 同全局 | 继承 | Dot2 用 2500/false；LX06 保持 1000/true |
 | multi_device.enabled | bool | false | true 时才允许多个 enabled inbound 平面 |
 | multi_device.max_planes | int | 5（2026-10-28 由 4 上调，§9.2 D4） | 超过上限的 enabled 设备不启动并给明确 warning（不是静默） |
-| multi_device.default_output | device id | 空 | 必须是 enabled、inbound、playback 能力的设备；空 = 用最近活跃房间 |
+| multi_device.default_output | device id | 空 | 必须是 enabled、inbound、playback 能力的设备；空 = 优先 enabled 的 `living`（或 room 客厅），再回落最近活跃房间 |
 | arbitration.duplicate_window_ms | int | 2000 | 50–10000；同词全局去重，与合并窗口分离 |
 | arbitration.candidate_merge_window_ms | int | 400 | 100–2000；同一 utterance 跨设备命中的合并窗口（§11 Q3） |
 | arbitration.source_priority | list[str] | `[device_wake, kws]` | 只允许 `device_wake`/`kws`；组间优先级，组内仍比 score 余量 |
@@ -439,7 +439,7 @@ multi_device:
 | K1 | 主音箱 | **不设**必须的主音箱，房间平权。只保留可选 `multi_device.default_output` 作为“无来源输出”的 fallback（定时提醒、无来源通知、音乐续播）；fallback 不参与唤醒归属。 |
 | K2 | 回合模型 | 全屋同一时刻**一个 turn、一个输出 owner**（第一版）。第二个唤醒只记候选，不产生第二个 turn。 |
 | K3 | 同时听到谁赢 | 显式 `room_priority` → 来源组间 `source_priority`（默认 device_wake > KWS）→ 组内 score 与 threshold 余量 → last_active（120 s）→ devices 顺序。**score 不跨来源比较**。 |
-| K4 | 提醒/通知 | 第一版固定走 `multi_device.default_output`；未配置时回落最近活跃房间并记 warning。不做全屋播报。 |
+| K4 | 提醒/通知 | 走 `multi_device.default_output`；未配置时优先 enabled 的 `living`/客厅，再回落最近活跃房间并记 warning；指定房间离线回落并明说（D-013）。不做全屋播报。 |
 | K5 | 每设备 AEC/EQ | `devices[].audio.aec {enabled, who: device\|controller\|both\|none}` + `devices[].audio.voice.followup_*` 覆盖；**EQ/limiter/trim 留在插头 `params`，不进核心**。`who=device` 时 RUI 不跑 AEC，配置校验给 warning。 |
 | K6 | 平面模型 | **每设备一个音频面**（方案 A）：一个控制面 + N 个音频面子进程。不是“每设备一个 rui 实例”——后者只是过渡部署手法，两个控制面无法全局仲裁，违反 K2，不作为契约。 |
 
@@ -558,7 +558,7 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 ### 12.4 输出所有权（OutputOwner，控制面）
 
 - 语音回答 → 起源设备（唤醒/打断的那台）；提示音/提醒/无来源通知 → `default_output`
-  （未配置则最近活跃房间，D7 校验要求 enabled 设备都有 room）。
+  （未配置则优先 `living`/客厅，再最近活跃房间；D7 校验要求 enabled 设备都有 room）。
 - 音乐 → 第一版单房间全局 owner；B 房间的回合不自动暂停 A 的音乐（D2）。
 - 停止/打断 → 只作用于当前 owner 设备；非 owner 房间的"停止"只结束该房间会话（D3）。
 - 平面内 `_owner` 保留为最后一道本地安全闸，但不再是跨房间裁决者。

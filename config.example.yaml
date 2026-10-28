@@ -65,6 +65,10 @@ devices:
 # multi_device:
 #   enabled: true
 #   max_planes: 2
+#   # 提醒没有指定房间时落在这台（D-013：living = 客厅）。指定房间离线也回落这里，
+#   # 并会明确说「<room>那台没在线」。留空时优先用 enabled 的 id `living`（或房间
+#   # 「客厅」），都没有才回落最近活跃房间（有 warning）。
+#   default_output: living
 
 audio:
   # Measured on LX06 1.94.13 - do not copy these numbers to another speaker, measure it.

@@ -544,7 +544,33 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 - **文档同步**：落地时改 D3（`multi-device-design.md:452`）与 §4.4:198，并在 §9.3 记变更。
 - **排期**：多音箱前置 P0 收口之后第一张；**不挤进本批**。
 
-### f.2 语音定时提醒（固定句式 first，PLANNED）
+### f.2 语音定时提醒（固定句式 first，PARTIAL — C1 已落地入口与落点）
+
+- **落地记录（C1，2026-10-28，未提交/待评审）**：
+  - **语音入口**：`src/rui/tools/reminders.py` 的 `parse_voice()`（固定句式，非自由 NL）+
+    `app.py` 的 `_voice_reminder_command()`，接在 `_stop_command` 之后、verbless/LLM 之前；
+    LLM 工具路径（`local.set_reminder`）**未改**。
+  - **句式**：`提醒我/叫我/提醒` + `今天/明天/后天`（可省，省略=下一次）+ `早上/上午/中午/下午/晚上`
+    （可省）+ `N点/半/一刻/三刻/N分/整/HH:MM`（中文或阿拉伯数字）+ 动作；动作前可带
+    `在<room>`，room **必须与 `devices[].room` 精确相等**（未知房间不猜，留在动作文本里）。
+  - **落点（§e.2 三级）**：`Reminder.room` 新增（`reminders.json` 缺字段读作 `None`，向后兼容）；
+    播报时 `_reminder_route()`：指定房间在线 → 该房间；离线 → `default_output` 并说
+    「<room>那台没在线」；未指定 → `default_output`。`multi_device.default_output` 按 D-013
+    定为 **`living`（客厅）**；未显式配置时也优先 enabled 的 id `living`（或 room 客厅），
+    都没有才回落最近活跃并记 warning。
+  - **失败口径**：解析失败/过去时间 → 明确追问或说明，**不创建**；存盘失败 → 说明没存下。
+    **相对时间、区间与句式外的时间线索不拦截**（「十分钟后提醒我关火」「七点以后」
+    「明早八点」「3天后」「每周一」「七点零一刻」）——仍交给既有 LLM 工具 `parse_at`，
+    避免把本来能办的句子改成反问；弱触发「叫我」无可解析时间时同样交给 LLM，避免
+    「叫我小王」被误追问「什么时候」。
+  - **测试**：`tests/test_reminder_voice.py`（时间表/23:59 边界/动作与房间/持久化/三级落点/播报入口）、
+    `tests/test_app_fleet.py` 的落点用例。
+  - **仍未做（本卡范围外）**：② 到点抢占（不 `stop` 音乐、120 s 超时仍只 `log.warning`）、
+    被让出的音乐不自动恢复、真机验收（重启不重播/不丢、离线回落实际出声）。
+  - 另修一处既有缺陷：tick 与 listener **重复入队**导致每条提醒播两遍；现只保留 tick 一个生产者
+    （`tests/test_app_fleet.py::test_a_due_reminder_is_spoken_exactly_once` 为回归）。
+  - **C1 review 修复（2026-10-28）**：一刻/三刻按 15/45 分解析（不再存成 1/3 分 + 「刻吃药」）；
+    有时间线索的句子不再误问「什么时候」；`default_output` 留空时显式优先 `living`/客厅。
 
 - **现状（2026-10-28 查代码，纠正原描述）**：rui **已有**提醒/定时能力——
   `src/rui/tools/reminders.py`（`ReminderStore`、`reminders.json` 原子落盘、`build_scheduler`、
@@ -561,6 +587,8 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
   - **等待上限与音乐恢复**：现有 120 s 等待上限是否保留、被 `stop` 的音乐是否自动恢复，实现前定；
     默认**不自动恢复**（提醒优先），若 9 哥 要恢复另开需求。
   - 新增播报文案（如「客厅那台没在线」）需进 `src/rui/session/phrases.py`，中英口径随实现确认。
+    **C1 已加** `reminder.set / set_room / need_time / need_text / past_time / save_failed / offline`
+    七条（当前话术表只有中文，沿用既有口径）。
 - **调度**：**沿用**进程内调度（`ReminderStore` + 1 s tick），**不引入外部 cron**；
   **持久化已实现**（`reminders.json` + `fired_at` 先落盘再播），**保持**，真机需验重启后不重复、不丢。
 - **明确不做**：重复提醒、日历同步、跨设备静音、自然语言复杂时间推理。

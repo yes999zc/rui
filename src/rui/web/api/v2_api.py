@@ -2287,9 +2287,10 @@ def install_v2_routes(
                 "code": "default_output_cleared",
                 "message": (f"device {device.id!r} was the default output; disabling it "
                             "cleared multi_device.default_output"),
-                "hint": ("Notifications without a source room now go to the most "
-                         "recently active room. Pick a new default output in the house "
-                         "settings to pin one."),
+                "hint": ("Notifications without a source room prefer device 'living' "
+                         "(客厅) while it is enabled, then the most recently active "
+                         "room. Pick a new default output in the house settings to pin "
+                         "one."),
             }]
         return {"device": row, "restart": _restart_payload(fresh, error, duration)}
 
