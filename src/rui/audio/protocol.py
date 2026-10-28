@@ -381,6 +381,14 @@ class ReplyFinished(BaseModel):
     # follow-up window (None = the window length). 0 = bring the music back the
     # moment the reply drains - a volume confirmation wants the song immediately.
     hold_music_s: float | None = None
+    # Whether this finish may open the wake-free follow-up window. Normal answers
+    # want it (a natural second sentence needs no wake word). A close path - the
+    # stop word's goodbye or the idle farewell - does not: the session just ended,
+    # and 20 s later nobody should be able to start a turn without the wake word.
+    # The plane still drains the queue and applies `post_playback_mute_ms`, so the
+    # goodbye's own echo cannot become a request. Additive: an old control plane
+    # omits it and keeps the pre-0.8.1 behaviour.
+    followup: bool = True
 
 
 class SpeakFinished(BaseModel):

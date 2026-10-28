@@ -732,6 +732,9 @@ function retryState(): void {
               <div class="v2-audio-leaf">
                 <div class="v2-audio-path">
                   <code class="mono">{{ row.path }}</code>
+                  <span v-if="row.spec?.labelKey" class="v2-audio-leaf-label">
+                    {{ t(row.spec.labelKey) }}
+                  </span>
                   <span v-if="row.overridden" class="tag is-warn">
                     {{ t('v2.audio.overriddenBadge') }}
                   </span>

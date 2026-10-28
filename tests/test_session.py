@@ -157,7 +157,7 @@ class _StopClient:
     def __init__(self) -> None:
         self.metrics = _StopMetrics()
         self.sent: list[object] = []
-        self.reply_finished_calls = 0
+        self.followups: list[bool] = []
 
     async def send(self, msg: object) -> None:
         self.sent.append(msg)
@@ -166,7 +166,7 @@ class _StopClient:
         return None
 
     async def reply_finished(self, **kwargs: object) -> None:
-        self.reply_finished_calls += 1
+        self.followups.append(bool(kwargs.get("followup", True)))
 
 
 class _StopTraces:
@@ -203,7 +203,9 @@ def test_stop_word_with_music_stops_the_song_and_closes_the_session(monkeypatch)
     assert runner.said == [], "the old 「music stopped, keep listening」 line must be gone"
     assert runner.dismissed == 1, "an end word over music must close the session"
     assert app.state.last_turn["session_action"] == "stop_and_dismiss"
-    assert client.reply_finished_calls == 0, "a closed session must not open a follow-up"
+    # The close finish still reaches the plane (drain + mute), but it must say
+    # followup=False: a closed session opens no wake-free window.
+    assert client.followups == [False]
 
 
 def test_bare_stop_without_music_ends_the_session(monkeypatch) -> None:
@@ -221,7 +223,7 @@ def test_bare_stop_without_music_ends_the_session(monkeypatch) -> None:
     assert runner.dismissed == 1
     assert runner.said == []
     assert app.state.last_turn["session_action"] == "bare_stop"
-    assert client.reply_finished_calls == 0
+    assert client.followups == [False]
 
 
 def test_a_dismissal_mid_song_stops_the_music_then_ends_the_session(monkeypatch) -> None:

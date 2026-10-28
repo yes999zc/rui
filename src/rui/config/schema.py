@@ -541,6 +541,23 @@ class PlaybackDefaults(BaseModel):
     channels: int | None = Field(default=None, ge=1, le=8)
 
 
+class VoiceDefaults(BaseModel):
+    """A plug manifest's declared voice/timing facts (rui-device/v1).
+
+    Both values describe what this model's microphone/echo path can tolerate, so the
+    manifest wins over an explicit global value exactly like the capture layout and
+    playback wire (0.8.1: a Dot 2 wants a 300 ms follow-up and 500 ms of post-playback
+    mute; the reference speaker's 2500 ms settings are wrong for it). Only the two
+    fields that differ per model live here: `followup_replay` stays a global choice
+    and `ack_echo_ignore_ms` keeps its own top-level field for compatibility.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    followup_delay_ms: int | None = Field(default=None, ge=0, le=10000)
+    post_playback_mute_ms: int | None = Field(default=None, ge=0, le=10000)
+
+
 class AudioDefaults(BaseModel):
     """The optional `audio_defaults` block of a rui-device/v1 manifest.
 
@@ -561,6 +578,11 @@ class AudioDefaults(BaseModel):
     * ``ack_echo_ignore_ms`` is an acoustic fact of the model and wins over an
       explicit global window; a device override still wins over both.
 
+    The `voice` block is the same kind of acoustic fact: a device-AEC model keeps
+    residual echo for seconds (or wants almost none), so its follow-up delay and
+    post-playback mute are declared here and win over a global template with a
+    reported conflict.
+
     A plug that declares nothing (every pre-0.6 plug) leaves the neutral core
     defaults in place, so the field is unknown-safe and loading an old plug never
     errors.
@@ -570,6 +592,7 @@ class AudioDefaults(BaseModel):
 
     capture: CaptureDefaults | None = None
     playback: PlaybackDefaults | None = None
+    voice: VoiceDefaults | None = None
     ack_echo_ignore_ms: int | None = Field(default=None, ge=0, le=5000)
 
 

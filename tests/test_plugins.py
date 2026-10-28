@@ -568,6 +568,8 @@ def test_a_v1_manifest_declares_audio_defaults(tmp_path: Path) -> None:
                         "ref_channels": 2, "bits": 32, "mic_shift": 12,
                         "ref_shift": 16},
             "playback": {"rate": 48000, "channels": 1},
+            # 0.8.1: the model's acoustic timing, alongside its capture/playback facts.
+            "voice": {"followup_delay_ms": 300, "post_playback_mute_ms": 500},
             "ack_echo_ignore_ms": 2500,
         },
     )
@@ -578,6 +580,9 @@ def test_a_v1_manifest_declares_audio_defaults(tmp_path: Path) -> None:
     assert defaults.capture is not None and defaults.playback is not None
     assert (defaults.capture.mic_channels, defaults.capture.ref_channels) == (6, 2)
     assert defaults.playback.rate == 48000
+    assert defaults.voice is not None
+    assert (defaults.voice.followup_delay_ms,
+            defaults.voice.post_playback_mute_ms) == (300, 500)
     assert defaults.ack_echo_ignore_ms == 2500
 
 
@@ -603,6 +608,15 @@ def test_unknown_audio_defaults_keys_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(PluginError) as error:
         load_plugin(_single(tmp_path, device=device))
     assert "audio_defaults" in str(error.value)
+
+
+def test_audio_defaults_voice_timing_is_bounded(tmp_path: Path) -> None:
+    # A manifest is data, not a bypass: the same 0-10000 ms range as the config.
+    device = _v1_device_doc(
+        audio_defaults={"voice": {"followup_delay_ms": 10001}})
+    with pytest.raises(PluginError) as error:
+        load_plugin(_single(tmp_path, device=device))
+    assert "audio_defaults.voice.followup_delay_ms" in str(error.value)
 
 
 def test_audio_defaults_capture_layout_must_add_up(tmp_path: Path) -> None:

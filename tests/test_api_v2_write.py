@@ -373,6 +373,68 @@ def test_device_audio_patch_and_clear(console):
     assert cleared.json()["audio"]["sources"]["aec.who"] != "device-override"
 
 
+def test_device_audio_exposes_and_patches_followup_timing(console):
+    """0.8.1 c: both timing knobs are per-device, ranged, and PATCH-able.
+
+    The console reads the same `/audio` provenance the device page does; these two
+    leaves must be editable with the manifest's values visible as the inherited
+    default, and an out-of-range write must be a 422 that names the field.
+    """
+    config = Config(web={"auth_token": TOKEN}, devices=[_manifest_device()])
+    # The reference-speaker template: the manifest's 300/500 must win for this model.
+    config.audio.voice.followup_delay_ms = 2500
+    config.audio.voice.post_playback_mute_ms = 2500
+    client, _, path = console(config=config)
+    _dot2_manifest_plug(Path(config.system.data_dir),
+                        voice={"followup_delay_ms": 300, "post_playback_mute_ms": 500})
+
+    before = client.get("/api/v2/devices/dot2/audio", headers=AUTH).json()
+    assert before["manifest_defaults"]["voice"] == {
+        "followup_delay_ms": 300, "post_playback_mute_ms": 500}
+    for field, inherited in (("followup_delay_ms", 300),
+                             ("post_playback_mute_ms", 500)):
+        path_key = f"voice.{field}"
+        assert before["effective"]["voice"][field] == inherited
+        assert before["sources"][path_key] == "device-manifest"
+        assert before["layers"][path_key]["manifest"] == inherited
+        assert before["layers"][path_key]["global"] == 2500
+        assert before["layers"][path_key]["device"] is None
+
+    patched = client.patch(
+        "/api/v2/devices/dot2/audio", headers=AUTH,
+        json={"audio": {"voice": {"followup_delay_ms": 450,
+                                  "post_playback_mute_ms": 600}}})
+    assert patched.status_code == 200, patched.text
+    body = patched.json()["audio"]
+    assert (body["effective"]["voice"]["followup_delay_ms"],
+            body["effective"]["voice"]["post_playback_mute_ms"]) == (450, 600)
+    assert body["sources"]["voice.followup_delay_ms"] == "device-override"
+    assert body["sources"]["voice.post_playback_mute_ms"] == "device-override"
+    assert set(body["overrides"]) >= {"voice.followup_delay_ms",
+                                      "voice.post_playback_mute_ms"}
+    saved = load_config(path)
+    assert saved.devices[0].audio is not None
+    assert saved.devices[0].audio.voice is not None
+    assert (saved.devices[0].audio.voice.followup_delay_ms,
+            saved.devices[0].audio.voice.post_playback_mute_ms) == (450, 600)
+
+    bad = client.patch("/api/v2/devices/dot2/audio", headers=AUTH,
+                       json={"audio": {"voice": {"followup_delay_ms": 10001}}})
+    assert bad.status_code == 422, bad.text
+    fields = bad.json()["error"]["details"]["fields"]
+    assert any("followup_delay_ms" in str(item.get("path", "")) for item in fields), fields
+
+    # Clearing the device override returns to the model default, not to 0/global.
+    cleared = client.patch("/api/v2/devices/dot2/audio", headers=AUTH,
+                           json={"audio": None})
+    assert cleared.status_code == 200, cleared.text
+    after = cleared.json()["audio"]
+    assert (after["effective"]["voice"]["followup_delay_ms"],
+            after["effective"]["voice"]["post_playback_mute_ms"]) == (300, 500)
+    assert after["sources"]["voice.followup_delay_ms"] == "device-manifest"
+    assert after["sources"]["voice.post_playback_mute_ms"] == "device-manifest"
+
+
 def test_device_test_is_evidence_shaped(console):
     client, _, _ = console()
     body = client.post("/api/v2/devices/living/test", headers=AUTH).json()
@@ -779,6 +841,7 @@ def test_rotate_refuses_a_token_from_the_environment(console, monkeypatch):
 
 def _dot2_manifest_plug(data_dir: Path, *, capabilities: tuple[str, ...] = ("playback",),
                         ack_ms: int | None = None,
+                        voice: dict | None = None,
                         params: tuple[tuple[str, str, str], ...] = ()) -> None:
     """A manifest-only v1 plug resolved from `data_dir/plugs` (no adapter code)."""
     from ruamel.yaml import YAML
@@ -812,8 +875,13 @@ def _dot2_manifest_plug(data_dir: Path, *, capabilities: tuple[str, ...] = ("pla
                    for key, label, kind in params],
         "compatibility": {"rui_min": "0.5.0", "tested_with": ["0.5.3"]},
     }
+    defaults: dict = {}
     if ack_ms is not None:
-        device["audio_defaults"] = {"ack_echo_ignore_ms": ack_ms}
+        defaults["ack_echo_ignore_ms"] = ack_ms
+    if voice is not None:
+        defaults["voice"] = voice
+    if defaults:
+        device["audio_defaults"] = defaults
     with (root / "plugin.yaml").open("w", encoding="utf-8") as handle:
         yaml.dump(plugin, handle)
     with (root / "devices" / "dot2.yaml").open("w", encoding="utf-8") as handle:

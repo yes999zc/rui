@@ -259,9 +259,14 @@ class AudioPlaneClient:
         """
         await self.send(LedState(effect=effect, repaint=repaint))
 
-    async def reply_finished(self, hold_music_s: float | None = None) -> None:
-        """Tell the plane the turn is over (its cue for the follow-up gate)."""
-        await self.send(ReplyFinished(hold_music_s=hold_music_s))
+    async def reply_finished(self, hold_music_s: float | None = None, *,
+                             followup: bool = True) -> None:
+        """Tell the plane the turn is over (its cue for the follow-up gate).
+
+        ``followup=False`` is for a close path: the plane waits for the speaker to
+        drain and applies the post-playback mute, but opens no wake-free window.
+        """
+        await self.send(ReplyFinished(hold_music_s=hold_music_s, followup=followup))
 
     async def pause_music(self) -> None:
         """「暂停」: park the track where it is; only resume_music lifts it."""

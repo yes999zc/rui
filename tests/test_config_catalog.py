@@ -618,6 +618,21 @@ def test_the_directory_exposes_multi_device_and_per_device_audio() -> None:
         assert path in fields, path
         assert fields[path]["writable"] is True, path
         assert fields[path]["effect"] == "restart", path
+    # 0.8.1 c: the two timing knobs are editable per device, with the schema's range,
+    # ms unit, and both UI languages. Empty = inherit (global or, since 0.8.1, manifest).
+    for path in ("devices.0.audio.voice.followup_delay_ms",
+                 "devices.0.audio.voice.post_playback_mute_ms"):
+        spec = fields[path]
+        assert spec["kind"] == "number"
+        assert (spec["min"], spec["max"]) == (0, 10000)
+        assert spec["unit"] == {"zh": "ms", "en": "ms"}
+        assert spec["nullable"] is True, "empty must mean inherit, not 0"
+        assert spec["label"]["zh"] and spec["label"]["en"]
+        assert spec["hint"]["zh"] and spec["hint"]["en"]
+        # 0.8.1: "inherit" means manifest first, then global. The old copy claimed
+        # only the global layer, which is now false for a model that declares timing.
+        assert "manifest" in spec["hint"]["zh"]
+        assert "manifest" in spec["hint"]["en"]
     # An unset override is a null value, not a missing field: the console must be able
     # to show "inherit" and write a value back.
     assert document(cfg)["values"]["devices.0.audio.aec.who"] is None

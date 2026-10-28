@@ -1020,16 +1020,33 @@ def _is_music_turn(result: object) -> bool:
 
 
 def _release_turn(client: object) -> None:
-    """Release the one-turn latch after a session ends without a reply.
+    """Release the one-turn latch after a session ends.
 
-    A dismissal deliberately skips `reply_finished` so the plane opens no follow-up
-    window after the goodbye. That call is also the turn's normal release, so the
-    latch has to be cleared explicitly or every later wake is rejected `turn_open`
-    until the process restarts (the 2026-10-26 Dot 2 report).
+    The close paths call `reply_finished(followup=False)`, which also releases the
+    latch; this stays as the explicit fallback (and for callers whose client has no
+    such method), or every later wake is rejected `turn_open` until the process
+    restarts (the 2026-10-26 Dot 2 report).
     """
     release = getattr(client, "release_turn", None)
     if callable(release):
         release()
+
+
+async def _finish_close_path(client: object) -> None:
+    """Tell the plane our own goodbye drained, without arming a follow-up window.
+
+    A dismissal or idle farewell closes the session before the words are spoken. The
+    plane still needs `ReplyFinished` to wait for the speaker to drain and to apply
+    `post_playback_mute_ms` - otherwise the goodbye's own echo is captured as the next
+    request (measured 13:06:50: "这吗" -> "在的，你说吧。"). But the default finish also
+    arms the wake-free follow-up gate, which turns a closed session back into a
+    listener (0.8.1: 退下即彻底断). `followup=False` keeps the drain and the mute and
+    opens nothing.
+    """
+    finisher = getattr(client, "reply_finished", None)
+    if callable(finisher):
+        with contextlib.suppress(Exception):
+            await finisher(followup=False)
 
 
 async def _pause_without_music(app: FastAPI, clean: str, runner, client, trace,
@@ -1096,7 +1113,9 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
         with contextlib.suppress(Exception):
             await client.send(StopAudio())
         spoken = await runner.dismiss(_speaking(app, client), trace)
-        # The session closed: release the turn latch even though no reply follows.
+        # The session closed: finish the turn (drain + post-playback mute) without
+        # opening the wake-free follow-up window a closed session must not have.
+        await _finish_close_path(client)
         _release_turn(client)
         _light_after_audio(app, spoken, cfg.audio.voice.rate, "off", live=client)
         _record_turn(app, {
@@ -1116,8 +1135,9 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
         except Exception as exc:  # noqa: BLE001 - never crash the app
             log.info("stop music failed: %s", exc)
         spoken = await runner.dismiss(_speaking(app, client), trace)
-        # No reply_finished: the session is closing, so the plane must not open a
-        # follow-up window after the goodbye. Release the turn latch explicitly.
+        # No follow-up window after the goodbye, but the plane still needs the finish:
+        # it drains the queue and mutes the microphone against our own stop reply.
+        await _finish_close_path(client)
         _release_turn(client)
         # The stop released the house's speaker: the next song may start anywhere.
         _release_owner(app)
@@ -1142,9 +1162,9 @@ async def _stop_command(app: FastAPI, clean: str, runner, client, trace,
     # dismiss() closes the session before the reply: the idle clock used to keep
     # running behind it and the farewell said goodbye a second time (measured 20:42).
     spoken = await runner.dismiss(_speaking(app, client), trace)
-    # No reply_finished here: the session is closing, so the plane must not open a
-    # follow-up window after the goodbye. The latch still has to be released, or the
-    # next wake is rejected turn_open until the process restarts.
+    # The close finish keeps the drain/mute and opens no window; the latch also has
+    # to be released, or the next wake is rejected turn_open until a restart.
+    await _finish_close_path(client)
     _release_turn(client)
     _light_after_audio(app, spoken, cfg.audio.voice.rate, "off", live=client)
     _record_turn(app, {
@@ -2028,7 +2048,8 @@ class _PlaneLink:
             self._coordinator.set_turn_open(False)  # type: ignore[attr-defined]
             self._coordinator.touch(self._device_id)  # type: ignore[attr-defined]
 
-    async def reply_finished(self, *args: object, **kwargs: object) -> None:
+    async def reply_finished(self, *args: object, followup: bool = True,
+                             **kwargs: object) -> None:
         allow_followup = not _consume_reminder_preempt(self._app, self._device_id)
         try:
             if not allow_followup:
@@ -2040,18 +2061,18 @@ class _PlaneLink:
                     self._device_id,
                 )
                 return
-            await self._handle.reply_finished(*args, **kwargs)  # type: ignore[attr-defined]
+            await self._handle.reply_finished(  # type: ignore[attr-defined]
+                *args, followup=followup, **kwargs)
         finally:
             self._end_turn()
 
     def release_turn(self) -> None:
         """End this turn without telling the plane the reply drained.
 
-        A dismissal closes the session before its goodbye and deliberately skips
-        `reply_finished`, so the plane opens no follow-up window after it. That call
-        was also the turn's only latch release, so without this every later wake is
-        rejected `turn_open` until the process restarts (measured 2026-10-26 12:26:
-        「退一下吧。」 -> 11 wakes rejected over the next five minutes).
+        Used by the utterance wrapper on every exit and by callers that already sent
+        their own close finish. Without it every later wake is rejected `turn_open`
+        until the process restarts (measured 2026-10-26 12:26: 「退一下吧。」 ->
+        11 wakes rejected over the next five minutes).
         """
         self._end_turn()
 
@@ -3892,13 +3913,12 @@ def create_app(
                 if line:
                     _light(app, "off", live=client)
                     log.info("session closed: %s: %r", "idle timeout", line)
-                    # The goodbye is our own audio: without this the plane never arms its
-                    # post-playback mute, and a device-AEC speaker hears its own farewell
-                    # tail as a request (measured 13:06:50: "这吗" -> "在的，你说吧。").
-                    finisher = getattr(client, "reply_finished", None)
-                    if callable(finisher):
-                        with contextlib.suppress(Exception):
-                            await finisher()
+                    # The goodbye is our own audio: the finish makes the plane drain it
+                    # and apply `post_playback_mute_ms`, or a device-AEC speaker hears
+                    # its own farewell tail as a request (measured 13:06:50: "这吗" ->
+                    # "在的，你说吧。"). `followup=False` keeps that mute but opens no
+                    # wake-free window: the session is closed, not listening (0.8.1).
+                    await _finish_close_path(client)
                     if coordinator is not None:
                         # This goodbye is our audio too. Clearing here is the safety net
                         # for a wake the goodbye interrupted mid-arbitration.

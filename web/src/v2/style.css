@@ -1889,6 +1889,10 @@
   font-size: 12.5px;
 }
 
+.v2-audio-leaf-label {
+  color: var(--text-muted);
+}
+
 .v2-audio-source {
   margin-top: 4px;
 }

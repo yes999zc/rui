@@ -10,8 +10,10 @@ byte identical.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -256,10 +258,11 @@ class _StubWriter:
 
 
 def test_speech_one_second_in_is_inside_the_window_twenty_is_outside() -> None:
-    """Farewell +1 s is a follow-up; farewell +20 s needs the wake word again.
+    """A normal reply +1 s is a follow-up; +20 s needs the wake word again.
 
     The window is shot in audio time (the real gate disarms itself after max_wait_ms),
-    so this exercises the same clock the speaker feeds, without sleeping.
+    so this exercises the same clock the speaker feeds, without sleeping. This is the
+    ordinary-reply window; a close path never arms it (see the 0.8.1 tests below).
     """
     plane = _plane()
     gate = _real_gate()
@@ -275,7 +278,7 @@ def test_speech_one_second_in_is_inside_the_window_twenty_is_outside() -> None:
 
     async def scenario() -> None:
         await plane._arm_followup_later(0.0)
-        assert gate.armed, "the farewell never opened its follow-up window"
+        assert gate.armed, "the reply never opened its follow-up window"
         await feed(1.0)
         assert gate.armed, "speech at +1 s would have needed a wake word"
         # Twenty seconds of device audio later the gate has closed on its own. That is
@@ -301,10 +304,10 @@ def test_speech_nine_seconds_in_is_outside_the_eight_second_window() -> None:
 
     async def scenario() -> None:
         await plane._arm_followup_later(0.0)
-        assert gate.armed, "the farewell never opened its follow-up window"
+        assert gate.armed, "the reply never opened its follow-up window"
         for _ in range(int(9.0 * 50)):  # 9 s of device audio
             await plane._feed_gate(bytes(640), 0.0, writer, connected)
-        assert not gate.armed, "9 s after the farewell still opened a follow-up turn"
+        assert not gate.armed, "9 s after the reply still opened a follow-up turn"
 
     asyncio.run(scenario())
 
@@ -371,5 +374,137 @@ def test_an_armed_gate_writes_an_utterance_and_a_closed_one_does_not() -> None:
         await feed(loud, 1.0)
         await feed(silent, 0.6)
         assert writer.frames == []
+
+    asyncio.run(scenario())
+
+
+# ------------------------------------------------- 0.8.1: close paths arm nothing
+#
+# The window above belongs to an ordinary answer. A stop word ("退下") and the idle
+# farewell close the session instead: the plane still drains the goodbye and applies
+# the post-playback mute, but it must not arm a wake-free window. The measured
+# failure was a turn started 15-20 s after "session closed" with no wake word.
+
+
+class _SpeakAdapter:
+    """Only the calls the speak loop makes; the gate decision is what is under test."""
+
+    def __init__(self) -> None:
+        self.played = 0
+
+    async def play(self, pcm: bytes, sample_rate: int = 48000,
+                   channels: int = 1) -> None:
+        self.played += 1
+
+    async def stop_playback(self, fade_ms: int = 120) -> None:
+        return None
+
+
+async def _speak_one_reply(plane: AudioPlane) -> None:
+    """Queue one short reply block (the goodbye is a single canned line)."""
+    plane._speak_queue.put_nowait((np.zeros(1600, dtype="<i2").tobytes(), True))
+    plane._speak_queued_s = 0.1
+
+
+async def _wait_until(predicate: Callable[[], bool], timeout_s: float) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(0.02)
+    return predicate()
+
+
+def test_an_ordinary_reply_arms_the_window_and_accepts_speech_one_second_later() -> None:
+    """"在，你说。" then a second sentence: the wake-free follow-up still works."""
+    async def scenario() -> None:
+        plane = _plane(followup_delay_ms=300, post_playback_mute_ms=0)
+        plane.adapter = _SpeakAdapter()  # type: ignore[assignment]
+        gate = _real_gate(_LevelVad())
+        plane.gate = gate  # type: ignore[assignment]
+        writer = _StubWriter()
+        connected = asyncio.Event()
+        connected.set()
+        loud = b"\xff\x7f" * 320
+        silent = bytes(640)
+
+        plane._reply_finished = True          # ReplyFinished with the default followup
+        await _speak_one_reply(plane)
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            assert await _wait_until(lambda: gate.armed, 3.0), (
+                "an ordinary reply must still open the follow-up window")
+            for _ in range(50):               # ~1 s after the reply drained
+                await plane._feed_gate(loud, 0.0, writer, connected)
+            for _ in range(60):               # VAD end silence closes the segment
+                await plane._feed_gate(silent, 0.0, writer, connected)
+            assert [frame[0] for frame in writer.frames] == [FrameType.UTTERANCE_PCM], (
+                "speech ~1 s after a normal reply must become a turn")
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    asyncio.run(scenario())
+
+
+def test_the_dismissal_finish_never_arms_and_twenty_seconds_hear_nothing() -> None:
+    """"退下" is the end: drain + mute, no window, and +20 s is not a turn.
+
+    This drives the plane's real speak loop with `ReplyFinished(followup=False)`, the
+    message the app now sends for a dismissal and for the idle farewell. The mute is
+    still started (the goodbye's own tail must not be heard as a request), but the
+    gate stays shut, so the loud audio the device keeps reporting cannot become an
+    utterance.
+    """
+    async def scenario() -> None:
+        plane = _plane(followup_delay_ms=300, post_playback_mute_ms=500)
+        plane.adapter = _SpeakAdapter()  # type: ignore[assignment]
+        gate = _real_gate(_LevelVad())
+        plane.gate = gate  # type: ignore[assignment]
+        writer = _StubWriter()
+        connected = asyncio.Event()
+        connected.set()
+        loud = b"\xff\x7f" * 320
+        silent = bytes(640)
+
+        plane._reply_finished = True
+        plane._reply_followup = False         # ReplyFinished(followup=False)
+        await _speak_one_reply(plane)
+        # Lower bound for the mute deadline: the speak loop has not started yet, and the
+        # finish is consumed no earlier than this instant.
+        started = time.monotonic()
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            assert await _wait_until(lambda: not plane._reply_finished, 3.0), (
+                "the speak loop never consumed the close finish")
+            assert not gate.armed, "a dismissal opened a wake-free window"
+            # The mute starts at the drain. Assert the deadline, not `_mic_is_muted()`:
+            # comparing against `time.monotonic()` was wall-clock fragile, because a
+            # starved 20 ms poll (full-suite run) can observe the plane >500 ms after it
+            # consumed the finish, when the 0.5 s window had already expired for real.
+            # `_followup_delay_from` sets `max(now, pacer.due) + mute_s` after `started`,
+            # so a real 0.5 s close-path mute always lands at or past `started + 0.5`,
+            # and a lost mute leaves the initial 0.0 behind.
+            assert plane._mic_mute_until >= started + 0.5, (
+                "the close path lost the post-playback mute")
+            # Then give the old code's delayed `_arm_followup_later` time to land
+            # (asserting immediately would pass on the pre-0.8.1 build only because
+            # its arm task had not run yet - a false red/green).
+            await asyncio.sleep(0.8)
+            assert not gate.armed, "a dismissal opened a wake-free window"
+            # Twenty seconds of full-scale input, then the VAD end silence: no gate,
+            # no UTTERANCE_PCM, so the control plane never starts a turn.
+            for _ in range(20 * 50):
+                await plane._feed_gate(loud, 0.0, writer, connected)
+            for _ in range(60):
+                await plane._feed_gate(silent, 0.0, writer, connected)
+            assert writer.frames == [], (
+                "audio 20 s after a dismissal reached the control plane")
+            assert not gate.armed
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     asyncio.run(scenario())

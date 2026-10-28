@@ -1438,11 +1438,12 @@ def _device_fields(cfg: Config) -> list[dict]:
                    {"zh": f"{name} · 播放后静音窗口", "en": f"{name} · post-playback mute"},
                    _t("播放排空后再丢弃麦克风多少毫秒（0 = 不丢；设备侧 AEC 建议 2500）。"
                       "播放中的 barge 不受影响；窗口大于等于 followup_delay_ms 时跳过续听门。"
-                      "留空 = 继承全局。改完重启音频面。",
+                      "留空 = 先继承型号 manifest，未声明时继承全局。改完重启音频面。",
                       "Microphone discarded for this many ms after the speaker drains "
                       "(0 = off; device-side AEC wants about 2500). Playback-time barge still "
                       "works; a window >= followup_delay_ms skips the follow-up gate. Empty "
-                      "= inherit the global value. Restart the plane."),
+                      "= inherit the model manifest when declared, else the global value. "
+                      "Restart the plane."),
                    effect="restart", minimum=0, maximum=10000, nullable=True,
                    unit=_t("ms", "ms")),
 
@@ -1461,11 +1462,12 @@ def _device_fields(cfg: Config) -> list[dict]:
                    unit=_t("ms", "ms")),
             _field(f"{prefix}.audio.voice.followup_delay_ms", "devices", "number",
                    {"zh": f"{name} · 续听窗口", "en": f"{name} · follow-up window"},
-                   _t("回答结束后仍可无唤醒词续听的毫秒数（留空 = 继承全局）。回声拖尾长的设备"
-                      "要等更久；改完重启音频面。",
+                   _t("回答结束后仍可无唤醒词续听的毫秒数（留空 = 先继承型号 manifest，"
+                      "未声明时继承全局）。回声拖尾长的设备要等更久；改完重启音频面。",
                       "How long the room keeps listening after an answer without the wake word "
-                      "(empty = inherit the global value). A speaker with a long echo tail "
-                      "needs longer. Restart the plane."),
+                      "(empty = inherit the model manifest when declared, else the global "
+                      "value). A speaker with a long echo tail needs longer. Restart the "
+                      "plane."),
                    effect="restart", minimum=0, maximum=10000, nullable=True,
                    unit=_t("ms", "ms"), advanced=True),
             _field(f"{prefix}.audio.voice.followup_replay", "devices", "bool",

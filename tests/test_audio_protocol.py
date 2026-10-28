@@ -65,3 +65,10 @@ def test_reply_finished_carries_the_music_hold() -> None:
     assert msg.hold_music_s == 0
     plain = CONTROL.validate_json(json.dumps({"type": "reply_finished"}))
     assert plain.hold_music_s is None
+    # 0.8.1: a close path says "finished, but open no follow-up window". An older
+    # control plane omits the field; the default must stay True so its answers keep
+    # the 1 s follow-up they always had.
+    assert plain.followup is True
+    close = CONTROL.validate_json(json.dumps(
+        {"type": "reply_finished", "followup": False}))
+    assert close.followup is False

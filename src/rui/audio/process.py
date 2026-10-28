@@ -564,6 +564,9 @@ class AudioPlane:
         self._segment_pending = False
         # Set by ReplyFinished: the turn is over, not merely between TTS chunks.
         self._reply_finished = False
+        # Whether that finish may open the follow-up window (ReplyFinished.followup).
+        # A close path still drains and mutes, but arms nothing: "退下" ends listening.
+        self._reply_followup = True
         self._speak_queued_s = 0.0
         # Set by an accepted wake: PLAY_PCM arriving before this turn's own utterance
         # belongs to the previous turn (e.g. an idle goodbye still being streamed).
@@ -2734,6 +2737,7 @@ class AudioPlane:
                     self.playback_gap_chunks = []
                     finished_reply = self._reply_finished
                     self._reply_finished = False
+                    followup, self._reply_followup = self._reply_followup, True
                     reply_hold, self._reply_hold = self._reply_hold, None
                     reply_chunks = 0
                     reply_lead_max = 0.0
@@ -2752,14 +2756,26 @@ class AudioPlane:
                         # pacer to drain, then the old build's 1 s echo tail.
                         # With a song waiting the block below arms it with the music
                         # window instead (shorter max_wait, and the song stays down).
+                        #
+                        # The delay is computed even for a close path: it also starts
+                        # the post-playback mute, which the goodbye needs for its own
+                        # echo. Only the arm/replay below is conditional.
                         delay = self._followup_delay_from(pacer.due)
-                        if self.effective.voice.followup_replay:
-                            self._start_followup_capture(
-                                max(0.0, pacer.due - time.monotonic()), delay)
-                        asyncio.create_task(
-                            self._arm_followup_later(delay, reason="reply drained"),
-                            name="followup-gate"
-                        )
+                        if not followup:
+                            # "退下" / the idle farewell closed the session. It must not
+                            # arm a wake-free window: 20 s later speech without a wake
+                            # word is not a follow-up, it is a new conversation
+                            # (0.8.1: 退下即彻底断). The mute above still applies;
+                            # `finished_reply` below clears the pending-song grace.
+                            log.info("close reply drained: no follow-up window")
+                        else:
+                            if self.effective.voice.followup_replay:
+                                self._start_followup_capture(
+                                    max(0.0, pacer.due - time.monotonic()), delay)
+                            asyncio.create_task(
+                                self._arm_followup_later(delay, reason="reply drained"),
+                                name="followup-gate"
+                            )
                     # The song waits out the whole turn. An empty queue alone once meant
                     # "speech over", so the music came back 0.4 s after the wake - over
                     # the user's request, and the resumed music then closed the freshly
@@ -2779,17 +2795,23 @@ class AudioPlane:
                         hold_ms = (int(self.cfg.music.resume_hold_ms)
                                    if reply_hold is None
                                    else max(0, int(reply_hold * 1000)))
-                        self._music_hold_until = (
-                            time.monotonic() + delay + hold_ms / 1000.0)
-                        if hold_ms > 0:
-                            self._start_followup_capture(
-                                max(0.0, pacer.due - time.monotonic()), delay)
-                            asyncio.create_task(
-                                self._arm_followup_later(delay, max_wait_ms=hold_ms,
-                                                         reason="music hold"),
-                                name="followup-gate")
+                        if not followup:
+                            # A close path holds nothing: the session and its window
+                            # are over, so the song must not wait for a gate that will
+                            # never arm.
+                            self._music_hold_until = None
                         else:
-                            self._music_hold_until = None   # resume on this very tick
+                            self._music_hold_until = (
+                                time.monotonic() + delay + hold_ms / 1000.0)
+                            if hold_ms > 0:
+                                self._start_followup_capture(
+                                    max(0.0, pacer.due - time.monotonic()), delay)
+                                asyncio.create_task(
+                                    self._arm_followup_later(delay, max_wait_ms=hold_ms,
+                                                             reason="music hold"),
+                                    name="followup-gate")
+                            else:
+                                self._music_hold_until = None   # resume on this very tick
                     now = time.monotonic()
                     holding = self._music_hold_until is not None and (
                         now < self._music_hold_until
@@ -3713,6 +3735,7 @@ class AudioPlane:
                         self._segment_pending = True
                 elif isinstance(msg, ReplyFinished):
                     self._reply_finished = True
+                    self._reply_followup = msg.followup
                     self._reply_hold = msg.hold_music_s
                 elif isinstance(msg, SpeakFinished):
                     if self._stale_speech_blocked:

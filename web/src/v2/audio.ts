@@ -43,13 +43,16 @@ export interface AudioLeafSpec {
   min?: number
   max?: number
   options?: AudioEnumOption[]
+  /** Optional human label (zh/en); the path stays visible as the technical key. */
+  labelKey?: MsgKey
 }
 
 function leaf(
   path: string,
   group: AudioGroup,
   control: AudioControlKind | null,
-  bounds: { min?: number; max?: number; options?: AudioEnumOption[] } = {},
+  bounds: { min?: number; max?: number; options?: AudioEnumOption[];
+            labelKey?: MsgKey } = {},
 ): AudioLeafSpec {
   return {
     path,
@@ -96,9 +99,17 @@ const VOICE: AudioLeafSpec[] = [
   leaf('voice.kws_num_threads', 'voice', null),
   leaf('voice.vad_model_path', 'voice', null),
   leaf('voice.wake_preroll_ms', 'voice', null),
-  leaf('voice.followup_delay_ms', 'voice', 'number', { min: 0, max: 10000 }),
+  leaf('voice.followup_delay_ms', 'voice', 'number', {
+    min: 0,
+    max: 10000,
+    labelKey: 'v2.audio.leaf.followup_delay_ms',
+  }),
   leaf('voice.followup_replay', 'voice', 'boolean'),
-  leaf('voice.post_playback_mute_ms', 'voice', 'number', { min: 0, max: 10000 }),
+  leaf('voice.post_playback_mute_ms', 'voice', 'number', {
+    min: 0,
+    max: 10000,
+    labelKey: 'v2.audio.leaf.post_playback_mute_ms',
+  }),
 ]
 
 /** Playback transport: rate/channels/prebuffer are the per-device knobs. */

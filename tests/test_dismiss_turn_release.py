@@ -34,10 +34,11 @@ class _Music:
 
 
 class _Handle:
-    """A plane handle that fails loudly if a dismissal opens a follow-up window."""
+    """Records the close finish: `followup=True` would open a wake-free window."""
 
     def __init__(self) -> None:
         self.sent: list[object] = []
+        self.followups: list[bool] = []
         self.metrics = SimpleNamespace(output_owner="")
 
     async def send(self, msg: object) -> None:
@@ -46,8 +47,8 @@ class _Handle:
     async def speak(self, pcm: bytes, **kwargs: object) -> None:  # noqa: ARG002
         return None
 
-    async def reply_finished(self, **kwargs: object) -> None:  # noqa: ARG002
-        raise AssertionError("a dismissal must not open a follow-up window")
+    async def reply_finished(self, **kwargs: object) -> None:
+        self.followups.append(bool(kwargs.get("followup", True)))
 
 
 class _Runner:
@@ -122,7 +123,7 @@ def test_a_dismissal_releases_the_turn_latch(monkeypatch) -> None:
     had eleven rejections over five minutes). The wake word works again as soon as the
     dismissal releases the turn.
     """
-    coordinator, sent, _handle, app, link = _env(
+    coordinator, sent, handle, app, link = _env(
         monkeypatch, music_state="idle", output_owner="living")
 
     # 04:38:48: the first wake is admitted and opens the turn (app.py's on_wake).
@@ -134,6 +135,9 @@ def test_a_dismissal_releases_the_turn_latch(monkeypatch) -> None:
     handled = asyncio.run(app_module._stop_command(
         app, "退下吧", _Runner(), link, TurnTrace(device_id="living"), _Traces()))
     assert handled is True
+    # The close finish still reaches the plane (drain + mute), but it says
+    # followup=False: no wake-free window after a closed session.
+    assert handle.followups == [False], handle.followups
 
     # 04:39:05: the next wake must be admitted, not rejected turn_open.
     assert coordinator.arbiter.state.turn_open is False, (
@@ -164,19 +168,21 @@ def test_a_dismissal_mid_song_in_another_room_also_releases_the_latch(monkeypatc
     assert app.state.last_turn["session_action"] == "stop_elsewhere"
     assert coordinator.arbiter.state.turn_open is False, "the closed session left the latch open"
     assert any(isinstance(msg, StopAudio) for msg in handle.sent)
-    # `_Handle.reply_finished` raises: reaching it here would have failed already.
+    assert handle.followups == [False], "the refusal opened a follow-up window"
 
 
 class _ReplyHandle:
     def __init__(self) -> None:
         self.replied = 0
+        self.followups: list[bool] = []
 
-    async def reply_finished(self, **kwargs: object) -> None:  # noqa: ARG002
+    async def reply_finished(self, **kwargs: object) -> None:
         self.replied += 1
+        self.followups.append(bool(kwargs.get("followup", True)))
 
 
 def test_a_normal_reply_still_releases_the_latch_through_reply_finished(monkeypatch) -> None:
-    """The one-turn rule is unchanged for an ordinary turn."""
+    """The one-turn rule is unchanged for an ordinary turn, window included."""
     coordinator, _sent, _handle, app, _link = _env(
         monkeypatch, music_state="idle", output_owner="living")
     coordinator.set_turn_open(True)
@@ -186,4 +192,22 @@ def test_a_normal_reply_still_releases_the_latch_through_reply_finished(monkeypa
     asyncio.run(link.reply_finished())
 
     assert handle.replied == 1
+    assert handle.followups == [True], "an ordinary answer must keep its follow-up window"
+    assert coordinator.arbiter.state.turn_open is False
+
+
+def test_the_idle_farewell_finishes_without_a_followup_window(monkeypatch) -> None:
+    """The idle goodbye is a close path too: drain/mute, then no listening window.
+
+    `idle_watch` used to call `reply_finished()` with no arguments, which armed the
+    wake-free gate for `followup_max_wait_ms`. This drives the helper that call site
+    now uses; the plane-side "no arm" behaviour is pinned in test_followup_window.
+    """
+    coordinator, _sent, handle, app, link = _env(
+        monkeypatch, music_state="idle", output_owner="living")
+    coordinator.set_turn_open(True)
+
+    asyncio.run(app_module._finish_close_path(link))
+
+    assert handle.followups == [False], "the farewell armed a wake-free window"
     assert coordinator.arbiter.state.turn_open is False

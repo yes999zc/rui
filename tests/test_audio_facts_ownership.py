@@ -84,6 +84,23 @@ runtime: {mode: in-process, entrypoint: "rui_test_colocated_adapter:build", list
 params: []
 """
 
+# 0.8.1: the model declares its acoustic timing as well. The global template keeps
+# the reference speaker's 2500/2500 on purpose, so the dot2 test proves the manifest
+# wins and the lx06 test proves a model that declares nothing is untouched.
+DOT2_VOICE_MANIFEST = DOT2_MANIFEST.replace(
+    "  playback: {rate: 48000, channels: 1}\n",
+    "  playback: {rate: 48000, channels: 1}\n"
+    "  voice: {followup_delay_ms: 300, post_playback_mute_ms: 500}\n",
+)
+VOICE_GLOBAL_TEMPLATE = GLOBAL_TEMPLATE.replace(
+    "audio:\n  capture:\n",
+    "audio:\n"
+    "  voice:\n"
+    "    followup_delay_ms: 2500\n"
+    "    post_playback_mute_ms: 2500\n"
+    "  capture:\n",
+)
+
 
 def _install_plug(root: Path, *, plug_id: str = "dot2-echomuse",
                   manifest: str = DOT2_MANIFEST) -> Path:
@@ -177,6 +194,51 @@ def test_new_dot2_with_empty_audio_gets_the_models_hardware_facts(tmp_path: Path
     assert "global 16000 vs model 48000; using 48000" in conflicts["playback.rate"].message
     assert conflicts["capture.channels"].winner == "device-manifest"
     assert conflicts["ack.echo_ignore_ms"].winner == "device-manifest"
+
+
+def test_a_new_dot2_with_empty_audio_gets_300ms_followup_and_500ms_mute(
+        tmp_path: Path) -> None:
+    """0.8.1: the model's acoustic timing wins over the reference-speaker template.
+
+    Production's global block carries the LX06-tuned 2500/2500. A Dot 2 added with no
+    `devices[].audio` used to inherit those numbers, which made a dismissed session
+    keep a listening window; the manifest now declares 300/500 and the merge must pick
+    it, reporting the disagreement instead of hiding it.
+    """
+    _install_plug(tmp_path, manifest=DOT2_VOICE_MANIFEST)
+    cfg = _load(tmp_path, [_device("dot2", adapter="dot2", plug_id="dot2-echomuse")],
+                template=VOICE_GLOBAL_TEMPLATE)
+    device = cfg.devices[0]
+
+    eff = effective_device_audio(cfg, device)
+    assert (eff.voice.followup_delay_ms, eff.voice.post_playback_mute_ms) == (300, 500)
+    # The same model facts still win over a *device* value? No: an explicit device
+    # override is the deliberate per-room choice and is covered elsewhere. Here the
+    # device has none, so the manifest layer is the winner.
+    conflicts = {item.path: item for item in device_audio_conflicts(cfg, device)}
+    for path, value in (("voice.followup_delay_ms", 300),
+                        ("voice.post_playback_mute_ms", 500)):
+        assert conflicts[path].winner == "device-manifest"
+        assert conflicts[path].kind == "hardware"
+        assert conflicts[path].global_value == 2500
+        assert conflicts[path].manifest_value == value
+        assert conflicts[path].effective == value
+
+
+def test_lx06_declares_no_voice_defaults_so_the_global_timing_is_unchanged(
+        tmp_path: Path) -> None:
+    """The other half of 0.8.1: do not touch lx06/living."""
+    cfg = _load(tmp_path, [_device("living", adapter="lx06", plug_id=LX06_ID,
+                                   room="客厅")],
+                template=VOICE_GLOBAL_TEMPLATE)
+    device = cfg.devices[0]
+
+    eff = effective_device_audio(cfg, device)
+    assert (eff.voice.followup_delay_ms, eff.voice.post_playback_mute_ms) == (2500, 2500)
+    assert "voice.followup_delay_ms" not in {
+        item.path for item in device_audio_conflicts(cfg, device)}
+    assert "voice.post_playback_mute_ms" not in {
+        item.path for item in device_audio_conflicts(cfg, device)}
 
 
 def test_living_lx06_keeps_16k_8ch_and_its_1200ms_ack(tmp_path: Path) -> None:
@@ -767,3 +829,41 @@ def test_console_copy_has_no_global_shadows_manifest_claim() -> None:
     zh_hint, en_hint = hints
     assert zh_hint.index("manifest") < zh_hint.index("核心默认")
     assert en_hint.index("plug manifest") < en_hint.index("core default")
+
+
+def test_console_exposes_both_per_device_followup_timing_fields() -> None:
+    """0.8.1 c: both knobs are editable leaves in the device audio editor.
+
+    The server payload is covered by test_api_v2_write; this is the source contract
+    for the table that renders it. `null` (inherited) is already handled by the
+    panel's restore/inherit path, so each leaf is a bounded number and the effective
+    value column shows the manifest's 300/500 as the inherited default.
+    """
+    audio_source = (ROOT / "web/src/v2/audio.ts").read_text(encoding="utf-8")
+    assert "voice.followup_delay_ms" in audio_source
+    assert "voice.post_playback_mute_ms" in audio_source
+    for field in ("followup_delay_ms", "post_playback_mute_ms"):
+        assert f"leaf('voice.{field}', 'voice', 'number'" in audio_source, field
+        assert f"labelKey: 'v2.audio.leaf.{field}'" in audio_source, field
+        assert "min: 0" in audio_source and "max: 10000" in audio_source
+    i18n = (ROOT / "web/src/v2/i18n.ts").read_text(encoding="utf-8")
+    expected = {
+        "followup_delay_ms": ("续听窗口", "Follow-up window"),
+        "post_playback_mute_ms": ("播放后静音窗口", "Post-playback mute"),
+    }
+    for field, (zh, en) in expected.items():
+        lines = [line for line in i18n.splitlines()
+                 if f"'v2.audio.leaf.{field}':" in line]
+        assert len(lines) == 2, f"zh-Hans and en must both label voice.{field}"
+        assert any(zh in line for line in lines), field
+        assert any(en in line for line in lines), field
+    panel = (ROOT / "web/src/v2/components/device/AudioPanel.vue").read_text(
+        encoding="utf-8")
+    # Editing goes through the generic row controls; the inherited value is the
+    # placeholder, the manifest layer is displayed underneath, and the two new
+    # leaves get a zh/en human label beside their technical path.
+    assert "row.editable" in panel
+    assert "inheritsCurrently(row)" in panel
+    assert "row.layer" in panel
+    assert "row.spec?.labelKey" in panel
+    assert "t(row.spec.labelKey)" in panel
