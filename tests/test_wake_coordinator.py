@@ -320,3 +320,100 @@ def test_two_planes_in_the_same_room_still_exclude_each_other() -> None:
     run(scenario())
     assert sent["lx2"][0].__class__.__name__ == "WakeReject"
     assert sent["lx2"][0].reason == "cross_echo"
+
+
+# ------------------------------------- P0-4: cross-echo count + worst-case coverage
+def test_cross_echo_is_rejected_counted_and_named(caplog) -> None:
+    """a. Same room, two planes: A playing -> B's wake is cross_echo and counted.
+
+    The count is what the 4-device acceptance reads; the log must name who was
+    playing and who was suppressed, or a real 双声 report is impossible to diagnose.
+    """
+    import logging
+
+    coordinator, sent = make_coordinator(devices=(("lx1", "客厅"), ("lx2", "客厅")))
+    coordinator.set_playing({"lx1"})
+
+    async def scenario():
+        with caplog.at_level(logging.INFO, logger="rui.audio.coordinator"):
+            await coordinator.on_candidate("lx2", candidate("w-echo", keyword="你好小瑞"))
+        await coordinator.close()
+
+    run(scenario())
+    reject = sent["lx2"][0]
+    assert reject.__class__.__name__ == "WakeReject"
+    assert reject.reason == "cross_echo"
+    metrics = coordinator.metrics()
+    assert metrics["arbitration_cross_echo_suppressed"] == 1
+    assert metrics["wake_rejected"] == 1
+    text = caplog.text
+    assert "playing_device=lx1" in text
+    assert "suppressed_device=lx2" in text
+    assert "room=客厅" in text
+
+
+def test_same_batch_same_word_is_one_admit_and_one_lost_same_word() -> None:
+    """b. Same room, same word in one batch: one turn, the loser is lost_same_word."""
+    coordinator, sent = make_coordinator(devices=(("lx1", "客厅"), ("lx2", "客厅")))
+
+    async def scenario():
+        await coordinator.on_candidate("lx1", candidate(
+            "w-dev", source="device", score=0.9, threshold=0.5, keyword="你好小瑞"))
+        await coordinator.on_candidate("lx2", candidate(
+            "w-kws", source="rui", keyword="你好小瑞"))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
+        await coordinator.close()
+
+    run(scenario())
+    messages = sent["lx1"] + sent["lx2"]
+    admits = [m for m in messages if m.__class__.__name__ == "WakeAdmit"]
+    rejects = [m for m in messages if m.__class__.__name__ == "WakeReject"]
+    assert len(admits) == 1
+    assert len(rejects) == 1
+    assert rejects[0].reason == "lost_same_word"
+    assert coordinator.counters["wake_admitted"] == 1
+    assert coordinator.metrics()["arbitration_cross_echo_suppressed"] == 0
+
+
+def test_cross_room_same_word_is_admitted_never_barges_and_keeps_playing() -> None:
+    """c. Different rooms: A playing, B wakes -> B is admitted without stealing A.
+
+    Per-room isolation (task-18): the same word in another room must not be
+    suppressed as cross_echo and must not barge the playing room.
+    """
+    coordinator, sent = make_coordinator()
+    coordinator.set_owner("living")
+
+    async def scenario():
+        await coordinator.on_candidate("study", candidate(
+            "w-study", keyword="你好小瑞", barge=True, playing=True))
+        await asyncio.sleep(WINDOW_MS / 1000 + 0.08)
+        await coordinator.close()
+
+    run(scenario())
+    assert sent["study"][0].__class__.__name__ == "WakeAdmit"
+    assert coordinator.last_decision is not None
+    assert coordinator.last_decision.decided_by != "barge"
+    assert coordinator.arbiter.state.playing == {"living"}
+    assert coordinator.arbiter.state.owner_device == "living"
+    assert coordinator.metrics()["arbitration_cross_echo_suppressed"] == 0
+
+
+def test_another_plane_in_the_turn_room_is_rejected_turn_open() -> None:
+    """e. Same room, *another* plane: the open turn rejects it with turn_open.
+
+    The owner (lx1) and the candidate (lx2) differ, so this covers the room-equality
+    branch of `_in_open_turn` (arbiter.py:546-548), not only the same-device shortcut.
+    """
+    coordinator, sent = make_coordinator(devices=(("lx1", "客厅"), ("lx2", "客厅")))
+
+    async def scenario():
+        coordinator.set_turn_open(True, "lx1")
+        await coordinator.on_candidate("lx2", candidate("w-same-room-turn"))
+        await coordinator.close()
+
+    run(scenario())
+    reject = sent["lx2"][0]
+    assert reject.__class__.__name__ == "WakeReject"
+    assert reject.reason == "turn_open"
+    assert coordinator.metrics()["arbitration_cross_echo_suppressed"] == 0

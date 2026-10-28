@@ -461,7 +461,23 @@ docker compose exec -T rui sh -lc 'stat -c "%a %U:%G %n" /opt/rui-secrets /opt/r
   （`schema.py:1045`）；同词重复窗口 `duplicate_window_ms` 默认 2000 ms（`:1047`）。
 - 同一句话被多台听到 → 一个赢家、其余 `lost_same_word`（`arbiter.py:481`）；
   赢家按 `source_priority`（device_wake 优先）→ `room_priority` → 最近活跃 打分
-  （`schema.py:1041-1050`）。
+  （`schema.py:1041-1050`）。`lost_same_word` **只表示同一 merge window 内同词竞争的 loser**，
+  不是跨房间/回合中唤醒的期望值。
+- **同房间交叉回声的计数**：`cross_echo` 拒绝会累计到控制面
+  `WakeCoordinator.metrics()["arbitration_cross_echo_suppressed"]`（每条 +1，`wake_rejected` 同步 +1），
+  控制面日志写 `wake candidate <id> rejected: cross_echo (playing_device=<id>, suppressed_device=<id>, room=<room>)`。
+  真机验收在 `/health.audio_devices[]` 的 `wake_rejected.cross_echo` 看每台 plane 收到的拒绝数。
+- **跨房间「A 应答中 B 唤醒」的判据**：仲裁按房间隔离，B 的候选会被 admit（既不是 `turn_open`，
+  也不是 `lost_same_word`）。
+  - **文本/调试/渠道回合**：`runner.busy` 时返回 `409 {"detail": "a turn is already running"}`
+    （`app.py:4112-4113` 的 `/api/v1/debug/say`、`:4370-4371` 的 `/api/v1/chat`），不产生第二回合（已测）。
+  - **语音链路**：`on_utterance`（`app.py:2765` 起）**没有** busy 检查，`runner.run` 也没有重入保护；
+    且 `on_wake`（`app.py:3029`）对任何被 admit 的 wake 都会 `runner.abort()`。
+    因此跨房 B 唤醒**当前行为是可能打断 A 正在合成的回答**——是否打断 A、是否出现双声，
+    属**真机录音 + 人耳**判据，本轮只记录实际，不预设结论；若出现打断/双声，升级为 0.8 缺陷单
+    （不要在本卡改 app/runner）。
+- 「实际谁出声、是否双声」只能靠**录音/人耳**判定：本节所有代码判据（计数、reason、409）只保证逻辑，
+  不替代听感验收。
 - ⚠️ **每台的 `wake_words` 最终会合并成一份 keywords 文件**：
   `_sync_devices` 把所有设备的词拼成一个列表再写盘
   （`app.py:1980-1998`、`:5440-5444`）。所以“给 A 房间配词1、B 房间配词2”**并不能**让

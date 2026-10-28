@@ -575,7 +575,7 @@ dot2 桥在 [#11](https://github.com/yes999zc/rui/issues/11) 提出多设备仲�
 | `arbitration_winner` / `arbitration_reason` | 赢家与理由（`playing` / `same_room` / `score` / `last_active` / `tie` / `barge`） |
 | `arbitration_dropped{device: reason}` | 被丢弃候选及原因 |
 | `arbitration_ties` | 平票次数 |
-| `arbitration_cross_echo_suppressed` | 同房间抑制次数 |
+| `arbitration_cross_echo_suppressed` | 同房间抑制次数（已实现：`WakeCoordinator.metrics()`，`reason == "cross_echo"` 每条 +1；控制面日志带 `playing_device` / `suppressed_device` / `room`） |
 | `wake_source`（每候选） | `device_wake` / `kws` |
 | `wake_admit_latency_ms` | 首候选到 admit 的时延 |
 | `wake_admit_timeout` | 控制面未按时裁决 |

@@ -52,6 +52,9 @@ class WakeCoordinator:
             "wake_rejected": 0,
             "wake_send_failed": 0,
             "wake_admit_latency_ms": 0,
+            # §4.5 / §12.5: same-room echo suppressions (§4.5 froze the rule; the
+            # count is what the 4-device acceptance reads).
+            "arbitration_cross_echo_suppressed": 0,
         }
         self.last_decision: Decision | None = None
         self._window_started_at: float | None = None
@@ -195,9 +198,29 @@ class WakeCoordinator:
             ))
         for candidate, reason in decision.rejected:
             self.counters["wake_rejected"] += 1
+            if reason == "cross_echo":
+                self.counters["arbitration_cross_echo_suppressed"] += 1
+                log.info(
+                    "wake candidate %s rejected: %s (playing_device=%s, "
+                    "suppressed_device=%s, room=%s)",
+                    candidate.wake_id, reason,
+                    self._playing_devices_in(candidate.room) or "?",
+                    candidate.device_id, candidate.room or "?")
+            else:
+                log.info(
+                    "wake candidate %s rejected: %s (suppressed_device=%s, room=%s)",
+                    candidate.wake_id, reason, candidate.device_id,
+                    candidate.room or "?")
             await self._send(candidate.device_id, WakeReject(
                 wake_id=candidate.wake_id, reason=reason,
             ))
+
+    def _playing_devices_in(self, room: str) -> str:
+        """The playing device(s) whose room makes this candidate a cross echo."""
+        return ",".join(sorted(
+            device_id for device_id in self.arbiter.state.playing
+            if self._rooms.get(device_id) == room
+        ))
 
     async def _send(self, device_id: str, message: object) -> None:
         send = self._senders.get(device_id)

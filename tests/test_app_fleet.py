@@ -730,3 +730,45 @@ def test_a_plain_wake_aborts_the_goodbye_still_being_synthesised(
         client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
 
         assert calls == ["abort"], "a plain wake left the previous TTS running"
+
+
+# ------------------------------------- P0-4: cross-room turn, single-runner backstop
+def test_cross_room_wake_during_a_turn_is_admitted_then_the_runner_returns_409(
+        tmp_path, monkeypatch) -> None:
+    """d. A turn in living must not swallow study's wake; text turns get a 409.
+
+    Arbitration is per room (K2), so study's wake is admitted while living answers.
+    The single runner refuses a second *text/debug* turn with 409 (app.py:4112-4113).
+    The voice path has no busy check and `on_wake` aborts the open turn, so whether a
+    cross-room wake interrupts A is a real-device recording judgement, not pinned here.
+    """
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        study = fleet.handle("study")
+        coordinator = app.state.wake_coordinator
+        coordinator.set_turn_open(True, "living")
+        app.state.turn_device = "living"
+
+        client.portal.call(study.on_wake_candidate, _candidate("w-study"))
+        time.sleep(0.25)
+        assert study.sent[-1].type == "wake_admit"
+        assert coordinator.counters["wake_admitted"] == 1
+        assert coordinator.turn_device == "living"
+        assert coordinator.metrics()["arbitration_cross_echo_suppressed"] == 0
+
+        # The single-session runner is what actually prevents turn #2.
+        calls: list[str] = []
+        app.state.runner._in_turn = True
+
+        async def run(*args: object, **kwargs: object) -> None:
+            calls.append("run")
+            raise AssertionError("a second turn must not run while one is busy")
+
+        monkeypatch.setattr(app.state.runner, "run", run)
+        response = client.post("/api/v1/debug/say",
+                               json={"text": "开灯", "device": "study"})
+        assert response.status_code == 409
+        assert response.json()["detail"] == "a turn is already running"
+        assert calls == []

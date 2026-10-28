@@ -159,9 +159,9 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 
 **同词必须额外覆盖的三个最不利用例**（超出 C-1 的"同时触发"）：
 
-1. **弱间隔触发**：A 已答到一半，B 才听到 A 的应答尾音并命中唤醒词 → 不应开第二回合（回声门的 `_same_room_echo` 只管同房间，跨房间要靠仲裁 + 回声切除）。
-2. **A 放歌时 B 同词唤醒**：B 不应拿到 barge 去打断 A 的歌（只有播放房间的候选可 barge，`lost_playing` 语义），B 要么被拒要么只开自己房间的空闲会话。
-3. **A 在应答中 B 同词唤醒**：应被 `turn_open` 拒绝并记 `lost_same_word`，不产生第二个 turn、不出现双声。
+1. **弱间隔触发（同房）**：A 已答到一半，**同房间**的 B 才听到 A 的应答尾音并命中唤醒词 → 仲裁层按 `turn_open` 拒绝（`_in_open_turn`），不产生第二回合。
+2. **A 放歌时 B 同词唤醒**：**同房间**的 B 按 `cross_echo` 抑制并计 `arbitration_cross_echo_suppressed`（日志写 `playing_device` / `suppressed_device` / `room`）；**跨房间**的 B 会被 admit，但不拿 barge、不打断 A 的歌（只有播放房间的 owner 可 barge）。
+3. **A 在应答中 B 同词唤醒**：**同房间**按 `turn_open` 拒绝；**跨房间**在仲裁层 admit（按房间隔离）。文本/调试/渠道回合在 `runner.busy` 时返回 `409 a turn is already running`，不产生第二回合（已测）。语音链路**没有** busy 检查，且 `on_wake` 会 `runner.abort()` 当前回合；跨房 B 唤醒是否打断 A / 是否双声，属真机录音 + 人耳判据，本轮只记录实际、不预设结论；若出现打断/双声，升级为 0.8 缺陷单（不要在本卡改 app/runner）。`lost_same_word` **只用于同一 merge window 内同词竞争的 loser**，不用于跨房/回合中场景。
 
 ### C-1 两台同唤醒词**同时**触发（谁抢到会话）
 
