@@ -26,6 +26,8 @@
 - **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（已实现；review PASS + verify VERIFIED，全量 1738/6；残余风险写入 d.10）。
 - **P0/P1 均已收口**；B1（task-8）恢复，之后 B2→B3（桥双窗口先于 core）→C。
 - **当前 HEAD**：`7b9035a`（B1）；P0 `82d45d9`、P1 `8344085`、B1 `7b9035a`。B2/B3/C 未开工。
+- **桥仓 main 领先 v1.3.2 一个工具提交 `56e9bb8`**（onboard_device.py + docs/onboard-device.md + README 中英 + CHANGELOG；4 files，不进 src/wheel）。口径：v1.3.2 tag 仍指 `4536968`、不重打、不改 release 正文、不 bump 版本、不 force-push、不 revert；[Unreleased] 留到下次发布。
+- **task-22 实测输入（2026-10-28）**：生产 3 台 living 4412 / dot2 8870 / dot2-b 8871（次卧，已 ready+connected）；dot2-b 建时 params 留 null → `loudness control on 127.0.0.1:8872 unavailable (Errno 98)`。task-22 必须覆盖 dot2-b 的 `params.control_port: 0` + `params.loudness_file=/var/lib/rui/loudness-dot2-b.json`，并把「控制台新增设备 params 不得留空」做成表单校验/提示。设备端事实：配置目录 `/data/local/etc/echomuse/`，`controller.json` endpoints 为有序回退；平面 TLS 口 = 设备在 rui 的 `listen_port`（tcp/wss 同口，生产不开明文）。
 - **P0b 追加证据（2026-10-28 12:1x，9 哥）**：拔电后设备 `connection open` → 正好 10s → `closed` 死循环；
   设备完成 TLS/WS 握手（1503/2932 B）但不再发 register；**重启 rui 后 3s 恢复、60s 0 断连**
   ⇒ 桥异常断线后没有清理连接槽位/状态（P0 根因）。另：僵尸连接 887s、Send-Q 85775B、
