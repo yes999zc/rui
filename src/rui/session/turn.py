@@ -82,7 +82,10 @@ MAX_SENTENCE_CHARS = 45
 # latency - that is why the condition is not "short" alone. The hold is bounded: a delta
 # that ends the short window releases it, so does an explicit force/tail, and
 # `SHORT_REPLY_HOLD_MS` caps it when the model pauses mid-reply.
-SHORT_REPLY_CHARS = 8
+# task-30 (2026-10-28): ≤10 characters, not 8. 「在，\n你说。」 is 5 spoken chars plus
+# the newline; the 8-char window expired on a slow model and the release path split it
+# again. The window now covers every ultra-short reply the model can emit.
+SHORT_REPLY_CHARS = 10
 SHORT_REPLY_HOLD_MS = 300.0
 
 
@@ -184,13 +187,23 @@ def split_sentences(
     `hold_short` is the streaming caller saying "this may still be a short reply": while
     the buffer is short and would split into several pieces (`_short_reply_pending`),
     nothing is emitted, so 「在，\n你说。」 reaches TTS as one request instead of two
-    (2026-10-28: the second synth left a 217 ms gap). It is a bounded hold - a delta
-    that ends the short window, a `force`/tail call, or
-    `short_wait_ms >= SHORT_REPLY_HOLD_MS` releases it. Callers that are not streaming
-    (a verbatim briefing) leave it off and keep the old split.
+    (2026-10-28: the second synth left a 217 ms gap; task-30: the release itself was
+    still splitting after a slow model pause). It is a bounded hold - a delta that ends
+    the short window, a `force`/tail call, or `short_wait_ms >= SHORT_REPLY_HOLD_MS`
+    releases it **as one merged piece**, never as a split. Callers that are not
+    streaming (a verbatim briefing) leave it off and keep the old split.
     """
-    if (hold_short and not force and _short_reply_pending(buffer)
-            and short_wait_ms < SHORT_REPLY_HOLD_MS):
+    if hold_short and _short_reply_pending(buffer):
+        # task-30: an ultra-short reply that would split is spoken as ONE piece. The old
+        # release path split it once `short_wait_ms` passed the cap, which is exactly how
+        # 「在，\n你说。」 still reached TTS twice when the model paused >300 ms after the
+        # newline (d.10 residual risk). Releasing by merging instead of splitting keeps
+        # the first-audio timing (the release happens on the same delta) while removing
+        # the vendor's double head/tail silence at the seam.
+        stripped = buffer.strip()
+        complete = bool(stripped) and stripped[-1] in SENTENCE_ENDINGS
+        if force or (complete and short_wait_ms >= SHORT_REPLY_HOLD_MS):
+            return ([stripped] if stripped else []), ""
         return [], buffer
     out: list[str] = []
     start = 0
@@ -389,6 +402,13 @@ class TurnRunner:
         # behaviour, byte for byte: a tool result is rendered and the model answers it.
         self.direct_hook = direct_hook
         self._pending_direct: DirectSpeech | None = None
+        # task-30: one entry per TTS request this turn (a "segment" on the wire). The
+        # ledger is what the reply log and the turn trace read: before this, a short
+        # reply split into two requests left a seam that `playback_gap_count` could not
+        # see (no underrun - the audio was buffered), so the only evidence was the ear.
+        self._tts_calls: list[dict] = []
+        self._tts_seq = 0
+        self._tts_turn_id = ""
         # The trace of the turn in flight. `abort()` is called by the control plane when a
         # barge-in lands; marking barge_in / silence here is what turns the acceptance
         # number (<=300 ms) from a test-only mark into a production measurement. The app
@@ -581,6 +601,14 @@ class TurnRunner:
         # stage (see `say`); a failed provider attempt is part of the wait, so the
         # clock starts before the chain is probed.
         sentence_started = time.perf_counter()
+
+        def finish(name: str, spoken: int, report: StageReport | None,
+                   error: str = "") -> tuple[str, int, StageReport | None, str]:
+            # task-30: every actual vendor request is one segment. Log it and keep the
+            # per-turn ledger even when only part of a sentence made it out (abort or a
+            # mid-stream failure), because that is the case where a seam is most likely.
+            self._record_tts_call(trace, text, name, spoken, sentence_started, error=error)
+            return name, spoken, report, error
         for name, provider in chain:
             spoken = 0
             retries = max(0, int(getattr(provider, "retries", 0) or 0))
@@ -596,7 +624,7 @@ class TurnRunner:
                         async for chunk in stream:
                             if self._abort.is_set():
                                 self._mark_silence()
-                                return name, spoken, None, ""
+                                return finish(name, spoken, None)
                             if not chunk:
                                 continue
                             if first:
@@ -625,14 +653,14 @@ class TurnRunner:
                     # failure: one WARNING per provider per window, never per sentence.
                     log_provider_failure("tts", name, exc)
                     if spoken:
-                        return name, spoken, None, ""
+                        return finish(name, spoken, None)
                     if attempt < retries:
                         continue
                     break
                 elapsed = round((time.perf_counter() - attempt_started) * 1000, 1)
                 attempts.append({"provider": name, "error": "", "elapsed_ms": elapsed})
                 elapsed = round((time.perf_counter() - sentence_started) * 1000, 1)
-                return name, spoken, StageReport("tts", name, attempts, elapsed), ""
+                return finish(name, spoken, StageReport("tts", name, attempts, elapsed))
         return "", 0, None, f"tts failed for every provider: {attempts}"
 
     @property
@@ -658,16 +686,17 @@ class TurnRunner:
         wait_for(30) for the same reason; a search that stalls at 12 s can otherwise run
         twice and eat the whole budget.
         """
+        self._begin_tts_ledger(trace)
         try:
             self._abort.clear()
             self._in_turn = True
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 self._run(pcm, speak, trace, transcript=transcript, hint=hint, audio=audio),
                 self.turn_timeout_s,
             )
         except TimeoutError:
             log.warning("turn: timed out after %.0f s", self.turn_timeout_s)
-            return TurnResult(error=f"turn timed out after {self.turn_timeout_s:.0f} s")
+            result = TurnResult(error=f"turn timed out after {self.turn_timeout_s:.0f} s")
         finally:
             self._in_turn = False
             self._trace = None
@@ -677,6 +706,73 @@ class TurnRunner:
             # Telegram/WeChat reply must never arm the living-room goodbye.
             if touch_idle:
                 self.idle.touch()
+        self._note_tts_calls(trace)
+        return result
+
+    def _begin_tts_ledger(self, trace: TurnTrace) -> None:
+        """Attribute the TTS-call ledger to one trace.
+
+        A fresh trace starts a fresh ledger. `app.py` may run the runner twice on the
+        same trace after a false claim; keeping the turn id makes that retry accumulate
+        instead of resetting. Canned lines (`say`/`farewell`) use their own trace and
+        therefore get their own ledger rather than inheriting the previous answer's.
+        """
+        if self._tts_turn_id != trace.turn_id:
+            self._tts_calls = []
+            self._tts_seq = 0
+            self._tts_turn_id = trace.turn_id
+
+    def _note_tts_calls(self, trace: TurnTrace) -> None:
+        """Publish the turn's TTS-call ledger into ``trace.meta`` (task-30, additive)."""
+        calls = self._tts_calls
+        trace.meta["tts_call_count"] = len(calls)
+        trace.meta["tts_call_chars"] = [int(call["chars"]) for call in calls]
+        trace.meta["tts_call_audio_ms"] = [round(call["audio_ms"], 1) for call in calls]
+        trace.meta["tts_inter_call_silence_ms"] = [
+            round(call["gap_ms"], 1) for call in calls[1:]
+        ]
+
+    def _record_tts_call(
+        self, trace: TurnTrace, text: str, provider: str, spoken: int,
+        started: float, error: str = "",
+    ) -> None:
+        """One TTS request: log it and add it to the per-turn ledger.
+
+        ``gap_ms`` is the producer's dead time since the previous request ended (synth
+        wait + queueing). It is not the audible seam on its own - the plane publishes
+        that as ``reply_segment_silences_ms``, which also counts the vendor's own
+        leading/trailing silence - but it is the part this side can act on.
+        """
+        ended = time.perf_counter()
+        self._tts_seq += 1
+        audio_ms = spoken / 2 / self.sample_rate * 1000.0
+        prev = self._tts_calls[-1] if self._tts_calls else None
+        gap_ms = max(0.0, (started - prev["ended"]) * 1000.0) if prev is not None else 0.0
+        call = {
+            "k": self._tts_seq,
+            "chars": len(text),
+            "provider": provider,
+            "started": started,
+            "ended": ended,
+            "synth_ms": (ended - started) * 1000.0,
+            "audio_ms": audio_ms,
+            "gap_ms": gap_ms,
+            "error": error,
+        }
+        self._tts_calls.append(call)
+        shown = text if len(text) <= 120 else text[:117] + "..."
+        log.info(
+            "tts_call#%d chars=%d provider=%s synth=%.0fms audio=%.0fms gap=%.0fms text=%r",
+            self._tts_seq, len(text), provider, call["synth_ms"], audio_ms, gap_ms, shown,
+        )
+        # Keep the trace readable while the turn is still running (a canned line has no
+        # `run()` wrapper); `_note_tts_calls` overwrites it with the final ledger.
+        trace.meta["tts_call_count"] = len(self._tts_calls)
+        trace.meta["tts_call_chars"] = [int(c["chars"]) for c in self._tts_calls]
+        trace.meta["tts_call_audio_ms"] = [round(c["audio_ms"], 1) for c in self._tts_calls]
+        trace.meta["tts_inter_call_silence_ms"] = [
+            round(c["gap_ms"], 1) for c in self._tts_calls[1:]
+        ]
 
     async def _run(
         self,
@@ -1189,6 +1285,7 @@ class TurnRunner:
             self._abort.clear()
         if not self._tts:
             return 0
+        self._begin_tts_ledger(trace)
         chain = list(self._tts)
         if self.spoken is not None:
             self.spoken.remember(text)

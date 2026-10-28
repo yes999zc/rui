@@ -216,6 +216,17 @@ class Metrics(BaseModel):
     # while that reply is sounding (see `AudioPlane._build_metrics`), so the control
     # plane must read it from a fresh snapshot, not the 2 s periodic one.
     playback_gap_chunks: list[list[float]] = Field(default_factory=list)
+    # task-30: per-reply segment ledger, additive with defaults. A segment is one
+    # SpeakStart-declared piece (one TTS request). `silences_ms` is the audible seam
+    # between consecutive segments: the previous segment's trailing silence + the
+    # producer stall + the next segment's leading silence. `inner_ms` is the longest
+    # silent run *inside* one segment - the vendor's own comma pause, which no underrun
+    # counter can see. Kept after the reply drains (reset when the next reply starts) so
+    # a turn trace read just after `run()` still finds its own reply.
+    reply_segment_count: int = 0
+    reply_segment_audio_ms: list[float] = Field(default_factory=list)
+    reply_segment_silences_ms: list[float] = Field(default_factory=list)
+    reply_segment_inner_silence_ms: list[float] = Field(default_factory=list)
     # task-24: blocks the adapter rejected in `play()`. Additive with defaults so an
     # older plane still parses. The counter is cumulative; the console and /health
     # show it (a wrong wire format used to be one INFO line per chunk).

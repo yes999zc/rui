@@ -467,6 +467,13 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
   delta（内容不合并，只是延后；下次 delta 超过 8 字即恢复）。
 - **验证**：`tests/test_turn.py` 新增 5 条（`在，\n你说。`→1 次 synth；`在，你说。`→1；
   长回复仍多段且首段不被合并；无句末标点的短回复 tail 1 次；hold 边界 300 ms/force）。真机复验留 9 哥 下午。
+- **task-30 追加（2026-10-28，未提交）**：d.10 的残余风险被真机复现为新的「在，你说。」空隙：
+  字面 5 字串本来只 1 段；实际 LLM 在逗号后输出换行（`在，\n你说。`），模型停顿 >300 ms 时
+  `hold` 到期仍按**拆分**释放 → 2 次 synth，vendor 每段自带 80 ms 头/尾静音，seam **160 ms**
+  （`playback_gap_count=0`，因为 PCM 连续）。修复：≤10 字且会拆的缓冲，在到期/force 时**合并为 1 段**
+  （不再拆分）；首音频时刻不变（402 ms vs 402 ms）。新增 `tts_call#k` 日志、`reply:` 的
+  `segments/silences/inner`、Metrics/Trace 的 per-reply segment 账本。复核脚本
+  `scripts/measure_reply_seam.py`，分析与限制见 `docs/analysis/short-reply-seam-task30.md`。
 
 ### d.11 有限续听窗口 N（**已落地 @（本卡，task-17）**，2026-10-28）
 

@@ -343,6 +343,25 @@ async def _refresh_playback_metrics(live: object, timeout_s: float = 0.5) -> Non
         await request(timeout_s=timeout_s)
 
 
+def _log_reply_segments(trace: object) -> None:
+    """One line per reply: what the TTS-call and playback-segment ledgers saw (task-30).
+
+    The plane's own `reply:` line is written when the queue drains; this one is written
+    while the turn trace is recorded, so a short reply that drains later still shows its
+    segment count and seams next to the request. No numbers are computed here.
+    """
+    meta = getattr(trace, "meta", {}) or {}
+    if not meta.get("tts_call_count") and not meta.get("reply_segment_count"):
+        return  # a turn that never spoke has nothing to describe
+    log.info(
+        "reply: tts_calls=%s segments=%s silences_ms=%s inner_ms=%s",
+        meta.get("tts_call_count", 0),
+        meta.get("reply_segment_count", 0),
+        meta.get("reply_segment_silences_ms", []),
+        meta.get("reply_segment_inner_silence_ms", []),
+    )
+
+
 def _direct_speech(name: str, transcript: str, output: object) -> DirectSpeech | None:
     """Tool results that are read out verbatim instead of being re-answered (D1c ④).
 
@@ -3424,6 +3443,7 @@ def create_app(
                 _record_turn(app, result.to_dict(), device_id)
                 await _refresh_playback_metrics(link)
                 trace.note_playback_metrics(getattr(link, "metrics", None))
+                _log_reply_segments(trace)
                 traces.add(trace)
                 # A music/volume turn wants the song back the moment the reply
                 # drains, not after the follow-up window (measured 09:21: ~10 s).
@@ -4725,6 +4745,7 @@ def create_app(
         _record_turn(app, result.to_dict(), device_id)
         await _refresh_playback_metrics(client)
         trace.note_playback_metrics(getattr(client, "metrics", None))
+        _log_reply_segments(trace)
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)
         return {

@@ -208,6 +208,13 @@ MAX_SPEAK_QUEUE_S = 120.0
 # clicks, and on this speaker a click reads as a stray 「叮」 at the front of the answer.
 # 12 ms is short enough to be inaudible as a fade and long enough to remove the step.
 FADE_IN_MS = 12
+# task-30: segment accounting for the audible seams the underrun counters cannot see.
+# A segment is one SpeakStart-declared piece (one TTS request). Frames are 10 ms; a
+# sample block whose peak stays under `SEGMENT_SILENCE_PEAK` (16-bit, about -44 dBFS)
+# counts as silence. The threshold only labels edges/inner runs for the log and trace -
+# nothing here changes the samples that are played.
+SEGMENT_FRAME_MS = 10
+SEGMENT_SILENCE_PEAK = 200
 # A turn that ends without a reply (a failed LM round, a dead tool) still gives the
 # music back after this long - the old build's silent-wake watchdog used 4 s for the
 # same "do not keep the song down forever" rule. 4 s was too short for a slow tool:
@@ -595,6 +602,13 @@ class AudioPlane:
         self.playback_max_gap_ms = 0.0
         self._reply_gap_count = 0
         self._reply_max_gap_ms = 0.0
+        # task-30: per-reply segment ledger. `_reply_segments` is a list of dicts (one
+        # per TTS request); `_seg` is the one being appended to right now. The ledger is
+        # kept after the reply drains (the turn trace is read just after `run()`), and
+        # reset when the next reply's first segment arrives.
+        self._reply_segments: list[dict] = []
+        self._reply_segment_silences_ms: list[float] = []
+        self._seg: dict | None = None
         # task-23: additive per-reply ledger of [chunk_index, gap_ms] for the chunks that
         # had to wait, reset when a reply opens. Diagnostic only; the send path never
         # reads it. The turn trace needs a protocol field before this can cross the
@@ -2666,6 +2680,111 @@ class AudioPlane:
                 self._reply_stall_state(),
             )
 
+    def _reset_reply_segments(self) -> None:
+        """Start a fresh per-reply segment ledger (the next reply's first chunk)."""
+        self._reply_segments = []
+        self._reply_segment_silences_ms = []
+        self._seg = None
+
+    def _new_reply_segment(self, now: float) -> dict:
+        prev = self._reply_segments[-1] if self._reply_segments else None
+        gap_before = 0.0
+        if prev is not None:
+            # Playback duration of the previous segment (including any true-silence
+            # chunk the control plane wrote after it) against the wall clock between the
+            # two first chunks. Positive = the producer stalled after the audio ended.
+            gap_before = max(0.0, (now - prev["started"]) * 1000.0 - prev["audio_ms"])
+        segment = {
+            "started": now,
+            "audio_ms": 0.0,
+            "lead_ms": 0.0,
+            "trail_ms": 0.0,
+            "inner_ms": 0.0,
+            "run_ms": 0.0,
+            "voice": False,
+            "gap_before_ms": gap_before,
+            "seam_done": False,
+        }
+        self._reply_segments.append(segment)
+        return segment
+
+    def _record_segment_seam(self, segment: dict) -> None:
+        """Append the audible seam before `segment` once its leading edge is known.
+
+        Called on the first non-silent frame (the seam is audible exactly up to that
+        point) and again at finalize for an all-silent segment. Idempotent: the trace
+        may be read while the reply is still playing.
+        """
+        if segment["seam_done"]:
+            return
+        index = self._reply_segments.index(segment)
+        if index >= 1:
+            previous = self._reply_segments[index - 1]
+            seam = previous["trail_ms"] + segment["gap_before_ms"] + segment["lead_ms"]
+            self._reply_segment_silences_ms.append(round(seam, 1))
+        segment["seam_done"] = True
+
+    def _finalize_reply_segment(self) -> None:
+        """Close the open segment and record the audible seam before it, if any."""
+        segment = self._seg
+        if segment is None:
+            return
+        if segment["voice"]:
+            segment["trail_ms"] = segment["run_ms"]
+        else:
+            # All silence: count its duration once as the leading edge. Counting it as
+            # both lead and trail would double it in the seam.
+            segment["lead_ms"] = segment["audio_ms"]
+            segment["trail_ms"] = 0.0
+        # Finalizing records only the seam *before* this segment; the seam after it is
+        # recorded when the next segment's leading edge is known (or here, if this one
+        # was entirely silent).
+        self._record_segment_seam(segment)
+        self._seg = None
+
+    def _track_segment_chunk(self, chunk: bytes, segment: bool, now: float) -> None:
+        """Attribute one PLAY_PCM chunk to the open segment and scan its silence.
+
+        Called on the send path, after the prebuffer gate, so `started` is close to the
+        first sample reaching the device. The scan is 10 ms frames over int16 samples -
+        cheap (a 100 ms block is 10 frames) and it never mutates the audio.
+        """
+        if segment:
+            self._finalize_reply_segment()
+            if not self._reply_open:
+                self._reset_reply_segments()
+            self._seg = self._new_reply_segment(now)
+        elif self._seg is None:
+            # A reply whose first frame was not marked still gets accounted for; the
+            # control plane marks the first chunk of every piece, so this is a fallback.
+            self._seg = self._new_reply_segment(now)
+        current = self._seg
+        rate = self.cfg.audio.voice.rate
+        current["audio_ms"] += len(chunk) / 2 / rate * 1000.0
+        samples = np.frombuffer(chunk, dtype="<i2")
+        if samples.size == 0:
+            return
+        frame = max(1, rate * SEGMENT_FRAME_MS // 1000)
+        for start in range(0, samples.size, frame):
+            block = samples[start:start + frame]
+            block_ms = block.size / rate * 1000.0
+            silent = int(np.max(np.abs(block.astype(np.int32)))) <= SEGMENT_SILENCE_PEAK
+            if silent:
+                if current["voice"]:
+                    current["run_ms"] += block_ms
+                else:
+                    current["lead_ms"] += block_ms
+            elif not current["voice"]:
+                current["voice"] = True
+                current["run_ms"] = 0.0
+                # The leading silence is now known: publish the seam immediately, not
+                # only when the next segment starts (a trace may be read mid-reply).
+                self._record_segment_seam(current)
+            else:
+                if current["run_ms"] > current["inner_ms"]:
+                    current["inner_ms"] = current["run_ms"]
+                current["run_ms"] = 0.0
+
     async def _prepare_reply_player(self, adapter: DeviceAdapter) -> bool:
         """Stop the old player before a reply only when it may still hold audio.
 
@@ -2725,9 +2844,17 @@ class AudioPlane:
                     # The lead is the number to read when a reply sounds rough; without
                     # this line the only copy of it was the console, 2 s stale. Only when
                     # something was actually spoken - the idle loop lands here too.
+                    self._finalize_reply_segment()
                     if reply_chunks:
-                        log.info("reply: %d chunks, lead max %.0f ms",
-                                 reply_chunks, reply_lead_max * 1000)
+                        log.info(
+                            "reply: %d chunks, lead max %.0f ms, %d segments, "
+                            "segments_ms=%s, silences_ms=%s, inner_ms=%s",
+                            reply_chunks, reply_lead_max * 1000,
+                            len(self._reply_segments),
+                            [round(item["audio_ms"]) for item in self._reply_segments],
+                            self._reply_segment_silences_ms,
+                            [round(item["inner_ms"]) for item in self._reply_segments],
+                        )
                         if self._reply_gap_count:
                             # One line per reply, never per chunk.
                             log.info("reply: %d gaps, max %.0f ms",
@@ -2871,6 +2998,10 @@ class AudioPlane:
                     self._owner = "dialogue"
                     break
             self._pause_for_speech()
+            # task-30: account the chunk before it is resampled/sent. The prebuffer gate
+            # above has already run, so `started` is the moment this segment reaches the
+            # device rather than the moment the producer wrote it.
+            self._track_segment_chunk(chunk, segment, time.monotonic())
             self._speak_queued_s = max(
                 0.0, self._speak_queued_s - len(chunk) / 2 / self.cfg.audio.voice.rate
             )
@@ -3230,6 +3361,9 @@ class AudioPlane:
             previous.cancel()
 
     def _flush_speech(self) -> None:
+        # task-30: close the segment ledger for the part that actually reached the
+        # speaker before the barge, so the trace describes what was heard.
+        self._finalize_reply_segment()
         self._release("dialogue")
         self._speak_queued_s = 0.0
         # The producer's burst was cancelled: nothing more is expected, and any pending
@@ -3468,6 +3602,17 @@ class AudioPlane:
                 [list(pair) for pair in self.playback_gap_chunks]
                 if self._reply_open else []
             ),
+            # task-30: the last reply's segment ledger survives the drain so the turn
+            # trace (read just after `run()`, possibly after the audio finished) can
+            # describe its own reply. It is replaced on the next reply's first segment.
+            reply_segment_count=len(self._reply_segments),
+            reply_segment_audio_ms=[
+                round(item["audio_ms"], 1) for item in self._reply_segments
+            ],
+            reply_segment_silences_ms=list(self._reply_segment_silences_ms),
+            reply_segment_inner_silence_ms=[
+                round(item["inner_ms"], 1) for item in self._reply_segments
+            ],
             playback_errors=self.playback_errors,
             playback_last_error=self.playback_last_error,
             device_volume=self.device_volume,

@@ -104,6 +104,28 @@ class TurnTrace:
                 for pair in chunks
                 if len(pair) >= 2
             ]
+        # task-30: the segment ledger is the part the underrun counters cannot see - two
+        # TTS renditions joined by their own head/tail silence leave the PCM contiguous
+        # and `playback_gap_count` at zero. Additive fields; an older plane that never
+        # sends them leaves the trace exactly as before.
+        segment_count = getattr(metrics, "reply_segment_count", None)
+        if segment_count:
+            self.meta["reply_segment_count"] = int(segment_count)
+            durations = getattr(metrics, "reply_segment_audio_ms", None) or []
+            if durations:
+                self.meta["reply_segment_audio_ms"] = [
+                    round(float(value), 1) for value in durations
+                ]
+            silences = getattr(metrics, "reply_segment_silences_ms", None) or []
+            if silences:
+                self.meta["reply_segment_silences_ms"] = [
+                    round(float(value), 1) for value in silences
+                ]
+            inner = getattr(metrics, "reply_segment_inner_silence_ms", None) or []
+            if inner:
+                self.meta["reply_segment_inner_silence_ms"] = [
+                    round(float(value), 1) for value in inner
+                ]
 
     def note_wake(self, wake: object) -> None:
         """Record where a turn's wake came from (Socket & Plug v1 §5).

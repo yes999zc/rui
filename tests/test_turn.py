@@ -841,14 +841,22 @@ def test_a_short_reply_without_end_punctuation_synthesises_once(monkeypatch) -> 
 
 
 def test_the_short_reply_hold_is_bounded() -> None:
-    """The hold releases on force/tail, on a longer buffer, and after ~300 ms."""
+    """The hold releases after ~300 ms, but as ONE merged piece (task-30).
+
+    d.10 released the hold by splitting: a model pause >300 ms after the newline put
+    「在，」 and 「你说。」 into two TTS requests, and the vendor's own head/tail silence
+    became the audible comma gap. The release now merges; first-audio timing is the
+    same (both happen on the delta that arrives after the cap).
+    """
     text = "在，\n你说。"
     assert split_sentences(text, hold_short=True) == ([], text)
     assert split_sentences(text, hold_short=True, short_wait_ms=299) == ([], text)
     assert split_sentences(text, hold_short=True, short_wait_ms=300) == (
-        ["在，", "你说。"], ""), "hold did not expire"
-    # `force` bypasses the hold (`not force`): the old split runs unchanged.
-    assert split_sentences(text, hold_short=True, force=True) == (["在，", "你说。"], "")
+        ["在，\n你说。"], ""), "hold must merge, never split"
+    # An incomplete short buffer keeps waiting: merging now would still split the tail.
+    assert split_sentences("在，\n你", hold_short=True, short_wait_ms=300) == ([], "在，\n你")
+    # `force`/tail also merges for a short reply.
+    assert split_sentences(text, hold_short=True, force=True) == (["在，\n你说。"], "")
     # A short *single* sentence is not held: it already is one piece.
     assert split_sentences("第一句话。", hold_short=True) == (["第一句话。"], "")
     assert split_sentences("在，你说。", hold_short=True) == (["在，你说。"], "")
