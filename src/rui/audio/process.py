@@ -94,6 +94,7 @@ from .protocol import (
 from .resample import resample
 from .ring import ArrivalStats, PcmRing
 from .vad import GateConfig, UtteranceGate, VadUnavailable
+from .volume_keys import VOLUME_KEY_GRACE_S, volume_key_target
 from .wav import read_wav_mono
 
 METRICS_EVERY_S = 2.0
@@ -433,6 +434,11 @@ class AudioPlane:
         self._muted_known = False
         self.key_events: dict[str, int] = {}
         self.last_key: tuple[str, str] | None = None
+        # task-19: monotonic time of the last physical volume key. `_reconcile_volume`
+        # stays silent for VOLUME_KEY_GRACE_S afterwards, while the device's own ramp
+        # (and the bridge's reported level) settle; after that the target is the new
+        # config value the key wrote back, never the pre-key one.
+        self.last_user_volume_at: float | None = None
         self.adapter: DeviceAdapter | None = None
         self.ring = PcmRing(capacity_ms=cfg.audio.playback.queue_ms, frame_ms=cfg.audio.voice.frame_ms)
         self.arrivals = ArrivalStats()
@@ -2768,12 +2774,14 @@ class AudioPlane:
             log.info("led: %s", exc)
 
     def _handle_device_key(self, event: _VendorEvent) -> None:
-        """Apply one physical-key signal (task-18).
+        """Apply one physical-key signal (task-18; volume writeback task-19).
 
         Mute is device-sovereign: ``mute``/``unmute`` update the state, paint the
         red ring (or hand the ring back on unmute) and make the next wake skip its
-        cue. Volume keys are reported and counted only: writeback to config is
-        task-19's job, and doing it here would fight the button's own ramp.
+        cue. A volume key already moved the device's mixer, so it is adopted into
+        the in-memory config target (``_apply_volume_key``) and the control plane
+        persists the same step; without that the reconciler would put the pre-key
+        level back on its next tick.
         """
         kind = event.kind
         text = event.text
@@ -2801,16 +2809,54 @@ class AudioPlane:
         elif kind in ("volume_up", "volume_down"):
             self.key_events[kind] = self.key_events.get(kind, 0) + 1
             self.last_key = (kind, text)
-            # Clear + observed mute state; no config write yet (task-19).
-            log.info(
-                "device key: %s (observed=%s); volume writeback not implemented yet",
-                kind,
-                text or "?",
-            )
+            self._apply_volume_key(kind, text)
         elif kind == "action":
             self.key_events[kind] = self.key_events.get(kind, 0) + 1
             self.last_key = (kind, text)
             log.info("device key: action button (observed=%s)", text or "?")
+
+    def _apply_volume_key(self, kind: str, text: str = "") -> None:
+        """Adopt one physical volume key into this process's config target (task-19).
+
+        The key itself already moved the mixer; this records where it landed, so
+        ``_reconcile_volume`` targets the new level instead of pulling the mixer
+        back to the pre-key config. The write is deliberately *not* repeated on the
+        device here - a second ramp on top of the button's own would fight it.
+
+        Persistence is the control plane's job (it owns config.yaml): the plane
+        already forwards every drained signal as ``VendorSignalMsg``, and the app
+        applies the identical step from ``volume_keys.volume_key_target`` to the
+        same config value. ``volume = 0`` stays vendor-owned (see that helper).
+        """
+        self.last_user_volume_at = time.monotonic()
+        dev = next((d for d in self.cfg.devices if d.id == self.device_id), None)
+        if dev is None:
+            return
+        percent = volume_key_target(dev.volume, kind)
+        if percent is None:
+            log.info(
+                "device key: %s (observed=%s) ignored (volume 0 = vendor owns the mixer)",
+                kind, text or "?",
+            )
+            return
+        before = dev.volume
+        if percent == before:
+            log.info(
+                "device key: %s (observed=%s) at the %d%% limit", kind, text or "?", percent
+            )
+            return
+        dev.volume = percent
+        # The best current estimate for /health and for the read-back comparison:
+        # the key moved the mixer to (about) the new target, and the next metrics
+        # read replaces it with the device's own report.
+        self.device_volume = round(percent * 255 / 100)
+        log.info(
+            "device key: %s (observed=%s), target %d%% -> %d%% (control plane persists it)",
+            kind,
+            text or "?",
+            before,
+            percent,
+        )
 
     def _seed_device_muted(self) -> None:
         """Adopt the adapter's reported mute state before the first key event."""
@@ -3131,10 +3177,25 @@ class AudioPlane:
         and an exact comparison rewrote the same level every ~16 s (d.7). A target that
         actually moved - config edit or `volume.set` - still differs by more than a step
         and is written here; the user path itself never consults this tolerance.
+
+        task-19: a physical volume key is a user choice too. For
+        `VOLUME_KEY_GRACE_S` after one, no write happens at all - the mixer is still
+        ramping on the device and the bridge can report the pre-key level for one
+        cycle. The target itself was already moved by `_apply_volume_key`, so once the
+        window closes this method enforces the *new* config value (or finds it already
+        within tolerance), never the pre-key one.
         """
         dev = next((d for d in self.cfg.devices if d.id == self.device_id), None)
         target = dev.volume if dev is not None else 0
         if target <= 0 or self.adapter is None or self.device_volume is None:
+            return
+        if (self.last_user_volume_at is not None
+                and time.monotonic() - self.last_user_volume_at < VOLUME_KEY_GRACE_S):
+            log.debug(
+                "volume: physical key %.1fs ago, not reconciling (target %d%%)",
+                time.monotonic() - self.last_user_volume_at,
+                target,
+            )
             return
         set_vol = getattr(getattr(self.adapter, "services", None), "set_volume", None)
         if set_vol is None:

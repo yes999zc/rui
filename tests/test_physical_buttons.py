@@ -4,7 +4,9 @@ The bridge drains ``drain_signals()`` items whose ``kind`` is ``mute`` /
 ``unmute`` / ``volume_up`` / ``volume_down`` / ``action``. The plane owns the
 two behaviours that matter here: a muted device still opens a turn but must not
 play the wake cue, and the ring stays red (``muted``) until it is unmuted.
-Volume keys are reported, not written back (task-19 owns config writeback).
+Volume keys adopt the new target into the config (task-19, see
+``test_volume_key_writeback.py``) but never rewrite the mixer from here - the
+key already moved it.
 """
 from __future__ import annotations
 
@@ -175,7 +177,8 @@ def test_the_red_ring_wins_over_later_paints_while_muted(tmp_path: Path) -> None
     asyncio.run(run())
 
 
-def test_volume_keys_reach_the_handler_without_a_config_write(tmp_path: Path) -> None:
+def test_volume_keys_do_not_rewrite_the_mixer(tmp_path: Path) -> None:
+    """The key already moved the mixer; a second write would fight its own ramp."""
     async def run() -> None:
         plane, adapter = make_plane(tmp_path)
         apply_keys(
@@ -185,7 +188,7 @@ def test_volume_keys_reach_the_handler_without_a_config_write(tmp_path: Path) ->
         )
         assert plane.key_events == {"volume_up": 1, "volume_down": 1}
         assert plane.last_key == ("volume_down", "unmuted")
-        assert adapter.volume_writes == 0, "task-19 owns volume writeback"
+        assert adapter.volume_writes == 0, "the key path must not call services.set_volume"
 
     asyncio.run(run())
 

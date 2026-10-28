@@ -256,6 +256,43 @@ def test_wake_opens_the_turn_and_idle_closes_it(tmp_path, monkeypatch) -> None:
         assert arbiter.state.turn_open is False
 
 
+def test_a_physical_volume_key_persists_the_new_config_target(
+        tmp_path, monkeypatch) -> None:
+    """task-19: the control plane is config.yaml's only writer.
+
+    The plane applied the same step to its own copy (the reconciler's target) before
+    emitting the device signal; here the signal must leave a file that reloads with
+    the new volume, so the key survives a plane/app restart instead of being pulled
+    back to the old target.
+    """
+    def saved_volume() -> int:
+        reloaded = load_config(tmp_path / "config.yaml")
+        return next(d.volume for d in reloaded.devices if d.id == "living")
+
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        assert saved_volume() == 60                     # DeviceConfig default
+
+        client.portal.call(living.on_vendor, "volume_down", "")
+        assert saved_volume() == 55, "the key was not persisted to config.yaml"
+        assert next(d.volume for d in app.state.cfg.devices
+                    if d.id == "living") == 55
+
+        client.portal.call(living.on_vendor, "volume_up", "")
+        assert saved_volume() == 60
+
+        # A key at the top/bottom writes the clamped value, never 105/-5.
+        for _ in range(10):
+            client.portal.call(living.on_vendor, "volume_up", "")
+        assert saved_volume() == 100
+        for _ in range(25):
+            client.portal.call(living.on_vendor, "volume_down", "")
+        assert saved_volume() == 0
+
+
 def test_plane_link_claims_the_owner_when_it_speaks_and_closes_the_turn() -> None:
     events: list[tuple[str, object]] = []
 

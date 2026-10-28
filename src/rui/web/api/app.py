@@ -42,6 +42,7 @@ from ...audio.fleet import PlaneFleet
 from ...audio.kws import KwsUnavailable, keyword_meta, model_files, write_keywords_file
 from ...audio.probe import safe_probe
 from ...audio.protocol import PauseMusic, PlayFile, ResumeMusic, StopAudio
+from ...audio.volume_keys import volume_key_target
 from ...channels.supervisor import ChannelSupervisor
 from ...channels.weixin import WeixinAdapter
 from ...config.catalog import (
@@ -3050,6 +3051,19 @@ def create_app(
                         await service.give_back_if_parked(delay_s=0.0)
                         return
 
+            def _volume_device():
+                """This plane's config row, resolved the way the volume tool does.
+
+                `device_id` is empty on the legacy single-plane wiring (the Ready
+                message had not arrived when callbacks were attached), so fall back to
+                the plane's own reported id and then to the first configured device.
+                """
+                dev_id = (device_id
+                          or (link.ready.device_id if link.ready else "")
+                          or "")
+                return next((d for d in cfg.devices if d.id == dev_id),
+                            cfg.devices[0] if cfg.devices else None)
+
             def on_vendor(kind: str, text: str) -> None:
                 """The vendor's assistant woke: it owns the next utterance.
 
@@ -3062,8 +3076,32 @@ def create_app(
                 the vendor's dialog and comes back (its `idle` event, or the 4 s
                 watchdog above). Key 114 starting the vendor's own player lands on
                 the same `playing` event, so V5 needs no separate path.
+
+                task-19: a physical volume key rides this same channel (the plane
+                forwards every drained signal). The plane has already applied the step
+                to its own config, so the reconciler targets the new level; here the
+                control plane - config.yaml's only writer - applies the identical step
+                from `volume_keys` and persists it, or the key would be undone by the
+                next restart.
                 """
                 service = getattr(app.state, "music", None)
+                if kind in ("volume_up", "volume_down"):
+                    dev = _volume_device()
+                    if dev is not None and config_path is not None:
+                        percent = volume_key_target(dev.volume, kind)
+                        if percent is not None and percent != dev.volume:
+                            before = dev.volume
+                            dev.volume = percent
+                            try:
+                                save_config(config_path, cfg)
+                            except Exception as exc:  # noqa: BLE001 - a key must not kill audio
+                                log.info("volume key: %s not persisted: %s", kind, exc)
+                            else:
+                                log.info(
+                                    "volume key: %s, config volume %d%% -> %d%% (saved)",
+                                    kind, before, percent,
+                                )
+                    return
                 if kind == "playing":
                     vendor_state["playing"] = text == "playing"
                     vendor_state["seen"] = vendor_state["seen"] or vendor_state["playing"]
