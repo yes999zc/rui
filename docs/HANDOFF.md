@@ -1,5 +1,35 @@
 # HANDOFF — rui 阶段快照（0.7.8 已发布）
 
+## 多音箱前置（P0，2026-10-28）
+
+phase-close: task-4
+
+**本阶段结论**：5 项 dot2 全局 env 已可按设备配；`max_planes` 默认 5；secrets/token 可逐台；
+P0-4 同房/跨房同词逻辑已自动化并有计数。**代码已 push，生产未部署**（仍 0.7.9，部署需 9 哥 执行）。
+
+## 版本与契约
+
+- rui core：`75de4b4`（task-3）← `a36f678`（max_planes 5）← `7b5ca57`；**未打 tag、未发版**。
+- rui-dot2-bridge：`c64acb5`；**未 bump 版本**（plug 仍 1.3.1）、`rui_compat` 仍 `>=0.6.0 <0.8.0`。
+- 契约：`rui-dot2-bridge/docs/contracts/C-001-per-device-params.md`（5 参数表 + 优先级 + 降级 + 回滚）。
+- 生产：NAS `/vol1/rui` 仍跑 0.7.9（`sha256:5aa362f6…`）；bridge 以源码挂载，需 pull + 重装 manifest + restart 才生效。
+
+## 已完成
+
+1. **P0-1** 5 项按设备可配：`adapter.py` ctor 4 kwarg + `params > env > 设备默认`；loudness 默认 `dev/rui/<id>/loudness.json`，EQ 共享可覆盖；control port bind 失败 warning 降级不 abort。证据：bridge `155 passed`、test_per_device_params 10 条、C-001。
+2. **P0-2** `multi_device.max_planes` 默认 4→5（`schema.py:1068`，1–8 不变）；5 台通过、6 台按原文案拒绝；控制台中英文案同步。证据：house `1718/6`（task-2 时点）。
+3. **P0-3** secrets 隔离：`dev > params > DOT2_SECRETS_DIR > secrets/<id>(存在) > secrets`；token 逐台 `token_env` + 各自 `device_token`；共享仍兼容。证据：C-001 + 两设备独立复现。
+4. **P0-4** `arbitration_cross_echo_suppressed` 计数（coordinator.metrics）+ 同房 cross_echo/turn_open/同批 lost_same_word + 跨房 admit/409 测试 5 条（HEAD 上 5 failed → 当前 5 passed）。证据：house `1723 passed, 6 skipped`；全量曾因并发 pytest 抢临时端口 flaky 1 次（xiaoai bind），隔离/重跑均绿。
+5. **文档** `backlog-0.8.md §e` 登记 9 哥 两条房间策略（e.1 全场停止 / e.2 default_output），OPEN、决策权在 9 哥；`docs/待拍板.md` D-012 登记语音链路跨房打断风险。
+
+## 下一步
+
+1. **9 哥 插第 2 台前**：NAS `cd /opt/rui-dot2-bridge && git pull`（到 `c64acb5`）→ `sh deploy/downstream/install-plug-manifest.sh <data_dir>` → `docker compose -f docker-compose.yml -f rui-dot2-override.yml restart rui`。
+2. 第 2 台走 `/api/v2/devices`：独立 `listen_port`（8871）、`room`、`params.control_port`（0 或唯一端口）、`params.loudness_file` 指可写卷、`secrets_dir` 逐台（可选）；两台 `listen_port` 不同。
+3. 真机跑 `docs/release/acceptance-4devices.md` §6.5 同房交叉回声 + 跨房同词三用例；**录音/人耳**判「是否打断/双声」，异常升级 0.8 缺陷单。
+4. 第二台 PASS 后再插第 3 台，不要一次三台。
+5. P1：`d.7` volume 精确比较（加容差/仅配置变化写）；`e.1`/`e.2` 等 9 哥 拍板，实现者不许自行选。
+
 ## 收尾（0.7.9，2026-10-27）
 
 - **版本**：core **0.7.9**（patch）。版本号三处一致：`pyproject.toml` / `src/rui/__init__.py` / `uv.lock`（`07f40f4`）。
