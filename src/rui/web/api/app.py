@@ -9,6 +9,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -140,8 +141,63 @@ log = logging.getLogger(__name__)
 _DEFAULT_WEB_DIST = Path(__file__).resolve().parents[3].parent / "web" / "dist"
 WEB_DIST = Path(env_get("RUI_WEB_DIR", _DEFAULT_WEB_DIST))
 
+# LED convergence (task-17, 2026-10-28 04:29). `_light_after_audio` delays a paint by
+# the duration of the audio it follows, which can be tens of seconds. A stop/farewell
+# that lands in between used to be overpainted green by that stale timer - measured as
+# `session closed` followed 13 s later by `led: listening` and three repaints. Every
+# paint now carries the epoch it was scheduled in; an `off` bumps the room's epoch and
+# cancels pending paints, and a stale paint is dropped instead of sent. Repaints are
+# bounded both by count and by a wall-clock deadline.
+LED_REPAINT_EVERY_S = 1.2
+LED_REPAINT_MAX = 3
+
+
+def _led_room(target: object | None) -> str:
+    """The room a paint belongs to (the ring is per device, not per turn)."""
+    ready = getattr(target, "ready", None)
+    room = (getattr(target, "device_id", "")
+            or getattr(ready, "device_id", ""))
+    return str(room or "default")
+
+
+def _led_epochs(app: FastAPI) -> dict[str, int]:
+    book = getattr(app.state, "led_epochs", None)
+    if book is None:
+        book = {}
+        app.state.led_epochs = book
+    return book
+
+
+def _led_closed(app: FastAPI) -> dict[str, int]:
+    """Rooms whose last state was `off`; cleared when a new turn paints a state."""
+    book = getattr(app.state, "led_closed", None)
+    if book is None:
+        book = {}
+        app.state.led_closed = book
+    return book
+
+
+def _led_after_tasks(app: FastAPI) -> dict[str, set[asyncio.Task]]:
+    book = getattr(app.state, "led_after_tasks", None)
+    if book is None:
+        book = {}
+        app.state.led_after_tasks = book
+    return book
+
+
+def _cancel_led_after(app: FastAPI, room: str) -> None:
+    """Drop this room's scheduled paints; a closed round must not repaint itself."""
+    tasks = _led_after_tasks(app).get(room)
+    if not tasks:
+        return
+    current = asyncio.current_task()
+    for task in list(tasks):
+        if task is not current:
+            task.cancel()
+
+
 def _light(app: FastAPI, effect: str, repaint: bool = False,
-           live: object | None = None) -> None:
+           live: object | None = None, *, epoch: int | None = None) -> int | None:
     """Paint the ring without blocking the caller.
 
     The shell request shares the websocket with the audio stream; the old build measured
@@ -149,16 +205,40 @@ def _light(app: FastAPI, effect: str, repaint: bool = False,
     targets one room's plane; without it the ring is painted in the room of the open
     turn (falling back to the default output room), never in an unrelated primary
     room. On the single-plane path both resolve to the same client.
+
+    Returns the room's new epoch. `epoch` is the guard used by delayed paints: a paint
+    scheduled before a newer state changed the ring is stale and is not sent.
     """
     target = live if live is not None else _session_client(app)
     if target is None:
-        return
+        return None
+    room = _led_room(target)
+    book = _led_epochs(app)
+    closed = _led_closed(app)
+    if epoch is not None and book.get(room, 0) != epoch:
+        return None
+    # A `listening` scheduled after the session closed (a turn still finishing) must
+    # not light the ring again. A real new turn first paints wake/thinking/speaking,
+    # which clears the marker below.
+    if effect == "listening" and closed.get(room) == book.get(room, 0):
+        return None
+    if effect == "off":
+        _cancel_led_after(app, room)
+    epoch = book.get(room, 0) + 1
+    book[room] = epoch
+    if effect == "off":
+        closed[room] = epoch
+    elif not repaint:
+        closed.pop(room, None)
     log.info("led: %s%s", effect, " (repaint)" if repaint else "")
     task = asyncio.create_task(target.set_led(effect, repaint=repaint), name="led")
-    tasks = getattr(app.state, "led_tasks", None)
-    if tasks is not None:
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
+    ledger = getattr(app.state, "led_tasks", None)
+    if ledger is None:
+        ledger = set()
+        app.state.led_tasks = ledger
+    ledger.add(task)
+    task.add_done_callback(ledger.discard)
+    return epoch
 
 
 def _light_after_audio(app: FastAPI, audio_bytes: int, rate: int, effect: str = "listening",
@@ -168,20 +248,53 @@ def _light_after_audio(app: FastAPI, audio_bytes: int, rate: int, effect: str = 
     run() returns when the last chunk is queued, not played; output_owner is released
     at the same moment (the plane frees the speaker when its queue empties), so neither
     is a "the answer is over" signal. The duration is exact: PCM bytes / 2 / rate. The
-    three repaints after it match what the vendor LED service needs to stay repainted.
+    repaints after it match what the vendor LED service needs to stay repainted, but
+    they are bounded by `LED_REPAINT_MAX` and a deadline, and they stop as soon as a
+    newer state (a stop, a farewell, the next turn) owns the ring.
     """
+    target = live if live is not None else _session_client(app)
+    if target is None:
+        return
     seconds = max(0.0, audio_bytes / 2 / max(1, rate))
+    room = _led_room(target)
+    book = _led_epochs(app)
+    closed = _led_closed(app)
+    if effect == "listening" and closed.get(room) == book.get(room, 0):
+        # The session already closed and no new turn started: this paint belongs to the
+        # round that ended. Do not schedule a green ring for it.
+        return
+    if effect == "off":
+        # Terminal: invalidate and cancel every paint this room still has pending, so
+        # no earlier `listening` can land after the goodbye (or before) this off.
+        _cancel_led_after(app, room)
+        epoch = book.get(room, 0) + 1
+        book[room] = epoch
+        closed[room] = epoch
+    else:
+        epoch = book.get(room, 0)
 
     async def run() -> None:
         await asyncio.sleep(seconds + 0.6)
-        _light(app, effect, live=live)
-        if effect != "listening":
+        applied = _light(app, effect, live=target, epoch=epoch)
+        if effect != "listening" or applied is None:
             return
-        for _ in range(3):
-            await asyncio.sleep(1.2)
-            _light(app, effect, repaint=True, live=live)
+        # Repaint i is due `i * LED_REPAINT_EVERY_S` after the initial paint, so the
+        # deadline must cover the last one. A deadline of `MAX * EVERY_S` expires
+        # exactly as repaint 3 is due; `time.monotonic() > deadline` was then true
+        # after the third sleep and only 1 + 2 paints were ever sent (review finding).
+        deadline = time.monotonic() + LED_REPAINT_EVERY_S * (LED_REPAINT_MAX + 1)
+        for _ in range(LED_REPAINT_MAX):
+            await asyncio.sleep(LED_REPAINT_EVERY_S)
+            if time.monotonic() > deadline:
+                return
+            applied = _light(app, effect, repaint=True, live=target, epoch=applied)
+            if applied is None:
+                return
 
-    asyncio.create_task(run(), name="led-after-audio")
+    task = asyncio.create_task(run(), name="led-after-audio")
+    tasks = _led_after_tasks(app).setdefault(room, set())
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 def _speaking(app: FastAPI, live: object, on_first: object | None = None):
@@ -3030,9 +3143,21 @@ def create_app(
                 # clock was started in on_wake and keeps running; only the light is
                 # turned off because nobody is being listened to any more.
                 _light(app, "off", live=link)
-                log.info("wake without speech (%.1f s); idle goodbye in %.0f s",
-                         float(getattr(msg, "waited_ms", 0.0)) / 1000.0,
-                         max(0.0, runner.idle.remaining()))
+                waited_s = float(getattr(msg, "waited_ms", 0.0)) / 1000.0
+                # `remaining()` returns an `inf` sentinel for both "no session" and
+                # "timeout off"; those are different states and must not share the
+                # "session already closed" wording. Printing inf raw produced
+                # `idle goodbye in inf s` (04:29).
+                remaining_s = runner.idle.remaining()
+                if not runner.idle.active:
+                    log.info("wake without speech (%.1f s); "
+                             "session already closed / no countdown", waited_s)
+                elif not math.isfinite(remaining_s):
+                    log.info("wake without speech (%.1f s); "
+                             "session timeout off / no goodbye", waited_s)
+                else:
+                    log.info("wake without speech (%.1f s); idle goodbye in %.0f s",
+                             waited_s, max(0.0, remaining_s))
 
             link.on_wake = on_wake
             link.on_wake_idle = on_wake_idle
@@ -3344,7 +3469,7 @@ def create_app(
                     continue
                 if line:
                     _light(app, "off", live=client)
-                    log.info("session closed: %r", line)
+                    log.info("session closed: %s: %r", "idle timeout", line)
                     # The goodbye is our own audio: without this the plane never arms its
                     # post-playback mute, and a device-AEC speaker hears its own farewell
                     # tail as a request (measured 13:06:50: "这吗" -> "在的，你说吧。").

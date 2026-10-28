@@ -632,6 +632,10 @@ class AudioPlane:
         self._followup_start = 0.0
         self._followup_end = 0.0
         self._followup_replayed_ms = 0.0
+        # The newest LED paint owns the ring (task-17). Every LedState used to become
+        # its own fire-and-forget task, so a slow "listening" animation could finish
+        # after a later "off" and leave the ring green after the session closed.
+        self._led_task: asyncio.Task | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._connected: asyncio.Event | None = None
         # Wake acknowledgement (S5a). Fire-and-forget: awaiting it here would block the
@@ -2428,7 +2432,8 @@ class AudioPlane:
                             self._start_followup_capture(
                                 max(0.0, pacer.due - time.monotonic()), delay)
                         asyncio.create_task(
-                            self._arm_followup_later(delay), name="followup-gate"
+                            self._arm_followup_later(delay, reason="reply drained"),
+                            name="followup-gate"
                         )
                     # The song waits out the whole turn. An empty queue alone once meant
                     # "speech over", so the music came back 0.4 s after the wake - over
@@ -2455,7 +2460,8 @@ class AudioPlane:
                             self._start_followup_capture(
                                 max(0.0, pacer.due - time.monotonic()), delay)
                             asyncio.create_task(
-                                self._arm_followup_later(delay, max_wait_ms=hold_ms),
+                                self._arm_followup_later(delay, max_wait_ms=hold_ms,
+                                                         reason="music hold"),
                                 name="followup-gate")
                         else:
                             self._music_hold_until = None   # resume on this very tick
@@ -2646,8 +2652,28 @@ class AudioPlane:
         log.info("follow-up gate replayed %.0f ms of gated tail",
                  self._followup_replayed_ms)
 
+    def _followup_wait_ms(self, override_ms: int | None = None) -> int:
+        """The finite follow-up window: min(session timeout, voice cap, path override).
+
+        The gate used to be armed for the whole session timeout (15 s), which made a
+        closed session look like an open listening window (04:15:43 speech, no wake).
+        `followup_max_wait_ms` (8 s by default) is the ceiling; a shorter music hold or
+        a shorter session timeout still wins. `session.timeout_s=0` means the session
+        never times out, so the cap alone is the window: it must not turn into 0 ms.
+        The follow-up cap itself being 0 means "do not open a window at all".
+        """
+        cap_ms = int(self.effective.voice.followup_max_wait_ms)
+        # A disabled session timeout is "forever", not "zero seconds": multiplying it
+        # by 1000 and taking min() with the cap made every follow-up window 0 ms.
+        wait_ms = (cap_ms if self.cfg.session.timeout_s <= 0
+                   else min(int(self.cfg.session.timeout_s * 1000), cap_ms))
+        if override_ms is not None:
+            wait_ms = min(wait_ms, max(0, int(override_ms)))
+        return max(0, wait_ms)
+
     async def _arm_followup_later(self, delay: float,
-                                  max_wait_ms: int | None = None) -> None:
+                                  max_wait_ms: int | None = None,
+                                  reason: str = "reply drained") -> None:
         """Open the follow-up gate after the speaker has finished, not after sending."""
         try:
             await asyncio.sleep(max(0.0, delay))
@@ -2661,12 +2687,18 @@ class AudioPlane:
             log.info("follow-up gate stays shut: %s owns the speaker", self._owner)
             self._music_hold_until = None   # nothing is held; resume next tick
             return
+        wait_ms = self._followup_wait_ms(max_wait_ms)
+        if wait_ms <= 0:
+            # A zero cap is a real choice: every sentence needs the wake word. Do not
+            # arm at all (arming for 0 would still accept the first block before the
+            # gate's own timeout check runs).
+            log.info("follow-up gate stays shut: follow-up window disabled (0 s)")
+            if max_wait_ms is not None:
+                self._music_hold_until = None   # nothing is held; resume next tick
+            return
         if gate is not None and not gate.armed and not self._stop.is_set():
-            log.info("follow-up gate open (%.1f s after the last block)", delay)
-            gate.arm(
-                followup=True,
-                max_wait_ms=max_wait_ms or int(self.cfg.session.timeout_s * 1000) or None,
-            )
+            log.info("follow-up gate open (%.1f s, %s)", wait_ms / 1000.0, reason)
+            gate.arm(followup=True, max_wait_ms=wait_ms)
             await self._replay_followup_tail()
 
     def _disarm_gate_for_our_audio(self) -> None:
@@ -2710,6 +2742,22 @@ class AudioPlane:
             await adapter.set_led(effect, repaint=repaint)
         except Exception as exc:  # noqa: BLE001 - a light is never worth an outage
             log.info("led: %s", exc)
+
+    def _request_led(self, effect: str, repaint: bool = False) -> None:
+        """Paint the newest LED state and abandon any older paint still in flight.
+
+        `LedState` is fire-and-forget on the control side (an animation must not queue
+        behind PLAY_PCM), so starting one independent task per message left the
+        completion order up to the adapter. A slow "listening" script could finish
+        after a later "off" and leave the ring green after the session closed. The
+        newest state is the only one worth painting, so the previous task is cancelled
+        as soon as a new one arrives.
+        """
+        previous = self._led_task
+        self._led_task = asyncio.create_task(
+            self._apply_led(effect, repaint), name="led")
+        if previous is not None and not previous.done():
+            previous.cancel()
 
     def _flush_speech(self) -> None:
         self._release("dialogue")
@@ -3145,8 +3193,9 @@ class AudioPlane:
                     self._resume_after_speech()
                 elif isinstance(msg, LedState):
                     # Never awaited: the script runs on the device for up to a couple
-                    # of seconds and this loop also carries PLAY_PCM.
-                    asyncio.create_task(self._apply_led(msg.effect, msg.repaint), name="led")
+                    # of seconds and this loop also carries PLAY_PCM. The newest state
+                    # supersedes a paint still in flight (task-17: off must win).
+                    self._request_led(msg.effect, msg.repaint)
                 elif isinstance(msg, SpeakStart):
                     if not self._stale_speech_blocked:
                         self._segment_pending = True

@@ -772,3 +772,133 @@ def test_cross_room_wake_during_a_turn_is_admitted_then_the_runner_returns_409(
         assert response.status_code == 409
         assert response.json()["detail"] == "a turn is already running"
         assert calls == []
+
+
+def test_the_idle_goodbye_log_is_finite_and_never_prints_inf(
+        tmp_path, monkeypatch, caplog) -> None:
+    """2026-10-28 04:29: `idle goodbye in inf s` - `remaining()`'s sentinel printed.
+
+    The sentinel stays (it is how `remaining()` says "nothing to count"), but it has
+    three sources: a live finite session, a live session with the timeout off, and no
+    session at all. "Timeout off" is not "closed", and none may print `inf`.
+    """
+    import logging
+
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="rui.web.api.app"):
+            client.portal.call(living.on_wake_idle, WakeIdle(waited_ms=8000))
+        assert "idle goodbye in 15 s" in caplog.text
+        assert "inf" not in caplog.text
+
+        # The session is still open, but `session.timeout_s=0` means it never expires:
+        # `remaining()` is inf. That is not a closed session.
+        app.state.runner.idle.timeout_s = 0.0
+        app.state.runner.idle.start()
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="rui.web.api.app"):
+            client.portal.call(living.on_wake_idle, WakeIdle(waited_ms=1000))
+        assert "session timeout off / no goodbye" in caplog.text
+        assert "already closed" not in caplog.text
+        assert "idle goodbye in" not in caplog.text
+        assert "inf" not in caplog.text
+
+        # The farewell (or a stop) has already closed the session: no countdown exists.
+        app.state.runner.idle.stop()
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="rui.web.api.app"):
+            client.portal.call(living.on_wake_idle, WakeIdle(waited_ms=0))
+        assert "session already closed / no countdown" in caplog.text
+        assert "idle goodbye in inf" not in caplog.text
+
+
+def test_a_listening_paint_after_off_is_refused_and_a_new_turn_reopens_it() -> None:
+    """`off` is terminal for that round: only a newer paint clears the marker."""
+    app = SimpleNamespace(state=SimpleNamespace())
+    handle = FakeHandle("living")
+
+    async def scenario() -> None:
+        assert app_module._light(app, "off", live=handle) is not None
+        await asyncio.sleep(0)
+        assert handle.led == ["off"]
+
+        # A `listening` paint after the goodbye is refused, not sent.
+        assert app_module._light(app, "listening", live=handle) is None
+        await asyncio.sleep(0)
+        assert handle.led == ["off"]
+
+        # A new turn paints wake/thinking first, which clears the closed marker ...
+        assert app_module._light(app, "wake", live=handle) is not None
+        await asyncio.sleep(0)
+        assert handle.led == ["off", "wake"]
+        # ... and `listening` is accepted again.
+        assert app_module._light(app, "listening", live=handle) is not None
+        await asyncio.sleep(0)
+        assert handle.led == ["off", "wake", "listening"]
+
+    asyncio.run(scenario())
+
+
+def test_a_delayed_listening_paint_is_refused_after_off_and_allowed_after_a_new_turn() -> None:
+    """The delayed `listening` path (after the answer drains) has the same gate."""
+    app = SimpleNamespace(state=SimpleNamespace())
+    handle = FakeHandle("living")
+
+    async def scenario() -> None:
+        app_module._light(app, "off", live=handle)
+        await asyncio.sleep(0)
+        # Refused synchronously: no delayed paint task is even created.
+        app_module._light_after_audio(app, 0, 16000, "listening", live=handle)
+        assert app_module._led_after_tasks(app).get("living", set()) == set()
+        await asyncio.sleep(0.05)
+        assert "listening" not in handle.led
+
+        # A new turn's first paint clears the marker; the delayed paint now runs.
+        app_module._light(app, "thinking", live=handle)
+        await asyncio.sleep(0)
+        app_module._light_after_audio(app, 0, 16000, "listening", live=handle)
+        tasks = app_module._led_after_tasks(app).get("living", set())
+        assert len(tasks) == 1
+        await asyncio.sleep(0.7)  # the task waits 0.6 s before painting
+        assert handle.led[-1] == "listening"
+        for task in list(tasks):
+            task.cancel()
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+
+def test_a_delayed_listening_paint_sends_the_initial_paint_plus_all_three_repaints(
+        monkeypatch) -> None:
+    """One initial paint and exactly `LED_REPAINT_MAX` repaints, then the task stops.
+
+    Regression (task-17 review): the deadline was `EVERY_S * MAX`, i.e. exactly the
+    moment repaint 3 was due, so the `>` check skipped it and only 1 + 2 paints were
+    sent. The LED service needs all three to stay repainted. The interval is shrunk
+    so the test does not sleep the real 0.6 s + 3.6 s window.
+    """
+    app = SimpleNamespace(state=SimpleNamespace())
+    handle = FakeHandle("living")
+    monkeypatch.setattr(app_module, "LED_REPAINT_EVERY_S", 0.02)
+    every = app_module.LED_REPAINT_EVERY_S
+    total = 1 + app_module.LED_REPAINT_MAX
+
+    async def scenario() -> None:
+        app_module._light_after_audio(app, 0, 16000, "listening", live=handle)
+        # 0.6 s before the initial paint, then `LED_REPAINT_MAX` intervals, plus slack
+        # so a repaint that is late by a scheduler tick still lands inside the window.
+        await asyncio.sleep(0.6 + every * app_module.LED_REPAINT_MAX + 0.15)
+        assert handle.led == ["listening"] * total
+
+        # Nothing lands after the window: the loop is count-bounded and the task is done.
+        await asyncio.sleep(every * 2)
+        assert handle.led == ["listening"] * total
+        assert app_module._led_after_tasks(app).get("living", set()) == set()
+
+    asyncio.run(scenario())

@@ -222,3 +222,41 @@ def test_our_own_announcement_disarms_an_armed_gate_and_plays() -> None:
     assert plane._stale_speech_blocked is False
     plane._accept_play_pcm(_chunk(np.zeros(1600, dtype="<i2").tobytes()))
     assert plane._speak_queued_s > 0.0, "the announcement that disarmed the gate was dropped"
+
+
+def test_a_newer_off_supersedes_a_slow_listening_paint() -> None:
+    """The ring applies the newest state, not "whatever task finishes last".
+
+    LedState is fire-and-forget, so every paint used to be its own task. An adapter
+    whose "listening" script takes a second (the vendor's ring animations do) could
+    then finish *after* the "off" a closed session sent, leaving the ring green -
+    measured 2026-10-28 04:29 as "led: listening ... repaint stuck". The newest state
+    is the only one worth painting, so the old task is cancelled when a new one lands.
+    """
+
+    class SlowAdapter(StubAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release = asyncio.Event()
+            self.led_states: list[str] = []
+
+        async def set_led(self, effect: str, color: str = "",
+                          *, repaint: bool = False) -> None:  # noqa: ARG002
+            if effect == "listening":
+                await self.release.wait()
+            self.led_states.append(effect)
+
+    async def scenario() -> list[str]:
+        plane = _plane()
+        adapter = SlowAdapter()
+        plane.adapter = adapter  # type: ignore[assignment]
+        plane._request_led("listening")
+        await asyncio.sleep(0)          # the listening paint is now awaiting the ring
+        plane._request_led("off")
+        adapter.release.set()           # let the old paint finish if it still can
+        await asyncio.sleep(0.05)
+        return adapter.led_states
+
+    states = asyncio.run(scenario())
+
+    assert states == ["off"], f"a stale listening paint outlived the off: {states}"

@@ -435,6 +435,7 @@ devices:
 _VOICE_GOLDEN = {
     "barge_in": True,
     "followup_delay_ms": 1000,
+    "followup_max_wait_ms": 8000,
     "followup_replay": True,
     "frame_ms": 20,
     "kws_chunk": 8,

@@ -420,6 +420,22 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 - **验证**：`tests/test_turn.py` 新增 5 条（`在，\n你说。`→1 次 synth；`在，你说。`→1；
   长回复仍多段且首段不被合并；无句末标点的短回复 tail 1 次；hold 边界 300 ms/force）。真机复验留 9 哥 下午。
 
+### d.11 有限续听窗口 N（**已落地 @（本卡，task-17）**，2026-10-28）
+
+- **语义**：回答 drain / 会话关闭后的免唤醒窗口 = `min(session.timeout_s×1000, audio.voice.followup_max_wait_ms)`，
+  默认 **N = 8000 ms**（cap）；本路径还有更小的 override（音乐 hold、音量确认的 0）再取 `min`。
+  窗口到点由 `UtteranceGate` 的 `max_wait_ms` 关麦（发 `WakeIdle`），之后必须唤醒词才能起一轮。
+- **`session.timeout_s=0` 是「会话不过期」，不是「0 秒窗口」**：旧公式 `min(0, cap)` 会得出 0 ms；
+  现在 timeout≤0 时直接取 cap（仍为 8 s）。**cap=0 才表示完全不续听**（每个句子都要唤醒词）。
+- **有歌的已知不同步**：`music.resume_hold_ms > 8000` 被 cap 截断的只是**续听门**的 `max_wait_ms`；
+  `process.py` 的 `_music_hold_until` 仍按**完整** hold（schema 上限 10 s）计时，所以 8–10 s 之间
+  音乐仍暂停、免唤醒窗口已关。登记为取舍（`docs/known-limitations.md` **L19**），本卡不修。
+- **落点**：`src/rui/audio/process.py` 的 `_followup_wait_ms()` / `_arm_followup_later(reason=...)`；
+  `src/rui/config/schema.py` 的 `VoiceConfig.followup_max_wait_ms`、`MusicConfig.resume_hold_ms`。
+- **回归**：`tests/test_followup_window.py`（默认 8 s、timeout 更短取小、`timeout_s=0` 仍 8 s、cap=0 不武装、
+  1 s 内接受 / 9 s 与 20 s 拒绝；音乐 hold 的 cap 截断由代码保证、当前未单测）。
+- **未做**：**真机未验证**（无专项真机窗口）；发版说明不得写「续听窗口真机已验证」。
+
 
 ## e. 房间策略待 9 哥 拍板
 

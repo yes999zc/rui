@@ -655,6 +655,13 @@ def _audio_fields() -> list[dict]:
          "Replay the mic audio caught between playback end and the gate opening. Off "
          "stops a device-AEC speaker's residual echo becoming a turn, at the cost of "
          "possibly clipping the first syllable.", None, True),
+        ("followup_max_wait_ms", "续听窗口上限", "Follow-up window cap", "number", 0, 60000,
+         "续听门开麦后最多听多久（毫秒，默认 8000；0 = 完全不要续听窗口，每句都要唤醒词）。"
+         "会话超时更短时取更小值；窗口结束立即关麦并熄灯。改完重启音频面。",
+         "How long the follow-up gate may stay open (ms, default 8000; 0 = no follow-up "
+         "window at all - every sentence needs the wake word). The session timeout still "
+         "caps it when shorter; the gate closes and the ring goes off at the end. "
+         "Restart the audio plane.", _t("ms", "ms"), True),
         ("barge_in", "允许打断", "Barge-in", "bool", None, None,
          "说话中再次唤醒是否打断当前回答。关掉 = 不能打断（问答排队），调大音量时更稳。",
          "Whether a second wake interrupts the current answer. Off = no interrupts "
@@ -1221,11 +1228,14 @@ def _music_fields() -> list[dict]:
                _t("打断后续播延迟", "Resume delay after speech"),
                _t("说话打断音乐后，答完再等多久恢复播放（毫秒）。0 = 答完立刻续播（之后"
                   "要换歌得重新唤醒）；调大 = 留时间直接说「换一首」而不必唤醒，但中间"
-                  "安静更久。默认 2500。改完重启音频面/服务生效。",
+                  "安静更久。默认 2500。超过 8 秒会被 follow-up 上限"
+                  "（audio.voice.followup_max_wait_ms）截断到 8 秒。改完重启音频面/服务生效。",
                   "How long the song stays parked after an answer ends (ms). 0 resumes "
                   "immediately (a follow-up then needs the wake word); larger leaves room "
                   "for 「换一首」 without a wake word but a longer silence. Default 2500. "
-                  "Restart the audio plane/service to apply."),
+                  "Values above 8 s are truncated to the follow-up cap "
+                  "(audio.voice.followup_max_wait_ms). Restart the audio plane/service "
+                  "to apply."),
                effect="restart", minimum=0, maximum=10000, unit=_t("ms", "ms")),
         _field("music.queue_min_tracks", "music", "number",
                _t("队列补齐阈值", "Top-up threshold"),

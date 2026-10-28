@@ -10,14 +10,17 @@ byte identical.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from pydantic import ValidationError
 
 from rui.audio.process import AudioPlane
+from rui.audio.protocol import FrameType
 from rui.config import Config, load_config, save_config
 from rui.config.schema import VoiceConfig
 
@@ -78,6 +81,7 @@ def test_the_window_fields_survive_save_and_reload(tmp_path) -> None:
     cfg = Config()
     cfg.audio.voice.followup_delay_ms = 2500
     cfg.audio.voice.followup_replay = False
+    cfg.audio.voice.followup_max_wait_ms = 5000
     path = tmp_path / "config.yaml"
     save_config(path, cfg)
 
@@ -85,6 +89,7 @@ def test_the_window_fields_survive_save_and_reload(tmp_path) -> None:
     loaded = load_config(path)
     assert loaded.audio.voice.followup_delay_ms == 2500
     assert loaded.audio.voice.followup_replay is False
+    assert loaded.audio.voice.followup_max_wait_ms == 5000
 
 
 def test_an_old_config_without_the_fields_keeps_the_lx06_defaults(tmp_path) -> None:
@@ -102,3 +107,269 @@ def test_an_old_config_without_the_fields_keeps_the_lx06_defaults(tmp_path) -> N
     loaded = load_config(path)
     assert loaded.audio.voice.followup_delay_ms == 1000
     assert loaded.audio.voice.followup_replay is True
+
+
+# ------------------------------------------------------- finite follow-up window (task-17)
+#
+# 2026-10-28 04:15: the farewell re-armed the follow-up gate for the whole session
+# timeout (15 s), so speech 8+ seconds after "session closed" still opened a turn with
+# no wake word. The window is now min(session.timeout_s, followup_max_wait_ms): finite,
+# eight seconds by default, with 0 meaning "no follow-up at all".
+
+
+def test_the_followup_window_is_finite_and_bounded() -> None:
+    assert VoiceConfig().followup_max_wait_ms == 8000
+    assert VoiceConfig(followup_max_wait_ms=0).followup_max_wait_ms == 0
+    assert VoiceConfig(followup_max_wait_ms=60000).followup_max_wait_ms == 60000
+    with pytest.raises(ValidationError):
+        VoiceConfig(followup_max_wait_ms=-1)
+    with pytest.raises(ValidationError):
+        VoiceConfig(followup_max_wait_ms=60001)
+
+
+class _RecordingGate:
+    """Only the arm call matters: the plane's policy is what is under test."""
+
+    armed = False
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def arm(self, **kwargs: object) -> None:
+        self.armed = True
+        self.calls.append(kwargs)
+
+    def disarm(self) -> None:
+        self.armed = False
+
+
+def test_the_plane_arms_the_followup_gate_for_the_configured_cap() -> None:
+    plane = _plane()
+    gate = _RecordingGate()
+    plane.gate = gate  # type: ignore[assignment]
+
+    asyncio.run(plane._arm_followup_later(0.0))
+
+    assert gate.calls == [{"followup": True, "max_wait_ms": 8000}]
+
+
+def test_the_session_timeout_still_caps_a_longer_followup_setting() -> None:
+    plane = _plane(followup_max_wait_ms=20000)
+    plane.cfg.session.timeout_s = 5.0
+    gate = _RecordingGate()
+    plane.gate = gate  # type: ignore[assignment]
+
+    asyncio.run(plane._arm_followup_later(0.0))
+
+    assert gate.calls == [{"followup": True, "max_wait_ms": 5000}]
+
+
+def test_a_disabled_session_timeout_keeps_the_eight_second_followup_cap() -> None:
+    """`session.timeout_s=0` is "never time out", not a zero-length window.
+
+    `min(0 * 1000, 8000)` armed the gate for 0 ms (i.e. not at all): turning the idle
+    goodbye off silently disabled every follow-up turn.
+    """
+    plane = _plane()
+    plane.cfg.session.timeout_s = 0.0
+    gate = _RecordingGate()
+    plane.gate = gate  # type: ignore[assignment]
+
+    asyncio.run(plane._arm_followup_later(0.0))
+
+    assert gate.calls == [{"followup": True, "max_wait_ms": 8000}]
+
+
+def test_zero_means_no_followup_window_at_all(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="rui.audio.process")
+    plane = _plane(followup_max_wait_ms=0)
+    gate = _RecordingGate()
+    plane.gate = gate  # type: ignore[assignment]
+
+    asyncio.run(plane._arm_followup_later(0.0))
+
+    assert gate.calls == [], "a zero cap still opened a listening window"
+    assert "follow-up window disabled" in caplog.text
+
+
+class _SilentVad:
+    """The gate's own timeout/arming state machine, without the optional model."""
+
+    def reset(self) -> None:
+        return None
+
+    def accept_waveform(self, samples: object) -> None:  # noqa: ARG002
+        return None
+
+    def is_speech_detected(self) -> bool:
+        return False
+
+
+class _LevelVad:
+    """Speech iff the block is loud: a non-vacuous stand-in for the model.
+
+    `_SilentVad` can never produce an utterance, so asserting `writer.frames == []`
+    with it proved nothing about the gate. This stub reports speech for full-scale
+    blocks and silence for zero blocks, so the real gate can open and close a turn.
+    """
+
+    def __init__(self) -> None:
+        self._speech = False
+
+    def reset(self) -> None:
+        self._speech = False
+
+    def accept_waveform(self, samples: np.ndarray) -> None:
+        self._speech = bool(samples.size) and float(np.max(np.abs(samples))) > 0.5
+
+    def is_speech_detected(self) -> bool:
+        return self._speech
+
+
+def _real_gate(vad: object | None = None) -> object:
+    from rui.audio.vad import GateConfig, UtteranceGate
+
+    gate = UtteranceGate.__new__(UtteranceGate)
+    gate.cfg = GateConfig()
+    gate.rate = gate.cfg.rate
+    gate.armed = False
+    gate.turns = 0
+    gate.discarded = 0
+    gate.idle_events = 0
+    gate._vad = vad if vad is not None else _SilentVad()
+    gate._cue_lag_ms = 0.0
+    gate._cue_lag_seen = False
+    gate._last_match_offset_ms = None
+    gate._reset_state()
+    return gate
+
+
+class _StubWriter:
+    def __init__(self) -> None:
+        self.frames: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        self.frames.append(data)
+
+    async def drain(self) -> None:
+        return None
+
+
+def test_speech_one_second_in_is_inside_the_window_twenty_is_outside() -> None:
+    """Farewell +1 s is a follow-up; farewell +20 s needs the wake word again.
+
+    The window is shot in audio time (the real gate disarms itself after max_wait_ms),
+    so this exercises the same clock the speaker feeds, without sleeping.
+    """
+    plane = _plane()
+    gate = _real_gate()
+    plane.gate = gate  # type: ignore[assignment]
+    writer = _StubWriter()
+    connected = asyncio.Event()
+    connected.set()
+
+    async def feed(seconds: float) -> None:
+        block = bytes(640)  # 20 ms at 16 kHz
+        for _ in range(int(seconds * 50)):
+            await plane._feed_gate(block, 0.0, writer, connected)
+
+    async def scenario() -> None:
+        await plane._arm_followup_later(0.0)
+        assert gate.armed, "the farewell never opened its follow-up window"
+        await feed(1.0)
+        assert gate.armed, "speech at +1 s would have needed a wake word"
+        # Twenty seconds of device audio later the gate has closed on its own. That is
+        # the whole point of the finite window: +1 s is a follow-up, +20 s is not.
+        await feed(19.0)
+        assert not gate.armed, "the follow-up window outlived its eight seconds"
+
+    asyncio.run(scenario())
+
+
+def test_speech_nine_seconds_in_is_outside_the_eight_second_window() -> None:
+    """The discriminating edge: +9 s is inside the old 15 s timeout but past the cap.
+
+    The +1 s / +20 s test above passed on the pre-task-17 code as well (20 s > 15 s);
+    nine seconds is the smallest choice that only the finite 8 s window rejects.
+    """
+    plane = _plane()
+    gate = _real_gate()
+    plane.gate = gate  # type: ignore[assignment]
+    writer = _StubWriter()
+    connected = asyncio.Event()
+    connected.set()
+
+    async def scenario() -> None:
+        await plane._arm_followup_later(0.0)
+        assert gate.armed, "the farewell never opened its follow-up window"
+        for _ in range(int(9.0 * 50)):  # 9 s of device audio
+            await plane._feed_gate(bytes(640), 0.0, writer, connected)
+        assert not gate.armed, "9 s after the farewell still opened a follow-up turn"
+
+    asyncio.run(scenario())
+
+
+def test_speech_after_the_window_cannot_become_an_utterance() -> None:
+    """No gate, no UTTERANCE_PCM: the control plane never sees a turn to start."""
+    plane = _plane()
+    gate = _real_gate(_LevelVad())
+    plane.gate = gate  # type: ignore[assignment]
+    writer = _StubWriter()
+    connected = asyncio.Event()
+    connected.set()
+
+    async def scenario() -> None:
+        await plane._arm_followup_later(0.0)
+        for _ in range(int(8.2 * 50)):
+            await plane._feed_gate(bytes(640), 0.0, writer, connected)
+        assert not gate.armed
+        writer.frames.clear()
+        # The device still reports a (loud) frame after the window closed. A disarmed
+        # gate drops it, so no utterance frame is written and no turn can start.
+        loud = b"\xff\x7f" * 320
+        for _ in range(25):
+            await plane._feed_gate(loud, 0.0, writer, connected)
+
+    asyncio.run(scenario())
+
+    assert writer.frames == [], (
+        "audio after the follow-up window reached the control plane as an utterance")
+
+
+def test_an_armed_gate_writes_an_utterance_and_a_closed_one_does_not() -> None:
+    """Positive control for the empty-writer assertion: the gate really can write.
+
+    `_LevelVad` reports the loud frames as speech, so an open window must yield one
+    UTTERANCE_PCM frame; the same audio after the window must yield none. Without the
+    positive half, `frames == []` would also pass if `_feed_gate` never wrote at all.
+    """
+    plane = _plane()
+    gate = _real_gate(_LevelVad())
+    plane.gate = gate  # type: ignore[assignment]
+    writer = _StubWriter()
+    connected = asyncio.Event()
+    connected.set()
+    loud = b"\xff\x7f" * 320  # full-scale 20 ms at 16 kHz
+    silent = bytes(640)
+
+    async def feed(block: bytes, seconds: float) -> None:
+        for _ in range(int(seconds * 50)):
+            await plane._feed_gate(block, 0.0, writer, connected)
+
+    async def scenario() -> None:
+        await plane._arm_followup_later(0.0)
+        assert gate.armed
+        # Positive control: one second of speech plus the follow-up end silence closes
+        # the turn and reaches the control plane as UTTERANCE_PCM.
+        await feed(loud, 1.0)
+        await feed(silent, 0.6)
+        assert not gate.armed, "the utterance should have closed the gate"
+        assert [frame[0] for frame in writer.frames] == [FrameType.UTTERANCE_PCM]
+
+        # Negative: the same loud audio after the window is dropped by the gate.
+        writer.frames.clear()
+        await feed(loud, 1.0)
+        await feed(silent, 0.6)
+        assert writer.frames == []
+
+    asyncio.run(scenario())

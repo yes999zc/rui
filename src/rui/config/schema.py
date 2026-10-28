@@ -366,6 +366,13 @@ class VoiceConfig(BaseModel):
     # Replay the audio caught between playback end and the gate opening into the
     # transcriber. Turn off for a device-AEC plug whose residual outlasts the delay.
     followup_replay: bool = True
+    # How long the follow-up gate may stay open *after* it opens. The gate was armed for
+    # `session.timeout_s` (15 s), so a farewell at 04:15 still accepted speech at
+    # 04:15:43 with no wake word - "session closed" had become an open listening window.
+    # The plane now arms for min(session.timeout_s * 1000, this); 0 = no follow-up
+    # window at all (every turn needs the wake word). Eight seconds keeps a natural
+    # second sentence without turning a closed session back into a listener.
+    followup_max_wait_ms: int = Field(default=8000, ge=0, le=60000)
     # Phase 2 (docs/multi-device-design.md §12.6): after our own output drains, drop
     # the microphone for this long (no VAD/ASR) so a device-AEC plug's residual echo
     # cannot become a turn. 0 keeps the 0.4.x behaviour; a per-device override wins.

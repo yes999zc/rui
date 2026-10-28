@@ -167,3 +167,66 @@ def test_stop_scope_still_uses_the_media_value_for_music() -> None:
     assert rules.stop_scope("停止", True, END_WORDS) == rules.MEDIA_STOP
     assert rules.stop_scope("停止", False, END_WORDS) == rules.BARE_STOP
     assert rules.stop_scope("退下吧", True, END_WORDS) == rules.BARE_STOP
+
+
+# --------------------------------------------------- LED convergence (task-17)
+class _LedHandle:
+    """A plane handle that records LED events like the real socket does."""
+
+    device_id = "living"
+
+    def __init__(self) -> None:
+        self.sent: list[object] = []
+        self.led: list[str] = []
+        self.release_turn_calls = 0
+        self.metrics = SimpleNamespace(output_owner="")
+
+    def release_turn(self) -> None:
+        self.release_turn_calls += 1
+
+    async def send(self, message: object) -> None:
+        self.sent.append(message)
+
+    async def set_led(self, effect: str, repaint: bool = False) -> None:
+        self.led.append(effect)
+
+    async def reply_finished(self, **kwargs: object) -> None:  # noqa: ARG002
+        raise AssertionError("a stop that closes the session must not call reply_finished")
+
+
+def test_a_stop_ends_the_led_sequence_off_and_drops_the_previous_turns_paint() -> None:
+    """04:29: stop -> `session closed` -> 13 s later `led: listening` + repaints.
+
+    The green came from the *previous* turn's `_light_after_audio`: its delay is the
+    length of the answer it painted after, so it can land long after a later stop has
+    already turned the ring off. A stop must be terminal for that room: the pending
+    paint is cancelled, the off is the last event, and nothing is left that could
+    repaint the ring green in the next 30 s.
+    """
+    app = SimpleNamespace(state=SimpleNamespace(
+        cfg=Config(), music=_Music("idle"), last_turn=None,
+        turn_device="living", output_owner="",
+    ))
+    runner = _Runner()
+    handle = _LedHandle()
+    traces = _Traces()
+
+    async def scenario() -> None:
+        # A previous 10 s answer scheduled its post-playback listening paint.
+        app_module._light_after_audio(app, 10 * 16000 * 2, 16000, "listening", live=handle)
+        assert handle.led == [], "the fixture expected the stale paint to still be pending"
+
+        handled = await app_module._stop_command(
+            app, "退下吧", runner, handle, TurnTrace(device_id="living"), traces)
+        assert handled is True
+        # The goodbye is 0 bytes in this fake runner, so the terminal off lands at 0.6 s.
+        await asyncio.sleep(0.8)
+
+    asyncio.run(scenario())
+
+    assert handle.led[-1] == "off", f"the ring did not converge to off: {handle.led}"
+    assert "listening" not in handle.led, (
+        "a paint from the previous turn landed after the session closed")
+    # No live timer remains, so nothing can repaint the ring inside 30 s.
+    assert not app.state.led_after_tasks.get("living")
+    assert not any(not task.done() for task in app.state.led_tasks)
