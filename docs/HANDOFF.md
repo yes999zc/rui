@@ -48,6 +48,7 @@
 - **回滚顺序反向**：先 plugins 回 1.3.2 + 0.2.3（1.3.2 兼容 0.7.9/0.8.x），再镜像回 `sha256:5aa362f6…b9f7`，up -d，复验。
 - **部署前自检表**：core 0.8.1（—）；dot2 1.3.3（>=0.8.1 <0.9.0，需 core≥0.8.1）；xiaoai 0.2.3（>=0.7.0 <0.9.0，兼容）。必须用 v0.8.1 tag 的干净 commit 出镜像，不拿脏树。
 - **部署前 HANDOFF 必写一行**：「即将部署：core→0.8.1 → plugins→1.3.3」；部署后贴 /health + 三台 audio.say。
+- **secret-scan 已转绿（2026-10-28 20:06）**：实际命中是 HANDOFF 里的 LAN `192.168.5.168`（soft 类），不是 sha256；已改为 `<NAS-LAN-IP>`，run success。
 - **0.8.2 / 1.3.4 已发并部署（2026-10-28 20:0x）**：core tag `v0.8.2`→`7720709`，release https://github.com/yes999zc/rui/releases/tag/v0.8.2；桥 tag `v1.3.4`→`76b8947`，release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.4。部署：core digest `sha256:6b007a8c04e521efbc19c5624f6e397fc85160c701f8be1bd4d6da904da8d00d`，插件 1.3.4。D5：version 0.8.2/devices 3/errors 0/registered dot2+lx06；三台 say 均 ok；summaries 同前；followup 3000。
 - **⚠ 1.3.4 真机仍命中一次 >1.0s 写阻塞（20:01:48 dot2，rx271678B/tx200753B）→ abort/掉 17 chunks(1.4s)，随后恢复**。按 9哥 口径「仍偶发先记日志再讨论，不自行继续上调」；未再提高阈值。根因仍是 2.4G 抖动（RSSI/重传/6Mbps），缓解未根治。
 - 回滚锚：镜像 `sha256:6b007a8c…d00d`；备份 `config.yaml.bak-20261028-195421`、`plugins.bak-20261028-195421`、`rui-dot2-override.yml.bak-20261028-195421`；旧镜像 `sha256:77224fc1…b335` / 插件 1.3.3。
