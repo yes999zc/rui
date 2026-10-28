@@ -20,7 +20,7 @@
   要求：volume_up/down 回写 `devices[].volume` 并持久化；按键后 10s 内 reconciler 不回拉；
   d.7 容差（`8961cbf`）叠加后静置仍无每 16s 日志；测试注入按键→配置降低且不回拉、±1 级不下发。
   跨桥/ house 两仓，两边 commit+push。
-- **P2 物理按键（task-18，blocked_by 15/17）**：桥 `device_link.py:461-467` 收到 button 但全仓无 `on_button` 注入，
+- **P2 物理按键（task-18，已收口：桥 `0698460` + house `de89e65`；桥 178 / house 1737；review PASS + verify VERIFIED）**：桥 `device_link.py:461-467` 收到 button 但全仓无 `on_button` 注入，
   按键全丢；设备上报 `clickType` + `muted`。需注入 handler、映射 mute/volume_up/down/action、health+控制台+LED `muted`；
   静音时照常转写/亮灯但跳过 ack。`DOT2_MUTE` 是部署 env，别混。
 - **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（已实现；review PASS + verify VERIFIED，全量 1738/6；残余风险写入 d.10）。
