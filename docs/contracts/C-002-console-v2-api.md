@@ -13,7 +13,7 @@
 |---|---|
 | 契约 ID / 版本 | `C-002/1` |
 | API 版本 | `2.0`（路径前缀 `/api/v2`） |
-| rui 版本窗口 | `>=0.6.0, <0.8.0`：只增不改（客户端可见变更见 A-2、A-5、A-6），v1 保持可用（已记录修正见 A-4 与 A-6） |
+| rui 版本窗口 | `>=0.7.0, <0.9.0`（2026-10-28 起，0.8.0 双窗口）：只增不改（客户端可见变更见 A-2、A-5、A-6），v1 保持可用（已记录修正见 A-4 与 A-6） |
 | 破坏性变更 | 本契约 **不含字段删除/重命名**；0.6.x 有意行为变更有三处：§5.4 动作门禁顺序（见 Addendum A-2）、`setup/plan` test/connect 步的证据来源（见 A-5），以及 v1 `POST /api/v1/memory` 校验与 `/api/v1/turns` stage 计时（见 A-6，属 bug 修正；既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`），均客户端可见；删除/重命名只能进 `/api/v3` 或 0.7 的 C-002/2 |
 | 依赖契约 | C-001 `rui-device/v1`（manifest：`capabilities`、`params`、`audio_defaults`、`runtime`、`device_side`）**不变** |
 | 认证 | 沿用 `X-Auth-Token`；无账号/角色/会话 |
@@ -369,8 +369,8 @@ Activity（设备维度事件流）
 {
   "contract": "C-002/1",
   "api_version": "2.0",
-  "rui_version": "0.7.0",
-  "compat": {"min": "0.6.0", "max_exclusive": "0.8.0"},
+  "rui_version": "0.8.0",
+  "compat": {"min": "0.7.0", "max_exclusive": "0.9.0"},
   "features": {
     "house": true,
     "house_audio": true,
@@ -1134,7 +1134,7 @@ Activity（设备维度事件流）
 
 ### 10.1 兼容窗口
 
-- `>=0.6.0 <0.8.0`：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序（A-2）、`setup/plan` test/connect 步的证据来源（A-5）与 A-6 的 v1 bug 修正（memory 非法输入改 422、`/turns` stage 计时真实化；既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`）外不改语义；`meta.features` 用于渐进点亮。
+- `>=0.7.0 <0.9.0`（2026-10-28 起，0.8.0 双窗口）：`/api/v2` 只增不改；字段不删除、不重命名；除 §5.4 门禁顺序（A-2）、`setup/plan` test/connect 步的证据来源（A-5）与 A-6 的 v1 bug 修正（memory 非法输入改 422、`/turns` stage 计时真实化；既有字段名不变，`attempts[]` 仅新增 `elapsed_ms`）外不改语义；`meta.features` 用于渐进点亮。
 - v1 端点与形状保持向后兼容；唯一已知的**新增字段**仍是 `/api/v1/turns` 每条可选 `device_id`（不删不改旧字段，旧消费者可忽略）；A-6 另外在 `attempts[]` 元素上新增 `elapsed_ms`（不删不改既有元素字段）。v2 不修改 `GET /api/v1/devices`、`PUT /api/v1/devices/{id}`、`/api/v1/setup/step` 的既有字段；这些写路径不再落盘派生的 `kws_keywords_file`，`GET /api/v1/voice/threshold` 的路径推导与不可读降级也见 A-4。`POST /api/v1/memory` 的 422 校验与 `/api/v1/turns` 的 `stages.*.elapsed_ms`/`attempts` 修正见 A-6。
 - C-001 不变：v2 只消费 manifest 的 `capabilities/params/audio_defaults/runtime/device_side`，不新增字段。
 
