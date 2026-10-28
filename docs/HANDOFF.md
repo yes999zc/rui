@@ -1,4 +1,99 @@
-# HANDOFF — rui 阶段快照（0.7.8 已发布）
+# HANDOFF — rui 阶段快照（0.8.5 已发布，未部署）
+
+2026-10-28 · 批次：0.8.5 攒批（A–G） · 本会话：rui 0.8.5 收口
+
+phase-close: task-11
+
+## 版本与契约
+
+- **rui core 0.8.5**：annotated tag `v0.8.5`（tag object `1573a47`）→ commit `6d94155`；
+  release https://github.com/yes999zc/rui/releases/tag/v0.8.5。**生产仍是 0.8.4**（本批只发版，未部署，9哥 未点头）。
+- **桥插件不动**：`rui-dot2-bridge` **1.3.4**（`76b8947`）、`rui-xiaoai-bridge` **0.2.3**（`0d82250`）；
+  `rui_compat` 不变（`>=0.8.1 <0.9.0`），C-001 未变。
+- **镜像（仅部署引用，未部署）**：index `sha256:20347039ee559db4e07989f9311c4fec78461163c6ce23312867e5350c51d383`；
+  amd64 `sha256:4bfd73d5b8e0ffadd22512f888d922d6b3355041214f5d3cdaaf17d936bd50a1`；
+  arm64 `sha256:c625d5c1a7469b1ab39163dbcbd2574cb5dd62e36a8cae05d4c556e00d2c8649`。
+- tag commit 上四 workflow 绿：`ci`（含 `test (3.11)`，run 40717635334）、
+  `docker-publish`（main 40717635389 / tag 40718665667）、`security`（40717635435 / 40718666213）、
+  `secret-scan`（40717635240 / 40718665933）。`ci` 只在 main push 触发，以同一 commit 的 main run 为准。
+
+## 已完成（0.8.5，2026-10-28）
+
+门禁：默认 3.12 全量 **1969 passed, 6 skipped**；Python 3.11 全量 **1969 passed, 6 skipped**；
+`ruff check src tests scripts/coverage_report.py` 绿；web `pnpm typecheck` + `pnpm build` 绿；
+fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；fresh verifier **VERIFIED**。
+
+- **A 到点文案**：`phrases.reminder.due`「时间到了，{text}。」+ 前导触发词剥离 / 句末标点归一 /
+  空文本退化；离线分支逐字不变。`app.py::_reminder_due_line()`；文档 `docs/reminder-due-phrase-0.8.5.md`。（`4e7daf1`）
+- **B 分钟级提醒 + 单句边界**：`parse_voice` 新增 `N分钟(之)后/以后`，与工具路径共用
+  `parse_at("+Nm")`；动作必须单句（第二句仍交 LLM，保 task-32 行为）；两条路径共用
+  `_reminder_room()`。文档 `docs/reminder-dispatch-0.8.5.md`。（`4e7daf1`）
+- **C 客厅 LX06 示例音量 60→45**：只改 `config.example.yaml` + 守卫断言 + 文档；
+  schema 默认 60 与 dot2 未动。（`3d1a8c5`）
+- **E 17–20 字合并**：`SOFT_MERGE_MAX_CHARS=20`，逗号仅在已缓冲 >20 字时切分；
+  17/18/19/20 字含逗号由 2 次 TTS 变 1 次；句末标点立即释放不变。（`3d1a8c5`）
+- **D dot2 1011 诊断**：只读取证 36 次 1011（uptime 全 20 s 倍数、5.1 s 重拨、0 丢块、
+  ≈1.77% 上行空洞），命中桥侧 websockets keepalive 超时，**不改行为、桥仓未动**。
+  文档 `docs/analysis/dot2-data-plane-1011.md`。（`ae4f320`）
+- **F task-2/task-3 观察口径**：known-limitations **L25/L26** + backlog「等样本」s.1/s.2；
+  无稳定样本不改代码。L21 同步到 0.8.5 口径（分钟级受理/单句边界）。（`ae4f320`）
+- **G CI 3.11 死锁**：CPython `asyncio.wait_for` 取消丢失（python/cpython#96764），
+  `_speak_loop` 改 `asyncio.timeout(0.5)`；`test` job 加 `timeout-minutes: 20`；
+  测试零改动。文档 `docs/ci-311-hang-0.8.5.md`。（`d08b159`）
+- **版本/发布**：`pyproject`/`src/rui/__init__.py`/`uv.lock` = 0.8.5；CHANGELOG 0.8.5 段；
+  README 版本矩阵；release notes `docs/releases/v0.8.5.md`。（`6d94155`）
+
+## 未完成 / 阻塞
+
+- **真机未验证**：A/B/C/E 的文案听感、ASR 噪声下分钟句命中率、17–20 字接缝听感均为单测推断
+  （发版说明已如实写）。
+- **D 的二级原因未定**：pong 为何丢（设备读循环阻塞 vs 2.4G）待 0.8.6/桥侧加 sent/rcvd + reason
+  日志后 DEBUG/A-B；0.8.5 不改桥。
+- **task-2（放歌中「停止」没停）/ task-3（打断后 158–221 ms 空隙）**：无稳定样本，等样本（L25/L26）。
+- **H（控制台显示 reply_segment_count / silences_ms / inner_ms）未做**，列 backlog。
+- **生产 living.volume 仍 60**：示例已改 45，存量配置需 9哥 批准后手动改。
+
+## 下一步
+
+部署 0.8.5（**等 9哥 点头后**按顺序）：
+
+1. 预检：确认 9哥 批准；生产现状 0.8.4 / 4 台设备 / 插件 1.3.4 / errors 0。
+2. 备份（NAS `/vol1/rui`）：`config/config.yaml`、`plugins/`、`rui-dot2-override.yml` →
+   `*.bak-<timestamp>`；记录当前 digest（0.8.4 = `sha256:a193e274…d8e3`）。
+3. **只换 override 的 image digest**：amd64 `sha256:4bfd73d5…50a1`（index `sha256:20347039…d383`），
+   不动插件、不动 `rui_compat`。
+4. `docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d`（只重启 rui 容器）。
+5. 可选（需 9哥 明示）：客厅 `living.volume` 60 → 45（控制台或 PATCH，先备份 config）。
+6. **D5 七项**：version=0.8.5 / devices=4 / errors 0 / warnings 0 / registered（dot2, dot2-b,
+   dot2-c, lx06）/ 四台 running+connected / 四台 `audio.say` 有 reply 且 error="" /
+   audio summaries 与 0.8.4 一致 / 日志 0 次 `got 16000`、`play ValueError`、`audio_config_mismatch` /
+   followup=3000 / LED 最后 off / 5 分钟后 errors 0、restarts 0。
+7. **0.8.5 专项真机**：①「一分钟后提醒我喝水。」→ 应直接受理（不再绕 LLM 工具），
+   到点播报「时间到了，喝水。」且只在当前房间；②「提醒我十分钟之后关火」同理；
+   ③ 17–20 字含逗号回复 trace 应为 `reply_segment_count 1 / silences_ms []`（不再 16+尾巴两段）；
+   ④ 若改了 living 音量，人耳确认。
+8. **回滚锚**：镜像 0.8.4 index `sha256:a193e274…d8e3` / amd64
+   `sha256:f1b6a992a8d64ff35eb1c52687c65c735fb2aabc02ceb97813169bcb6c2e6462`；备份
+   `config.yaml.bak-20261028-220433`、`plugins.bak-20261028-220433`、
+   `rui-dot2-override.yml.bak-20261028-220433`；更旧 0.8.3 `sha256:be138161…e0a9`。
+   插件无需回滚（本批未动）。
+9. 失败处置：D5 任一红 → 换回 0.8.4 digest + `up -d`；配置类先回备份再排查。
+
+## 关键文件
+
+- `src/rui/web/api/app.py` `_reminder_due_line()` / `_reminder_room()`（A/B）
+- `src/rui/tools/reminders.py` `_MINUTES_REL` / `_has_second_sentence()`（B，L21）
+- `src/rui/session/turn.py` `SOFT_MERGE_MAX_CHARS=20`（E）
+- `src/rui/audio/process.py:2830` `asyncio.timeout`（G）
+- `config.example.yaml:37` living volume 45（C）
+- 文档：`docs/reminder-due-phrase-0.8.5.md`、`docs/reminder-dispatch-0.8.5.md`、
+  `docs/short-reply-merge-window-0.8.5.md`、`docs/lx06-volume-default-0.8.5.md`、
+  `docs/ci-311-hang-0.8.5.md`、`docs/analysis/dot2-data-plane-1011.md`；
+  `docs/known-limitations.md` L21/L25/L26；`docs/backlog-0.8.md`「等样本」
+
+---
+
+# 历史记录（0.7.8 – 0.8.4，保留）
 
 ## 当前推进：0.8.0（2026-10-28）
 
@@ -127,7 +222,7 @@ phase-close: task-4
 P0-4 同房/跨房同词逻辑已自动化并有计数。**代码已 push；生产已由 9 哥 激活**（bridge `c64acb5`、manifest 已装、
 max_planes=5、`/health` 已确认，2 台 plane running）。验收可按 **3 台设备**（lx06 + 2×dot2）开始。
 
-## 版本与契约
+## 历史版本与契约（0.7.8–0.8.0）
 
 - rui core：`cf1cf92`（§e/§f 文档）← `1a751ae`（d.8）← `6412b3a`（P0 收口）← `75de4b4`（task-3）
   ← `a36f678`（max_planes 5）← `7b5ca57`；**未打 tag、未发版**。
@@ -137,7 +232,7 @@ max_planes=5、`/health` 已确认，2 台 plane running）。验收可按 **3 �
   插件清单已装到 `/vol1/rui/data/plugs/dot2-echomuse/`、config `max_planes=5`；`/health` 已确认 `max_planes: 5`、2 台 plane running。
 - 第二台 dot2 的 token 已由 9 哥 刷成与第一台相同 ⇒ **P0-3 不需额外凭据工程**；共享 token 形态按 C-001 属可接受。
 
-## 已完成
+## 历史已完成（多音箱前置）
 
 1. **P0-1** 5 项按设备可配：`adapter.py` ctor 4 kwarg + `params > env > 设备默认`；loudness 默认 `dev/rui/<id>/loudness.json`，EQ 共享可覆盖；control port bind 失败 warning 降级不 abort。证据：bridge `155 passed`、test_per_device_params 10 条、C-001。
 2. **P0-2** `multi_device.max_planes` 默认 4→5（`schema.py:1068`，1–8 不变）；5 台通过、6 台按原文案拒绝；控制台中英文案同步。证据：house `1718/6`（task-2 时点）。
@@ -148,7 +243,7 @@ max_planes=5、`/health` 已确认，2 台 plane running）。验收可按 **3 �
    `d.8` 登记「唤醒后首句偶发空 ASR」；`docs/待拍板.md` D-012（语音跨房打断）、D-013（default_output 配哪台）OPEN。
    代码核查纠正：rui 已有 `ReminderStore`/`build_scheduler`（真实缺口是语音入口/抢占/指定房间/离线明说）。
 
-## 下一步（3 台设备验收起点 2026-10-28）
+## 历史下一步（3 台设备验收起点 2026-10-28）
 
 1. **确认第 2 台 dot2 已进配置**：`/health.devices` 应为 3（lx06 + dot2×2）；若仍 2 台，走 `/api/v2/devices`
    加第 2 台：独立 `listen_port`（8871）、`room`、`params.control_port`（0 或唯一端口，如 8874）、
