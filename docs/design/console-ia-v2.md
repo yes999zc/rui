@@ -318,8 +318,11 @@
 ### 5.1 三层模型
 
 ```text
-插头默认 audio_defaults  <  全局 config（audio / ack）  <  devices[].audio
+核心默认  <  全局 config（audio / ack）  <  型号 manifest 的 audio_defaults  <  devices[].audio
 ```
+
+0.8.0 起 manifest 是**型号硬件事实**，压过显式全局值；`capture.rate` 例外（协商值，
+显式 wire 生效）。任何冲突都进 `conflicts`（见 ADR 0007 / C-002 §7.15），不得静默。
 
 - 核心默认中性；LX06 的 8ch/48k/6mic+2ref 由 manifest 声明（`schema.py:285-315`、`docs/multi-device-design.md:269-291`）。
 - 合并只调用 `effective_device_audio()` / `effective_device_ack_echo_ignore_ms()`（`schema.py:650-661`），v2 不重写。
@@ -330,8 +333,8 @@
 | 优先级 | `source` | 判定 |
 |---|---|---|
 | 1 | `device-override` | `devices[].audio.<path>` 非 null |
-| 2 | `global-config` | 全局 `audio.<path>` / `ack.echo_ignore_ms` 显式 |
-| 3 | `device-manifest` | manifest `audio_defaults.<path>` 非 null |
+| 2 | `device-manifest` | manifest `audio_defaults.<path>` 非 null（型号硬件事实）；或 manifest 声明了采集布局维度（channels/mic_channels/ref_channels）而该布局字段缺失——取核心中性值，`layers[path].manifest` 给中性值 |
+| — | `global-config` | 全局 `audio.<path>` / `ack.echo_ignore_ms` 显式，且 manifest 未声明该字段、也未被布局中性填充；或 `capture.rate` 的协商值 |
 | 4 | `core-default` | 以上都无 |
 | — | `unresolved` | 插件不可解析，且该字段无 device/global 显式值（不知道 manifest 本应声明什么） |
 
@@ -357,7 +360,13 @@
   },
   "overrides": ["aec.who", "aec.enabled", "voice.ack_echo_ignore_ms"],
   "manifest_defaults": {"capture": {"rate": 48000}, "ack_echo_ignore_ms": 1200},
-  "plug_resolved": true
+  "plug_resolved": true,
+  "manifest_error": "",
+  "conflicts": [
+    {"path": "capture.rate", "global": 16000, "manifest": 48000,
+     "effective": 16000, "winner": "global-config", "kind": "negotiated",
+     "message": "audio.capture.rate: global 16000 vs model 48000; using 16000 (...)"}
+  ]
 }
 ```
 
@@ -415,8 +424,10 @@
 
 | 用例 | 配置 | `sources[f]` | effective |
 |---|---|---|---|
-| 显式全局 vs manifest | global `capture.rate=16000`，manifest 48000 | `global-config` | 16000 |
+| capture.rate 协商（0.8.0） | global `capture.rate=16000`，manifest 48000 | `global-config` + `conflicts` | 16000 |
+| 硬件字段 vs 全局（0.8.0） | global `playback.rate=16000`，manifest 48000 | `device-manifest` + `conflicts` | 48000 |
 | 纯 manifest | global 未写，manifest 48000 | `device-manifest` | 48000 |
+| 布局中性填充（0.8.0） | manifest 声明 channels/mic/ref，bits/shift 省略；global 32/12/16 | `device-manifest`（`layers[f].manifest`=中性值） | 16/0/0 |
 | 纯核心 | 两者无 | `core-default` | 16000/1ch |
 | 设备覆盖 | `devices[].audio.capture.rate=48000` | `device-override` | 48000 |
 | 设备值=全局值 | device 16000，global 16000 | `device-override` | 16000 |

@@ -16,7 +16,39 @@ from .builtin import builtin_plugins
 from .loader import discover_plugins
 from .models import DeviceManifest, Plugin
 
-__all__ = ["PlugCatalog", "PlugEntry", "ResolvedPlug", "resolve_device_plug"]
+__all__ = [
+    "PlugCatalog",
+    "PlugEntry",
+    "ResolvedPlug",
+    "adapter_plugins",
+    "clear_adapter_plugins",
+    "register_adapter_plugin",
+    "resolve_device_plug",
+]
+
+#: Manifests the adapter loader found next to an in-process adapter module
+#: (``RUI_ADAPTER_PLUGINS`` / entry points). ``PlugCatalog`` only scans the image and
+#: ``<data_dir>/plugs``, so without this a co-located manifest backs a working adapter
+#: while the audio resolver reports ``plug_unresolved`` - the 0.8.0 cold-start split
+#: between "the plane can drive the device" and "its hardware facts are known".
+#:
+#: Keyed by plug id; first registration wins so a later duplicate cannot replace the
+#: manifest the adapter was gated against. Reset only by tests.
+_ADAPTER_PLUGINS: dict[str, Plugin] = {}
+
+
+def register_adapter_plugin(plugin: Plugin) -> None:
+    """Remember a manifest that the adapter loader accepted (idempotent)."""
+    _ADAPTER_PLUGINS.setdefault(str(plugin.id), plugin)
+
+
+def adapter_plugins() -> tuple[Plugin, ...]:
+    return tuple(_ADAPTER_PLUGINS.values())
+
+
+def clear_adapter_plugins() -> None:
+    """Test hook: forget co-located manifests (the registry has no such cache)."""
+    _ADAPTER_PLUGINS.clear()
 
 
 @dataclass(frozen=True)
@@ -64,6 +96,10 @@ class PlugCatalog:
         scan = discover_plugins(data_dir)
         for plugin in scan.plugins:
             entries.setdefault(plugin.id, PlugEntry(plugin, "user"))
+        # Co-located manifests the adapter loader already gated: the plane can load
+        # the adapter, so its hardware facts must resolve from the first read.
+        for plugin in adapter_plugins():
+            entries.setdefault(plugin.id, PlugEntry(plugin, "adapter"))
         self.entries = entries
         self.errors = list(scan.errors)
 

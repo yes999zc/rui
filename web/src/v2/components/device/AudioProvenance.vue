@@ -128,6 +128,22 @@ const manifestDefaultsText = computed(() => jsonText(props.audio?.manifest_defau
       </div>
       <div v-if="!audio.plug_resolved" class="note v2-warn-text">
         {{ t('v2.audio.plugUnresolved') }}
+        <span v-if="audio.manifest_error" class="mono"> — {{ audio.manifest_error }}</span>
+      </div>
+      <div
+        v-if="audio.conflicts && audio.conflicts.length"
+        class="note v2-warn-text"
+        data-testid="audio-conflicts"
+      >
+        <h3>
+          <AppIcon name="alert" :size="16" />
+          {{ t('v2.common.warning') }}
+        </h3>
+        <ul>
+          <li v-for="conflict in audio.conflicts" :key="conflict.path" class="mono">
+            {{ conflict.message }}
+          </li>
+        </ul>
       </div>
 
       <div class="table-wrap">

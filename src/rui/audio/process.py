@@ -36,7 +36,9 @@ import numpy as np
 from .. import secrets
 from ..config import Config, load_config
 from ..config.schema import (
-    device_audio_defaults,
+    CAPTURE_LAYOUT_FIELDS,
+    AudioDefaultsInfo,
+    device_audio_defaults_info,
     effective_ack_echo_ignore_ms,
     effective_audio,
 )
@@ -404,16 +406,30 @@ class AudioPlane:
         self.device_id = device_id
         self.socket_path = socket_path
         # Config v3 (Phase 1) resolved once: this device's overrides on top of the
-        # global audio block. 0.6 adds the plug manifest's `audio_defaults` underneath
-        # both (device default < global config < devices[].audio), resolved once here
-        # because the ack window needs the same layer and a plug catalog scan is not
-        # something to repeat per turn.
+        # model manifest's hardware facts (core default < global < manifest < device
+        # override). `build_plane()` loads the downstream adapters first, so a
+        # co-located manifest is in the catalog before this first read - the 0.8.0
+        # cold start used to resolve the Dot 2 manifest only after a restart, leaving
+        # ack at the reference speaker's 1200 ms and playback at 16 kHz.
         device_cfg = next((d for d in cfg.devices if d.id == device_id), None)
         self.device_cfg = device_cfg
-        self.audio_defaults = device_audio_defaults(device_cfg, cfg.system.data_dir)
-        self.effective = effective_audio(
-            cfg.audio, device_cfg.audio if device_cfg else None, self.audio_defaults
+        self.audio_defaults_info: AudioDefaultsInfo = device_audio_defaults_info(
+            device_cfg, cfg.system.data_dir
         )
+        self.audio_defaults = self.audio_defaults_info.defaults
+        self.audio_conflicts = []
+        self._audio_refresh_attempts = 0
+        self.effective = effective_audio(
+            cfg.audio, device_cfg.audio if device_cfg else None, self.audio_defaults,
+            conflicts=self.audio_conflicts,
+        )
+        # Resolve the cue window once here too: it is the field that exposed the
+        # unresolved-manifest cold start (1200 vs the Dot 2's declared 2500), and
+        # doing it now means the conflicts list and the log line agree.
+        effective_ack_echo_ignore_ms(
+            cfg.ack, device_cfg, self.audio_defaults, conflicts=self.audio_conflicts
+        )
+        self._log_audio_resolution("startup")
         # Phase 2: with multi_device.enabled the plane only reports candidates and waits
         # for the control plane's admit/reject; it never arms its own gate or barges on
         # its own. With it off (the default) the old local path is byte-identical.
@@ -764,7 +780,90 @@ class AudioPlane:
             self.vad_error = str(exc)
             log.warning("vad off: %s", exc)
 
-    # ------------------------------------------------------ Phase 2 arbitration
+    # ------------------------------------------------------------- audio facts
+    def _log_audio_resolution(self, when: str) -> None:
+        """Say which manifest supplied this device's hardware facts, or why none did.
+
+        A missing manifest is not fatal for a neutral/mono device, but it is exactly
+        how the Dot 2 silently ran at 16 kHz playback and a 1200 ms cue window. The
+        line is one per plane start/refresh, never per turn.
+        """
+        info = self.audio_defaults_info
+        if info.resolved:
+            log.info(
+                "audio facts (%s): device=%s plug=%s model=%s source=%s",
+                when, self.device_id, info.plug_id or "?", info.model_id or "?",
+                info.source or "?",
+            )
+        elif info.expected or info.error:
+            log.warning(
+                "audio facts (%s): device=%s has no usable model manifest (%s); "
+                "hardware facts fall back to the global/core values - playback/ack/"
+                "capture may be wrong",
+                when, self.device_id, info.error or "manifest declares none",
+            )
+
+    def _refresh_audio_defaults(self, *, reason: str) -> bool:
+        """Re-resolve the model manifest; discover a catalog that became ready late.
+
+        The plane starts before a device has ever connected, and in 0.8.0 production
+        the dot2 manifest was missing for the first effective read and appeared only
+        after a restart. `build_plane()` closes the co-located case by loading the
+        adapters first; this covers a data_dir that is populated while the plane is
+        already up (mount ordering) and makes the first wake use the manifest, not
+        the core defaults.
+        """
+        if self.device_cfg is None:
+            return False
+        self._audio_refresh_attempts += 1
+        info = device_audio_defaults_info(self.device_cfg, self.cfg.system.data_dir)
+        if not info.resolved:
+            self.audio_defaults_info = info
+            return False
+        before = (
+            None if self.audio_defaults is None
+            else self.audio_defaults.model_dump(exclude_none=True)
+        )
+        after = info.defaults.model_dump(exclude_none=True)
+        if before == after:
+            self.audio_defaults_info = info
+            return False
+        self.audio_defaults_info = info
+        self.audio_defaults = info.defaults
+        conflicts: list = []
+        self.effective = effective_audio(
+            self.cfg.audio,
+            self.device_cfg.audio if self.device_cfg else None,
+            self.audio_defaults,
+            conflicts=conflicts,
+        )
+        effective_ack_echo_ignore_ms(
+            self.cfg.ack, self.device_cfg, self.audio_defaults, conflicts=conflicts
+        )
+        self.audio_conflicts = conflicts
+        # A late manifest can invalidate the stream the plane already opened in two
+        # ways: this is the first resolution at all (the stream was built from global
+        # values), or a later resolution moves the capture layout under an open stream.
+        # A manifest that only adds playback/ack facts does not need a restart.
+        before_capture = (before or {}).get("capture") or {}
+        after_capture = after.get("capture") or {}
+        layout_changed = before is None or any(
+            before_capture.get(key) != after_capture.get(key)
+            for key in CAPTURE_LAYOUT_FIELDS
+        )
+        log.warning(
+            "audio facts (%s): device=%s resolved plug=%s model=%s (late manifest); "
+            "playback=%d Hz ack=%d ms%s",
+            reason, self.device_id, info.plug_id or "?", info.model_id or "?",
+            self.effective.playback.rate,
+            effective_ack_echo_ignore_ms(
+                self.cfg.ack, self.device_cfg, self.audio_defaults
+            ),
+            "; restart the plane if the capture layout changed"
+            if layout_changed else "",
+        )
+        return True
+
     @property
     def _post_playback_mute_s(self) -> float:
         return self.effective.voice.post_playback_mute_ms / 1000.0
@@ -777,6 +876,14 @@ class AudioPlane:
         than the reference speaker needs; reading the global value here is what let its own cue open a
         turn (0.5.3 self-hearing fix). 0.6 lets the plug declare its own measured tail.
         """
+        if (
+            self.audio_defaults is None
+            and self.audio_defaults_info.expected
+            and self._audio_refresh_attempts < 3
+        ):
+            # A cold start whose catalog was not ready: the first wake must not use
+            # the reference speaker's window when the model declares its own.
+            self._refresh_audio_defaults(reason="ack-read")
         return effective_ack_echo_ignore_ms(
             self.cfg.ack, self.device_cfg, self.audio_defaults
         )
@@ -3342,6 +3449,9 @@ class AudioPlane:
             if not probe.ok:
                 raise RuntimeError(f"device probe failed ({probe.as_error()})")
             info = probe.info
+            # The manifest catalog is now as ready as the device is: re-resolve
+            # before the first wake can read the cue window (cold-start fix).
+            self._refresh_audio_defaults(reason="probe")
             writer.write(
                 encode_json(
                     Ready(

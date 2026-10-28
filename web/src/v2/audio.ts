@@ -277,18 +277,29 @@ export function buildAudioRows(data: DeviceAudio): AudioRow[] {
   })
 }
 
+/** The only audio leaf the global layer may legitimately override (task-26). */
+export const NEGOTIATED_AUDIO_PATH = 'capture.rate'
+
 /**
- * A global value written explicitly shadows a manifest default — the exact
- * situation mixed houses hit (global `audio.capture` overriding a plug's own
- * layout). The server's `global_explicit` flag decides; value equality never does.
+ * `capture.rate` is the one negotiated leaf: an explicit global value is the wire
+ * rate the client is asked for, and the client resamples to the model's hardware
+ * rate. It may therefore differ from the manifest without being a stale override.
+ *
+ * Every other manifest leaf is a hardware fact and wins over global config. The
+ * path argument is required on purpose: an `AudioLayer` alone cannot tell capture
+ * from playback, and `playback.rate`/`playback.channels` with the same
+ * `global_explicit`/manifest shape must NOT be reported as negotiated — those
+ * disagreements are the server's `conflicts` list, shown with the winner.
  */
-export function globalShadowsManifest(layer: AudioLayer | null): boolean {
-  if (!layer) return false
-  return (
-    layer.global_explicit === true &&
-    layer.manifest !== null &&
-    layer.manifest !== undefined
-  )
+export function isNegotiatedCaptureRate(
+  path: string,
+  layer: AudioLayer | null,
+): boolean {
+  if (path !== NEGOTIATED_AUDIO_PATH || !layer) return false
+  if (layer.global_explicit !== true) return false
+  if (layer.manifest === null || layer.manifest === undefined) return false
+  if (layer.global === null || layer.global === undefined) return false
+  return layer.global !== layer.manifest
 }
 
 /**

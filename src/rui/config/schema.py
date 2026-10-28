@@ -14,13 +14,17 @@ Version history:
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 CONFIG_VERSION = 3
+
+log = logging.getLogger(__name__)
 
 ExposeMode = Literal["domain", "whitelist", "all"]
 STAGES = ("asr", "tts", "llm")
@@ -292,8 +296,9 @@ class CaptureConfig(BaseModel):
     The core has no device in it: the default layout is the neutral one a generic
     int16 mono microphone delivers (16 kHz, 1 channel, no reference, no shift). A
     speaker that differs declares its own layout in its plug manifest's
-    "audio_defaults" block, which is the bottom layer of the audio merge
-    (device default < global config < devices[].audio). A multi-mic speaker, for instance,
+    "audio_defaults" block, which is authoritative for the model's hardware
+    (core default < global config < manifest < devices[].audio; `rate` is the one
+    negotiated field, see `AudioDefaults`). A multi-mic speaker, for instance,
     declares S32_LE / 8 interleaved channels / 48 kHz (ch0..ch5 mic array, ch6/ch7
     playback reference; mic full scale 2**23, reference 2**28).
     """
@@ -486,7 +491,10 @@ class EffectiveAudio(BaseModel):
 class CaptureDefaults(BaseModel):
     """A plug manifest's declared capture layout (rui-device/v1 `audio_defaults`).
 
-    Every field is optional: a plug states only what its hardware changes, and the
+    These are hardware facts, so they win over the global `audio.capture` block; a
+    disagreeing explicit global value is reported as a conflict. The one exception is
+    `rate`, which the client may negotiate down (see `AudioDefaults`). Every field is
+    optional: a plug states only what its hardware changes, and the
     neutral core layout fills the rest. The ranges match `CaptureConfig` so a merged
     block can never be out of range. A plug that states one of
     channels/mic_channels/ref_channels must state the layout consistently, otherwise
@@ -536,14 +544,26 @@ class PlaybackDefaults(BaseModel):
 class AudioDefaults(BaseModel):
     """The optional `audio_defaults` block of a rui-device/v1 manifest.
 
-    This is the *bottom* layer of the three-layer audio merge:
-    device default < global config < devices[].audio override. A plug that declares
-    nothing (every pre-0.6 plug) leaves the neutral core defaults in place, so the
-    field is unknown-safe and loading an old plug never errors.
+    `audio_defaults` states the *model's* hardware facts, not a preference: a
+    6-mic/2-ref array or a 48 kHz speaker wire is a property of the box, and a global
+    config written for the reference speaker must not silently replace it (0.8.0 P0:
+    the production template's 16 kHz / 8 ch block was applied to a mono Dot 2, so
+    every playback block was rejected). The merge order is therefore:
 
-    `ack_echo_ignore_ms` lives here rather than under `capture` because it is the
-    conversational cue window (`ack.echo_ignore_ms`), not a DSP property; it is
-    resolved by `effective_ack_echo_ignore_ms()`, not by `effective_audio()`.
+        core default < global config < manifest hardware facts < devices[].audio
+
+    with two documented exceptions, both reported as
+    :class:`AudioConflict` warnings instead of being silent:
+
+    * ``capture.rate`` is *negotiated*: the model states its native rate, but the
+      client may resample to the operator's requested wire (reference speaker: 48 kHz native,
+      production asks for 16 kHz to save wifi). An explicit global/device rate wins.
+    * ``ack_echo_ignore_ms`` is an acoustic fact of the model and wins over an
+      explicit global window; a device override still wins over both.
+
+    A plug that declares nothing (every pre-0.6 plug) leaves the neutral core
+    defaults in place, so the field is unknown-safe and loading an old plug never
+    errors.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -553,31 +573,141 @@ class AudioDefaults(BaseModel):
     ack_echo_ignore_ms: int | None = Field(default=None, ge=0, le=5000)
 
 
+@dataclass(frozen=True)
+class AudioConflict:
+    """One field where an explicit config value disagreed with the model manifest.
+
+    The console and the plane both show it; nothing about it is silent. ``winner`` is
+    the source whose value became effective (``device-manifest`` or ``global-config``;
+    a device override never conflicts because it is a deliberate per-room choice).
+    """
+
+    path: str
+    global_value: Any
+    manifest_value: Any
+    effective: Any
+    winner: str
+    kind: str
+    message: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "global": self.global_value,
+            "manifest": self.manifest_value,
+            "effective": self.effective,
+            "winner": self.winner,
+            "kind": self.kind,
+            "message": self.message,
+        }
+
+
+#: Conflicts already logged, so a per-request read does not spam the service log.
+_LOGGED_CONFLICTS: set[tuple[str, str, str, str]] = set()
+#: Manifest misses already logged, keyed by (device/plug, reason).
+_LOGGED_MANIFEST_MISSES: set[tuple[str, str, str]] = set()
+
+
+def _conflict(
+    *,
+    path: str,
+    global_value: Any,
+    manifest_value: Any,
+    effective: Any,
+    winner: str,
+    kind: str,
+    note: str,
+) -> AudioConflict:
+    label = path if path.startswith("ack.") else f"audio.{path}"
+    message = (
+        f"{label}: global {global_value} vs model {manifest_value}; "
+        f"using {effective} ({note})"
+    )
+    conflict = AudioConflict(path, global_value, manifest_value, effective, winner,
+                             kind, message)
+    key = (path, str(global_value), str(manifest_value), winner)
+    if key not in _LOGGED_CONFLICTS:
+        _LOGGED_CONFLICTS.add(key)
+        log.warning("%s", message)
+    return conflict
+
+
 def _explicit(block: BaseModel, key: str, core: BaseModel) -> bool:
     """Whether the config state for `key` is a real choice, not a core default.
 
     A field counts as configured when the operator/config file set it
     (`model_fields_set`) or when its value differs from the core default `core` (a
-    value mutated after load, which older write paths do). The distinction is what
-    lets a device manifest's `audio_defaults` apply to a config that never chose a
-    layout while an explicit value - including the production template's 16 kHz capture override -
-    wins.
+    value mutated after load, which older write paths do). The distinction still
+    matters: a manifest fills fields the config never chose, and a conflict with an
+    explicit value is reported rather than applied silently.
     """
     return key in block.model_fields_set or getattr(block, key) != getattr(core, key)
+
+
+#: Capture fields that form one bundle with the channel dimensions: a model that
+#: declares its layout also owns the fields it omits (they take the neutral core
+#: value, never the global template written for another speaker).
+CAPTURE_LAYOUT_FIELDS = (
+    "channels", "mic_channels", "ref_channels", "bits", "mic_shift", "ref_shift",
+)
+#: Only the dimension fields imply a complete layout; declaring `bits` alone says
+#: nothing about how many channels arrive, so the global block still supplies them.
+CAPTURE_LAYOUT_DIMENSIONS = ("channels", "mic_channels", "ref_channels")
+
+
+def capture_layout_neutral_fills(
+    defaults: AudioDefaults | None, audio: AudioConfig
+) -> dict[str, Any]:
+    """Capture paths a declared manifest layout replaces with the neutral core value.
+
+    Keys are provenance paths (``capture.mic_shift``); values are the neutral values
+    the merge installs. A field is listed when the manifest declares a layout
+    dimension (``channels`` / ``mic_channels`` / ``ref_channels``) but omits that
+    field, and the global block disagrees with the neutral value - exactly the fields
+    :func:`effective_audio` neutralizes and reports as a ``device-manifest`` conflict.
+    A global value that already equals the neutral one is not listed: nothing was
+    replaced, so ``global-config`` stays truthful for it.
+
+    The provenance endpoint uses this so its ``sources`` cannot claim the global
+    block won a field the merge took from the model's declared layout.
+    """
+    if defaults is None or defaults.capture is None:
+        return {}
+    declared = defaults.capture.model_dump(exclude_none=True)
+    if not set(declared) & set(CAPTURE_LAYOUT_DIMENSIONS):
+        return {}
+    neutral = CaptureConfig()
+    fills: dict[str, Any] = {}
+    for key in CAPTURE_LAYOUT_FIELDS:
+        if key in declared:
+            continue
+        if getattr(audio.capture, key) == getattr(neutral, key):
+            continue
+        fills[f"capture.{key}"] = getattr(neutral, key)
+    return fills
 
 
 def effective_audio(
     audio: AudioConfig,
     override: DeviceAudioOverride | None,
     defaults: AudioDefaults | None = None,
+    *,
+    conflicts: list[AudioConflict] | None = None,
 ) -> EffectiveAudio:
-    """Merge the three audio layers for one device: manifest < global < override.
+    """Merge the audio layers for one device: manifest hardware facts win.
+
+    Order: core default < global config < manifest ``audio_defaults`` <
+    ``devices[].audio``. The manifest is authoritative for the model's hardware
+    (capture layout, playback wire format); an explicit global value that disagrees is
+    kept in ``conflicts`` and the effective value is the model's, except for
+    ``capture.rate`` (negotiated: the explicit wire wins and the client resamples).
 
     `defaults` is the device plug's `audio_defaults` (None for an old plug or an
-    unresolved manifest: the neutral core defaults then apply unchanged). The merged
-    dict is validated again on purpose: an override that changes `capture.channels`
-    without the matching `mic_channels`/`ref_channels` must fail here with a schema
-    error, not later in the audio plane as a frame-length crash.
+    unresolved manifest: the global/core value then applies unchanged, which is the
+    documented unknown-safe shim - callers that can see a manifest log the miss).
+    The merged dict is validated again on purpose: an override that changes
+    `capture.channels` without the matching `mic_channels`/`ref_channels` must fail
+    here with a schema error, not later in the audio plane as a frame-length crash.
     """
     resolved: dict[str, Any] = {}
     blocks = {
@@ -586,14 +716,72 @@ def effective_audio(
         "playback": audio.playback,
         "aec": audio.aec,
     }
+
+    def overridden(name: str, key: str) -> bool:
+        """A deliberate device value makes the global-vs-model conflict moot."""
+        part = getattr(override, name, None) if override is not None else None
+        return part is not None and getattr(part, key, None) is not None
+
     for name, block in blocks.items():
         merged = block.model_dump()
+        core = type(block)()
         default_block = getattr(defaults, name, None) if defaults is not None else None
         if default_block is not None:
-            core = type(block)()
-            for key, value in default_block.model_dump(exclude_none=True).items():
+            declared = default_block.model_dump(exclude_none=True)
+            # A capture layout is a bundle: the model's channels/bits/shifts only make
+            # sense together. A global template's 32-bit/12-bit-shift array-speaker numbers must
+            # not leak into a 16-bit mono Dot 2 just because its manifest omitted the
+            # shift fields (which it does - neutral 0 is the only correct value there).
+            if name == "capture" and set(declared) & set(CAPTURE_LAYOUT_DIMENSIONS):
+                for key in CAPTURE_LAYOUT_FIELDS:
+                    if key in declared:
+                        continue
+                    core_value = getattr(core, key)
+                    current = getattr(block, key)
+                    if current == core_value:
+                        continue
+                    merged[key] = core_value
+                    if overridden(name, key):
+                        continue
+                    conflict = _conflict(
+                        path=f"{name}.{key}", global_value=current,
+                        manifest_value=core_value, effective=core_value,
+                        winner="device-manifest", kind="hardware",
+                        note="manifest declares the layout; neutral core value",
+                    )
+                    if conflicts is not None:
+                        conflicts.append(conflict)
+            for key, value in declared.items():
                 if not _explicit(block, key, core):
                     merged[key] = value
+                    continue
+                current = getattr(block, key)
+                if current == value:
+                    continue
+                path = f"{name}.{key}"
+                if overridden(name, key):
+                    merged[key] = value
+                    continue
+                if name == "capture" and key == "rate":
+                    # The model states its native rate; an explicit wire is the
+                    # operator's negotiated request (the reference client is asked for 16 kHz).
+                    conflict = _conflict(
+                        path=path, global_value=current, manifest_value=value,
+                        effective=current, winner="global-config",
+                        kind="negotiated",
+                        note="explicit wire wins; the client resamples",
+                    )
+                else:
+                    # Hardware fact: channels/bit depth/shifts, or the playback wire
+                    # format a plug's adapter rejects anything else for (Dot 2 48 kHz).
+                    merged[key] = value
+                    conflict = _conflict(
+                        path=path, global_value=current, manifest_value=value,
+                        effective=value, winner="device-manifest",
+                        kind="hardware", note="model hardware",
+                    )
+                if conflicts is not None:
+                    conflicts.append(conflict)
         part = getattr(override, name) if override is not None else None
         if part is not None:
             values = part.model_dump(exclude_none=True)
@@ -611,65 +799,165 @@ def effective_ack_echo_ignore_ms(
     ack: AckConfig,
     device: DeviceConfig | None,
     defaults: AudioDefaults | None = None,
+    *,
+    conflicts: list[AudioConflict] | None = None,
 ) -> int:
     """The spoken-cue echo window for one device, three layers resolved.
 
-    Layer order: the plug's `audio_defaults.ack_echo_ignore_ms` < the global
-    `ack.echo_ignore_ms` (when the config states it) <
-    `devices[].audio.voice.ack_echo_ignore_ms`. The override lives under `voice`
-    because it describes this device's microphone (a device-AEC plug keeps the cue's
-    residual echo far longer than the 1200 ms the reference speaker needs), but the value it replaces
-    is the conversational `ack` setting, which is deliberately outside the `audio`
-    block. Keeping the two resolved in one place is what stops the next caller from
-    reading the global value and re-introducing the self-hearing bug.
+    Layer order: the plug's `audio_defaults.ack_echo_ignore_ms` (the model's measured
+    acoustic tail) < the global `ack.echo_ignore_ms` **only when the model declares
+    none** < `devices[].audio.voice.ack_echo_ignore_ms`. An explicit global window
+    that disagrees with a declared model tail is kept in ``conflicts`` and does not
+    win: the Dot 2's 2500 ms tail was lost to the reference speaker's 1200 ms exactly
+    that way (0.8.0 P0 cold-start symptom: `ack=1200` on a fresh Dot 2).
+
+    The override lives under `voice` because it describes this device's microphone,
+    but the value it replaces is the conversational `ack` setting, which is
+    deliberately outside the `audio` block. Keeping the two resolved in one place is
+    what stops the next caller from reading the global value and re-introducing the
+    self-hearing bug.
     """
     base = ack.echo_ignore_ms
-    if (
-        defaults is not None
-        and defaults.ack_echo_ignore_ms is not None
-        and not _explicit(ack, "echo_ignore_ms", type(ack)())
-    ):
-        base = defaults.ack_echo_ignore_ms
+    core = type(ack)()
+    if defaults is not None and defaults.ack_echo_ignore_ms is not None:
+        value = defaults.ack_echo_ignore_ms
+        if not _explicit(ack, "echo_ignore_ms", core):
+            base = value
+        elif ack.echo_ignore_ms != value:
+            base = value
+            override_value = None
+            if (device is not None and device.audio is not None
+                    and device.audio.voice is not None):
+                override_value = device.audio.voice.ack_echo_ignore_ms
+            if override_value is None:
+                conflict = _conflict(
+                    path="ack.echo_ignore_ms", global_value=ack.echo_ignore_ms,
+                    manifest_value=value, effective=value, winner="device-manifest",
+                    kind="acoustic", note="model measured tail",
+                )
+                if conflicts is not None:
+                    conflicts.append(conflict)
     override = None
     if device is not None and device.audio is not None and device.audio.voice is not None:
         override = device.audio.voice.ack_echo_ignore_ms
     return base if override is None else override
 
 
-def device_audio_defaults(
+@dataclass(frozen=True)
+class AudioDefaultsInfo:
+    """Why a device does or does not have manifest hardware facts.
+
+    ``error`` is empty for a resolved plug and for a device that never named one;
+    it is set when the device names a ``plug_id`` (or the adapter matches a plug) but
+    no manifest could be read. The plane logs that once and the console shows it, so
+    a cold-start catalog miss is visible instead of looking like "the model declares
+    nothing".
+    """
+
+    defaults: AudioDefaults | None = None
+    plug_id: str = ""
+    model_id: str = ""
+    source: str = ""
+    expected: bool = False
+    error: str = ""
+
+    @property
+    def resolved(self) -> bool:
+        return self.defaults is not None
+
+
+def device_audio_defaults_info(
     device: DeviceConfig | None, data_dir: str | None
-) -> AudioDefaults | None:
-    """The `audio_defaults` of the plug manifest that owns `device`, or None.
+) -> AudioDefaultsInfo:
+    """Resolve the device's plug manifest and report what was found (or why not).
 
     Imported lazily: `rui.plugins.models` imports this module, so a module-level
     import here would close a cycle, and config validation must not require the plug
     catalog unless a device actually asks for its defaults. An unresolved or broken
     plug is not an error at this layer - the neutral core defaults are the documented
-    shim for a plug that declares nothing.
+    shim for a plug that declares nothing - but it is *visible*.
     """
     if device is None:
-        return None
+        return AudioDefaultsInfo()
+    params = device.params if isinstance(device.params, dict) else {}
+    plug_id = str(params.get("plug_id") or "").strip()
     try:
         from ..plugins.resolve import resolve_device_plug
 
         resolved = resolve_device_plug(device, data_dir)
-    except Exception:  # noqa: BLE001 - a broken plug must not make the config unloadable
-        return None
-    return None if resolved is None else resolved.device.audio_defaults
-
-
-def effective_device_audio(cfg: Config, device: DeviceConfig | None) -> EffectiveAudio:
-    """`effective_audio()` for a configured device, resolving its manifest defaults."""
-    defaults = device_audio_defaults(device, cfg.system.data_dir)
-    return effective_audio(
-        cfg.audio, device.audio if device is not None else None, defaults
+    except Exception as exc:  # noqa: BLE001 - a broken plug must not unload the config
+        return AudioDefaultsInfo(
+            plug_id=plug_id, expected=bool(plug_id),
+            error=f"plug catalog failed: {type(exc).__name__}: {exc}",
+        )
+    if resolved is None:
+        error = (
+            f"plug {plug_id!r} is not installed or its manifest did not load"
+            if plug_id
+            else f"no installed plug declares adapter {device.adapter!r}"
+        )
+        key = (str(getattr(device, "id", "") or ""), plug_id,
+               str(getattr(device, "adapter", "") or ""))
+        if key not in _LOGGED_MANIFEST_MISSES:
+            _LOGGED_MANIFEST_MISSES.add(key)
+            log.warning(
+                "audio facts: device %s (%s) has no usable model manifest: %s; "
+                "hardware facts fall back to the global/core values",
+                getattr(device, "id", "?"), getattr(device, "adapter", "?"), error,
+            )
+        return AudioDefaultsInfo(plug_id=plug_id, expected=bool(plug_id), error=error)
+    defaults = resolved.device.audio_defaults
+    return AudioDefaultsInfo(
+        defaults=defaults,
+        plug_id=resolved.plug_id,
+        model_id=str(resolved.device.id),
+        source=resolved.source,
+        # A matched plug that declares nothing is the documented shim for a pre-0.6
+        # plug: there is nothing to wait for, so no retry and no warning.
+        expected=False,
     )
 
 
-def effective_device_ack_echo_ignore_ms(cfg: Config, device: DeviceConfig | None) -> int:
+def device_audio_defaults(
+    device: DeviceConfig | None, data_dir: str | None
+) -> AudioDefaults | None:
+    """The `audio_defaults` of the plug manifest that owns `device`, or None."""
+    return device_audio_defaults_info(device, data_dir).defaults
+
+
+def effective_device_audio(
+    cfg: Config,
+    device: DeviceConfig | None,
+    *,
+    conflicts: list[AudioConflict] | None = None,
+) -> EffectiveAudio:
+    """`effective_audio()` for a configured device, resolving its manifest defaults."""
+    defaults = device_audio_defaults(device, cfg.system.data_dir)
+    return effective_audio(
+        cfg.audio, device.audio if device is not None else None, defaults,
+        conflicts=conflicts,
+    )
+
+
+def effective_device_ack_echo_ignore_ms(
+    cfg: Config,
+    device: DeviceConfig | None,
+    *,
+    conflicts: list[AudioConflict] | None = None,
+) -> int:
     """`effective_ack_echo_ignore_ms()` with the device manifest's declared tail."""
     defaults = device_audio_defaults(device, cfg.system.data_dir)
-    return effective_ack_echo_ignore_ms(cfg.ack, device, defaults)
+    return effective_ack_echo_ignore_ms(
+        cfg.ack, device, defaults, conflicts=conflicts
+    )
+
+
+def device_audio_conflicts(cfg: Config, device: DeviceConfig | None) -> list[AudioConflict]:
+    """Every manifest-vs-explicit disagreement for one device, merged and ack."""
+    conflicts: list[AudioConflict] = []
+    effective_device_audio(cfg, device, conflicts=conflicts)
+    effective_device_ack_echo_ignore_ms(cfg, device, conflicts=conflicts)
+    return conflicts
 
 
 class ProviderConfig(BaseModel):

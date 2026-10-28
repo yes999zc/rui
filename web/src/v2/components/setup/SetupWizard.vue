@@ -78,6 +78,29 @@ const models = computed<PluginModel[]>(() => selectedPlugin.value?.devices ?? []
 const selectedModel = computed<PluginModel | null>(
   () => models.value.find((model) => model.model_id === selectedModelId.value) ?? null,
 )
+/**
+ * The selected model's declared hardware facts, shown before the device exists.
+ * The console must not make the operator guess what a new Dot 2 will ask the
+ * bridge for; the same numbers appear with their source on the device page.
+ */
+const modelAudioSummary = computed(() => {
+  const defaults = selectedModel.value?.audio_defaults
+  if (!defaults || Object.keys(defaults).length === 0) return ''
+  const capture = (defaults.capture ?? {}) as Record<string, unknown>
+  const playback = (defaults.playback ?? {}) as Record<string, unknown>
+  const ack = defaults.ack_echo_ignore_ms
+  const parts: string[] = []
+  if (playback.rate) {
+    parts.push(`${t('v2.audio.group.playback')} ${playback.rate} Hz`)
+  }
+  if (capture.rate || capture.channels) {
+    parts.push(
+      `${t('v2.audio.group.capture')} ${capture.rate ?? '?'} Hz / ${capture.channels ?? '?'} ch`,
+    )
+  }
+  if (ack) parts.push(`${t('v2.audio.group.ack')} ${ack} ms`)
+  return parts.join(' · ')
+})
 const multiDeviceEnabled = computed(() => house.value?.multi_device?.enabled ?? true)
 const pluginErrorCopy = computed(() =>
   pluginError.value ? describeError(pluginError.value) : null,
@@ -819,6 +842,10 @@ onBeforeUnmount(() => {
               <div>
                 <dt>{{ t('v2.setup.summary.deviceId') }}</dt>
                 <dd class="mono">{{ createdDeviceId || plan.device_id || draftId || t('v2.common.na') }}</dd>
+              </div>
+              <div v-if="modelAudioSummary" data-testid="setup-audio-defaults">
+                <dt>{{ t('v2.audio.title') }}</dt>
+                <dd class="mono">{{ modelAudioSummary }}</dd>
               </div>
               <div v-if="plan.next_step">
                 <dt>{{ t('v2.setup.summary.next') }}</dt>

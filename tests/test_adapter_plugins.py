@@ -22,6 +22,7 @@ from _plugin_compat import fixture_compat_range
 from rui.config import Config
 from rui.config.schema import DeviceConfig
 from rui.device import loader, registry
+from rui.plugins.resolve import clear_adapter_plugins
 
 
 @pytest.fixture(autouse=True)
@@ -31,10 +32,12 @@ def _isolated_registry(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("RUI_ADAPTER_PLUGINS", raising=False)
     monkeypatch.delenv("HOUSE_EAR_ADAPTER_PLUGINS", raising=False)
     monkeypatch.delenv(loader.DATA_DIR_ENV, raising=False)
+    clear_adapter_plugins()
     yield
     registry._BUILDERS.clear()
     registry._BUILDERS.update(before)
     registry.RUNTIME_DEFAULTS.clear()
+    clear_adapter_plugins()
 
 
 @pytest.fixture(autouse=True)

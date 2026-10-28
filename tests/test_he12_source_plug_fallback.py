@@ -21,7 +21,7 @@ from _plugin_compat import fixture_compat_range
 
 from rui.device import loader, registry
 from rui.plugins import builtin
-from rui.plugins.resolve import PlugCatalog
+from rui.plugins.resolve import PlugCatalog, clear_adapter_plugins
 
 SOURCE_DEVICE = "source-speaker"
 ADAPTER_MODULE = "demo_source_adapter"
@@ -35,7 +35,9 @@ def _isolated_registry(monkeypatch: pytest.MonkeyPatch):
                  loader.DATA_DIR_ENV, "RUI_PLUGINS_DIR"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(loader.metadata, "entry_points", lambda **_: [])
+    clear_adapter_plugins()
     yield
+    clear_adapter_plugins()
     registry._BUILDERS.clear()
     registry._BUILDERS.update(before)
     registry.RUNTIME_DEFAULTS.clear()

@@ -169,6 +169,17 @@ export interface AudioLayer {
   device: unknown
 }
 
+/** One explicit global value that disagreed with the model manifest (0.8.0). */
+export interface AudioConflict {
+  path: string
+  global: unknown
+  manifest: unknown
+  effective: unknown
+  winner: 'device-manifest' | 'global-config' | string
+  kind: 'hardware' | 'negotiated' | 'acoustic' | string
+  message: string
+}
+
 export interface DeviceAudio {
   effective: Record<string, unknown>
   sources: Record<string, AudioSource | string>
@@ -176,6 +187,10 @@ export interface DeviceAudio {
   overrides: string[]
   manifest_defaults: Record<string, unknown>
   plug_resolved: boolean
+  /** Why no manifest supplied the hardware facts; empty when resolved. */
+  manifest_error?: string
+  /** "global X vs model Y, using Y" - never silent (0.8.0 P0). */
+  conflicts?: AudioConflict[]
 }
 
 export interface DevicePlane {

@@ -28,6 +28,7 @@ from rui.config.schema import (
     DeviceVoiceOverride,
     MultiDeviceConfig,
     config_warnings,
+    device_audio_conflicts,
     device_audio_defaults,
     effective_ack_echo_ignore_ms,
     effective_audio,
@@ -597,9 +598,14 @@ def test_the_ack_window_resolves_its_three_layers(tmp_path: Path) -> None:
     # The config states no ack.echo_ignore_ms, so the manifest's measured tail beats
     # the neutral core 1200.
     assert effective_ack_echo_ignore_ms(cfg.ack, device, defaults) == 2500
-    # A config that states the global value wins over the manifest ...
+    # The model's measured tail is an acoustic fact: an explicit global window that
+    # disagrees does not silently replace it (0.8.0 P0). The disagreement is reported.
     cfg.ack = AckConfig(echo_ignore_ms=900)
-    assert effective_ack_echo_ignore_ms(cfg.ack, device, defaults) == 900
+    conflicts: list = []
+    assert effective_ack_echo_ignore_ms(
+        cfg.ack, device, defaults, conflicts=conflicts) == 2500
+    assert [item.path for item in conflicts] == ["ack.echo_ignore_ms"]
+    assert conflicts[0].winner == "device-manifest"
     # ... and a device override wins over both (the 0.5.3 self-hearing knob).
     device.audio = DeviceAudioOverride(
         voice=DeviceVoiceOverride(ack_echo_ignore_ms=3000))
@@ -642,7 +648,12 @@ def test_saving_keeps_a_stated_ack_window(tmp_path: Path) -> None:
     document = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
     assert document["ack"]["echo_ignore_ms"] == 900
     reloaded = load_config(path)
-    assert effective_device_ack_echo_ignore_ms(reloaded, reloaded.devices[0]) == 900
+    # The value is persisted (an explicit choice is not erased), but the LX06
+    # manifest's measured 1200 ms tail owns the effective window; the disagreement is
+    # visible as a conflict (0.8.0: the manifest wins for acoustic hardware facts).
+    assert effective_device_ack_echo_ignore_ms(reloaded, reloaded.devices[0]) == 1200
+    conflicts = device_audio_conflicts(reloaded, reloaded.devices[0])
+    assert any(item.path == "ack.echo_ignore_ms" for item in conflicts)
 
 
 def test_an_explicit_cue_window_at_the_default_is_preserved(tmp_path: Path) -> None:

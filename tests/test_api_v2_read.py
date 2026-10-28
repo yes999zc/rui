@@ -310,7 +310,10 @@ def test_device_audio_endpoint_reports_all_four_layers(console):
     client, _ = console()
     body = client.get("/api/v2/devices/living/audio", headers=AUTH).json()
     assert set(body) == {"effective", "sources", "layers", "overrides",
-                         "manifest_defaults", "plug_resolved"}
+                         "manifest_defaults", "plug_resolved", "manifest_error",
+                         "conflicts"}
+    assert body["manifest_error"] == ""
+    assert body["conflicts"] == []
     # No explicit global value and no override: the plug's hardware layout wins.
     assert body["sources"]["capture.rate"] == "device-manifest"
     assert body["layers"]["capture.rate"]["manifest"] == 48000

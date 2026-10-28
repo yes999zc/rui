@@ -40,8 +40,8 @@ import {
   audioGroupLabelKey,
   audioSpec,
   buildAudioRows,
-  globalShadowsManifest,
   isInheritedSource,
+  isNegotiatedCaptureRate,
   overridePathFor,
   type AudioRow,
 } from '../../audio'
@@ -742,13 +742,21 @@ function retryState(): void {
                 <div class="v2-audio-source">
                   <ProvenanceTag :source="row.source" />
                 </div>
+                <!-- Only capture.rate is negotiated. Every other manifest leaf is a
+                     hardware fact that wins over global config; those disagreements
+                     belong to the server's `conflicts` list, not a per-row warning. -->
                 <p
-                  v-if="globalShadowsManifest(row.layer)"
+                  v-if="isNegotiatedCaptureRate(row.path, row.layer)"
                   class="v2-audio-shadow"
                   :data-testid="`audio-shadow-${row.path}`"
                 >
                   <AppIcon name="alert" :size="13" />
-                  <span>{{ t('v2.audio.globalShadow') }}</span>
+                  <span>
+                    {{ t('v2.audio.globalShadow', {
+                      global: displayValue(row.layer?.global),
+                      manifest: displayValue(row.layer?.manifest),
+                    }) }}
+                  </span>
                 </p>
                 <p
                   v-if="row.source === 'unresolved'"

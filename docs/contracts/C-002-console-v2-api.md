@@ -732,14 +732,14 @@ Activity（设备维度事件流）
     "ack_echo_ignore_ms": 2500
   },
   "sources": {
-    "capture.rate": "global-config",
+    "capture.rate": "device-manifest",
     "playback.rate": "device-manifest",
     "aec.who": "device-override",
     "aec.enabled": "device-override",
     "ack.echo_ignore_ms": "device-override"
   },
   "layers": {
-    "capture.rate": {"effective": 16000, "source": "global-config",
+    "capture.rate": {"effective": 16000, "source": "device-manifest",
                      "core": 16000, "manifest": 16000, "global": 16000,
                      "global_explicit": true, "device": null},
     "playback.rate": {"effective": 48000, "source": "device-manifest",
@@ -756,7 +756,9 @@ Activity（设备维度事件流）
   "manifest_defaults": {"capture": {"rate": 16000, "channels": 1},
                         "playback": {"rate": 48000, "channels": 1},
                         "ack_echo_ignore_ms": 2500},
-  "plug_resolved": true
+  "plug_resolved": true,
+  "manifest_error": "",
+  "conflicts": []
 }
 ```
 
@@ -765,10 +767,29 @@ Activity（设备维度事件流）
 | 优先级 | `source` | 判定 |
 |---|---|---|
 | 1 | `device-override` | `devices[].audio.<path>` 显式且非 null |
-| 2 | `global-config` | 全局 `audio.<path>`（或 `ack.echo_ignore_ms`）显式：`model_fields_set` 包含 或 值 ≠ 核心默认 |
-| 3 | `device-manifest` | manifest `audio_defaults.<path>` 非 null |
-| 4 | `core-default` | 以上都无 |
+| 2 | `device-manifest` | manifest `audio_defaults.<path>` 非 null（型号硬件事实；0.8.0 起压过显式全局值）；或 manifest 声明了采集布局维度（channels/mic_channels/ref_channels）而该布局字段缺失——取核心中性值，`layers[path].manifest` 给中性值 |
+| — | `global-config` | 全局 `audio.<path>`（或 `ack.echo_ignore_ms`）显式，且 manifest 未声明该字段、也未被布局中性填充；或 `capture.rate` 的协商值（显式 wire 生效） |
+| 3 | `core-default` | 以上都无 |
 | — | `unresolved` | 插件不可解析，且该字段既无 device 也无 global 显式值（无法知道 manifest 本应声明什么） |
+
+0.8.0 归属规则（ADR 0007）：
+
+- manifest 声明的是**型号硬件事实**，显式全局值不得静默覆盖；不一致时必须返回
+  `conflicts`，服务日志同时 WARN（每条冲突每进程一次）：
+  `{"path","global","manifest","effective","winner","kind","message"}`，
+  `message` 形如 `audio.playback.rate: global 16000 vs model 48000; using 48000 (model hardware)`。
+- `kind="negotiated"` 仅用于 `capture.rate`：manifest 给型号原生采样率，显式全局/设备 wire
+  仍是运维选择（客户端重采样），`winner="global-config"`。
+- manifest 声明了采集布局的通道维度（channels/mic_channels/ref_channels）时，未声明的布局
+  字段（bits/mic_shift/ref_shift 或缺失维度）取核心中性值（`kind="hardware"`，`note` 说明），
+  不继承全局模板；`source` 必须是 `device-manifest`，`layers[path].manifest` 给该中性值。
+  只声明 bits/shift 不触发此规则。
+- `ack_echo_ignore_ms` 按同一优先级：device override > manifest 的型号实测拖尾 > 显式全局
+  `ack.echo_ignore_ms` > 核心 1200。
+- `manifest_error` 非空表示 `params.plug_id`（或 adapter）指向的 manifest 读不到；
+  `plug_resolved=false`。此时不能把未声明的字段伪装成 `core-default`。
+- 设备列表/详情的 `warnings` 追加 `{code:"audio_conflict", path, global, manifest,
+  effective, message, hint}`，值与 §7.15 的 `conflicts` 同源。
 
 - 示例只列 4 个 leaf 以说明来源；实际 `sources/layers` 覆盖**全部 leaf**（capture/voice/playback/aec 的所有字段 + ack）。
 - `layers` 同时给四层原始值 + `global_explicit`；UI 不得用“值相等”推断继承（显式设备值可以等于全局值，`app.py:1113-1115`）。

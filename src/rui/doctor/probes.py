@@ -405,12 +405,13 @@ def _wire_rate_from_entrypoint(
 
 
 def _merged_audio(cfg: Config, device: object):
-    """This device's three-layer audio: manifest defaults < global config < override.
+    """This device's merged audio: core < global < manifest hardware facts < override.
 
     Doctor rows must describe what the plane will run with. The global block alone is
     wrong as soon as a plug declares `audio_defaults` (the neutral core defaults are
-    not an array speaker's 8 ch / 48 kHz) or a device sets its own playback rate (the 0.5.3 D2
-    bug: the row said 16 kHz while the speaker heard 48 kHz).
+    not an array speaker's 8 ch / 48 kHz) or a device sets its own playback rate (the
+    0.5.3 D2 bug: the row said 16 kHz while the speaker heard 48 kHz). Since 0.8.0 the
+    manifest wins for hardware facts; `capture.rate` stays the negotiated exception.
     """
     return effective_audio(
         cfg.audio,

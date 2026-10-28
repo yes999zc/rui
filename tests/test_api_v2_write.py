@@ -863,11 +863,14 @@ def test_audio_patch_null_clears_the_global_field_back_to_the_manifest(console):
     `audio.capture.rate`, and the LX06's 48 kHz manifest default could never apply.
     """
     config = Config(web={"auth_token": TOKEN}, devices=[_device()])
-    config.audio.capture.rate = 48000
+    # 24000, not 48000: an explicit rate equal to the manifest reports the manifest as
+    # the source (0.8.0 tie rule), so use a real disagreement to see "global" first.
+    config.audio.capture.rate = 24000
     client, _, path = console(config=config)
     before = client.get("/api/v2/devices/living/audio", headers=AUTH).json()
     assert before["sources"]["capture.rate"] == "global-config"
-    assert before["layers"]["capture.rate"]["effective"] == 48000
+    assert before["layers"]["capture.rate"]["effective"] == 24000
+    assert [item["path"] for item in before["conflicts"]] == ["capture.rate"]
 
     response = client.patch("/api/v2/house/audio", headers=AUTH,
                             json={"audio": {"capture": {"rate": None}}})
@@ -902,15 +905,21 @@ def test_audio_patch_keeps_an_explicit_value_equal_to_the_core_default(console):
 
 
 def test_audio_patch_null_clears_the_ack_window_to_the_manifest(console):
-    """P1c: clearing the cue window falls back to the plug's measured 2500 ms."""
+    """P1c: clearing the cue window leaves the plug's measured 2500 ms in effect.
+
+    0.8.0: the global 1500 ms never won while the manifest declared 2500 (the model's
+    acoustic tail is authoritative); clearing still deletes the useless explicit
+    value and removes the conflict warning.
+    """
     config = Config(web={"auth_token": TOKEN}, devices=[_manifest_device()])
     config.ack.echo_ignore_ms = 1500
     client, _, path = console(config=config)
     _dot2_manifest_plug(Path(config.system.data_dir), ack_ms=2500)
 
     before = client.get("/api/v2/devices/dot2/audio", headers=AUTH).json()
-    assert before["sources"]["ack.echo_ignore_ms"] == "global-config"
-    assert before["effective"]["ack_echo_ignore_ms"] == 1500
+    assert before["sources"]["ack.echo_ignore_ms"] == "device-manifest"
+    assert before["effective"]["ack_echo_ignore_ms"] == 2500
+    assert any(item["path"] == "ack.echo_ignore_ms" for item in before["conflicts"])
 
     response = client.patch("/api/v2/house/audio", headers=AUTH,
                             json={"ack": {"echo_ignore_ms": None}})
@@ -921,6 +930,7 @@ def test_audio_patch_null_clears_the_ack_window_to_the_manifest(console):
     after = client.get("/api/v2/devices/dot2/audio", headers=AUTH).json()
     assert after["effective"]["ack_echo_ignore_ms"] == 2500
     assert after["sources"]["ack.echo_ignore_ms"] == "device-manifest"
+    assert after["conflicts"] == []
 
 
 def test_deleting_the_last_enabled_device_leaves_a_loadable_config(console):

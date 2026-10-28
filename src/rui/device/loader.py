@@ -345,6 +345,15 @@ def _find_manifest(
         # ``lxref=...`` case). The env prefix still selects the config-facing name.
         device = _match_device(plugin, name, allow_single=True)
         if device is not None:
+            # A co-located manifest is invisible to PlugCatalog's image/data_dir scan;
+            # register it so the audio resolver sees the same hardware facts the
+            # adapter was gated against (0.8.0 cold-start: ack 1200 vs manifest 2500).
+            try:
+                from ..plugins.resolve import register_adapter_plugin
+
+                register_adapter_plugin(plugin)
+            except Exception:  # noqa: BLE001 - catalog registration is never fatal
+                pass
             return (plugin, device), ""
         root_problem = (
             f"manifest {root / 'plugin.yaml'} has no device {name!r} and declares "

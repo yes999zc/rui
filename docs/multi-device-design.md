@@ -266,29 +266,42 @@ multi_device:
     on_no_speech: end           # end | retry_next（默认 end）
 ~~~
 
-### 5.2.1 三层音频合并（0.6，M1）
+### 5.2.1 音频合并（0.6 M1 起；0.8.0 改为「型号硬件事实归 manifest」）
 
-0.6 起每台设备的生效音频由三层合成（低 → 高）：
+0.8.0 起每台设备的生效音频按下表合成（低 → 高），理由与 lx06 决策见
+`docs/adr/0007-audio-facts-ownership.md`：
 
 ~~~text
-设备默认（插头 manifest 的 audio_defaults） < 全局 config（audio / ack） < devices[].audio
+核心默认 < 全局 config（audio / ack） < 型号 manifest 的 audio_defaults < devices[].audio
 ~~~
 
-- 核心默认改为中性：capture 16000 Hz / 1 ch / 0 ref、playback 16000 Hz / 1 ch、ack earcon；
-  LX06 的 8 ch / 6 mic / 2 ref / 48 kHz 由它自己的 plug manifest
-  （`plugs/xiaoai/devices/lx06.yaml`，镜像内 `/opt/rui-plugins`）声明，不再硬编码在
-  `CaptureConfig` 或核心代码里。
-- 缺任一层都不报错：没有 `audio_defaults` 的旧 plug 继续拿中性默认；没有
-  `devices[].audio` 的设备继续继承全局块。
-- 「全局 config」只认**配置文件里显式写下的字段**（`model_fields_set`）：生产模板把
-  `capture.rate` 写成 16000 是有意的带宽选择，必须继续覆盖 manifest 的 48000。
-  `save_config()` 因此只回写文件原本写过的 audio 字段与 `ack.echo_ignore_ms`
-  （以及相对核心默认改过的值），避免一次控制台保存把中性默认固化成显式覆盖、把设备的
-  manifest 默认挤掉。
-- `ack_echo_ignore_ms` 属于 `ack` 语义，单独由 `effective_ack_echo_ignore_ms()` 合成
-  （设备默认 < 全局 `ack.echo_ignore_ms` < `devices[].audio.voice.ack_echo_ignore_ms`）。
+- 核心默认是中性值：capture 16000 Hz / 1 ch / 0 ref、playback 16000 Hz / 1 ch、ack earcon；
+  LX06 的 8 ch / 6 mic / 2 ref / 48 kHz 由它自己的 plug manifest 声明，不再硬编码。
+- **manifest 声明的是型号硬件事实**（采集布局、播放 wire、声学拖尾），因此压过显式全局值；
+  冲突必须可见：服务日志 WARN + `GET /api/v2/devices/{id}/audio` 的 `conflicts` +
+  设备 `warnings` 的 `audio_conflict`。**绝不静默替换**。
+- 两个例外：
+  1. `capture.rate` 是协商值：manifest 给型号原生采样率，客户端可重采样到运维要求的
+     wire（生产 LX06 显式 16000 仍生效，`kind=negotiated`）。
+  2. manifest 声明了采集布局的**通道维度**（channels/mic_channels/ref_channels）时，它没写的
+     布局字段（bits/mic_shift/ref_shift 或缺失的维度）取**核心中性值**，不继承全局模板
+     （否则 16-bit Dot2 会继承 LX06 的 12/16 shift）；只声明 bits/shift 不触发该规则
+     （没有通道维度，布局仍由全局块提供）。这类中性填充字段在
+     `GET /api/v2/devices/{id}/audio` 中来源标为 `device-manifest`，`layers[path].manifest`
+     给中性值，与 `conflicts` 的 winner 一致。
+- `ack_echo_ignore_ms` 由 `effective_ack_echo_ignore_ms()` 合成：
+  manifest 的型号实测拖尾 > 显式全局 `ack.echo_ignore_ms` > 核心 1200；
+  `devices[].audio.voice.ack_echo_ignore_ms` 仍压过全部。
+- 没有 `devices[].audio` 的设备继承 manifest/全局；没有 `audio_defaults` 的旧 plug 继续拿
+  中性默认；`params.plug_id` 写了但 manifest 读不到时，plane 记 WARN、API 返回
+  `plug_resolved=false` + `manifest_error`，配置没写过的字段来源标 `unresolved`。
+- `save_config()` 仍只回写文件原本写过的 audio 字段与 `ack.echo_ignore_ms`，避免一次控制台
+  保存把中性默认固化成显式覆盖。
 - `rui doctor` 的 `capture_layout` 按设备打印合成后的布局，`audio_rates` 用合成后的
   `playback.rate` 与插头声明的 wire rate 对比——两者都不再读全局块。
+- 冷启动：`build_plane()` 先加载下游 adapter，co-located manifest 会注册进
+  `PlugCatalog`，所以 plane 的**第一次** effective 读就能看到 manifest；
+  data_dir 晚挂载时 plane 在 probe 后/首次读 ack 时重试解析（不需要重启）。
 
 ### 5.3 字段与校验
 

@@ -55,7 +55,9 @@ from ...config.schema import (
     PlaybackConfig,
     VoiceConfig,
     _explicit,
-    device_audio_defaults,
+    capture_layout_neutral_fills,
+    device_audio_conflicts,
+    device_audio_defaults_info,
     effective_device_ack_echo_ignore_ms,
     effective_device_audio,
 )
@@ -69,7 +71,6 @@ from ...plugins import (
     TrustLevel,
     discover_plugins,
 )
-from ...plugins.resolve import resolve_device_plug
 from ...providers import keycheck
 from .device_rules import (
     effective_listen_port,
@@ -606,15 +607,29 @@ def _device_pid(app: FastAPI, device_id: str) -> int | None:
 
 
 def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
-    """The four audio layers per field, with the source that won (contract §7.15).
+    """The audio layers per field, with the source that won and every conflict.
 
-    The values come from the schema's own merge functions; this function only reports
-    where each value came from. ``_explicit`` is the schema's rule for "the config chose
-    this", reused so the API and the merge can never disagree.
+    Values come from the schema's own merge functions; this function only reports
+    where each value came from. The manifest is authoritative for the model's
+    hardware facts (0.8.0), so an explicit global value only wins for the negotiated
+    ``capture.rate`` - and each disagreement appears in ``conflicts`` so the console
+    can show "global X vs model Y, using Y" instead of silently applying X. A capture
+    layout the manifest declares also owns the fields it omits: those carry the
+    neutral core value, so their source is ``device-manifest`` even though the layer's
+    own value is absent (see ``capture_layout_neutral_fills``).
     """
-    effective = effective_device_audio(cfg, device)
-    defaults = device_audio_defaults(device, cfg.system.data_dir)
-    resolved = resolve_device_plug(device, cfg.system.data_dir)
+    conflicts: list = []
+    effective = effective_device_audio(cfg, device, conflicts=conflicts)
+    ack_value = effective_device_ack_echo_ignore_ms(cfg, device, conflicts=conflicts)
+    info = device_audio_defaults_info(device, cfg.system.data_dir)
+    defaults = info.defaults
+    # Fields the manifest's declared capture layout neutralizes: they are the model's
+    # facts (neutral core values), not the global template's, so a `global-config`
+    # source here would contradict `conflicts` in the same payload.
+    neutral_fills = capture_layout_neutral_fills(defaults, cfg.audio)
+    # A matched plug is `plug_id`-bearing even when it declares no audio_defaults
+    # (an old plug): that is the difference from an unresolved catalog entry.
+    resolved = bool(info.plug_id) and not info.error
     blocks = {
         "capture": (CaptureConfig, cfg.audio.capture),
         "voice": (VoiceConfig, cfg.audio.voice),
@@ -630,11 +645,25 @@ def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
             global_value: Any, device_value: Any, global_explicit: bool) -> None:
         if device_value is not None:
             source = "device-override"
+        elif manifest is not None:
+            # The manifest is authoritative, except for the negotiated capture rate:
+            # an explicit global wire wins there (the client resamples) and the
+            # conflict list names it.
+            if (path == "capture.rate" and global_explicit
+                    and global_value != manifest):
+                source = "global-config"
+            else:
+                source = "device-manifest"
+        elif path in neutral_fills:
+            # The manifest declares the capture layout but omitted this field, so the
+            # merge filled the neutral core value. Attribute it to the manifest (with
+            # the neutral value as its layer) - the same winner `conflicts` reports -
+            # never to the global value it replaced.
+            manifest = neutral_fills[path]
+            source = "device-manifest"
         elif global_explicit:
             source = "global-config"
-        elif manifest is not None:
-            source = "device-manifest"
-        elif resolved is None:
+        elif not resolved:
             source = "unresolved"
         else:
             source = "core-default"
@@ -672,7 +701,7 @@ def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
                     if override is not None and override.voice is not None else None)
     add(
         "ack.echo_ignore_ms",
-        value=effective_device_ack_echo_ignore_ms(cfg, device),
+        value=ack_value,
         core=ack_core.echo_ignore_ms,
         manifest=(defaults.ack_echo_ignore_ms if defaults is not None else None),
         global_value=cfg.ack.echo_ignore_ms,
@@ -691,14 +720,17 @@ def _audio_provenance(cfg: Config, device: DeviceConfig) -> dict[str, Any]:
                 overrides.append(block)
 
     return {
-        "effective": {**effective_dump,
-                      "ack_echo_ignore_ms": effective_device_ack_echo_ignore_ms(cfg, device)},
+        "effective": {**effective_dump, "ack_echo_ignore_ms": ack_value},
         "sources": sources,
         "layers": layers,
         "overrides": sorted(overrides),
         "manifest_defaults": (defaults.model_dump(mode="json", exclude_none=True)
                               if defaults is not None else {}),
-        "plug_resolved": resolved is not None,
+        "plug_resolved": resolved,
+        # Additive 0.8.0: a cold-start catalog miss must be visible, not look like a
+        # model that declares nothing.
+        "manifest_error": info.error,
+        "conflicts": [conflict.as_dict() for conflict in conflicts],
     }
 
 
@@ -1050,6 +1082,28 @@ def install_v2_routes(
                     "declare them in the plug manifest.",
         }]
 
+    def _audio_conflict_warnings(config: Config,
+                                 device: DeviceConfig) -> list[dict[str, Any]]:
+        """Surface "global X vs model Y" in the device warnings (0.8.0 P0).
+
+        The merge itself is still the only place that decides the value; this only
+        makes the disagreement visible on the list/detail cards without opening the
+        audio tab.
+        """
+        return [
+            {
+                "code": "audio_conflict",
+                "path": conflict.path,
+                "global": conflict.global_value,
+                "manifest": conflict.manifest_value,
+                "effective": conflict.effective,
+                "message": conflict.message,
+                "hint": "The model manifest owns hardware facts. Override it per device "
+                        "under devices[].audio if this room needs a different value.",
+            }
+            for conflict in device_audio_conflicts(config, device)
+        ]
+
     def _unknown_params(device: DeviceConfig, resolved: Any) -> list[str]:
         declared = ({spec.key for spec in resolved.device.params}
                     if resolved is not None else set())
@@ -1169,7 +1223,10 @@ def install_v2_routes(
                 "aec_who": summary_audio["aec"]["who"],
                 "ack_echo_ignore_ms": summary_audio["ack_echo_ignore_ms"],
             },
-            "warnings": device_warnings_for(device.id, warnings),
+            "warnings": [
+                *device_warnings_for(device.id, warnings),
+                *_audio_conflict_warnings(config, device),
+            ],
         }
         if not detail:
             return payload
@@ -1207,6 +1264,7 @@ def install_v2_routes(
             "setup": _setup_summary(config, device),
             "warnings": [
                 *device_warnings_for(device.id, warnings),
+                *_audio_conflict_warnings(config, device),
                 *_unknown_params_warning(_unknown_params(device, resolved)),
             ],
         })

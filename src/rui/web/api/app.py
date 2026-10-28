@@ -1338,12 +1338,13 @@ def _audio_fleet(app: FastAPI) -> object | None:
 
 
 def _device_audio_summary(cfg_now: Config, device: DeviceConfig) -> dict:
-    """One room's three-layer audio merge, as the device page shows it.
+    """One room's merged audio, as the device page shows it.
 
-    The console must show what each speaker will actually use (plug `audio_defaults`
-    < global config < `devices[].audio`), plus which fields this device states
-    explicitly. That distinction cannot be inferred from a value (an explicit
-    override may equal the global one on purpose), so it is reported as dotted paths.
+    The console must show what each speaker will actually use (core < global < the
+    model manifest's hardware facts < `devices[].audio`; `capture.rate` is the
+    negotiated exception), plus which fields this device states explicitly. That
+    distinction cannot be inferred from a value (an explicit override may equal the
+    global one on purpose), so it is reported as dotted paths.
     """
     effective = effective_device_audio(cfg_now, device)
     defaults = device_audio_defaults(device, cfg_now.system.data_dir)
