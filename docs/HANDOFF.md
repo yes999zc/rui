@@ -14,6 +14,11 @@
 - **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（已实现；review PASS + verify VERIFIED，全量 1738/6；残余风险写入 d.10）。
 - **P0/P1 均已收口**；B1（task-8）恢复，之后 B2→B3（桥双窗口先于 core）→C。
 - **当前 HEAD**：`7b9035a`（B1）；P0 `82d45d9`、P1 `8344085`、B1 `7b9035a`。B2/B3/C 未开工。
+- **P0b 追加证据（2026-10-28 12:1x，9 哥）**：拔电后设备 `connection open` → 正好 10s → `closed` 死循环；
+  设备完成 TLS/WS 握手（1503/2932 B）但不再发 register；**重启 rui 后 3s 恢复、60s 0 断连**
+  ⇒ 桥异常断线后没有清理连接槽位/状态（P0 根因）。另：僵尸连接 887s、Send-Q 85775B、
+  `speaker_connected` 粘性 true；会话关闭后 15s 仍能免唤醒进 turn（P1，卡 task-17）；
+  关闭日志无 reason/字节数（P2）。**task-15 需补：连接槽位/状态重建 + 重连注册测试 + close/register 日志。**
 - **P0b（2026-10-28 12:1x 真机，dot2 掉线）：三件 rui 侧修复，插在 B1 期间/之后**
   A 连接关闭必须丢弃未发送音频（禁止重放半句）；B 发送水位上限（256KB 或 2s 音频）+ 写超时→主动断开重连；
   C 半开连接检测（TCP keepalive 或 ping_timeout 30–60s）+ `speaker_connected` 改实时。每项回归测试 + 双闸门。
