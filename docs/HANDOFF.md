@@ -74,8 +74,28 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   新增 `tests/test_channels_view.py`（源码契约 7 + API 真行为 13，含 PUT→GET 回读/0600/422/supervisor 缺失 503）。
   门禁：`pnpm typecheck` 绿、`pnpm build` 绿（产出 ChannelsView chunk）、全量 **1989 passed / 6 skipped**、ruff 绿。
 - **D5 ✅**：tag `v0.8.5` / release / 四 workflow 绿 / 双 review PASS / verifier VERIFIED（见上）。
-- **本批收口**：D4/D6/D7/D8 全部完成后由 fresh reviewer（task-17）+ fresh verifier（task-18）复核；
-  复核通过后在本节补三句要求（README 通用化 / AI 一条命令接入 / arm64 验证到哪一层）并更新任务板。
+- **D4/D6/D7/D8 复核 ✅**：fresh `reviewer-followup`（task-17）**PASS**；fresh `verifier-followup`（task-18）**VERIFIED**：
+  rui 全量 **1989 passed / 6 skipped**、ruff 绿、web typecheck+build 绿（产物含 `ChannelsView-*.js` chunk）、
+  bridge `scripts/check.sh --nodevice` 183 tests OK、D6 三仓 grep（`## 0.x` 0、`vX.Y.Z` 0/0/0、
+  `Latest release:` 各 1、`onboard_device` 有命中）、D7 registry digest 三平台与文档逐字一致 +
+  arm64 容器 `0.8.5 2.5.4` 且 `/health` 200、D8 后端 `src/` 零 diff + 无新依赖 + 20 tests、secret-scan 等效 0 命中；
+  三仓 `HEAD==origin/main`、工作区干净。
+
+**交接三句（9哥 指定，必须在这里）**：
+
+1. **README 首页已通用化，版本变化只写 release**：rui `928cbe4`、dot2 桥 `870d965`、xiaoai 桥 `7f8f8d8`；
+   首页只剩通用介绍 + 一处 `Latest release:`（不含写死版本），逐版本变更只写 release 正文/CHANGELOG。
+2. **AI 一条命令接入已写入首页核心能力**：「新设备接入：一条命令，AI 可代劳」→
+   `rui-dot2-bridge/scripts/onboard_device.py` + `docs/onboard-device.md`，中英两节都保留。
+3. **arm64 验证到哪一层**：runtime 层——arm64 镜像可 pull、`ffmpeg` 可执行、`import rui,numpy`（0.8.5 / 2.5.4）、
+   最小 config 起服务 `/health` **200** 且 `version=0.8.5`；**未验证** ARM 多设备/音频性能、长稳 soak、
+   真实音频设备与 bridge plug、真实 provider 链路、生产 compose 形态（详见 `docs/arm64-verification-0.8.5.md`）。
+
+**非阻塞观察（review/verify 一致，未改，留后续）**：① `docs/analysis/dot2-data-plane-1011.md` §10 示例行
+把两个事件拼成一行（已标「数值沿用」）；② i18n `v2.channels.saveFailed` 定义了但视图未使用；③ ChannelsView
+把任何 503 都映射成「网关未就绪」（保存路径实际不会 503）。
+
+**本批结束**：D1–D8 全部完成；**未部署生产**。
 
 ## 未完成 / 阻塞
 
@@ -85,11 +105,16 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   日志后 DEBUG/A-B；0.8.5 不改桥。
 - **task-2（放歌中「停止」没停）/ task-3（打断后 158–221 ms 空隙）**：无稳定样本，等样本（L25/L26）。
 - **H（控制台显示 reply_segment_count / silences_ms / inner_ms）未做**，列 backlog。
+- **桥仓 main 领先 `v1.3.4`**：dot2 桥 `516c0e8`（1011 计数日志）+ `b6deb86`（check.sh 修复）+ `870d965`
+  （README 通用化），**未打 tag、未发版**；生产插件仍是 1.3.4。要让计数日志上线需另发桥版本并部署
+  （本批不做）。xiaoai 桥 main 也只有 README 提交 `7f8f8d8`，版本仍 0.2.3。
 - **生产 living.volume 仍 60**：示例已改 45，存量配置需 9哥 批准后手动改。
 
 ## 下一步
 
 部署 0.8.5（**等 9哥 点头后**按顺序）：
+
+> 前置：本批桥仓只有 main 上的未发版提交（1011 计数日志 + README），**生产插件仍 1.3.4**；若希望计数日志随部署上线，需先给 dot2 桥打一个新版本并换插件（本批未做，9哥 未要求）。
 
 1. 预检：确认 9哥 批准；生产现状 0.8.4 / 4 台设备 / 插件 1.3.4 / errors 0。
 2. 备份（NAS `/vol1/rui`）：`config/config.yaml`、`plugins/`、`rui-dot2-override.yml` →
