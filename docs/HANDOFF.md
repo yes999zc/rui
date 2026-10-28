@@ -4,7 +4,8 @@
 
 - **A1 d.6 ASR 尾巴剥离**：已落地 `b91599a`；全量 `1722 passed / 6 skipped`；review PASS + verify VERIFIED。
   真机 N2 口径已反转（`停止你好` 现在命中），待 9 哥 按新口径复验 2 min。
-- **A2 d.7 volume 容差**：实现完成（`VOLUME_RECONCILE_TOLERANCE = 1`，设备 0–255 刻度）；全量 `1725 / 6`；review 进行中。
+- **A2 d.7 volume 容差**：实现完成（`VOLUME_RECONCILE_TOLERANCE = 1`，设备 0–255 刻度）；已补
+  「1 刻度假漂移不再纠」的显式代价 + 一步差用户 set 用例；全量 `1726 / 6`；最终 review 进行中。
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
   不打 tag、不部署，真机与插设备等 9 哥 下午做。
 - 未完成项不宣称完成；上下文压缩后先读本节 + 任务板。
