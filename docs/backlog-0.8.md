@@ -346,6 +346,15 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 
 ### d.7 `_reconcile_volume` 精确相等导致每 ~16 s 重复 `set_vol`（P1 性能 / 日志噪音）
 
+- **已落地 @（本卡）**（2026-10-28，task-7）：按方案 ① 加容差。`src/rui/audio/process.py`
+  新增 `VOLUME_RECONCILE_TOLERANCE = 1`（单位是设备低层刻度 **0–255**，不是百分比），
+  `_reconcile_volume()` 的判定改为 `abs(self.device_volume - want) <= VOLUME_RECONCILE_TOLERANCE`；
+  配置变化 / `volume.set` 的写入路径未动（用户 set 仍立即写、并记为新的 target）。
+  回归测试：`tests/test_volume_reconcile.py`（差 0/±1 不写，±2 写，配置变化仍写，用户 set 仍写
+  ——含「mixer 219、用户设 220」一步差用例；先红后绿）。**剩余验收**：真机静置 5 min，
+  `set_vol` / `volume: reconciled` 计数应降到 0。
+  **显式代价**：设备读回若真的偏移 1 刻度（≈0.4% 满量程），重建器不再纠正，直到下一次
+  配置变化或用户 set；>1 刻度仍会纠回。
 - **现状（2026-10-28 查代码）**：`src/rui/audio/process.py:2907` 的 `_reconcile_volume()` 用 `self.device_volume == want` 精确比较；设备读回值有取整/量化差，导致每个 metrics 周期（~16 s）重复 `set_volume` 并打 `volume: reconciled to N`。
 - **做法（择一，实现时定）**：① 加容差（例如 ≤1 设备刻度或 ±1%）后再写；② 只在配置变化时写，读回值只用于展示。
 - **判据**：静置 5 min，`set_vol` / `volume: reconciled` 日志 0 次（或从 ~19 次降到 0）；音量调整仍生效；新增回归测试（float/取整差不再触发）。

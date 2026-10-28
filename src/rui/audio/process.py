@@ -101,6 +101,14 @@ METRICS_EVERY_S = 2.0
 # called it log noise (P2). Keep the measurement (it is how a threshold change is judged)
 # but one line per 30 s: the console's log filter still keys on "voice peak".
 LEVEL_LOG_EVERY = 15
+# Volume reconciliation tolerance, in low-level mixer steps (0-255, the unit of
+# `DeviceServices.set_volume`/`read_volume`). The vendor's read-back is quantised: a
+# 219 write can report back as 218/220, and the old exact comparison then rewrote the
+# same level every metrics cadence (~16 s) plus a `volume: reconciled` line each time
+# (d.7, measured 2026-10-28). One step is ~0.4 % of full scale, so it cannot hide a
+# drift a person would hear; a new target (config change / `volume.set`) is still
+# written immediately because this tolerance only applies to the read-back check.
+VOLUME_RECONCILE_TOLERANCE = 1
 PLAY_CHUNK_MS = 100
 # Reply pacing. Pushing a block and then waiting exactly its own duration leaves the
 # device's buffer empty the whole time: any scheduler hiccup (1-3 ms per send, GC, a
@@ -2912,6 +2920,11 @@ class AudioPlane:
         undone by the next answer). It reconciled at three call sites; this build
         already reads the value on the metrics cadence, so the check lives here.
         `devices[].volume` is a percent (0 = do not manage), mysoftvol is 0-255.
+        The read-back is compared with a one-step tolerance
+        (`VOLUME_RECONCILE_TOLERANCE`, in that same 0-255 unit): the vendor quantises,
+        and an exact comparison rewrote the same level every ~16 s (d.7). A target that
+        actually moved - config edit or `volume.set` - still differs by more than a step
+        and is written here; the user path itself never consults this tolerance.
         """
         dev = next((d for d in self.cfg.devices if d.id == self.device_id), None)
         target = dev.volume if dev is not None else 0
@@ -2921,7 +2934,7 @@ class AudioPlane:
         if set_vol is None:
             return
         want = round(target * 255 / 100)
-        if self.device_volume == want:
+        if abs(self.device_volume - want) <= VOLUME_RECONCILE_TOLERANCE:
             return
         try:
             await set_vol(want)
