@@ -37,11 +37,11 @@
   证据：8870 连接 887s 未收包、`notsent 65160/unacked 15/retrans 1/25/backoff 15`、积压 85775 字节；
   拔电时正在播报的 ~0.9s @48k 留在队列。A/B 在桥仓，C 涉及桥+house 音频面/健康状态。卡 task-15（已收口：桥 `9065d19`、house `88400aa`；两仓 review PASS + verify VERIFIED）、task-16（C，blocked_by B1）。B1 已收口 `7b9035a`。
 - **批次 B 进行中（2026-10-28 14:xx）**：B3a dot2 `4536968`、B3b xiaoai `0d82250` 已 push（双窗口，179/87 passed）；B2 house 已收口 `78d87df`（console/setup/save_config 均拒绝 xiaoai，1752/6；review PASS + verify VERIFIED）。B3c core 0.8.0 已收口 `e8f728c`（1752/6；版本/窗口/meta/fixtures/README/CHANGELOG；C-002 已同步；review PASS + verify VERIFIED）。- **桥 v1.3.2 已发布（2026-10-28，9哥 授权）**：annotated tag `v1.3.2` → commit `4536968`（tag object `cebcb30`），已 push；GitHub release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.2（双窗口 >=0.7.0 <0.9.0，0.8.0 后仍是 0.7.x 最后一个桥，不承诺 0.9.x）。core 0.8.0 未发、生产未动。rui README quickstart 已改 v1.3.2（`9f9e6a6`）。
-**三仓 0.8.0 代码面完成**（桥 dot2 `4536968`、xiaoai `0d82250`；core `e8f728c`）。C1 task-20 已实现（语音固定句式 + Reminder.room + 三级路由；1794/6）；review CHANGES 两轮（default_output=living、一刻/三刻、明早误澄清、下午15点/晚上21:30 误 need_time），round2 修正中。C2 task-21（抢占/去重/失败重排）待做。
+**三仓 0.8.0 代码面完成**（桥 dot2 `4536968`、xiaoai `0d82250`；core `e8f728c`）。C1 task-20 已收口 `1f02983`（语音固定句式 + Reminder.room + 三级路由；1804/6；review PASS + verify VERIFIED）。C2 task-21（抢占/去重/失败重排）待做。
 - **task-23（插桩，2026-10-28）**：应答 gap 158–221ms（barge 打断→停止→告别语）只加 INFO
   `reply stall: chunk #N/total gap=...ms state=...` + trace meta 记 gaps 块序号；**不修逻辑**。part 1 已实现并提交 `ee26458`（日志 + per-reply ledger，review PASS）；part 2 trace meta 被 pydantic Metrics/进程边界挡住，需 protocol.py + trace.py 两个 additive 字段（且需防跨回复串味），等授权。等 9哥 真机复现后三选一。
 之后交 0.8.0 发布前报告（桥双窗口计划+回滚）。
-- **task-22（goal 外前置，2026-10-28 下午插设备前）**：5 台真实布局文档 + v2 逐台 params
+- **task-22（goal 外前置，2026-10-28 下午插设备前，实现中）**：5 台真实布局文档 + v2 逐台 params
   （control_port=0 / 独立 loudness_file）写盘透传测试；不碰桥仓、不改 goal 四项。C1 收口后做。
 
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
