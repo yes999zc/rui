@@ -492,3 +492,22 @@ def test_build_scheduler_reads_the_same_file_the_tools_write(tmp_path) -> None:
     call(handlers(cfg)["set_reminder"], {"text": "关火", "when": "+1m"})
     sched = build_scheduler(cfg)
     assert [it.text for it in sched.pending()] == ["关火"]
+
+
+# ------------------------------------------------ task-32: tool-call room context
+def test_the_turn_context_room_is_stored_with_a_tool_reminder(tmp_path) -> None:
+    from rui.tools.reminders import ToolContext, use_tool_context
+
+    h = handlers(config_for(tmp_path))
+    with use_tool_context(ToolContext(device_id="dot2-b", room="次卧")):
+        call(h["set_reminder"], {"text": "喝水", "when": "+1m"})
+
+    assert store(tmp_path).load()[0].room == "次卧"
+
+
+def test_no_turn_context_keeps_the_historical_unrouted_reminder(tmp_path) -> None:
+    """A console/channel turn has no speaking room: room stays None, not guessed."""
+    h = handlers(config_for(tmp_path))
+    call(h["set_reminder"], {"text": "喝水", "when": "+1m"})
+
+    assert store(tmp_path).load()[0].room is None

@@ -30,6 +30,7 @@ from ..providers.chain import (
     tts_chain,
 )
 from ..tools.contract import ToolResult
+from ..tools.reminders import ToolContext, use_tool_context
 from ..trace import TurnTrace
 from . import phrases, prompts, rules
 from .filler import filler_phrase, should_speak_filler
@@ -67,7 +68,14 @@ SENTENCE_ENDINGS = "。！？!?；;\n"
 # rest of the answer has usually arrived. Only worth it once a clause is long enough to
 # not sound like a hiccup.
 SOFT_ENDINGS = "，,、：:"
-SOFT_MIN_CHARS = 10
+# task-32 (2026-10-28): 10 -> 16. 「一分钟后提醒你喝水，小志。」 is one natural short
+# sentence, but the 10-char comma rule cut it into tts_call#1 chars=10 plus a second
+# 624 ms request, and the vendor's head/tail silence made the comma audible. 16 keeps a
+# 13-char sentence whole while a clause of 16+ chars still streams early, so the
+# first-audio path for real long answers is unchanged. A sentence end is always released
+# immediately: the measured first-audio lead is 343 ms, and the only extra wait here is
+# the 3 characters between the comma and the full stop.
+SOFT_MIN_CHARS = 16
 # Any complete sentence is worth speaking at once: the first one decides perceived
 # latency, and a longer wait for a "nicer" split is a worse trade. The cap only exists so
 # a reply with no punctuation at all cannot hold the speaker silent.
@@ -678,6 +686,7 @@ class TurnRunner:
         hint: str = "",
         audio: bool = True,
         touch_idle: bool = True,
+        tool_context: ToolContext | None = None,
     ) -> TurnResult:
         """One turn, with a hard ceiling.
 
@@ -685,7 +694,30 @@ class TurnRunner:
         says nothing, and the logs do not say why either. The old build wrapped its turn in
         wait_for(30) for the same reason; a search that stalls at 12 s can otherwise run
         twice and eat the whole budget.
+
+        ``tool_context`` carries the speaking device's resolved room to the tool
+        handlers (task-32). It is scoped to this turn only: the runner is shared by
+        every room, and a ContextVar copy per task keeps a 客厅 turn from seeing a
+        次卧 tool call. A channel/console turn passes nothing and tools see an empty
+        context, exactly as before.
         """
+        with use_tool_context(tool_context or ToolContext()):
+            return await self._run_turn(
+                pcm, speak, trace,
+                transcript=transcript, hint=hint, audio=audio, touch_idle=touch_idle,
+            )
+
+    async def _run_turn(
+        self,
+        pcm: bytes,
+        speak: SpeakFn,
+        trace: TurnTrace,
+        *,
+        transcript: str | None = None,
+        hint: str = "",
+        audio: bool = True,
+        touch_idle: bool = True,
+    ) -> TurnResult:
         self._begin_tts_ledger(trace)
         try:
             self._abort.clear()

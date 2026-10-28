@@ -38,7 +38,9 @@ import logging
 import os
 import re
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -57,6 +59,43 @@ MAX_TEXT = 80           # 念出来的一句话，不是备忘录
 GRACE_SECONDS = 300.0   # 迟到超过 5 分钟就不再补播（设备离线一整晚的提醒没有意义）
 KEEP_FIRED_HOURS = 24   # 已播记录保留一天，重启后靠它证明「这条响过了」
 MAX_FIRED = 50
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """The turn-side facts a tool handler may need: who is asking, from which room.
+
+    The room is resolved once by the control plane (the same resolver the
+    fixed-sentence reminder path uses) and scoped to the turn; a handler reads it
+    through :func:`current_tool_context`. It is a ContextVar rather than a handler
+    field because one runner serves every room: two concurrent turns must not see
+    each other's room, and a handler must not guess "where am I" from the output
+    owner or the last active room (task-32: 「一分钟后提醒我喝水」 came from 次卧 but
+    stored room=None and rang in 客厅).
+    """
+
+    device_id: str = ""
+    room: str = ""
+
+
+_TOOL_CONTEXT: ContextVar[ToolContext | None] = ContextVar(
+    "rui_tool_context", default=None
+)
+
+
+def current_tool_context() -> ToolContext:
+    """The context of the tool call in flight (empty outside a turn)."""
+    return _TOOL_CONTEXT.get() or ToolContext()
+
+
+@contextmanager
+def use_tool_context(context: ToolContext) -> Iterator[ToolContext]:
+    """Scope ``context`` to this turn. ContextVar copies are task-local."""
+    token = _TOOL_CONTEXT.set(context)
+    try:
+        yield context
+    finally:
+        _TOOL_CONTEXT.reset(token)
 
 
 def _shanghai() -> dt.tzinfo:
@@ -858,12 +897,19 @@ def _set_handler(store: ReminderStore) -> Handler:
                 "不要猜一个时间定下去。"
             )
         try:
-            item = store.add(text, at)
+            # The device that asked is the source room (task-32): an unnamed tool
+            # reminder must ring where the person is standing, exactly like the
+            # fixed-sentence path. Outside a turn the context is empty -> None,
+            # which keeps the historical "wherever default_output is" behaviour.
+            source_room = current_tool_context().room or None
+            item = store.add(text, at, room=source_room)
         except ValueError:
             return "提醒内容是空的：直接问用户要提醒什么。"
         except OSError as exc:  # data_dir not writable: say so, do not promise a reminder
             log.warning("reminders: cannot save to %s: %s", store.path, exc)
             return "提醒没能存下来（数据目录不可写），直接说这次定不了，别答应用户。"
+        log.info("reminders: tool set %s at %s for room %r", item.text,
+                 item.at.isoformat(), item.room)
         return f"好，{humanize(item.at)}提醒你{item.text}。"
 
     return handle

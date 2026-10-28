@@ -81,12 +81,13 @@ def test_sentences_split_on_punctuation_and_length() -> None:
     # one short sentence is still a sentence: waiting for more text would only add latency
     assert split_sentences("好。") == (["好。"], "")
 
-    # a long clause speaking early is the point; a short one is not
-    long_clause, rest = split_sentences("今天沈阳多云转晴最高二十度，明天有雨")
-    assert long_clause == ["今天沈阳多云转晴最高二十度，"]
+    # a long clause (>= SOFT_MIN_CHARS) speaking early is the point; a short one is not
+    long_clause, rest = split_sentences("今天沈阳多云转晴最高气温二十度，明天有雨")
+    assert long_clause == ["今天沈阳多云转晴最高气温二十度，"]
     assert rest == "明天有雨"
     assert split_sentences("好，") == ([], "好，")
-    assert split_sentences("今天沈阳多云转晴最高二十度，", clauses=False) == ([], "今天沈阳多云转晴最高二十度，")
+    assert split_sentences("今天沈阳多云转晴最高气温二十度，", clauses=False) == (
+        [], "今天沈阳多云转晴最高气温二十度，")
 
 
 def test_turn_runs_asr_llm_tts_and_marks_latency(monkeypatch) -> None:
@@ -860,3 +861,33 @@ def test_the_short_reply_hold_is_bounded() -> None:
     # A short *single* sentence is not held: it already is one piece.
     assert split_sentences("第一句话。", hold_short=True) == (["第一句话。"], "")
     assert split_sentences("在，你说。", hold_short=True) == (["在，你说。"], "")
+
+
+# ------------------------------------------------- task-32: don't split one short sentence
+def test_a_thirteen_char_comma_sentence_is_one_tts_call(monkeypatch) -> None:
+    """The reported 13-char reply: comma at char 10 used to force tts_call#1 chars=10
+    plus a second 624 ms request. A 16-char clause window keeps this one whole."""
+    text = "一分钟后提醒你喝水，小志。"
+    assert len(text) == 13
+    tts, result = _run_reply(monkeypatch, [text])
+
+    assert tts.texts == [text], tts.texts
+    assert result.reply == text
+
+
+def test_the_reported_reply_streamed_at_its_comma_is_still_one_call(monkeypatch) -> None:
+    """The live stream arrives as 「…喝水，」 then 「小志。」; neither half is a sentence."""
+    text = "一分钟后提醒你喝水，小志。"
+    tts, _result = _run_reply(monkeypatch, ["一分钟后提醒你喝水，", "小志。"])
+
+    assert tts.texts == [text], tts.texts
+
+
+def test_a_nineteen_char_two_sentence_reply_still_splits(monkeypatch) -> None:
+    """The wider comma window must not merge two real sentences: 19 chars, 2 requests."""
+    first, second = "好的，已经关掉客厅的灯。", "还需要别的吗？"
+    text = first + second
+    assert len(text) == 19
+    tts, _result = _run_reply(monkeypatch, [text])
+
+    assert tts.texts == [first, second], tts.texts

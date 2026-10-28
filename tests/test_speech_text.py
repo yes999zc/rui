@@ -106,7 +106,9 @@ def test_a_url_in_a_reply_is_not_spoken_as_a_url(monkeypatch) -> None:
 
 def test_a_clause_split_does_not_add_a_second_pause(monkeypatch) -> None:
     asr = FakeAsr("今天天气")
-    llm = FakeLlm(["今天沈阳多云转晴最高二十度，明天有雨。"])
+    # 16 chars before the comma: still a streaming clause split after task-32's
+    # SOFT_MIN_CHARS=16 (a 13-char comma sentence is a single request instead).
+    llm = FakeLlm(["今天沈阳多云转晴最高气温二十度，明天有雨。"])
     tts = FakeTts()
     patch_chains(monkeypatch, asr=asr, llms=[llm], ttss=[tts])
     spoken: list[bytes] = []
@@ -117,5 +119,5 @@ def test_a_clause_split_does_not_add_a_second_pause(monkeypatch) -> None:
     asyncio.run(TurnRunner(Config().providers).run(b"\x00\x00" * 1600, speak, TurnTrace(device_id="living")))
     gap = b"\x00\x00" * (16000 * 350 // 1000)
     # clause piece (no gap) -> sentence piece + one gap
-    assert tts.texts == ["今天沈阳多云转晴最高二十度，", "明天有雨。"]
+    assert tts.texts == ["今天沈阳多云转晴最高气温二十度，", "明天有雨。"]
     assert spoken == [tts.chunk, tts.chunk, gap]

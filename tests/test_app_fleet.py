@@ -22,6 +22,7 @@ from rui.audio.protocol import (
     WakeIdle,
 )
 from rui.config import load_config
+from rui.providers.base import ChatChunk
 from rui.web.api import app as app_module
 from rui.web.api.app import _PlaneLink, create_app
 
@@ -1069,3 +1070,53 @@ def test_a_due_reminder_for_an_offline_room_falls_back_and_counts_it(
         assert stats["offline"] == 1
         assert stats["failed"] == 1
         assert "书房" in stats["last_error"]
+
+
+# ------------------------------------------- task-32: the LLM tool keeps the source room
+class _ReminderToolLlm:
+    """Two rounds: call `set_reminder`, then answer the tool result."""
+
+    def __init__(self, rounds: list[list[ChatChunk]]) -> None:
+        self.rounds = list(rounds)
+
+    async def chat(self, messages: list[dict], tools: list[dict]):
+        for chunk in self.rounds.pop(0):
+            yield chunk
+
+
+class _OneChunkTts:
+    async def synthesize(self, text: str, voice: str = ""):
+        yield b"\x01\x00" * 160
+
+
+def test_an_llm_set_reminder_keeps_the_speaking_devices_room(tmp_path, monkeypatch) -> None:
+    """task-32: 「一分钟后提醒我喝水。我是小志。」 in 次卧 must store room=次卧.
+
+    The fixed-sentence path only claims relative seconds; 「一分钟后」 goes to the LLM
+    tool. Before this, `local.set_reminder` called `store.add(text, at)` with no room,
+    so the reminder fell back to the living default and played there.
+    """
+    FakeFleet.instances.clear()
+    config = CONFIG.replace("room: 书房", "room: 次卧").replace(
+        "web:\n  host: 127.0.0.1",
+        f"system:\n  data_dir: {tmp_path / 'data'}\nweb:\n  host: 127.0.0.1",
+    )
+    app = _app(tmp_path, monkeypatch, config=config)
+    with TestClient(app) as client:
+        bedroom = app.state.audio_fleet.handle("study")
+        runner = app.state.runner
+        llm = _ReminderToolLlm([
+            [ChatChunk(delta="", finish_reason="tool_calls", tool_calls=[
+                {"id": "t1", "name": "set_reminder",
+                 "arguments": '{"text": "喝水", "when": "+1m"}'}])],
+            [ChatChunk(delta="好，一分钟后提醒你喝水。")],
+        ])
+        monkeypatch.setattr(runner, "_llm", [("test", llm)])
+        monkeypatch.setattr(runner, "_tts", [("test", _OneChunkTts())])
+
+        client.portal.call(bedroom.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+        _utter(client.portal, app, bedroom, "一分钟后提醒我喝水。我是小志。", monkeypatch)
+
+        items = app.state.reminders.store.pending()
+        assert [(it.text, it.room) for it in items] == [("喝水", "次卧")]
+        assert app.state.last_turn["tools"] == ["set_reminder"]

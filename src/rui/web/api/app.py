@@ -120,6 +120,7 @@ from ...tools.memory import build_memory_tools
 from ...tools.registry import ToolRegistry
 from ...tools.reminders import (
     Reminder,
+    ToolContext,
     VoiceParseError,
     parse_voice,
 )
@@ -1256,7 +1257,7 @@ async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trac
         return False
     cfg = app.state.cfg
     rooms = tuple(dev.room for dev in cfg.devices if dev.room.strip())
-    source_room = _device_room(cfg, _speaking_device_id(client))
+    source_room = _reminder_room(cfg, client)
     moment = scheduler.now()
     try:
         parsed = parse_voice(clean, rooms=rooms, now=moment)
@@ -1277,7 +1278,7 @@ async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trac
     if parsed is None:
         return False
 
-    room = parsed.room or source_room
+    room = _reminder_room(cfg, client, parsed.room)
     try:
         item = scheduler.store.add(parsed.text, parsed.at, now=moment, room=room)
     except ValueError:
@@ -1701,6 +1702,32 @@ def _speaking_device_id(client: object) -> str:
     """
     ready = getattr(client, "ready", None)
     return str(getattr(client, "device_id", "") or getattr(ready, "device_id", "") or "")
+
+
+def _reminder_room(cfg: Config, client: object, named: str | None = None) -> str:
+    """The room a reminder must ring in: the one the user named, else the speaking one.
+
+    One resolver for both reminder entry points (task-32). The fixed sentence path has
+    a parsed room and passes it as ``named``; the LLM tool path has no room argument,
+    so it uses the device that heard the sentence. An unknown device or a room-less
+    config stays "" (stored as None), never a guessed default.
+    """
+    explicit = (named or "").strip()
+    if explicit:
+        return explicit
+    return _device_room(cfg, _speaking_device_id(client))
+
+
+def _tool_context(cfg: Config, client: object) -> ToolContext:
+    """The context a turn's tool calls see: the speaking device and its resolved room.
+
+    Built from the same :func:`_reminder_room` resolver as the fixed-sentence path, so
+    an LLM `set_reminder` and a parsed voice reminder cannot disagree about 次卧.
+    """
+    return ToolContext(
+        device_id=_speaking_device_id(client),
+        room=_reminder_room(cfg, client),
+    )
 
 
 def _device_room(cfg: Config, device_id: str) -> str:
@@ -3443,7 +3470,8 @@ def create_app(
                 with contextlib.suppress(Exception):
                     memory.extract(clean)
                 try:
-                    result = await runner.run(pcm, _speaking(app, link), trace, transcript=clean)
+                    result = await runner.run(pcm, _speaking(app, link), trace, transcript=clean,
+                                              tool_context=_tool_context(cfg, link))
                 except Exception as exc:  # noqa: BLE001 - a broken turn must not kill the app
                     log.warning("turn failed: %s", exc)
                     # Turn-level degrade (V1): silence after a wake reads as
@@ -3467,7 +3495,8 @@ def create_app(
                             "不要谎称已经放/已经执行。")
                     try:
                         result = await runner.run(pcm, _speaking(app, link), trace,
-                                                  transcript=clean, hint=hint)
+                                                  transcript=clean, hint=hint,
+                                                  tool_context=_tool_context(cfg, link))
                     except Exception as exc:  # noqa: BLE001
                         log.warning("retry after a false claim failed: %s", exc)
                     if not result.tools:

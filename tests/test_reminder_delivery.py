@@ -24,7 +24,15 @@ from types import SimpleNamespace
 
 from rui.audio.protocol import ResumeMusic, StopAudio
 from rui.config.schema import Config, DeviceConfig
-from rui.tools.reminders import ZONE, DueScheduler, Reminder, ReminderStore
+from rui.tools.reminders import (
+    ZONE,
+    DueScheduler,
+    Reminder,
+    ReminderStore,
+    ToolContext,
+    build_tools,
+    use_tool_context,
+)
 from rui.trace import TraceLog, TurnTrace
 from rui.web.api import app as app_module
 
@@ -327,6 +335,68 @@ def test_an_unnamed_second_bedroom_reminder_leaves_the_living_song_alone(
     _route_source_room(monkeypatch, bedroom, living)
 
     reminder = _unnamed_reminder_from(app, runner, bedroom)
+    assert reminder.room == "次卧"
+
+    assert run_delivery(app, reminder, runner, settle_s=1.0) is True
+
+    assert music.stops == 0 and music.resumes == 0
+    assert not any(isinstance(msg, StopAudio) for msg in living.sent)
+    assert living.spoken == []
+    assert bedroom.spoken and bedroom.led[-1] == "off"
+    assert bedroom.replies == 0 and living.replies == 0
+
+
+def _tool_reminder(app, room: str, *, text: str = "喝水") -> Reminder:
+    """Create through the real LLM tool surface, scoped to the speaking room."""
+    tools = {spec.llm_name: handler for spec, handler in build_tools(app.state.cfg)}
+    with use_tool_context(ToolContext(device_id="dot2-b", room=room)):
+        asyncio.run(tools["set_reminder"]({"text": text, "when": "+1m"}))
+    return app.state.reminders.store.pending(now=REF)[0]
+
+
+def test_an_llm_tool_reminder_stops_only_the_source_rooms_song(
+    monkeypatch, tmp_path,
+) -> None:
+    """task-32: the tool path stores the source room too, so delivery stops 次卧 only."""
+    cfg = _source_room_cfg(tmp_path)
+    bedroom, living = FakeClient("dot2-b"), FakeClient("living")
+    music = FakeMusic("playing")
+    runner = FakeRunner()
+    app = fake_app(music=music, turn_device="dot2-b", cfg=cfg)
+    app.state.reminders = DueScheduler(ReminderStore(cfg.system.data_dir), clock=lambda: REF)
+    app.state.music_room = "dot2-b"
+    app.state.output_owner = "dot2-b"
+    bedroom.metrics.output_owner = "music"
+    _route_source_room(monkeypatch, bedroom, living)
+
+    reminder = _tool_reminder(app, "次卧")
+    assert reminder.room == "次卧"
+
+    assert run_delivery(app, reminder, runner, settle_s=1.0) is True
+
+    assert music.stops == 1 and music.resumes == 0
+    assert any(isinstance(msg, StopAudio) for msg in bedroom.sent)
+    assert living.sent == [] and living.spoken == []
+    assert bedroom.spoken and bedroom.led[-1] == "off"
+    assert bedroom.replies == 0 and living.replies == 0
+
+
+def test_an_llm_tool_reminder_leaves_the_living_song_alone(
+    monkeypatch, tmp_path,
+) -> None:
+    """The mirror case for the tool path: 客厅's song is not the reminder's target."""
+    cfg = _source_room_cfg(tmp_path)
+    bedroom, living = FakeClient("dot2-b"), FakeClient("living")
+    music = FakeMusic("playing")
+    runner = FakeRunner()
+    app = fake_app(music=music, turn_device="dot2-b", cfg=cfg)
+    app.state.reminders = DueScheduler(ReminderStore(cfg.system.data_dir), clock=lambda: REF)
+    app.state.music_room = "living"
+    app.state.output_owner = "living"
+    living.metrics.output_owner = "music"
+    _route_source_room(monkeypatch, bedroom, living)
+
+    reminder = _tool_reminder(app, "次卧")
     assert reminder.room == "次卧"
 
     assert run_delivery(app, reminder, runner, settle_s=1.0) is True
