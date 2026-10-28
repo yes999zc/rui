@@ -18,6 +18,80 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.1] - 2026-10-28
+
+**Theme: the follow-up window becomes honest.** A closed session no longer reopens
+itself, the two per-model voice timings become manifest facts, the console names them,
+and a playback gap now says which chunk stalled. No breaking API; two additive
+protocol fields.
+
+> **Tree version — not tagged, not deployed.** This section describes the tree only:
+> `pyproject.toml` / `src/rui/__init__.py` still say 0.8.0 until the release bump, and
+> production runs **0.7.9**. `v0.8.0` stays tagged as history but was never deployed.
+
+### Behaviour changes
+
+1. **A close path no longer arms a follow-up window.** `ReplyFinished` gains an
+   additive `followup: bool = True`; the dismissal / stop-word goodbye and the idle
+   farewell send `followup=False`. The plane still drains the goodbye and applies
+   `post_playback_mute_ms` (so the speaker's own tail cannot become a request), and it
+   clears the pending music hold, but it arms **no** wake-free window
+   (`close reply drained: no follow-up window`). The old behaviour turned a session
+   that had just ended back into a listener: speech 20 s later started a turn without
+   the wake word. With the default `true`, an older control plane and every ordinary
+   answer keep the pre-0.8.1 behaviour.
+
+2. **The model manifest may declare the voice timings.** `audio_defaults` gains an
+   optional `voice` block (`followup_delay_ms`, `post_playback_mute_ms`), merged like
+   the other hardware facts: `devices[].audio` > manifest > explicit global. The Dot 2
+   manifest (`rui-dot2-bridge` 1.3.3) declares **300 ms / 500 ms** — its device-side
+   AEC leaves almost no echo tail, and the reference speaker's window left a listening
+   window behind after a dismissal. A disagreeing global value is reported as a
+   conflict, never silently replaced. `lx06` declares no `voice` block, so its
+   effective values are unchanged (production keeps its global/device values).
+
+3. **The console names the two fields.** The device audio panel renders
+   `voice.followup_delay_ms` and `voice.post_playback_mute_ms` with human labels
+   (`续听窗口` / Follow-up window, `播放后静音窗口` / Post-playback mute) while keeping
+   the technical path visible. Their help text now says an empty device value inherits
+   the **model manifest first, then the global value**. Both remain per-device
+   writable and still require a plane restart.
+
+4. **A playback gap records its chunk (additive).** `Metrics.playback_gap_chunks` is a
+   per-reply ledger of `[chunk_index, gap_ms]` pairs, filled only while that reply is
+   sounding and cleared when the next reply starts; the turn trace copies it into
+   `meta.playback_gap_chunks` (an empty ledger is not recorded). The existing
+   `playback_gap_count` / `playback_max_gap_ms` counters are unchanged. Additive with a
+   default, so an older plane or control plane on either side still parses. Because the
+   ledger is per-reply, the control plane takes a fresh metrics snapshot before the
+   trace copy rather than the 2 s periodic one — a stale snapshot could attribute the
+   previous answer's chunks to this turn.
+
+5. **The LX06 48 kHz question is recorded, not "fixed".** `docs/adr/0008-lx06-capture-negotiation.md`
+   explains why `lx06.yaml` keeps `capture.rate: 48000` while production asks the client
+   for 16 kHz: `capture.rate` is the documented negotiated exception, the 48 kHz figure
+   is the hardware, and 16 kHz is the deliberate wifi decision (~1 MB/s versus ~6 MB/s).
+   No manifest or config change; the living speaker stays at 16 kHz. The same ADR
+   records the cold-start observability conclusion: gated manifests are registered
+   before the plane is built, the first probe re-resolves before Ready, and a late ack
+   read retries up to 3 times. Residual: a capture layout that resolves late still
+   needs a plane restart (the warning says so).
+
+### Compatibility and upgrade
+
+- **`rui-dot2-bridge` 1.3.3 is 0.8.1-only**: `rui_compat` is now
+  `>=0.8.1 <0.9.0`, because 0.8.0 and the whole 0.7.x line reject the unknown
+  `audio_defaults.voice` key (`AudioDefaults` is `extra="forbid"`). Deploy the core
+  and the bridge **together**: core 0.8.1 + bridge 1.3.3, or stay on core 0.7.9 +
+  bridge 1.3.2. The two mismatches are not equivalent: a **1.3.3 plug on an older
+  core is refused** by the loader (compat window, then the unknown key), so every Dot 2
+  loses its adapter; a **0.8.1 core with a 1.3.2 plug still loads**, but the Dot 2 keeps
+  the global voice timings instead of its 300/500 model defaults. `rui-xiaoai-bridge`
+  0.2.3 is unaffected (`rui_compat >=0.7.0 <0.9.0`, no `voice` block) and needs no
+  change.
+- No config migration: existing `audio.voice` values keep working, and a device
+  without a manifest `voice` block resolves exactly as before.
+
 ## [0.8.0] - 2026-10-28
 
 **Theme: the 0.8.0 breaking release.** Three breaking changes, in the order they bite:
@@ -27,10 +101,11 @@ still says `adapter: xiaoai` (or a plug manifest that omits `runtime.listen_port
 `/api/v2/meta` and the two bridge manifests. Everything else in this version is the
 P0/P1 batch that landed on `main` after 0.7.9.
 
-> **Tree version — not tagged, not released, not deployed.** The version bump
-> (`pyproject.toml`, `src/rui/__init__.py`, `uv.lock`) and this section describe the
-> tree only: there is no `v0.8.0` tag, no image digest and no production change yet.
-> 生产仍是 0.7.9；发版与部署由 9 哥 亲手做。
+> **0.8.0 — tagged and released, never deployed.** The version bump
+> (`pyproject.toml`, `src/rui/__init__.py`, `uv.lock`) and this section shipped as
+> annotated tag `v0.8.0` → `26659b0` and a GitHub release on 2026-10-28, but the
+> release was not deployed: **production stayed on 0.7.9**. 0.8.1 supersedes it on the
+> deploy path (see the section above).
 
 ### Breaking changes
 

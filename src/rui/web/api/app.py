@@ -325,6 +325,24 @@ def _speaking(app: FastAPI, live: object, on_first: object | None = None):
     return say
 
 
+async def _refresh_playback_metrics(live: object, timeout_s: float = 0.5) -> None:
+    """Take a fresh plane metrics snapshot before a turn trace reads it (task-23).
+
+    ``playback_gap_chunks`` is per reply, so the 2 s periodic snapshot can still
+    describe the previous answer and misattribute its chunks to this turn. A
+    ``QueryMetrics`` round trip right before ``note_playback_metrics`` returns the
+    ledger of the reply that is actually sounding (or an empty one). Best effort: a
+    fake/older handle without ``request_metrics``, or a plane that does not answer in
+    time, keeps the last snapshot. Instrumentation only - nothing here changes what is
+    played.
+    """
+    request = getattr(live, "request_metrics", None)
+    if request is None:
+        return
+    with contextlib.suppress(Exception):
+        await request(timeout_s=timeout_s)
+
+
 def _direct_speech(name: str, transcript: str, output: object) -> DirectSpeech | None:
     """Tool results that are read out verbatim instead of being re-answered (D1c ④).
 
@@ -3404,6 +3422,7 @@ def create_app(
                 if asr_report is not None:
                     result.stages.setdefault("asr", asr_report)
                 _record_turn(app, result.to_dict(), device_id)
+                await _refresh_playback_metrics(link)
                 trace.note_playback_metrics(getattr(link, "metrics", None))
                 traces.add(trace)
                 # A music/volume turn wants the song back the moment the reply
@@ -4704,6 +4723,7 @@ def create_app(
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
                            _turn_light(result), live=client)
         _record_turn(app, result.to_dict(), device_id)
+        await _refresh_playback_metrics(client)
         trace.note_playback_metrics(getattr(client, "metrics", None))
         traces.add(trace)
         log.info("debug say: %r -> %r", text, result.reply)

@@ -54,6 +54,36 @@ def test_metrics_are_wire_safe() -> None:
     assert parsed.frames_in == 250
 
 
+def test_metrics_carry_the_per_reply_gap_chunks() -> None:
+    """task-23 (0.8.1 d): the ledger must survive the plane -> control wire.
+
+    `Metrics` is pydantic with extra=ignore, so an undeclared field would be dropped
+    silently and the trace would only ever see the two cumulative counters.
+    """
+    msg = Metrics(
+        uptime_s=5.0, frames_in=250, frames_out=250, frames_dropped=0, no_consumer=0,
+        jitter_p50_ms=20.0, jitter_p99_ms=20.4, cpu_s=0.2, audio_s=5.0, rtf=0.04,
+        playback_gap_count=2, playback_max_gap_ms=120.5,
+        playback_gap_chunks=[[4, 40.0], [9, 120.5]],
+    )
+    raw = encode_json(msg)
+    parsed = parse_control(raw[HEADER.size:])
+
+    assert isinstance(parsed, Metrics)
+    assert parsed.playback_gap_chunks == [[4, 40.0], [9, 120.5]]
+    # The existing counters are untouched.
+    assert (parsed.playback_gap_count, parsed.playback_max_gap_ms) == (2, 120.5)
+
+
+def test_metrics_without_gap_chunks_still_parse() -> None:
+    """An older plane never sends the field; the additive default must hold."""
+    msg = Metrics(uptime_s=1.0, frames_in=0, frames_out=0, frames_dropped=0, no_consumer=0,
+                  jitter_p50_ms=0.0, jitter_p99_ms=0.0, cpu_s=0.0, audio_s=0.0, rtf=0.0)
+    assert msg.playback_gap_chunks == []
+    parsed = parse_control(msg.model_dump_json().encode())
+    assert parsed.playback_gap_chunks == []
+
+
 def test_reply_finished_carries_the_music_hold() -> None:
     """The plane reads hold_music_s off the parsed message; a missing field there
     crashed the audio plane on the first volume confirmation (measured 09:13)."""

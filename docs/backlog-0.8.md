@@ -44,6 +44,24 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 
 ---
 
+## a.4 0.8.1 范围标记（a–f，2026-10-28）
+
+> 0.8.0 不部署、`v0.8.0` tag 仅作历史；**0.8.1 合并 a–f 后发版并直接部署**。生产在发版前仍是
+> **0.7.9**。本表只记「这一项在 0.8.1 里的落点与证据」，0.8.0 的 §b–§f 原文保持不动。
+
+| # | 0.8.1 项 | 状态 | 落点 / 证据 | 备注 |
+|---|---|---|---|---|
+| a | 告别/结束词**不 arm** 免唤醒续听 | **已落地** `d633d80` | `ReplyFinished.followup`（additive，默认 `true`）；`web/api/app.py::_finish_close_path` 发 `followup=False`；`audio/process.py` 只跳过 arm/replay，仍排空并套 `post_playback_mute_ms` | 旧控制面不发该字段 = 旧行为；测试 `tests/test_followup_window.py`、`tests/test_dismiss_turn_release.py` |
+| b | rs03qr 型号 voice 默认 **300 / 500**（不动 lx06） | **已落地**（桥 `9866c6d`，tag `v1.3.3`→`31195ee`） | 桥 `devices/rs03qr.yaml` 的 `audio_defaults.voice`；core `schema.py::VoiceDefaults` + `effective_audio()` | 连带把桥 `rui_compat` 收到 `>=0.8.1 <0.9.0`；生产插件仍是 1.3.2 直到 0.8.1 部署 |
+| c | 控制台暴露两个 voice 字段 | **已落地** `d633d80` | `web/src/v2/audio.ts` 的 `labelKey` + `AudioPanel.vue` 渲染；`catalog.py` 帮助文案改为「先继承型号 manifest，再全局」 | 仅设备音频面板；字段本就按设备可写，仍需重启音频面 |
+| d | trace gap **块序号**（protocol + trace additive） | **工作区已实现，待提交/评审** | `audio/protocol.py` 的 `Metrics.playback_gap_chunks`（`[chunk_index, gap_ms]`，per-reply、additive）；`process.py` 仅在应答发声期间填充；`trace.py::note_playback_metrics` 写入 `meta.playback_gap_chunks`（空账本不记） | 控制面在 trace 前取 fresh snapshot，不用 2 s 周期快照；旧对端仍可解析 |
+| e | lx06 48k/16k 对齐 ADR + 冷启动可观测 | **已落地**（文档） | `docs/adr/0008-lx06-capture-negotiation.md`：`capture.rate` 保持协商、不改 `lx06.yaml`、living 不变；冷启动注册/probe/≤3 次 ack 重读与残余（capture layout 迟到需重启） | 改 manifest 需 9 哥 批准 + 独立真机 probe；探针清单见 ADR |
+| f | 文档收口 | **已落地**（本批，未提交） | `CHANGELOG` 0.8.1、`docs/known-limitations.md` L23/L24、本表、`docs/socket-plug-v1.md`、`docs/contracts`/C-001、README 版本矩阵 | **不做**版本号 bump；发版时再改 `pyproject.toml` / `__init__.py` |
+
+**发版前复查**：d 的提交与 trace 侧字段是否随本次一起进 tag；README 矩阵的「当前代码」行在 bump 后要从 0.8.1 改成实际版本。
+
+---
+
 ## b. 0.8.0 破坏性三项（删什么 / 谁受影响 / 怎么验）
 
 ### b.1 删 `/legacy` 面板与全部 15 条老链接 302 —— **已落地 @（本卡）**

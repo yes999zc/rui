@@ -3237,6 +3237,10 @@ class AudioPlane:
         self._speak_finished = True
         self._starvation_due = None
         self._speak_generation += 1
+        # task-23: the per-reply gap ledger belongs to the reply this barge/stop just
+        # cancelled. Clearing it here (not only when the speak loop notices the idle
+        # queue 0.5 s later) keeps a new turn's trace from inheriting those chunks.
+        self.playback_gap_chunks = []
         # The queue is gone; the device's count for the old player is meaningless now.
         # The next reply opens a fresh player (and resets the credit again by generation).
         self._credit.reset()
@@ -3456,6 +3460,14 @@ class AudioPlane:
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
             playback_gap_count=self.playback_gap_count,
             playback_max_gap_ms=round(self.playback_max_gap_ms, 1),
+            # task-23 (0.8.1 d): ship the per-reply chunk ledger alongside the
+            # counters. Only a reply that is still sounding has a ledger; once it has
+            # drained (or a barge flushed it) the list is empty, so a metrics snapshot
+            # taken between replies cannot carry the previous answer's chunks.
+            playback_gap_chunks=(
+                [list(pair) for pair in self.playback_gap_chunks]
+                if self._reply_open else []
+            ),
             playback_errors=self.playback_errors,
             playback_last_error=self.playback_last_error,
             device_volume=self.device_volume,

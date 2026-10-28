@@ -178,12 +178,117 @@ def test_gap_counters_reach_the_metrics_wire_and_the_turn_trace(tmp_path: Path) 
     assert isinstance(decoded, Metrics)
     assert decoded.playback_gap_count >= 1
     assert decoded.playback_max_gap_ms >= 200.0
+    # task-23 (0.8.1 d): the chunk that waited travels with the counters. The first
+    # block was sent as chunk 1, so the late arrival is chunk 2.
+    assert decoded.playback_gap_chunks, decoded.playback_gap_chunks
+    assert decoded.playback_gap_chunks[0][0] == 2
+    assert decoded.playback_gap_chunks[0][1] >= PLAYBACK_GAP_MIN_MS
 
     trace = TurnTrace(device_id="living")
     trace.note_playback_metrics(decoded)
     entry = trace.to_dict()
     assert entry["meta"]["playback_gap_count"] == decoded.playback_gap_count
     assert entry["meta"]["playback_max_gap_ms"] == decoded.playback_max_gap_ms
+    assert entry["meta"]["playback_gap_chunks"] == decoded.playback_gap_chunks
+
+
+def test_the_gap_ledger_does_not_leak_into_the_next_reply(tmp_path: Path) -> None:
+    """Two replies in one speak loop: reply 2 must not inherit reply 1's chunks.
+
+    The plane clears the ledger when a reply drains, and `_build_metrics` publishes it
+    only while the reply is still sounding. This is what the control plane's fresh
+    ``request_metrics`` before tracing relies on.
+    """
+    plane, adapter = make_plane(tmp_path, prebuffer_ms=0)
+
+    async def run() -> tuple[list[list[float]], int, Metrics]:
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            # Reply 1 gets the issue's arrival shape: one audible gap on chunk 2.
+            enqueue(plane, pcm(), segment=True)
+            await wait_until(lambda: adapter.plays >= 1)
+            await asyncio.sleep(0.4)
+            for i in range(3):
+                enqueue(plane, pcm(), segment=(i == 0))
+            plane._speak_finished = True
+            await wait_until(lambda: plane.playback_gap_chunks, timeout_s=2.0)
+            snapshot = plane.metrics()
+            first = [list(pair) for pair in snapshot.playback_gap_chunks]
+            assert first and first[0][0] == 2
+            first_count = snapshot.playback_gap_count
+
+            # Reply 2 starts after the loop has closed reply 1 (0.5 s idle branch).
+            await wait_until(lambda: not plane._reply_open, timeout_s=2.0)
+            assert plane.metrics().playback_gap_chunks == []
+
+            plays = adapter.plays
+            enqueue(plane, pcm(), segment=True)
+            enqueue(plane, pcm())
+            enqueue(plane, pcm())
+            plane._speak_finished = True
+            await wait_until(lambda: adapter.plays >= plays + 3, timeout_s=2.0)
+            return first, first_count, plane.metrics()
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    first, first_count, second = asyncio.run(run())
+
+    # The counters stay cumulative (unchanged by reply 2 - it had no gap) ...
+    assert second.playback_gap_count == first_count, second.playback_gap_count
+    # ... while the per-reply ledger is fresh, not reply 1's list.
+    assert second.playback_gap_chunks == []
+
+    trace = TurnTrace(device_id="living")
+    trace.note_playback_metrics(second)
+    assert "playback_gap_chunks" not in trace.to_dict()["meta"]
+
+
+def test_a_closed_or_barged_reply_publishes_no_gap_ledger(tmp_path: Path) -> None:
+    """A snapshot taken between replies must not carry the finished answer's chunks."""
+    plane, _adapter = make_plane(tmp_path)
+
+    plane.playback_gap_chunks = [[7, 88.0]]
+    plane._reply_open = False
+    assert plane._build_metrics().playback_gap_chunks == []
+
+    plane._reply_open = True
+    assert plane._build_metrics().playback_gap_chunks == [[7, 88.0]]
+
+    # A barge flushes the reply; the ledger dies with it even though `_reply_open`
+    # stays set until the loop's idle branch runs.
+    plane._flush_speech()
+    assert plane._build_metrics().playback_gap_chunks == []
+
+
+def test_trace_refreshes_the_plane_metrics_before_reading_the_ledger() -> None:
+    """The control plane must not trace from the stale 2 s periodic snapshot.
+
+    `playback_gap_chunks` is per reply; asking for a fresh snapshot right before the
+    trace is what keeps the previous answer's chunks out of this turn. Best effort:
+    an object without `request_metrics` is a no-op, not an error.
+    """
+    from rui.web.api.app import _refresh_playback_metrics
+
+    class FakeLive:
+        def __init__(self) -> None:
+            self.calls: list[float] = []
+            self.metrics = "stale"
+
+        async def request_metrics(self, timeout_s: float = 3.0) -> None:
+            self.calls.append(timeout_s)
+            self.metrics = "fresh"
+
+    class NoMetricsRequest:
+        pass
+
+    live = FakeLive()
+    asyncio.run(_refresh_playback_metrics(live))
+    assert live.metrics == "fresh"
+    assert live.calls and live.calls[0] > 0
+    # An older/fake handle simply keeps its last snapshot.
+    asyncio.run(_refresh_playback_metrics(NoMetricsRequest()))
 
 
 def test_the_pre_start_stop_is_skipped_when_the_player_is_already_stopped(

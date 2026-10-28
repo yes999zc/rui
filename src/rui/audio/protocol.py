@@ -210,6 +210,12 @@ class Metrics(BaseModel):
     # plane started; a gap under 20 ms is scheduler noise, not an underrun.
     playback_gap_count: int = 0
     playback_max_gap_ms: float = 0.0
+    # task-23 (0.8.1 d): per-reply ledger of the chunks that had to wait, as
+    # [chunk_index, gap_ms]. Additive with a default: an older control plane ignores
+    # it and an older plane that never sends it still parses. The plane fills it only
+    # while that reply is sounding (see `AudioPlane._build_metrics`), so the control
+    # plane must read it from a fresh snapshot, not the 2 s periodic one.
+    playback_gap_chunks: list[list[float]] = Field(default_factory=list)
     # task-24: blocks the adapter rejected in `play()`. Additive with defaults so an
     # older plane still parses. The counter is cumulative; the console and /health
     # show it (a wrong wire format used to be one INFO line per chunk).

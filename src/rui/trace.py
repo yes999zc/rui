@@ -83,6 +83,13 @@ class TurnTrace:
         import its protocol models. The control plane calls this with the latest
         ``Metrics`` snapshot before ``TraceLog.add``; absent fields (an older plane) are
         skipped rather than recorded as zero.
+
+        ``playback_gap_chunks`` (task-23, 0.8.1 d) is a *per-reply* ledger, so unlike the
+        cumulative counters a stale 2 s periodic snapshot could attribute the previous
+        answer's chunks to this turn. The control plane therefore asks for a fresh
+        snapshot first (``app._refresh_playback_metrics`` before this call), and the
+        plane only publishes the ledger while that reply is still sounding. An empty
+        ledger is not recorded: there is nothing to attribute.
         """
         count = getattr(metrics, "playback_gap_count", None)
         if count is not None:
@@ -90,6 +97,13 @@ class TurnTrace:
         max_gap = getattr(metrics, "playback_max_gap_ms", None)
         if max_gap is not None:
             self.meta["playback_max_gap_ms"] = round(float(max_gap), 1)
+        chunks = getattr(metrics, "playback_gap_chunks", None)
+        if chunks:
+            self.meta["playback_gap_chunks"] = [
+                [int(pair[0]), round(float(pair[1]), 1)]
+                for pair in chunks
+                if len(pair) >= 2
+            ]
 
     def note_wake(self, wake: object) -> None:
         """Record where a turn's wake came from (Socket & Plug v1 §5).

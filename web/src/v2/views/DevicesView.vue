@@ -36,15 +36,17 @@ const deviceErrorCopy = computed(() => (deviceError.value ? describeError(device
 const houseErrorCopy = computed(() => (houseError.value ? describeError(houseError.value) : null))
 const catalogOff = computed(() => Boolean(capabilityError.value) && deviceData.value !== null)
 
-interface RoomGroup {
+interface DeviceCard {
+  device: DeviceSummary
   room: string
-  devices: DeviceSummary[]
-  online: number
-  total: number
   defaultOutput: boolean
 }
 
-const groups = computed<RoomGroup[]>(() => {
+/**
+ * One card per device, ordered by room so same-room cards stay adjacent. The
+ * previous room sections are gone; the room name is the card title instead.
+ */
+const cards = computed<DeviceCard[]>(() => {
   const items = deviceData.value?.items ?? []
   const info: HouseInfo | null = houseData.value
   const byRoom = new Map<string, DeviceSummary[]>()
@@ -65,23 +67,14 @@ const groups = computed<RoomGroup[]>(() => {
   order.push(...rest)
   if (byRoom.has('')) order.push('')
 
-  return order.map((room) => {
-    const list = byRoom.get(room) ?? []
-    const houseRoom = info?.rooms.find((entry) => entry.room === room)
-    const defaultOutput =
-      houseRoom?.default_output ??
-      Boolean(
-        info?.multi_device?.default_output &&
-          list.some((device) => device.id === info.multi_device.default_output),
-      )
-    return {
+  const defaultOutputId = info?.multi_device?.default_output ?? ''
+  return order.flatMap((room) =>
+    (byRoom.get(room) ?? []).map((device) => ({
+      device,
       room,
-      devices: list,
-      total: list.length,
-      online: houseRoom?.online ?? list.filter((device) => device.ready).length,
-      defaultOutput,
-    }
-  })
+      defaultOutput: Boolean(defaultOutputId && device.id === defaultOutputId),
+    })),
+  )
 })
 
 const counts = computed(() => {
@@ -104,7 +97,7 @@ const counts = computed(() => {
   }
 })
 
-const roomCount = computed(() => groups.value.length)
+const roomCount = computed(() => new Set(cards.value.map((card) => card.room)).size)
 
 /**
  * An empty house gets the first-run wizard (`/setup`); once a device exists the
@@ -305,73 +298,71 @@ onMounted(() => {
         </ul>
       </section>
 
-      <section
-        v-for="group in groups"
-        :key="group.room || 'unassigned'"
-        class="v2-room"
-      >
-        <header class="v2-room-head">
-          <h2>{{ group.room || t('v2.devices.unassigned') }}</h2>
-          <span class="meta">{{ t('v2.devices.roomCount', { online: group.online, total: group.total }) }}</span>
-          <span v-if="group.defaultOutput" class="badge badge-accent">
-            {{ t('v2.devices.defaultOutput') }}
-          </span>
-        </header>
-
-        <div class="v2-device-grid">
-          <RouterLink
-            v-for="device in group.devices"
-            :key="device.id"
-            class="v2-device-card"
-            :to="`/devices/${device.id}`"
-            :aria-label="t('v2.devices.openAria', { id: device.id })"
-          >
-            <div class="v2-device-top">
-              <div class="v2-device-title">
-                <strong class="mono">{{ device.id }}</strong>
+      <div class="v2-device-grid">
+        <RouterLink
+          v-for="card in cards"
+          :key="card.device.id"
+          class="v2-device-card"
+          :to="`/devices/${card.device.id}`"
+          :aria-label="t('v2.devices.openAria', { id: card.device.id })"
+        >
+          <div class="v2-device-top">
+            <div class="v2-device-title">
+              <h2 class="v2-device-room">{{ card.room || t('v2.devices.unassigned') }}</h2>
+              <span
+                class="v2-device-card-sub mono"
+                :title="`${card.device.id} · ${card.device.model || t('v2.devices.modelFallback')}`"
+              >
+                <span class="v2-device-id">{{ card.device.id }}</span>
+                <span aria-hidden="true">·</span>
                 <span class="v2-device-model">
-                  {{ device.model || t('v2.devices.modelFallback') }}
+                  {{ card.device.model || t('v2.devices.modelFallback') }}
                 </span>
-              </div>
-              <StatusBadge :status="device.status" :reason="device.status_reason" />
-            </div>
-
-            <p class="v2-device-sub">
-              <span>{{ device.vendor || t('v2.devices.vendorFallback') }}</span>
-              <span aria-hidden="true">·</span>
-              <span>{{ transportLabel(device.transport) }}</span>
-              <span v-if="!device.enabled" class="tag">{{ t('v2.common.disabled') }}</span>
-            </p>
-
-            <p v-if="device.status !== 'ready'" class="v2-device-reason">
-              {{ statusReasonText(device.status_reason) }}
-            </p>
-
-            <CapabilityChips
-              :ids="device.capabilities ?? []"
-              :unknown="device.unknown_capabilities ?? []"
-            />
-
-            <p class="v2-device-audio mono">{{ audioLine(device) }}</p>
-
-            <div
-              v-if="device.warnings?.length"
-              class="v2-device-warn"
-            >
-              <AppIcon name="alert" :size="13" />
-              <span>{{ firstWarning(device) }}</span>
-            </div>
-
-            <div class="v2-device-foot">
-              <span>{{ lastSeen(device) }}</span>
-              <span class="v2-open">
-                {{ t('v2.devices.open') }}
-                <AppIcon name="arrowRight" :size="14" />
               </span>
             </div>
-          </RouterLink>
-        </div>
-      </section>
+            <div class="v2-device-badges">
+              <span v-if="card.defaultOutput" class="badge badge-accent">
+                {{ t('v2.devices.defaultOutput') }}
+              </span>
+              <StatusBadge
+                :status="card.device.status"
+                :reason="card.device.status_reason"
+              />
+            </div>
+          </div>
+
+          <p class="v2-device-sub">
+            <span>{{ card.device.vendor || t('v2.devices.vendorFallback') }}</span>
+            <span aria-hidden="true">·</span>
+            <span>{{ transportLabel(card.device.transport) }}</span>
+            <span v-if="!card.device.enabled" class="tag">{{ t('v2.common.disabled') }}</span>
+          </p>
+
+          <p v-if="card.device.status !== 'ready'" class="v2-device-reason">
+            {{ statusReasonText(card.device.status_reason) }}
+          </p>
+
+          <CapabilityChips
+            :ids="card.device.capabilities ?? []"
+            :unknown="card.device.unknown_capabilities ?? []"
+          />
+
+          <p class="v2-device-audio mono">{{ audioLine(card.device) }}</p>
+
+          <div v-if="card.device.warnings?.length" class="v2-device-warn">
+            <AppIcon name="alert" :size="13" />
+            <span>{{ firstWarning(card.device) }}</span>
+          </div>
+
+          <div class="v2-device-foot">
+            <span>{{ lastSeen(card.device) }}</span>
+            <span class="v2-open">
+              {{ t('v2.devices.open') }}
+              <AppIcon name="arrowRight" :size="14" />
+            </span>
+          </div>
+        </RouterLink>
+      </div>
     </template>
   </div>
 </template>

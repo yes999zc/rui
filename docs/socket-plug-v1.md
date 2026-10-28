@@ -89,10 +89,11 @@ transport: inbound            # inbound = 设备拨回；outbound = RUI 连设�
 protocol: {kind: ws, version: "1"}   # 具体字段由 adapter 解释
 capabilities: [mic_array, playback, volume, device_wake, barge_via_device]
 wake: {source: device, barge_via_device: true}
-# 0.6：本机型的硬件音频默认（可选，合并的最底层；见 §3.2.1）
+# 本机型的硬件音频默认（可选；0.8.0 起 manifest 硬件事实优先，见 §3.2.1）
 audio_defaults:
   capture: {rate: 48000, channels: 1, mic_channels: 1, ref_channels: 0}
   playback: {rate: 48000, channels: 1}
+  voice: {followup_delay_ms: 300, post_playback_mute_ms: 500}   # 0.8.1+
   ack_echo_ignore_ms: 2500
 device_side:
   artifact: firmware          # firmware | client | app | none
@@ -130,29 +131,36 @@ acceptance: {verified: false, last_verified: "", evidence: "待真机验收；�
 | `params` | list / 是 | 表单 schema；类型 `string/int/bool/list/secret/choice`。`list.max` 必须覆盖 `default` 的长度；`secret` 无默认、只写不读；向导只接受 manifest 已声明的 key/类型/options（declared-only） |
 | `compatibility` | mapping / 否 | `rui_min`/`tested_with` 为 semver；`notes` 人读 |
 | `acceptance` | mapping / 否 | `verified` + `last_verified`（`YYYY-MM-DD`）+ `evidence`；`verified: true` 必须带 `last_verified`；向导不把它当完成证据 |
-| `audio_defaults` | mapping / 否 | **仅 v1（0.6）**；本机型的硬件音频默认：`{capture?, playback?, ack_echo_ignore_ms?}`；未知键报错；v0 声明它一律报错。省略 = 中性核心默认（16000/1ch/0ref、playback 16000、ack earcon），所以旧 plug 不写也照常加载 |
+| `audio_defaults` | mapping / 否 | **仅 v1**；本机型的硬件音频默认：`{capture?, playback?, voice?, ack_echo_ignore_ms?}`；未知键报错；v0 声明它一律报错。`voice`（`followup_delay_ms` / `post_playback_mute_ms`）是 **0.8.1+** 的键：0.8.0 与整条 0.7.x 线因 `extra="forbid"` 会拒载带它的设备清单，所以声明它的插件必须把 `rui_compat` 下界抬到 `0.8.1`。省略 = 中性核心默认（16000/1ch/0ref、playback 16000、ack earcon），所以旧 plug 不写也照常加载 |
 
-### 3.2.1 `audio_defaults` 与三层合并（0.6）
+### 3.2.1 `audio_defaults` 与合并顺序（0.8.x；0.6 的顺序已作废）
 
 ```text
-设备默认（manifest audio_defaults，本文档）   ← 最底层
-  < 全局 config（config.yaml 的 audio / ack，显式写下的值才覆盖）
-    < devices[].audio（单台设备的覆盖，最高层）
+core 默认（中性）  <  全局 config（显式写下的值才参与）  <  manifest 硬件事实  <  devices[].audio
 ```
 
-- 每一层都可缺省，缺一层不报错；三层合成后再做一次 schema 校验（`mic_channels +
-  ref_channels == channels`），失败指向具体设备而不是在音频面里崩帧长。
+- **0.8.0 起 manifest 的硬件事实胜出**（ADR `docs/adr/0007-audio-facts-ownership.md`）。0.6/0.7
+  的旧顺序把 manifest 放在最底层，导致生产模板的 16 kHz / 8 ch 块被套到单声道 Dot 2 上，每次
+  `play()` 都被桥拒绝（LED 亮、没声音）。分歧不再静默：`effective_audio()` 返回
+  `AudioConflict`（`winner` / `kind` / 生效值），控制台与 `/api/v2` 都能看到。
+- **`capture.rate` 是唯一协商项**：manifest 声明机型的原生率（LX06 为 48000），显式全局/设备值
+  是运维**主动要的 wire**（生产模板写 16000 省 wifi），后者赢，冲突记为
+  `kind: "negotiated"`。所以 `lx06.yaml` 的 48000 与生产 16000 并不矛盾，也不需要改 manifest
+  （见 `docs/adr/0008-lx06-capture-negotiation.md`）。
+- **`capture` 是一个整体**：声明了 channels / mic_channels / ref_channels 中任一项时，manifest 未
+  声明的其余布局字段取**中性核心值**，而不是继承全局模板的 32 bit / 12·16 shift（否则会漏进
+  16 bit 单声道的机型）。
+- **`voice` 与 `ack_echo_ignore_ms` 都是声学事实**，manifest 胜显式全局值（`devices[]` 仍最高）。
+  `voice` 只收两个逐型号字段：`followup_replay` 仍是全局选择，`ack_echo_ignore_ms` 保留在
+  `audio_defaults` 顶层、由 `effective_ack_echo_ignore_ms()` 单独合成，不进 `effective_audio()`
+  的 `audio` 块。
+- 每一层都可缺省，缺一层不报错；合成后再做一次 schema 校验（`mic_channels + ref_channels ==
+  channels`），失败指向具体设备而不是在音频面里崩帧长。`save_config` 不会把核心默认值写回文件，
+  避免一次控制台保存就把设备默认「冻结」成显式覆盖。
 - 核心默认是**中性**的：capture 16000 Hz / 1 ch / 0 ref、playback 16000 Hz / 1 ch、ack `earcon`。
   LX06 的 8 ch / 6 mic / 2 ref / 48 kHz 由它自己的 manifest 声明
   （`plugs/xiaoai/devices/lx06.yaml`，镜像内为 `/opt/rui-plugins/xiaoai/devices/lx06.yaml`），
   核心不再硬编码任何机型数字。
-- 「全局 config」按**文件里是否写了该字段**判定：没写的字段继续落到设备默认；显式写下的值
-  （例如生产模板把 capture.rate 写成 16000 以省 wifi 带宽）永远赢。`save_config` 因此
-  不会把核心默认值（audio 各字段与 `ack.echo_ignore_ms`）写回文件，避免一次控制台保存
-  就把设备默认「冻结」成显式覆盖。
-- `ack_echo_ignore_ms` 属于唤醒应答（`ack.echo_ignore_ms`）而不是 DSP 参数，所以放在
-  `audio_defaults` 顶层，由 `effective_ack_echo_ignore_ms()` 单独合成；它不进
-  `effective_audio()` 的 `audio` 块，避免看起来生效实际被忽略的假旋钮。
 - LX06 manifest 自 0.6 起是 `rui-device/v1`（唤醒仍走 RUI KWS：省略 `wake` 即
   `source: rui`），随镜像放在 `plugs/xiaoai/`；没有 `audio_defaults` 的旧 plug
   兼容样本由 `examples/plugin-example` 与测试 fixture 覆盖（v0 参考包在 0.6 M2 随
@@ -401,7 +409,7 @@ dot2 = "my_plugin.adapter:build"
 | 部件 | 内容 | 对应规范 |
 |---|---|---|
 | `plugin.yaml` | id `xiaoai-lx06`，trust `builtin`，`rui_compat: ">=0.3.0 <0.7.0"` | §3.1 / §3.2 |
-| `devices/lx06.yaml` | `rui-device/v1`，id `lx06`，class A，inbound，`ws`，in-process，能力 `mic_array` / `reference` / `playback` / `led` / `keys` / `volume`，`audio_defaults` 48000/8 ch/6 mic/2 ref/32 bit/>>12/>>16 + `ack_echo_ignore_ms: 1200`，参数 `host` / `room` / `wake_words` | §3、§7 |
+| `devices/lx06.yaml` | `rui-device/v1`，id `lx06`，class A，inbound，`ws`，in-process，能力 `mic_array` / `reference` / `playback` / `led` / `keys` / `volume`，`audio_defaults` 48000/8 ch/6 mic/2 ref/32 bit/>>12/>>16 + `ack_echo_ignore_ms: 1200`（**不声明 `voice`**，沿用全局/设备值），参数 `host` / `room` / `wake_words` | §3、§7 |
 | `xiaoai_plug/` | adapter / wire protocol / LED ring / mixer services；`build(dev, cfg)`，`kit_live_device_required = True` | §4.1 |
 | `wake` | 无；v1 默认 `source: rui`，LX06 继续走 RUI KWS | §2、§7 |
 
@@ -432,7 +440,7 @@ python -m rui plug-test plugs/xiaoai \
 | Adapter | `drain_signals()` | 新增 `drain_wakes()` 与 `DeviceWake` |
 | 策略 | RUI KWS 唯一入口 | device_wake 可入口，RUI 拥有最终 turn/barge 决策 |
 | 内部 IPC | `VendorSignalMsg` | 新增 `DeviceWakeMsg`；vendor 语义不变 |
-| 音频默认 | 无（核心写死 LX06） | 新增可选 `audio_defaults`（0.6）：`capture`/`playback`/`ack_echo_ignore_ms` |
+| 音频默认 | 无（核心写死 LX06） | 新增可选 `audio_defaults`（0.6）：`capture`/`playback`/`ack_echo_ignore_ms`；0.8.1 追加可选 `voice`（`followup_delay_ms`/`post_playback_mute_ms`，声明它要求 `rui_compat >=0.8.1`） |
 | 验收 | 手工 + 既有 pytest | 增加 manifest validator、wake injection、playback gap 工具 |
 
 **兼容规则**：loader 接受 v0，按 `wake.source=rui`、`barge_via_device=false` 处理；v0 不得声明 `wake`/`device_wake`/`barge_via_device`/`model`/`audio_defaults`（否则报错，不静默升级）。0.6 起 LX06 的 manifest（`plugs/xiaoai`，镜像内 `/opt/rui-plugins/xiaoai`）升为 `rui-device/v1` 以声明 `audio_defaults`（唤醒仍走 RUI KWS，省略 `wake` 即 `source: rui`）；LX06 adapter 不实现 `drain_wakes()`，KWS 路径不变。v0 兼容样本改由 `examples/plugin-example` 与测试 fixture 覆盖。v0 + 新字段、v1 + 未知字段、`rui_compat` 不匹配都报文件/字段。`devices[].params` 仍是值字典，`params.plug_id` 继续作为 adapter→plug 兜底（`src/rui/plugins/resolve.py`）。

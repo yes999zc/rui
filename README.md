@@ -51,10 +51,13 @@
 
 | rui 核心 | rui-dot2-bridge | rui-xiaoai-bridge |
 |---|---|---|
-| **0.8.0**（当前代码，**破坏性**；未打 tag、未发布）：删 `/legacy` 与 15 条老链接（一律 404）、旧 `adapter: xiaoai` 读入即拒绝（须改 `lx06`）、插件 `runtime.listen_port` 必填、契约窗口改为 `>=0.7.0 <0.9.0`；另含 P0/P1 修复（ack 回声、短回复、LED 收敛、掉线丢弃排队语音）与物理按键支持（静音、音量回写） | **1.3.2**：`rui_compat >=0.7.0 <0.9.0`（双窗口）、设备清单 `compatibility.rui_min=0.3.0` | **0.2.3**：`rui_compat >=0.7.0 <0.9.0`（双窗口）、设备清单 `compatibility.rui_min=0.6.0` |
+| **0.8.1**（当前代码；**未打 tag、未部署**）：在 0.8.0 的三项破坏性变更之上——结束词/告别**不 arm** 免唤醒续听（`ReplyFinished.followup`，additive）、Dot 2 型号 voice 默认 300/500（manifest 压过显式全局值）、控制台命名两个 voice 字段、播放 gap 记账到块序号（additive）；LX06 48k/16k 归 ADR 0008（`capture.rate` 保持协商，不改 manifest）。**生产仍是 0.7.9** | **1.3.3**：`rui_compat >=0.8.1 <0.9.0`（**0.8.1-only**：声明了 `audio_defaults.voice`）、设备清单 `compatibility.rui_min=0.8.1` | **0.2.3**：`rui_compat >=0.7.0 <0.9.0`、设备清单 `compatibility.rui_min=0.6.0`（0.8.1 下不变） |
+| 0.8.0（历史，**破坏性**；已打 tag `v0.8.0` 并 release，**从未部署**）：删 `/legacy` 与 15 条老链接（一律 404）、旧 `adapter: xiaoai` 读入即拒绝（须改 `lx06`）、插件 `runtime.listen_port` 必填、契约窗口改为 `>=0.7.0 <0.9.0`；另含 P0/P1 修复（ack 回声、短回复、LED 收敛、掉线丢弃排队语音）与物理按键支持（静音、音量回写） | **1.3.2**：`rui_compat >=0.7.0 <0.9.0`（双窗口）、设备清单 `compatibility.rui_min=0.3.0` | **0.2.3**：`rui_compat >=0.7.0 <0.9.0`（双窗口）、设备清单 `compatibility.rui_min=0.6.0` |
 | 0.7.9（历史，patch）：意图层两处行为变更 + 唤醒应答提前 | 1.3.1（`>=0.6.0 <0.8.0`） | 0.2.2（`>=0.6.0 <0.8.0`） |
 | 0.7.8（历史）：控制台默认 v2、TLS 安装、插件外置 | 1.3.1 | 0.2.2 |
 | 0.7.4（历史） | 1.3.1 | 0.2.2 |
+
+> **0.8.1 与桥 1.3.3 必须同发**：core 0.8.1 + 桥 1.3.3，或 core 0.7.9 + 桥 1.3.2。把 1.3.3 装到 ≤0.8.0 的 core 上会被 loader 拒载（每台 Dot 2 没有 adapter）；0.8.1 配 1.3.2 能跑，但 Dot 2 拿不到型号的 300/500 时序。
 
 > LX06 的插件**必须外置**：把 `rui-xiaoai-bridge` 挂到 `/opt/rui-plugins`，并设 `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`；挂上后日志为 `adapter plugins: registered dot2, lx06`。核心不再有兼容别名、也不回退内置实现；不挂插件时设备错误会明确提示去 mount 桥。**0.8.0 起旧配置里的 `adapter: xiaoai` 不再被迁移**：读入即失败，报错含 `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`，把该行改成 `lx06` 即可。
 
@@ -238,10 +241,13 @@ Two constraints must both hold: `compatibility.rui_min` in the device manifest (
 
 | rui core | rui-dot2-bridge | rui-xiaoai-bridge |
 |---|---|---|
-| **0.8.0** (current code, **breaking**; not tagged, not released): `/legacy` and the 15 old links are gone (plain 404), a legacy `adapter: xiaoai` is rejected on load (change it to `lx06`), the plug manifest's `runtime.listen_port` is required, the compat window is now `>=0.7.0 <0.9.0`; also carries the P0/P1 fixes (ack echo, short replies, LED convergence, queued speech on link loss) and physical-key support (mute, volume write-back) | **1.3.2**: `rui_compat >=0.7.0 <0.9.0` (dual window), manifest `compatibility.rui_min=0.3.0` | **0.2.3**: `rui_compat >=0.7.0 <0.9.0` (dual window), manifest `compatibility.rui_min=0.6.0` |
+| **0.8.1** (current code; **not tagged, not deployed**): on top of 0.8.0's three breaking changes — a close path no longer arms a wake-free follow-up (`ReplyFinished.followup`, additive), the Dot 2 model declares 300/500 voice timings (manifest wins over an explicit global value), the console names the two voice fields, and playback gaps record the chunk ordinal (additive); the LX06 48k/16k question is recorded in ADR 0008 (`capture.rate` stays negotiated, no manifest change). **Production is still 0.7.9** | **1.3.3**: `rui_compat >=0.8.1 <0.9.0` (**0.8.1-only**: it declares `audio_defaults.voice`), manifest `compatibility.rui_min=0.8.1` | **0.2.3**: `rui_compat >=0.7.0 <0.9.0`, manifest `compatibility.rui_min=0.6.0` (unchanged on 0.8.1) |
+| 0.8.0 (historical, **breaking**; tagged `v0.8.0` and released, **never deployed**): `/legacy` and the 15 old links are gone (plain 404), a legacy `adapter: xiaoai` is rejected on load (change it to `lx06`), the plug manifest's `runtime.listen_port` is required, the compat window is now `>=0.7.0 <0.9.0`; also carries the P0/P1 fixes (ack echo, short replies, LED convergence, queued speech on link loss) and physical-key support (mute, volume write-back) | **1.3.2**: `rui_compat >=0.7.0 <0.9.0` (dual window), manifest `compatibility.rui_min=0.3.0` | **0.2.3**: `rui_compat >=0.7.0 <0.9.0` (dual window), manifest `compatibility.rui_min=0.6.0` |
 | 0.7.9 (historical, patch): intent-layer behaviour + wake acknowledgement moved up | 1.3.1 (`>=0.6.0 <0.8.0`) | 0.2.2 (`>=0.6.0 <0.8.0`) |
 | 0.7.8 (historical): v2 console default, TLS install, external plugs | 1.3.1 | 0.2.2 |
 | 0.7.4 (historical) | 1.3.1 | 0.2.2 |
+
+> **Core 0.8.1 and bridge 1.3.3 ship together**: core 0.8.1 + bridge 1.3.3, or core 0.7.9 + bridge 1.3.2. A 1.3.3 plug on a core ≤0.8.0 is refused by the loader (every Dot 2 loses its adapter); 0.8.1 with 1.3.2 still runs, but the Dot 2 keeps the global voice timings instead of its 300/500 model defaults.
 
 > The LX06 plug is **external only**: mount `rui-xiaoai-bridge` under `/opt/rui-plugins` and set `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`; with it mounted the log reads `adapter plugins: registered dot2, lx06`. There is no compatibility alias and no built-in fallback, and without the plug the device error tells you to mount the bridge. **Since 0.8.0 a legacy `adapter: xiaoai` is no longer migrated**: it fails on load with `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`. Change that line to `lx06`; do not wait for a fallback.
 

@@ -33,9 +33,11 @@ web/src/v2/components/device/  Identity, Capabilities, AudioProvenance, AudioPan
 
 ## Pages
 
-- `/v2/devices` — room-grouped device list, status/capability badges. An empty
-  house links to `/v2/setup` (first run); once a device exists the header/action
-  links to `/v2/devices/add`.
+- `/v2/devices` — responsive card grid, one card per device (room name as the
+  title, id/model as the mono subtitle; same-room cards stay adjacent).
+  Status/capability badges stay on the card. An empty house links to
+  `/v2/setup` (first run); once a device exists the header/action links to
+  `/v2/devices/add`.
 - `/v2/devices/add` — M6 add wizard: choose plugin/model, then render the
   server's eight-step plan (`GET /setup/plan?plugin_id=&model_id=&device_id=`).
   Step order, status, evidence, `next_step` and `blocked` are never inferred in

@@ -193,6 +193,12 @@ audio:
   `QueryMetrics` 时收到），控制面可再写入轮次 trace 的 `meta`：
   `TurnTrace.note_playback_metrics(metrics)` 会复制
   `playback_gap_count` / `playback_max_gap_ms` 到 `meta`。
+- 0.8.1 d：同一时刻的 `playback_gap_chunks` 记录"这一轮回复里哪一块等了多久"，
+  形如 `[[chunk_index, gap_ms], ...]`（chunk 从 1 开始）。它是**按回复**的账本：
+  回复开始时清空、结束时清空、barge/StopAudio 冲刷队列时也清空；`Metrics` 只在
+  该回复仍在发声时发布它。控制面在写 trace 前用 `request_metrics()` 取一份新快照
+  （`app._refresh_playback_metrics`），而不是用最多 2 s 前的周期快照——否则上一轮
+  回复的 chunk 列表会被错记到这一轮。空的账本不写入 `meta`。
 - 每次回复结束只在有 gap 时打一行 `reply: N gaps, max X ms`；不逐块打日志。
 - 已知取舍：句间 TTS 合成停顿如果超过设备缓冲，也会被记为 gap——那是真实
   underrun，不是误报；要区分"故意留的句间静音"，应把静音作为 PCM 发出来。
