@@ -14,25 +14,27 @@
   **生产验收（2026-10-27 22:3x 核过）**：`/health` = `version 0.7.9 / console v2 / devices 2 / device_errors 0 / audio_plane true / speaker_connected true`，
   `adapter_plugins.registered ["dot2","lx06"] / warnings 0`；两台 plane（`living` 客厅、`dot2` 卧室）均 `running true / speaker_connected true / restarts 0 / error ""`；
   `GET /api/v1/config/catalog` → **200**，`ack` 的 `tier 2 / order 5`（tier2 首位）→ **v2 语音助手页第 3 位（assistant → session → ack）**，D-011 在生产生效。
-  **注意**：容器已跑 0.7.9 代码，但 **0.7.9 的意图层行为仍未做真机出声验证**（真机窗口并入 0.8，见 `docs/acceptance-pending.md`）。
-- **0.7.9 真机未验**：C1/C2/C3/C5 与 D-011 排序都只经 headless 判定（`1716 passed, 6 skipped`）。验证项全部挂在 `docs/acceptance-pending.md`（N1/N2/N3 + R79-1…6，`☐` 一个都没勾），并入 **0.8 窗口**（第二台 dot2 到位后一起做）。
+  **注意**：容器已跑 0.7.9 代码；**C1 已于 2026-10-28 00:54 真机验证**（见下方），**其余意图层行为（C2/C3/C5、D-011 目视）仍未做真机出声验证**（真机窗口并入 0.8，见 `docs/acceptance-pending.md`）。
+- **0.7.9 真机（部分）**：**C1 已于 2026-10-28 00:54 生产真机验证**（见下方新条目）→ `acceptance-pending.md` 的 **N1 已勾**；**C2 / C3 / C5 与 D-011 目视仍未验**（只经 headless 判定，`1716 passed, 6 skipped`），验证项挂在 `docs/acceptance-pending.md`（N2/N3/ACK-1/ACK-2 + R79-1…6，`☐` 未勾），并入 **0.8 窗口**（第二台 dot2 到位后一起做）。
 - **本批做了**：意图层批次 1（C1 `ddb7cbb`）+ 批次 2/3（C3/C4/C5/C6/C11 `34e3629`）+ D-011=A（`ack` order 200→5、**tier 未动** `6117fb7`）+ 审计两件（`f5d3f46`/`7fde6aa`）+ 验收/限制/backlog 三份文档（`4f75079`/`715a3c2`）+ 收口报告（`35dc556`）。
 - **本批没做（明确不做，见 `docs/known-limitations.md`）**：C7/C8/C9/C10（不新增结束词）、HE-02 回声切除（D-010 不修）、D-011 的 v2 第 1 位（需 tier 2→1 或页内排序，归 0.8 P1）、控制台「唤醒应答独立成页」、桥的任何发版（`rui_compat` 窗口未变，dot2 1.3.1 / xiaoai 0.2.2 无需重发）。
-- **最终 HEAD**：`8de395a`（工作树干净、已 push；`origin/main` 与本地 0/0）。
+- **最终 HEAD（0.7.9 收尾时）**：`47882ec`（其父 `8de395a` 上测得测试基线；当时工作树干净、已 push，`origin/main` 与本地 0/0）；**2026-10-28 的 C1 文档回写未提交**（4 份 docs）。
 - **测试基线**：`uv run pytest` → **`1716 passed, 6 skipped`**（113.5 s，2026-10-27 22:5x 在 `8de395a` 实测；`ruff check src tests tools` 绿）。
 - **容器状态**：`rui` `Up (healthy)`，`created=2026-10-27T14:28:06Z`（=22:28 CST），`/health` `version 0.7.9 / devices 2 / device_errors 0 / warnings 0`。
 - **在途卡**：只有 `task-10`（HE-02）保持 blocked（D-010 不修，并入 0.8 真机窗口）；其余全部 completed，无 in_progress / pending。
 - **决策记录**：`docs/待拍板.md` 的 D-001…D-011 **全部 ANSWERED**（含结论行）；本批内我按 9 哥 授权自行裁决的两处写在 D-011 与 backlog d.1（order-only 收、ACK-1 判据 = 首屏可见）。
 
+- **C1 真机已验证（2026-10-28 00:54，生产日志原文）**：`00:54:16 tool music_play({"query": "播放一首周杰伦的青花瓷。"}) → 好，放《青花瓷》`；`00:54:35 stop intent: '停止播放。' -> media stopped, session closed`（旧行为 `media stopped, session open`）⇒ C1 成立，`docs/acceptance-pending.md` 的 N1 已勾；**C2/C3/C5 与 D-011 目视仍未验，发版说明不得声称已修**。**本轮不改的陈旧表述（统一口径，以本条目为准）**：`README.md` 中英两份（含 `:54`/`:170`/`:241`/`:357`）、`docs/release-candidate-0.7.9.md` 全文（含 `:16`/`:143`/`:191`）、`CHANGELOG.md` 的「真机未验」段（`:24-29`）——它们是对外文本/发版记录，待 0.8 发版时统一改；N1 的证据只覆盖「停止播放」一句，「停止」「拜拜」未单独留证。
+
 ## 若以后重启：先读这三个文件
 
 1. `docs/backlog-0.8.md` —— 0.8 的开工顺序（**桥先发双窗口 → core 后发**，顺序不可反）、三项破坏性变更、以及**从未验过的「双 dot2 同型号」验证组**。
 2. `docs/acceptance-pending.md` —— 真机验收累计（21 条只能真机 + 补充 + 本阶段新增），每条有可照抄命令与通过标准；0.7.9 的项全部并入 0.8 窗口。
-3. `docs/known-limitations.md` —— L1–L16 已知限制（含 HE-02 缺口、C7–C10 不做、0.7.9 真机未验）。
+3. `docs/known-limitations.md` —— L1–L16 已知限制（含 HE-02 缺口、C7–C10 不做、0.7.9 真机部分已验：**C1 已验 @ 2026-10-28**，C2/C3/C5 与 D-011 目视未验）。
 
 补两份按需查：`docs/release-candidate-0.7.9.md`（这批发版依据与回滚步骤）、`docs/待拍板.md`（已答结论）。
 
-**接手自检（2026-10-27 收尾时核过，三处都够用）**：上面三个文件覆盖 ① 0.8 开工顺序（`>=0.7.0 <0.9.0` 双窗口 → core，顺序不可反）② 破坏性三项 ③ 双 dot2 六组 ④ D-011 的 P1 结构项 ⑤ 真机未测项（含 0.7.9 的 N1/N2/N3 与 R79-*，**0.7.9 没留下任何真机结论**）；`backlog-0.8.md` §d.3 已写明「inventory 36/26 vs acceptance-pending 21+补充+新增」的条数口径差异，执行以 acceptance-pending 为准。
+**接手自检（2026-10-27 收尾时核过、2026-10-28 按 C1 真机结论更新，三处都够用）**：上面三个文件覆盖 ① 0.8 开工顺序（`>=0.7.0 <0.9.0` 双窗口 → core，顺序不可反）② 破坏性三项 ③ 双 dot2 六组 ④ D-011 的 P1 结构项 ⑤ 真机未测项（**N1 已验 @ 2026-10-28**（`停止播放` → 停歌 + 关会话）；N2/N3 与 R79-* 未测；0.7.9 除 C1 外没留下真机结论）；`backlog-0.8.md` §d.3 已写明「inventory 36/26 vs acceptance-pending 21+补充+新增」的条数口径差异，执行以 acceptance-pending 为准。
 
 ## 历史：新会话入口（2026-10-27，0.7.8 收尾时的版本）
 

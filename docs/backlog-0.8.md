@@ -131,6 +131,38 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 6. 记下两台的 `id`，下文记作 `$ID1` / `$ID2`；`$BASE` / `$TOKEN` 口径与
    `docs/acceptance-pending.md` 一致。
 
+### C-0 代码侧前置：`DOT2_*` 还有 5 项只能全局配（2026-10-28 查代码补记）
+
+现有 `build(dev, cfg)` 已有优先级 **`DeviceConfig` > plug `params` > `DOT2_*` env**（`rui_dot2_bridge/adapter.py:906-916`），
+所以**不是从零做**。但下面 5 项目前**只从 env 读、没有 per-device 通路**：
+
+| 项 | 位置 | 两台的后果 |
+|---|---|---|
+| `DOT2_CONTROL_PORT` | `adapter.py:315`（bind `127.0.0.1:<port>`） | 第 2 台 bind 失败 → 该房间 plane 起不来（**生产 override 现在设着 `"8872"`**） |
+| `DOT2_LOUDNESS_FILE` | `adapter.py:314`（默认 `dev/rui/loudness.json`） | 两台写同一文件，响度学习互相覆盖 |
+| `DOT2_EQ_DIR` | `adapter.py:313` / `:324`（默认 `artifacts/eq-prototype`） | 两台共用同一 EQ profile 目录 |
+| `DOT2_SECRETS_DIR` | `adapter.py:953` | 两台共用凭证目录（同型号同凭据，需确认可接受） |
+| `DOT2_OWW_THRESHOLD` | `adapter.py:222` | OWW 阈值只能全局；两台麦克风要不同阈值时做不到 |
+
+**做法**：把这 5 项接进 `dev`/`params` 读取路径，env 只作 fallback；文件类默认值带 `device_id` 区分。
+**验收**：两台 plane 同时起来、各自写自己的 loudness/EQ、control port 不冲突（或两台都设 `0`）、阈值可按台设。
+**优先级 P0**：不做完，第二台一插就起不来，C-1…C-6 全都测不了。
+
+**已定（9 哥 2026-10-28）：两台用同词，按最不利情况设计与验收。**
+
+- 理由：唤醒词本来就可以 per-device 自定义（`schema.py:265`），所以「错开」随时能做——
+  **但那是运维技巧，不能当设计前提**。实际两个房间大概率互相听不到（开门、空调、大音量、回声都可能传过去），
+  所以设计必须假设「**两台能互相听见**」，按同词的最不利条件做。
+- 因此验收**一律用同词**跑（C-1…C-6 全部同词基线）；要证明的是「同词也只会一台接、不双回复、不互相打断、不跨房停别屋的歌」，
+  而不是靠"两台听不见"侥幸成立。
+- 「错开」只作为**可选优化**保留：配成不同词后应互不触发（`wake_words` per-device），验证一次即可，不作默认。
+
+**同词必须额外覆盖的三个最不利用例**（超出 C-1 的"同时触发"）：
+
+1. **弱间隔触发**：A 已答到一半，B 才听到 A 的应答尾音并命中唤醒词 → 不应开第二回合（回声门的 `_same_room_echo` 只管同房间，跨房间要靠仲裁 + 回声切除）。
+2. **A 放歌时 B 同词唤醒**：B 不应拿到 barge 去打断 A 的歌（只有播放房间的候选可 barge，`lost_playing` 语义），B 要么被拒要么只开自己房间的空闲会话。
+3. **A 在应答中 B 同词唤醒**：应被 `turn_open` 拒绝并记 `lost_same_word`，不产生第二个 turn、不出现双声。
+
 ### C-1 两台同唤醒词**同时**触发（谁抢到会话）
 
 - **现象 / 担心什么**：同一个唤醒词在两台同时命中时，是否出现**双回复**（两台都答、声音叠加）、
@@ -244,12 +276,15 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 - **已合入（`34e3629`）**：批次 2 的 **C3/C4/C5**（无歌说「暂停/停一下」→ 回「现在没在放音乐。」、会话保持
   `session_action="pause_no_music"`；paused 也算「有歌」；暂停词表收窄为「暂停」「停一下」）与批次 3 的
   **C6** 文案、**C11**（暂停回复「好，暂停了。」+ `docs/interaction.md` 口径）。**代码已进 main，
-  但真机仍未验** —— 见 `known-limitations.md` L14 与 `docs/acceptance-pending.md` 的 N1/N2/N3。
+  但真机仍未验** —— 见 `known-limitations.md` L14 与 `docs/acceptance-pending.md` 的 N2/N3（**N1 已验，见本节下方 2026-10-28 更新**）。
 - **不做**：批次 4 的 **C7**（单字「停」）、**C8**（无歌 transport）、**C9**（「大一点/小一点」）；
   以及批次 3 里踩决策 2 边界的 **C10**（「退一下」别名）。四条都写进
   `docs/known-limitations.md`（L10–L13），**不是**待办——要改先由 9 哥 改决策 2。
-- **剩下的不是代码，是验收**：N1/N2（C1/C2 真机）、N3（C3）在
+- **剩下的不是代码，是验收**：N2（C2 真机；**C1 已于 2026-10-28 真机验证**）、N3（C3）在
   `docs/acceptance-pending.md`，随 0.8 的真机窗口一起做（第二台 dot2 到位后与 §c 同场）。
+
+  > **2026-10-28 更新**：**N1（C1）已在生产真机验证**（见 §d.3）；仍未验的是 **N2（C2 收窄后的日常说法）、
+  > N3（C3）、ACK-1/ACK-2（D-011 目视）**，随 0.8 真机窗口做。
 
 > 批次表与每条判据的权威版本是 `docs/audit/intent-collisions.md`；本文件只列状态，不复制矩阵。
 
@@ -259,6 +294,10 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
   + 本阶段新增 5 条（N1/N2/N3/ACK-1/ACK-2）+ 0.7.9 新增 6 条（R79-1…6）。
   **0.7.9 自己没有留下任何真机结论**：C1/C2/C3/C5 与 D-011 排序都只经 headless 判定，
   N1/N2 没有在 0.7.9 窗口验过（原计划如此，9 哥 决定全部并入 0.8）。
+
+  > **2026-10-28 更新**：**N1（C1）已在生产真机验证**（`stop intent: '停止播放。' -> media stopped, session closed`，
+  > 旧行为 `media stopped, session open`），`docs/acceptance-pending.md` 已勾；上文「仍未测」里的 **N1 不再成立**，
+  > **N2 / N3 / ACK-1 / ACK-2 仍未验**。窗口排期时别再把 C1 排进去。
 - 来源与口径：`docs/audit/unverified-inventory.md`（全量 36 条 = §1 10 条 + §2 26 条真机协议）。
   **两处条数不同**（inventory 36/26、acceptance-pending 21+补充+新增）——以 acceptance-pending
   为执行口径，inventory 只作来源索引。若以后要按「某一固定条数」对齐，先统一这两份文件的统计口径，
