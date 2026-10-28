@@ -301,6 +301,16 @@ def fade_in(samples: np.ndarray, rate: int, ms: float = FADE_IN_MS) -> np.ndarra
 # The device buffer keeps sounding after the last frame is sent (~300 ms at 48 kHz), so a
 # tone needs a tail floor before the gate may open. The old build used 250 ms.
 ACK_TAIL_MS = 250
+# How long after the cue is *handed over* a device can still start playing it. Measured
+# on the Dot 2 (2026-10-28 11:01:30): 460 ms handed over at 30.495, audible from ~31.24,
+# i.e. 740-850 ms later. The gate's `ack_echo_ignore_ms` is a post-playback window, so the
+# hold has to carry this lead before the cue's own length: otherwise the "ignore" clock
+# starts while the device is still playing and the cue's echo tail falls outside it.
+# One conservative value for *every* device (including the 16 kHz device, whose
+# measured lead is lower): the cost is +850 ms of buffered turn delay and +850 ms of
+# device-barge suppression on each wake. Buffered audio is delayed, not dropped, and
+# only a device whose own lead exceeds a measured 850 ms would need more.
+ACK_PLAYOUT_LEAD_MS = 850
 log = logging.getLogger(__name__)
 
 
@@ -739,6 +749,29 @@ class AudioPlane:
         return effective_ack_echo_ignore_ms(
             self.cfg.ack, self.device_cfg, self.audio_defaults
         )
+
+    def _ack_gate_windows(self, audio: np.ndarray, mode: str) -> tuple[float, float]:
+        """(cue_ms, hold_ms) for this wake's ack, in the gate's audio clock.
+
+        `render_ack` produces the cue at the **global** playback rate; `_play_ack` then
+        resamples it for a device that overrides `playback.rate` (the Dot 2 runs 48 kHz).
+        Dividing the rendered sample count by the device rate made a 460 ms cue read as
+        153 ms there, so the gate skipped 403 ms instead of 710 and replayed the cue's
+        tail into ASR (2026-10-28 11:01:30: `cue_gate: cue=[0,460] dropped=[0,403]` ->
+        `[seg] 1.18 s` -> turn 「在呢？」, 4.18 s wasted). So cue_ms uses the render rate.
+
+        The hold is the post-playback echo window, counted from the cue's **end**: the
+        device starts it `ACK_PLAYOUT_LEAD_MS` after the handover, then it sounds for
+        cue_ms, then `ack_echo_ignore_ms` keeps the gate shut. A tone keeps its 250 ms
+        floor instead of the spoken-cue window.
+        """
+        cue_ms = (
+            audio.size * 1000.0 / self.cfg.audio.playback.rate if audio.size else 0.0
+        )
+        tail_ms = float(self.ack_echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS
+        if cue_ms <= 0.0:
+            return 0.0, tail_ms
+        return cue_ms, cue_ms + ACK_PLAYOUT_LEAD_MS + tail_ms
 
     def _mic_is_muted(self) -> bool:
         """True while a post-playback mute window is open (no VAD/KWS at all)."""
@@ -1859,14 +1892,12 @@ class AudioPlane:
             # Cleared on success: an error that sticks forever makes the console report a
             # problem that was fixed an hour ago.
             self.ack_error = note
-            cue_ms = audio.size * 1000.0 / self.effective.playback.rate if audio.size else 0.0
+            cue_ms, hold_ms = self._ack_gate_windows(audio, mode)
             # A spoken cue mutes the device microphone; a tone rings out through the device's
             # own 300 ms buffer. Both need more than their nominal length, so the hold carries
             # a floor - the old build used 250 ms for exactly this - and anything arriving
-            # meanwhile is buffered, not dropped.
-            hold_ms = cue_ms + (
-                float(self.ack_echo_ignore_ms) if mode == "tts" else ACK_TAIL_MS
-            )
+            # meanwhile is buffered, not dropped. `cue_ms`/`hold_ms` carry the render rate
+            # and the playout lead (see `_ack_gate_windows`).
             # A device barge hint inside this window is our own cue/echo, not a person;
             # `_device_wake_barge_allowed` consults this deadline (§5 ACK mute/gate hold).
             self._wake_hold_until = max(

@@ -26,9 +26,9 @@ log = logging.getLogger(__name__)
 # The gate therefore searches the whole hold window for the cue (not just the nominal
 # skip window), but only up to this start. A later start is far more likely to be the
 # person's reply than the cue: `test_a_device_that_mutes_during_the_cue_is_unaffected`
-# feeds the reply at the skip boundary (950 ms) and a 900 ms search matched it (that
-# fixture reuses the cue audio). Cues later than this are handled by the conservative
-# overlap guard below, not by a match that could delete the person's reply.
+# feeds the reply at the skip boundary (950 ms), so the bound stays below it.
+# The 2026-10-28 P0 cue (Dot 2, 740-850 ms) is beyond this bound; it is recovered by
+# the narrow re-search around the measured-latency prior instead (see `_cue_echo`).
 CUE_MATCH_START_MAX_MS = 800.0
 # If the cue is clipped/overlapped/late it cannot be located (the envelope is no longer
 # the cue's rhythm, or its onset is past the search bound). The person is talking over
@@ -152,7 +152,9 @@ class UtteranceGate:
         self.interrupted = 0
         self._reset_state()
         # Learned across arms: the device's cue latency and whether a match has ever
-        # confirmed it (until then the narrow re-search is disabled and logged unknown).
+        # confirmed it. Until then the measured prior is used for the narrow re-search
+        # (the first wake of a fresh process must find a late cue too); only confirmed
+        # first-pass matches teach the EMA.
         self._cue_lag_ms = CUE_LAG_INITIAL_MS
         self._cue_lag_seen = False
         self._last_match_offset_ms: float | None = None
@@ -341,22 +343,27 @@ class UtteranceGate:
             observed, reference, 0.0, CUE_MATCH_START_MAX_MS)
         if best_score < max(self.cfg.echo_match_min, CUE_MATCH_MIN):
             # The bounded first pass missed. A late cue lives just past that bound: look
-            # only in a narrow window around the learned latency, with a stricter match
+            # only in a narrow window around the measured latency, with a stricter match
             # and a silent run before its onset. A muted device has no cue there, so
-            # nothing matches and the person's reply is kept.
-            if self._cue_lag_seen:
-                low = max(0.0, self._cue_lag_ms - CUE_LAG_WINDOW_MS)
-                high = self._cue_lag_ms + CUE_LAG_WINDOW_MS
-                narrow, narrow_offset = self._match_cue(
-                    observed, reference, low, high, silent_before=True)
-                if (narrow >= CUE_LAG_REMATCH_MIN
-                        and self._quiet_after(observed, reference, narrow_offset)):
-                    # A narrow hit must be a cue, not the person's reply: the cue echo
-                    # is followed by the device going quiet, while a reply keeps
-                    # sounding past the cue's length. It does NOT teach the latency -
-                    # a mistaken narrow hit would reinforce its own error.
-                    self._last_match_offset_ms = narrow_offset * self.cfg.echo_block_ms
-                    return 0.0, 0.0, narrow, False, True
+            # nothing matches and the person's reply is kept. This runs on the first wake
+            # too, using the measured prior (740 ms): before 2026-10-28 it waited for a
+            # confirmed match to learn a lag, so the very first cue of a fresh process -
+            # the Dot 2 starts it 740-850 ms late - had no way to be found and was
+            # replayed into ASR (11:01:30 「在呢？」). The strict match plus the
+            # quiet-after check is what keeps a person's reply out of it; a false hit
+            # cannot teach the EMA because this path does not call `_learn_lag`.
+            low = max(0.0, self._cue_lag_ms - CUE_LAG_WINDOW_MS)
+            high = self._cue_lag_ms + CUE_LAG_WINDOW_MS
+            narrow, narrow_offset = self._match_cue(
+                observed, reference, low, high, silent_before=True)
+            if (narrow >= CUE_LAG_REMATCH_MIN
+                    and self._quiet_after(observed, reference, narrow_offset)):
+                # A narrow hit must be a cue, not the person's reply: the cue echo
+                # is followed by the device going quiet, while a reply keeps
+                # sounding past the cue's length. It does NOT teach the latency -
+                # a mistaken narrow hit would reinforce its own error.
+                self._last_match_offset_ms = narrow_offset * self.cfg.echo_block_ms
+                return 0.0, 0.0, narrow, False, True
             return 0.0, 0.0, best_score, False, clipped or heard_any
         cue_start_ms = best_offset * self.cfg.echo_block_ms
         self._last_match_offset_ms = cue_start_ms

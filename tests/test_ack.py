@@ -22,6 +22,11 @@ from rui.audio.process import AudioPlane
 from rui.config import Config
 from rui.device.contract import AudioFrame, DeviceInfo
 
+# Mirrors `rui.audio.process.ACK_PLAYOUT_LEAD_MS` (the dot2's measured 740-850 ms cue
+# onset after the handover): a literal here lets these tests run against the pre-fix
+# source, and the rate test below asserts the production constant still matches it.
+ACK_PLAYOUT_LEAD_MS = 850
+
 # Optional model for the gate tests. Point RUI_TEST_MODELS at a directory that
 # holds silero_vad.onnx (and kws/, sensevoice/ for the other suites); without it these
 # tests skip instead of depending on one developer's home directory.
@@ -415,7 +420,8 @@ def test_wake_replays_the_preroll_then_holds() -> None:
         # The tone itself plus the tail floor: the device's own buffer keeps sounding for
         # ~300 ms after the last frame, so holding for exactly cue_ms opens the gate early.
         cue_ms = plane.cfg.ack.chime_ms
-        assert gate.holds and gate.holds[0] == pytest.approx(cue_ms + 250, abs=10)
+        assert gate.holds and gate.holds[0] == pytest.approx(
+            cue_ms + ACK_PLAYOUT_LEAD_MS + 250, abs=10)
         assert writer.written  # the wake event reached the control plane
         await asyncio.sleep(0.05)  # let the cue task run
         assert adapter.calls and adapter.calls[0][1] == plane.cfg.audio.playback.rate
@@ -451,7 +457,8 @@ def test_spoken_cue_holds_the_gate_for_its_length_plus_the_echo_window(tmp_path:
         plane.adapter = FakeAdapter()  # type: ignore[assignment]
         await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=0.0), FakeWriter(), asyncio.Event())
         assert plane.ack_mode_effective == "tts"
-        assert plane.gate.holds[0] == pytest.approx(500 + 1200, abs=15)
+        assert plane.gate.holds[0] == pytest.approx(
+            500 + ACK_PLAYOUT_LEAD_MS + 1200, abs=15)
 
     asyncio.run(run())
 
@@ -497,8 +504,8 @@ def test_a_device_sets_its_own_ack_echo_window(tmp_path: Path) -> None:
             with pytest.raises(asyncio.CancelledError):
                 await plane._ack_task
 
-        assert holds["dot2"] == pytest.approx(500 + 2500, abs=15)
-        assert holds["lx06"] == pytest.approx(500 + 1200, abs=15), (
+        assert holds["dot2"] == pytest.approx(500 + ACK_PLAYOUT_LEAD_MS + 2500, abs=15)
+        assert holds["lx06"] == pytest.approx(500 + ACK_PLAYOUT_LEAD_MS + 1200, abs=15), (
             "a device without the override must keep the global window"
         )
 
@@ -540,7 +547,7 @@ def test_the_cue_replayed_into_the_frame_consumer_cannot_become_a_turn(
         connected.set()
 
         await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=0.0), writer, connected)
-        assert gate.hold_ms == pytest.approx(500 + 2500, abs=15), (
+        assert gate.hold_ms == pytest.approx(500 + ACK_PLAYOUT_LEAD_MS + 2500, abs=15), (
             "the plane held for the global window, not this device's"
         )
 
@@ -560,12 +567,14 @@ def test_the_cue_replayed_into_the_frame_consumer_cannot_become_a_turn(
         assert gate.turns == 0 and plane.utterances == 0, (
             "the cue's own audio became a turn inside the echo window"
         )
-        assert gate.hold_ms == pytest.approx(100, abs=25), (
+        assert gate.hold_ms == pytest.approx(100 + ACK_PLAYOUT_LEAD_MS, abs=25), (
             "the window was not the device's 2500 ms: it lifted mid-echo"
         )
 
         # ... and it is not a deaf window: a real utterance right after it still closes.
-        adapter.set_frames(_voice_frames(_speech(0.2)))
+        # The extra silence spends the tail of the (now lead-extended) hold and then lets
+        # the end-point close the turn.
+        adapter.set_frames(_voice_frames(_speech(0.2) + b"\x00\x00" * 16000 * 2))
         await plane._capture_frames(info, connected, writer)
         assert gate.turns == 1
         assert plane.utterances == 1
@@ -830,6 +839,90 @@ def test_wake_idle_is_a_control_message() -> None:
     msg = CONTROL.validate_json('{"type":"wake_idle","waited_ms":6000}')
     assert isinstance(msg, WakeIdle)
     assert msg.waited_ms == 6000
+
+
+def test_the_ack_gate_windows_use_the_render_rate_not_the_device_rate(tmp_path: Path) -> None:
+    """P0 2026-10-28 11:01:30: dot2 (48 kHz) divided the 16 kHz-rendered cue by 48000.
+
+    `render_ack` renders at the global playback rate (16 kHz) and `_play_ack` resamples
+    for the device, so the cue's *duration* is unchanged. Measuring it with the device
+    rate read a 460 ms cue as 153 ms: the gate skipped 403 ms instead of 710 and held
+    2653 instead of 3810. The cue was still playing when the hold lifted, its echo was
+    replayed as capture (`[seg] 1.18 s`), and 「在呢？」 opened a second turn 4.18 s in.
+    """
+    from rui.config import DeviceConfig
+    from rui.config.schema import (
+        DeviceAudioOverride,
+        DevicePlaybackOverride,
+        DeviceVoiceOverride,
+    )
+
+    cfg = Config()
+    cfg.system.data_dir = str(tmp_path)
+    cfg.ack.mode = "tts"  # type: ignore[assignment]
+    cfg.audio.aec.enabled = False
+    cfg.devices = [DeviceConfig(
+        id="dot2", adapter="dot2", host="dot2.local", room="卧室",
+        audio=DeviceAudioOverride(
+            playback=DevicePlaybackOverride(rate=48000),
+            voice=DeviceVoiceOverride(ack_echo_ignore_ms=2500),
+        ),
+    )]
+    plane = AudioPlane(cfg, "dot2", tmp_path / "plane.sock")
+    assert plane.effective.playback.rate == 48000, "the fixture lost the device override"
+    rendered_at_16k = np.zeros(int(0.460 * 16000), dtype="<i2")  # what render_ack returns
+
+    from rui.audio import process as process_module
+    assert process_module.ACK_PLAYOUT_LEAD_MS == ACK_PLAYOUT_LEAD_MS
+
+    cue_ms, hold_ms = plane._ack_gate_windows(rendered_at_16k, "tts")
+
+    assert cue_ms == pytest.approx(460, abs=1), "the cue was measured at the device rate"
+    assert min(hold_ms, cue_ms + 250) == pytest.approx(710, abs=1), (
+        "the skip window is the cue plus the tone floor"
+    )
+    assert hold_ms == pytest.approx(460 + ACK_PLAYOUT_LEAD_MS + 2500, abs=1), (
+        "the hold must count ack_echo_ignore_ms from the cue's playout end"
+    )
+
+
+def test_the_ack_window_is_bounded_and_is_not_a_mute(tmp_path: Path) -> None:
+    """The post-cue window delays turns; it must never mute the path permanently."""
+    from rui.config import DeviceConfig
+    from rui.config.schema import DeviceAudioOverride, DeviceVoiceOverride
+
+    async def run() -> None:
+        cfg = Config()
+        cfg.system.data_dir = str(tmp_path)
+        cfg.ack.mode = "tts"  # type: ignore[assignment]
+        cfg.audio.aec.enabled = False
+        cfg.devices = [DeviceConfig(
+            id="dot2", adapter="dot2", host="dot2.local", room="卧室",
+            audio=DeviceAudioOverride(
+                voice=DeviceVoiceOverride(ack_echo_ignore_ms=2500)
+            ),
+        )]
+        tone_wav(ack.ack_wav_path(cfg), 0.46)
+        plane = AudioPlane(cfg, "dot2", tmp_path / "plane.sock")
+        plane.gate = FakeGate()  # type: ignore[assignment]
+        plane.adapter = FakeAdapter()  # type: ignore[assignment]
+
+        await plane._on_wake(WakeHit(keyword="你好小瑞", ts_ms=0.0), FakeWriter(),
+                             asyncio.Event())
+
+        remaining_s = plane._wake_hold_until - time.monotonic()
+        assert 0.0 < remaining_s <= (460 + ACK_PLAYOUT_LEAD_MS + 2500) / 1000.0 + 0.2, (
+            f"the ack hold is not a bounded window: {remaining_s:.2f} s"
+        )
+        assert plane._mic_mute_until == 0.0, (
+            "a wake opened a post-playback mute: the gate hold is a delay, not deafness"
+        )
+        assert plane._ack_task is not None
+        plane._ack_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await plane._ack_task
+
+    asyncio.run(run())
 
 
 def test_cue_uses_the_device_playback_rate(tmp_path: Path) -> None:

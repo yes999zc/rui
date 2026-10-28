@@ -10,8 +10,8 @@
 - **P0（2026-10-28 真机插入，优先于 B1）**：ack 回声漏切 → 自问自答。**根因**：`process.py:1862`
   用设备 48k rate 除 16k 渲染的 cue → 460ms 变 153ms，skip/hold=403/2653，cue 整段 replay。
   已实现修复（cue 用渲染 rate；hold=460+850 lead+2500，从播放结束起算；VAD 首唤醒晚 cue 先验），
-  全量 `1733 passed / 6 skipped`；review PASS（补 3 条文档注意项），verify 进行中。卡 task-13，证据记 known-limitations L17。
-- **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（未开工）。
+  全量 `1733 passed / 6 skipped`；review PASS + verify VERIFIED（修掉 1 处核心禁词注释）。卡 task-13，证据记 known-limitations L17。
+- **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（进行中）。
 - **B1 已暂停**（task-8 释放，blocked_by task-13/14）；P0/P1 收口后恢复。
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
   不打 tag、不部署，真机与插设备等 9 哥 下午做。

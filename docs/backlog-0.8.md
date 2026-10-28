@@ -376,6 +376,21 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
   （如 `asr_empty` / `asr_punct_only` 与 `noise` 分开计数），**不要直接改门限**。
 - **来源**：9 哥 2026-10-28 真机日志。
 
+### d.9 P0 ack 回声漏切（dot2 460 ms cue）—— **已落地 @（本卡）**
+
+- **真机（2026-10-28 11:01:30）**：`cue_gate: cue=[0,460]ms dropped=[0,403]ms kept=[403,2653]ms` →
+  `[seg] 1.18 s` → `turn: transcript='在呢？'`（4.18 s 白起一轮）；dot2 无设备 AEC、`ack_echo_ignore_ms=2500`。
+- **根因**：`process.py` 用设备 48k rate 去除 16k 渲染的 ack（460→153、skip 403、hold 2653）；
+  且首唤醒无 learned lag，cue 实际 740–850 ms（自 handover）超出 800 ms 一阶搜索后无人接。
+- **修复**：`_ack_gate_windows()` 用**渲染 rate** 算 cue_ms；hold 从 cue 播放结束起算
+  （`ACK_PLAYOUT_LEAD_MS=850` + cue + `ack_echo_ignore_ms`，dot2：460+850+2500=3810）；
+  `vad.py` 在未学到 lag 时用实测先验（740 ms）跑窄搜索（严格匹配 + quiet-after，不写 EMA）；
+  barge 路径（cue/hold 置 0）未动。
+- **验证**：`tests/test_ack.py`（rate/window 与 no-mute）、`tests/test_ack_echo_gate.py`
+  （860/900/930 ms 首唤醒不 replay；窗口后语音正常起回合；第二次唤醒仍可听）；
+  全量 + ruff 见本卡报告。**真机复验：9 哥 2026-10-28 下午**。
+- **已知限制**：`docs/known-limitations.md` **L17**（与 L1/HE-02 同族、触发条件不同，不合并）。
+
 ## e. 房间策略待 9 哥 拍板
 
 > **状态：两项均已于 2026-10-28 拍板（ANSWERED）。本批只登记，不实现；落地卡见 §f。**
