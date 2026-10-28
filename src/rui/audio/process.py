@@ -3362,8 +3362,12 @@ class AudioPlane:
 
     def _flush_speech(self) -> None:
         # task-30: close the segment ledger for the part that actually reached the
-        # speaker before the barge, so the trace describes what was heard.
+        # speaker before the barge, so the trace describes what was heard. Mark the
+        # reply closed too: _track_segment_chunk only resets the ledger on a segment
+        # when `_reply_open` is false, so without this the next reply after a barge
+        # would inherit the cancelled reply's segments.
         self._finalize_reply_segment()
+        self._reply_open = False
         self._release("dialogue")
         self._speak_queued_s = 0.0
         # The producer's burst was cancelled: nothing more is expected, and any pending

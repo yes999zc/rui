@@ -212,6 +212,46 @@ def test_plane_metrics_expose_segment_count_duration_and_seam(tmp_path: Path) ->
     assert metrics.reply_segment_inner_silence_ms == [0.0, 0.0]
 
 
+def test_a_barge_does_not_leave_segments_for_the_next_reply(tmp_path: Path) -> None:
+    """`_flush_speech` must close the ledger, not just finalize the open segment.
+
+    A barged/stopped reply used to leave `_reply_open` true, so the next reply's first
+    segment added to the previous ledger (2 + 1 = 3). The trace would then describe a
+    seam that was never heard.
+    """
+    plane = _plane(tmp_path)
+
+    async def scenario() -> Metrics:
+        task = asyncio.create_task(plane._speak_loop())
+        try:
+            for index in range(2):
+                for part, block in enumerate((_silence(80), _tone(120), _silence(80))):
+                    _enqueue(plane, block, segment=(part == 0))
+                if index == 0:
+                    await asyncio.sleep(0.05)
+            plane._flush_speech()
+
+            for part, block in enumerate((_silence(80), _tone(120), _silence(80))):
+                _enqueue(plane, block, segment=(part == 0))
+            plane._speak_finished = True
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if len(plane.adapter.pcm) >= 3:  # type: ignore[union-attr]
+                    break
+                await asyncio.sleep(0.01)
+            return plane.metrics()
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    metrics = asyncio.run(scenario())
+
+    assert metrics.reply_segment_count == 1
+    assert metrics.reply_segment_audio_ms == [280.0]
+    assert metrics.reply_segment_silences_ms == []
+
+
 def test_reply_log_carries_segment_count_and_silences(
     tmp_path: Path, caplog,
 ) -> None:
