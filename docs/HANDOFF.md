@@ -11,7 +11,7 @@
   用设备 48k rate 除 16k 渲染的 cue → 460ms 变 153ms，skip/hold=403/2653，cue 整段 replay。
   已实现修复（cue 用渲染 rate；hold=460+850 lead+2500，从播放结束起算；VAD 首唤醒晚 cue 先验），
   全量 `1733 passed / 6 skipped`；review PASS + verify VERIFIED（修掉 1 处核心禁词注释）。卡 task-13，证据记 known-limitations L17。
-- **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（已实现；review CHANGES：d.10 根因表述/残余风险 + force 测试旁路，修正中）。
+- **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（已实现；review PASS，verify 进行中；残余风险已写入 d.10）。
 - **B1 已暂停**（task-8 释放，blocked_by task-13/14）；P0/P1 收口后恢复。
 - **当前 HEAD**：`82d45d9`（P0）；P1 修正未提交。B2/B3/C 未开工。
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
