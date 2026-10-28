@@ -58,13 +58,24 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   验证：rui `grep -nE '^##+ *0\.[0-9]'` 无输出；`grep -cE 'v0\.[0-9]+\.[0-9]+'` = 0（≤1）；
   三仓 `grep -n onboard_device` 有命中；三仓各一处 `Latest release: <releases URL>`（不含版本号）；
   版本矩阵/流水/过期 tag 快照删除，硬编码版本 badge 换动态 release badge。
-- **D7 ⏳ arm64 可运行性验证**：impl-arm 进行中（pull linux/arm64 0.8.5 → ffmpeg → import rui,numpy →
-  起服务 /health 200 + version=0.8.5），结论将写 `docs/arm64-verification-0.8.5.md`。
-- **D8 ⏳ v2 通知通道页**：未开始（计划 `web/src/v2/views/ChannelsView.vue` + 路由/侧栏/i18n +
-  源码契约测试 + API 回读测试；超 3 轮则砍成「Telegram 卡片 + 网关按钮」）。
+- **D7 ✅ arm64 可运行性验证**（rui `34bd182`，`docs/arm64-verification-0.8.5.md` 新建）：
+  `ghcr.io/yes999zc/rui:0.8.5` 的 linux/arm64 在 Apple Silicon Mac 上 pull 成功（本地 arm64 镜像
+  `sha256:3baf2b78…23c7`；manifest arm64 `sha256:c625d5c1…8649`）；
+  `--entrypoint ffmpeg` → `ffmpeg version 7.1.5`；`--entrypoint python -c "import rui,numpy"` → `0.8.5 2.5.4`；
+  最小 config 起服务（`-p 18081:8080`，18080 被本机既有 0.7.2 进程占用，未触碰）→ `/health` **200**
+  且 `version=0.8.5 / status=ok / device_errors=0`；容器已清理。字面 `docker run <img> ffmpeg/python`
+  因镜像 `ENTRYPOINT ["rui"]` 会 exit 2，文档如实记录等价 `--entrypoint` 用法。
+  **未验证**：ARM 多设备/音频平面性能、长稳 soak、真实音频设备与 bridge plug、真实 provider 链路、生产 compose 形态。
+- **D8 ✅ v2 通知通道页**（rui `1327585`，第 1 轮即绿，未触发裁砍；Telegram + 微信都做）：
+  新增 `web/src/v2/views/ChannelsView.vue` + `/channels` 路由 + Config 子导航「通知通道」+ 中英 i18n
+  + `api.ts` channels 封装 + `style.css`（仅复用现有 tokens）；两张卡片（enabled / reply_mode 三选 /
+  白名单增删、PUT→GET 回读比对）、token 与微信登录态只读、网关 start/stop/restart、503/422/网络错误文案；
+  后端零改动（`git diff 34bd182..1327585 -- src/` 为空）、无新依赖、未复活 /legacy。
+  新增 `tests/test_channels_view.py`（源码契约 7 + API 真行为 13，含 PUT→GET 回读/0600/422/supervisor 缺失 503）。
+  门禁：`pnpm typecheck` 绿、`pnpm build` 绿（产出 ChannelsView chunk）、全量 **1989 passed / 6 skipped**、ruff 绿。
 - **D5 ✅**：tag `v0.8.5` / release / 四 workflow 绿 / 双 review PASS / verifier VERIFIED（见上）。
-- 本批新卡片的 review/verify 收口：D4/D6/D7/D8 全部完成后由 fresh reviewer + fresh verifier 复核，
-  再更新本 HANDOFF 的三句要求（README 通用化 / AI 一条命令接入 / arm64 验证到哪一层）。
+- **本批收口**：D4/D6/D7/D8 全部完成后由 fresh reviewer（task-17）+ fresh verifier（task-18）复核；
+  复核通过后在本节补三句要求（README 通用化 / AI 一条命令接入 / arm64 验证到哪一层）并更新任务板。
 
 ## 未完成 / 阻塞
 
