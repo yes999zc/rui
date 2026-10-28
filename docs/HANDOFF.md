@@ -43,6 +43,29 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
 - **版本/发布**：`pyproject`/`src/rui/__init__.py`/`uv.lock` = 0.8.5；CHANGELOG 0.8.5 段；
   README 版本矩阵；release notes `docs/releases/v0.8.5.md`。（`6d94155`）
 
+### 后续批次 D4–D8（9哥 2026-10-28 深夜追加；按顺序执行）
+
+- **D4 ✅ bridge 侧 1011 计数日志（只诊断，不改行为）**：bridge `LinkStats` 新增
+  `data_plane_closes / last_data_close_at / data_close_rx_total / data_close_dropped_total`，
+  `_lose_data()` 既有 INFO/WARNING 行尾追加 `close#N interval=…s dropped=N`；新增单测
+  `test_data_plane_close_counters_are_logged`；`scripts/check.sh` 顺手修既有
+  `house_ear.config → rui.config`（0.2.0 包重命名后遗留）。bridge `516c0e8` + `b6deb86`
+  （已 push，main 领先 v1.3.4，**未发版/未 bump**）；rui `ab579b8`（`docs/analysis/dot2-data-plane-1011.md` §10）。
+  `./scripts/check.sh --nodevice` EXIT=0（183 tests / ruff / doctor 0 fail·2 warn）。
+  环境备注：bridge dev extra 的 PyYAML 在 house-ear venv 缺失，本机 `uv pip install` 补齐（仅本机 venv，未提交）。
+- **D6 ✅ README 通用化（中英对称，保留「AI 一条命令接入」）**：rui `928cbe4`、
+  rui-dot2-bridge `870d965`、rui-xiaoai-bridge `7f8f8d8`（均已 push，各自只改 README.md）。
+  验证：rui `grep -nE '^##+ *0\.[0-9]'` 无输出；`grep -cE 'v0\.[0-9]+\.[0-9]+'` = 0（≤1）；
+  三仓 `grep -n onboard_device` 有命中；三仓各一处 `Latest release: <releases URL>`（不含版本号）；
+  版本矩阵/流水/过期 tag 快照删除，硬编码版本 badge 换动态 release badge。
+- **D7 ⏳ arm64 可运行性验证**：impl-arm 进行中（pull linux/arm64 0.8.5 → ffmpeg → import rui,numpy →
+  起服务 /health 200 + version=0.8.5），结论将写 `docs/arm64-verification-0.8.5.md`。
+- **D8 ⏳ v2 通知通道页**：未开始（计划 `web/src/v2/views/ChannelsView.vue` + 路由/侧栏/i18n +
+  源码契约测试 + API 回读测试；超 3 轮则砍成「Telegram 卡片 + 网关按钮」）。
+- **D5 ✅**：tag `v0.8.5` / release / 四 workflow 绿 / 双 review PASS / verifier VERIFIED（见上）。
+- 本批新卡片的 review/verify 收口：D4/D6/D7/D8 全部完成后由 fresh reviewer + fresh verifier 复核，
+  再更新本 HANDOFF 的三句要求（README 通用化 / AI 一条命令接入 / arm64 验证到哪一层）。
+
 ## 未完成 / 阻塞
 
 - **真机未验证**：A/B/C/E 的文案听感、ASR 噪声下分钟句命中率、17–20 字接缝听感均为单测推断
