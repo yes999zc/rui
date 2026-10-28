@@ -48,6 +48,7 @@
 - **回滚顺序反向**：先 plugins 回 1.3.2 + 0.2.3（1.3.2 兼容 0.7.9/0.8.x），再镜像回 `sha256:5aa362f6…b9f7`，up -d，复验。
 - **部署前自检表**：core 0.8.1（—）；dot2 1.3.3（>=0.8.1 <0.9.0，需 core≥0.8.1）；xiaoai 0.2.3（>=0.7.0 <0.9.0，兼容）。必须用 v0.8.1 tag 的干净 commit 出镜像，不拿脏树。
 - **部署前 HANDOFF 必写一行**：「即将部署：core→0.8.1 → plugins→1.3.3」；部署后贴 /health + 三台 audio.say。
+- **部署进度（2026-10-28 19:1x）**：D1' core 0.8.1 已上线（digest `sha256:77224fc1…b335`），/health version=0.8.1/devices=3/errors=0/registered dot2+lx06；D2' 插件已换 dot2 1.3.3（`>=0.8.1 <0.9.0`）+ xiaoai 0.2.3，重启后仍 3 台/errors 0。D3' followup=3000、dot2-b control_port=0 + loudness_file 已就位；dot2-b audio 保留。待 D5：audio_summary/say/LED/5min errors；dot2-b speaker_connected 暂 false。
 - **0.8.1 已发（2026-10-28 19:1x）**：tag `v0.8.1`→`ea1b8ba`（tag object `c373853`），release https://github.com/yes999zc/rui/releases/tag/v0.8.1；全量 1887/6；桥 1.3.3 tag `31195ee`。
 - **即将部署：core→0.8.1 → plugins→1.3.3**（按纠正顺序 D1' core 先、D2' 插件后、D3' 配置；D5 七项验证；异常反向回滚）。
 - **进度（2026-10-28 18:55）**：c UI 卡片网格实现中（DevicesView/style + test_devices_view_grid）；d trace gap 块序号已实现（protocol/trace/app + 5 tests，全量 1887/6）；e/f 文档已写（ADR 0008、L23/L24、C-001 1.3.3、README 0.8.1 矩阵）。待 UI DONE + 三路 review/verify → 版本 bump 0.8.1 → tag/release → 部署 0.8.1。
