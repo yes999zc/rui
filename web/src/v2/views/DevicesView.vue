@@ -239,7 +239,9 @@ onMounted(() => {
       >
         {{ setupEnabled ? t('v2.devices.emptyAddAction') : t('v2.devices.emptyAction') }}
       </RouterLink>
-      <a v-else-if="!setupEnabled" class="btn btn-primary" href="/legacy">{{ t('v2.devices.emptyAction') }}</a>
+      <RouterLink v-else-if="!setupEnabled" class="btn btn-primary" to="/setup">
+        {{ t('v2.devices.emptyAction') }}
+      </RouterLink>
     </StateBlock>
 
     <template v-else>

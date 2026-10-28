@@ -46,8 +46,18 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 
 ## b. 0.8.0 破坏性三项（删什么 / 谁受影响 / 怎么验）
 
-### b.1 删 `/legacy` 面板与全部 15 条老链接 302
+### b.1 删 `/legacy` 面板与全部 15 条老链接 302 —— **已落地 @（本卡）**
 
+- **落地记录（2026-10-28，task-8）**：已核对 404/302/200 矩阵、typecheck/build、全量与 ruff（见 HANDOFF「B1 / task-8」）。
+  删除 `src/rui/web/api/legacy_links.py`、`app.py` 的
+  `/legacy*` / `_legacy_shell` / `FALLBACK` / 根 catch-all，以及 `web/` 下全部旧面板源码
+  （`index.html`、`main.ts`、`App.vue`、`router/api/i18n/panels/nav`、`views/`、旧 `components/`
+  与 `providers/`）。保留 `/`→`/v2/` 302、`/v2`、`/api/v2`、`/api/v1/panels`，以及 v2 仍引用的
+  `AppIcon.vue` / `theme.ts` / `style.css` / `vite-env.d.ts` / `public/*`。根静态资源
+  （`/favicon.svg`、`/fonts/*`、`/logo*.svg`、`/assets/*`）改为显式 mount/route；`vite.config`
+  只留 `v2` 输入；Dockerfile 检查 `dist/v2.html`；v2 内 `/legacy` 链接与 `?from=` 提示删除。
+  测试矩阵见 `tests/test_console_switch.py`（404/302/200），`test_panels.py` 只保留
+  `/api/v1/panels` 注册表。`web.console` 枚举保留、值被忽略（README/deploy §3.8 已写明）。
 - **删的是什么**：`src/rui/web/api/app.py` 的 `/legacy` 与 `/legacy/{full_path}` 路由、旧控制台 shell、
   `src/rui/web/api/legacy_links.py` 的 302 映射表；前端旧面板（v2 早就不读的 `ConfigCenter.vue` /
   `DeviceManager.vue` 一套）。共 **15 条**老链接 = 11 个 `/panel/*` + `/setup`、`/secrets`、

@@ -191,7 +191,7 @@ RUN chmod -R a+rX /app /opt/seed-models /usr/local/bin/rui-healthcheck \
     && test "$(id -u rui)" = 1000 \
     && test "$(id -g rui)" = 1000 \
     && test -x /usr/local/bin/ffmpeg \
-    && test -r /app/web/dist/index.html \
+    && test -r /app/web/dist/v2.html \
     && test -r /app/src/rui/__main__.py \
     && setpriv --reuid=1000 --regid=1000 --clear-groups test -w /opt/rui-plugins \
     && test -r /opt/seed-models/silero_vad.onnx \

@@ -13,11 +13,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // Multi-page build: the legacy console keeps `index.html`, v2 is served at
-    // `/v2` by FastAPI (contract C-002 §2).
+    // Single-page build: 0.8.0 removed the legacy console, so `v2.html` is the only
+    // entry. FastAPI serves it at `/v2` (contract C-002 §2) and `/` redirects there.
     rollupOptions: {
       input: {
-        main: 'index.html',
         v2: 'v2.html',
       },
     },

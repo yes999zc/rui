@@ -83,7 +83,7 @@
 - **自回声抑制**：唤醒提示音（「在呢」）实测 0/10 泄漏；普通唤醒撞上进行中的告别语时，会丢弃已排队的我方语音。冷启动/重叠 <110 ms 的边界仍可能漏（见已知限制）。
 - **可插拔设备**：`dot2` / `xiaoai` 两个桥接插件遵循同一份 `rui-device/v1` 契约，桥与核心可独立升级。
 - **控制台 v2**：设备、房间、配置分组、日志、轨迹、音乐、凭据、体检；中英双语，字段说明来自服务端目录。
-- **控制台入口**：0.7.8 起**默认 v2**——`/` 直接进 v2；**15 条**旧链接（`/panel/*` 11 个面板 + `/setup`、`/secrets`、`/diagnostics`、`/channels`）302 到对应 v2 页面。旧控制台保留在 `/legacy`（顶部有弃用横幅，0.8.0 移除）。
+- **控制台入口**：**只有 v2**——`/` 302 到 `/v2/`（保留 query）。0.8.0 删除了旧面板与 **15 条**旧链接（`/panel/*` 11 个面板 + `/setup`、`/secrets`、`/diagnostics`、`/channels`）的 302：`/legacy` 与这些路径现在都是 404；`web.console` 键仅为配置兼容保留，值被忽略。
 - **本地优先**：模型与密钥都在你自己的机器上；配置文件是唯一事实来源，控制台只提交你改过的字段。
 
 ## 三行启动
@@ -270,7 +270,7 @@ No ffmpeg build needed (the image ships it)
 - **Self-echo suppression**: the acknowledgement cue leaked 0/10 on the device; a stale goodbye still queued is dropped when a wake arrives. Cold-start or <110 ms overlap can still leak (see Known limitations).
 - **Pluggable devices**: the `dot2` and `xiaoai` bridges share one `rui-device/v1` contract and version independently.
 - **Console v2**: devices, rooms, grouped configuration, logs, traces, music, credentials and health checks; bilingual UI fed by a server-side catalog.
-- **Console entry**: v2 is the **default** since 0.7.8, so `/` opens v2 and **15 old links** (the 11 `/panel/*` panels plus `/setup`, `/secrets`, `/diagnostics`, `/channels`) answer a 302 to their v2 page. The legacy console lives at `/legacy` (deprecated, removed in 0.8.0).
+- **Console entry**: **v2 only** — `/` answers a 302 to `/v2/` (query preserved). 0.8.0 removed the legacy panel shell and the **15 old links** (the 11 `/panel/*` panels plus `/setup`, `/secrets`, `/diagnostics`, `/channels`): `/legacy` and those paths are 404 now. `web.console` stays for config compatibility only; its value is ignored.
 - **Local first**: models and keys stay on your machine; the config file is the source of truth and the console submits only changed fields.
 
 ## Three-line quickstart

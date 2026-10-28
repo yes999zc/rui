@@ -633,50 +633,30 @@ doctor 里的三行（`docker compose exec -T rui rui doctor`，或控制台「�
   命令，**不打印 token 值**。容器里通常看不到宿主机的 `console-token.txt`（它不是挂载卷），
   可设 `RUI_CONSOLE_TOKEN_FILE=/path/to/console-token.txt` 指向一份可读副本。
 
-### 3.8 控制台入口（v2 默认 / legacy 回滚）
+### 3.8 控制台入口（0.8.0 起只有 v2）
 
-`web.console` 决定打开服务器根地址 `/` 时进入哪套控制台。**0.7.8 起默认 `v2`**：全新
-安装和没写这个键的老配置，`/` 都会 302 到 `/v2/`。旧控制台降级到 `/legacy`，顶部带
-中英弃用横幅（**0.8.0 移除**），`/legacy` 下的路由与深链行为与 0.6 完全一致（只多一条弃用横幅）。
-
-| 取值 | `/` | 旧控制台 | v2 控制台 | `/health.console` |
-|---|---|---|---|---|
-| `v2`（默认） | **302 → `/v2/`**（保留 query） | **只在 `/legacy`**（`/legacy/panel/...` 深链可用） | `/v2` | `v2` |
-| `legacy`（一版回滚，0.8.0 移除） | 旧控制台 | `/`（以及 `/legacy`） | `/v2` | `legacy` |
+**0.8.0 删除了旧控制台**：`/legacy`、旧 SPA 与 15 条老链接的 302 都不存在了。
+`/` 恒 **302 → `/v2/`**（保留 query，例如 `?token=`），`/v2`、`/v2/assets` 与 `/api/v2` 照旧；
+`/panel/*`、`/setup`、`/secrets`、`/diagnostics`、`/channels`、`/legacy*` 一律 **404**。
+`web.console` 只剩配置兼容用途（老配置读入不报错），**取值被忽略，没有回滚开关**。
 
 ```yaml
 web:
-  console: v2        # v2（默认）| legacy（一版回滚，0.8.0 移除）
+  console: v2        # 兼容保留；0.8.0 起任何值都只服务 v2
 ```
-
-全新安装不用改任何东西；确认线上入口只认 `/health.console`（不要凭浏览器缓存或书签
-推断），根地址本身也能看出来：
 
 ```bash
-curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8080/  # v2: 302 /v2/
-curl -s http://127.0.0.1:8080/health | jq -r .console                            # 期望 "v2"
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8080/  # 302 /v2/
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/panel/music       # 404
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/favicon.svg      # 200
 ```
 
-**行为变更（0.7.8）**：老书签 `/panel/<id>`（11 条）以及 `/setup`、`/secrets`、`/diagnostics`、
-`/channels` 共 15 条，现在 **302 到对应 v2 页面**（`/panel/turns` → `/v2/conversation` 等），
-不再落回旧壳；v2 暂无对应页的 `providers` / `system` / `channels` 落 `/v2/?from=<旧路径>`
-（目前只是标记，v2 未消费，SPA 会进设备页）。映射表与逐条实测见
-[`docs/audit/console-functional.md`](audit/console-functional.md) §8.2。
+根静态资源（`/favicon.svg`、`/fonts/*`、`/logo*.svg`、`/assets/*`）由服务端显式提供；
+反代只需按原样转发，不要为这些路径改写前缀。
 
-回滚一行（配置 + 重启，不需要新镜像；先备份配置）：
+**行为变更（0.8.0）**：老书签不再跳转，直接 404；把 `/panel/<id>` 换成 `/v2/<page>`
+（如 `/v2/music`、`/v2/devices`、`/v2/setup`）。升级/回滚演练见 `docs/deploy-runbook-0.7.8.md` §8。
 
-```bash
-cp ~/rui/config/config.yaml ~/rui/config/config.yaml.bak.$(date +%Y%m%d-%H%M%S)
-sed -i 's/^  console: .*/  console: legacy/' ~/rui/config/config.yaml   # 没有该行就手动加到 web: 块
-cd ~/rui && docker compose up -d --force-recreate
-curl -s http://127.0.0.1:8080/health | jq -r .console                            # 期望 "legacy"
-```
-
-> **兼容窗口**：`console` 是 0.7 新增字段，`CONFIG_VERSION` 不变。0.7.x 镜像都读这个键
-> （`v2` / `legacy` 两值从 0.7.0 起就存在）；只有 **0.6.x 及更早**的镜像会忽略它、按旧壳
-> 运行，所以从 0.7.8 回滚到 0.6.x 时也不用改配置文件。
-> v2 的验收记录（172 行交互 / 0 不可用）在 `docs/audit/console-functional.md`，0.7.8 的
-> 评审与验证结论在 `docs/release/v0.7.8.md`。
 
 ## 4. 音乐：Navidrome
 

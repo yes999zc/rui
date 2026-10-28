@@ -28,8 +28,6 @@ const zh = {
   'v2.nav.devices': '设备',
   'v2.nav.rooms': '全屋',
   'v2.nav.config': '配置',
-  'v2.nav.legacy': '旧控制台',
-  'v2.nav.legacyHint': '打开旧版控制台（0.8.0 移除）',
   'v2.nav.language': '语言',
   'v2.lang.zh': '中文',
   'v2.lang.en': 'English',
@@ -45,8 +43,6 @@ const zh = {
   'v2.nav.memory': '记忆',
   'v2.footer.readOnly': 'M9 · 配置页组 · 语音助手 / 工具 / 音乐 / 凭据 / 体检',
   'v2.footer.version': '契约 {contract} · rui {version}',
-  'v2.legacy.from': '{path} 在 v2 暂无对应页，已回到设备页。',
-  'v2.legacy.from.close': '关闭提示',
 
   // — token ——————————————————————————————————————————————————
   'v2.token.title': '访问令牌',
@@ -88,7 +84,7 @@ const zh = {
   'v2.meta.failed': '无法读取 v2 API 元信息',
   'v2.meta.failedHint': '后端可能尚未部署 /api/v2，或服务不可达。确认 rui 版本不低于 0.6.0 后重试。',
   'v2.meta.incompatible': 'API 契约不兼容',
-  'v2.meta.incompatibleHint': '控制台需要 C-002 契约（/api/v2），当前服务返回 {contract}。请升级服务端，或继续使用旧控制台。',
+  'v2.meta.incompatibleHint': '控制台需要 C-002 契约（/api/v2），当前服务返回 {contract}。请升级服务端。',
   'v2.meta.featureOff': '此版本未启用',
   'v2.meta.featureOffHint': '服务端的 meta.features 将该功能标为 false；升级服务端后会在这里出现。',
 
@@ -197,7 +193,7 @@ const zh = {
   'v2.devices.roomDevices': '{n} 台',
   'v2.devices.empty': '还没有设备',
   'v2.devices.emptyHint': '从可用插头添加第一台音箱。',
-  'v2.devices.emptyLegacyHint': '在旧控制台的安装向导中添加第一台音箱。',
+  'v2.devices.emptyLegacyHint': '通过安装向导添加第一台音箱。',
   'v2.devices.emptyAction': '添加设备',
   'v2.devices.emptySetupHint': '全屋还没有设备：运行首次安装向导，或直接添加第一台设备。',
   'v2.devices.emptySetupAction': '开始首次安装',
@@ -610,8 +606,8 @@ const zh = {
   'v2.run.houseFallback': '全屋聚合不可用，已按设备数据聚合。',
   'v2.run.loadFailed': '无法读取全屋概览',
   'v2.run.empty': '全屋还没有设备',
-  'v2.run.emptyHint': '在旧控制台的安装向导中添加第一台音箱。',
-  'v2.run.emptyAction': '打开旧控制台',
+  'v2.run.emptyHint': '通过安装向导添加第一台音箱。',
+  'v2.run.emptyAction': '开始设置',
   'v2.run.featureOff': '此版本未启用运行页',
   'v2.run.version': 'rui {rui} · 配置 {config}',
   'v2.run.lede': '异常优先：需要处理的设备、配置与警告，然后是全屋计数、多设备策略与房间分布。',
@@ -632,7 +628,6 @@ const zh = {
   'v2.config.lede': '全屋默认、房间策略与设备安装。',
   'v2.config.openDevices': '去设备页',
   'v2.config.openRooms': '去全屋页',
-  'v2.config.openLegacy': '打开旧控制台',
 
   // — M8 conversation —————————————————————————————————————————
   'v2.conversation.title': '对话',
@@ -1000,7 +995,7 @@ const zh = {
   'v2.setup.lede.add': '按服务端返回的八步计划添加下一台设备：补齐全屋密钥与模型，准备设备侧，填写参数，设置唤醒词，连接、测试并试听验证。已有设备不会被修改。',
   'v2.setup.lede.firstRun': '按服务端返回的八步计划完成第一台设备。步骤顺序、完成情况与下一步都由服务端计算，本页只执行计划允许的动作。',
   'v2.setup.featureOff': '此版本未启用安装向导',
-  'v2.setup.featureOffHint': '服务端的 meta.features.setup_plan 为 false；旧控制台的 /setup 不受影响。',
+  'v2.setup.featureOffHint': '服务端的 meta.features.setup_plan 为 false；当前没有可用的安装向导。',
   'v2.setup.backDevices': '返回设备列表',
   'v2.setup.loadFailed': '无法读取安装计划',
   'v2.setup.loadFailedHint': '检查服务端 /api/v2 是否可用、插件是否已安装，然后重试。',
@@ -1566,8 +1561,6 @@ const en: Record<MsgKey, string> = {
   'v2.nav.devices': 'Devices',
   'v2.nav.rooms': 'House',
   'v2.nav.config': 'Config',
-  'v2.nav.legacy': 'Legacy console',
-  'v2.nav.legacyHint': 'Open the legacy console (removed in 0.8.0)',
   'v2.nav.language': 'Language',
   'v2.lang.zh': '中文',
   'v2.lang.en': 'English',
@@ -1583,8 +1576,6 @@ const en: Record<MsgKey, string> = {
   'v2.nav.memory': 'Memory',
   'v2.footer.readOnly': 'M9 · Config pages · Voice assistant / Tools / Music / Credentials / Health',
   'v2.footer.version': 'Contract {contract} · rui {version}',
-  'v2.legacy.from': '{path} has no v2 page yet — you are on the devices page.',
-  'v2.legacy.from.close': 'Dismiss notice',
 
   // — token ——————————————————————————————————————————————————
   'v2.token.title': 'Access token',
@@ -1626,7 +1617,7 @@ const en: Record<MsgKey, string> = {
   'v2.meta.failed': 'Could not read the v2 API metadata',
   'v2.meta.failedHint': 'The backend may not expose /api/v2 yet, or the service is unreachable. Confirm rui is at least 0.6.0 and retry.',
   'v2.meta.incompatible': 'Incompatible API contract',
-  'v2.meta.incompatibleHint': 'The console needs contract C-002 (/api/v2); the server reports {contract}. Upgrade the server or keep using the legacy console.',
+  'v2.meta.incompatibleHint': 'The console needs contract C-002 (/api/v2); the server reports {contract}. Upgrade the server.',
   'v2.meta.featureOff': 'Not enabled in this build',
   'v2.meta.featureOffHint': 'The server marks this feature false in meta.features; it will appear here after a server upgrade.',
 
@@ -1735,7 +1726,7 @@ const en: Record<MsgKey, string> = {
   'v2.devices.roomDevices': '{n} devices',
   'v2.devices.empty': 'No devices yet',
   'v2.devices.emptyHint': 'Add the first speaker from an available plugin.',
-  'v2.devices.emptyLegacyHint': 'Add the first speaker from the install wizard in the legacy console.',
+  'v2.devices.emptyLegacyHint': 'Add the first speaker from the install wizard.',
   'v2.devices.emptyAction': 'Add device',
   'v2.devices.emptySetupHint': 'The house has no devices yet: run the first-run wizard, or add the first device directly.',
   'v2.devices.emptySetupAction': 'Start first-run setup',
@@ -2142,8 +2133,8 @@ const en: Record<MsgKey, string> = {
   'v2.run.houseFallback': 'House aggregate unavailable; derived from device data.',
   'v2.run.loadFailed': 'Could not load the house overview',
   'v2.run.empty': 'The house has no devices yet',
-  'v2.run.emptyHint': 'Add the first speaker from the install wizard in the legacy console.',
-  'v2.run.emptyAction': 'Open the legacy console',
+  'v2.run.emptyHint': 'Add the first speaker from the install wizard.',
+  'v2.run.emptyAction': 'Open setup',
   'v2.run.featureOff': 'Run is not enabled in this build',
   'v2.run.version': 'rui {rui} · config {config}',
   'v2.run.lede': 'Exceptions first: devices, config, and warnings that need action, then house counts, multi-device policy, and rooms.',
@@ -2164,7 +2155,6 @@ const en: Record<MsgKey, string> = {
   'v2.config.lede': 'House defaults, room policy, and device installation.',
   'v2.config.openDevices': 'Go to devices',
   'v2.config.openRooms': 'Go to house',
-  'v2.config.openLegacy': 'Open the legacy console',
 
   // — M8 conversation —————————————————————————————————————————
   'v2.conversation.title': 'Conversation',

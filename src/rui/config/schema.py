@@ -115,13 +115,11 @@ class WebConfig(BaseModel):
     # explicitly (development machines only).
     auth_token: str = ""
     allow_anonymous: bool = False
-    # Which console `/` opens (M10). "v2" (0.7.8 default) sends `/` to `/v2/` and
-    # keeps the old shell, marked deprecated, at `/legacy`; "legacy" keeps the 0.6
-    # entry point for one release and is removed in 0.8.0. Additive and defaulted:
-    # a config written before this field existed loads as "v2", and CONFIG_VERSION
-    # stays 3, so an older image can still read a file that names `console: v2`.
-    # The switch is read per request from `app.state.cfg`, so flipping it is one
-    # config edit + restart (no new image).
+    # Which console `/` opens (M10). Kept for config compatibility only: 0.8.0 removed
+    # the old panel shell, so the value is ignored, `/` always answers a 302 to `/v2/`,
+    # and there is no rollback switch. Additive and defaulted: a config written before
+    # this field existed loads as "v2", and CONFIG_VERSION stays 3 so an older image can
+    # still read a file that names `console: v2`.
     console: Literal["legacy", "v2"] = "v2"
 
 

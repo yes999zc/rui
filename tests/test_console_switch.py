@@ -1,12 +1,10 @@
-"""M10 console switch: `web.console` picks what `/` opens — v2 by default since 0.7.8.
+"""The console entry point after 0.8.0 removed the legacy shell.
 
-`v2` (the default) turns `/` into a 302 to `/v2/` (query preserved) and keeps the
-old shell, marked deprecated, at `/legacy`, history deep links included. `legacy`
-is the one-release rollback: `/` serves the old SPA byte for byte, and the 15 old
-console links keep answering it (the 302 matrix lives in `test_legacy_links.py`).
-`/health.console` reports the live choice so an operator never has to infer it from
-a bookmark. A config written before this field existed carries no `console` key and
-must load as v2.
+`/` is a 302 to `/v2/` (query preserved) and nothing else: the old panel SPA, its
+`/legacy` mount and the 15 redirects are gone, so every old console path is a plain
+404. `web.console` stays in the schema for config compatibility, but its value is
+ignored - keeping the enum is not the same as keeping the old shell. `/health.console`
+still reports the configured value, so an operator can see what the config says.
 """
 from __future__ import annotations
 
@@ -24,12 +22,35 @@ from rui.web.api.app import create_app
 TOKEN = "test-token-fake"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Every path the old console used to answer (eleven /panel/<id> + four hand-written
+# pages) plus its own mount. All of them are 404 now.
+OLD_CONSOLE_PATHS = (
+    "/legacy",
+    "/legacy/",
+    "/legacy/panel/music",
+    "/legacy/setup",
+    "/legacy/api/v1/panels",
+    "/panel/music",
+    "/panel/overview",
+    "/panel/credentials",
+    "/setup",
+    "/secrets",
+    "/diagnostics",
+    "/channels",
+)
+
 
 def _dist(tmp_path: Path) -> Path:
+    """The subset of `web/dist` the server serves: v2 shell, assets and root static."""
     dist = tmp_path / "dist"
     (dist / "assets").mkdir(parents=True)
-    (dist / "index.html").write_text("<html>old-shell-marker</html>", encoding="utf-8")
+    (dist / "fonts").mkdir()
+    (dist / "assets" / "v2-test.js").write_text("// v2 bundle", encoding="utf-8")
     (dist / "v2.html").write_text("<html>v2-shell-marker</html>", encoding="utf-8")
+    (dist / "favicon.svg").write_text("<svg/>", encoding="utf-8")
+    (dist / "logo.svg").write_text("<svg/>", encoding="utf-8")
+    (dist / "logo-dark.svg").write_text("<svg/>", encoding="utf-8")
+    (dist / "fonts" / "manrope-latin.woff2").write_bytes(b"fake-font")
     return dist
 
 
@@ -46,9 +67,10 @@ def _app(tmp_path: Path, monkeypatch, *, console: str | None = None):
     return create_app(config, config_path=path)
 
 
-def test_v2_is_the_default_entry_point(tmp_path, monkeypatch) -> None:
-    """A fresh install lands on the v2 console; the old shell is the /legacy mount."""
-    client = TestClient(_app(tmp_path, monkeypatch))
+@pytest.mark.parametrize("console", [None, "v2", "legacy"])
+def test_root_always_hands_over_to_v2(tmp_path, monkeypatch, console) -> None:
+    """`console: legacy` no longer renders a shell: the value is accepted and ignored."""
+    client = TestClient(_app(tmp_path, monkeypatch, console=console))
 
     moved = client.get("/", follow_redirects=False)
     assert moved.status_code == 302
@@ -58,44 +80,45 @@ def test_v2_is_the_default_entry_point(tmp_path, monkeypatch) -> None:
     assert kept.status_code == 302
     assert kept.headers["location"] == "/v2/?room=living&tab=config"
 
-    # Following the hop lands on the real v2 shell, so the redirect target exists.
     landed = client.get("/")
     assert landed.status_code == 200
     assert "v2-shell-marker" in landed.text
 
-    # The old shell keeps its own mount in both modes; a history link must answer
-    # index.html, not a 404 or the v2 shell.
-    for path in ("/legacy", "/legacy/", "/legacy/panel/music", "/legacy/setup"):
-        response = client.get(path)
-        assert response.status_code == 200, path
-        assert "old-shell-marker" in response.text, path
-
     v2 = client.get("/v2")
     assert v2.status_code == 200
     assert "v2-shell-marker" in v2.text
 
-    assert client.get("/health").json()["console"] == "v2"
-    assert client.get("/legacy/api/v1/panels").status_code == 404
+    assert client.get("/health").json()["console"] == (console or "v2")
 
 
-def test_legacy_mode_is_the_one_release_rollback(tmp_path, monkeypatch) -> None:
-    """`console: legacy` still serves the old shell at `/` and reports it as legacy."""
-    client = TestClient(_app(tmp_path, monkeypatch, console="legacy"))
-
-    root = client.get("/")
-    assert root.status_code == 200
-    assert "old-shell-marker" in root.text
-
-    for path in ("/legacy/panel/music", "/panel/music", "/setup"):
+def test_every_old_console_path_is_gone(tmp_path, monkeypatch) -> None:
+    client = TestClient(_app(tmp_path, monkeypatch))
+    for path in OLD_CONSOLE_PATHS:
         response = client.get(path)
-        assert response.status_code == 200, path
-        assert "old-shell-marker" in response.text, path
+        assert response.status_code == 404, path
+        assert not response.headers["content-type"].startswith("text/html"), path
 
-    v2 = client.get("/v2")
-    assert v2.status_code == 200
-    assert "v2-shell-marker" in v2.text
 
-    assert client.get("/health").json()["console"] == "legacy"
+def test_the_root_static_assets_v2_html_needs_are_served(tmp_path, monkeypatch) -> None:
+    """`v2.html` loads `/assets/*`, `/favicon.svg`, `/fonts/*` and `/logo*.svg`.
+
+    These used to come from the old SPA catch-all; with it gone they are explicit
+    mounts/routes, and an unknown path must stay a 404 instead of reviving the shell.
+    """
+    client = TestClient(_app(tmp_path, monkeypatch))
+
+    for path in (
+        "/favicon.svg",
+        "/logo.svg",
+        "/logo-dark.svg",
+        "/fonts/manrope-latin.woff2",
+        "/assets/v2-test.js",
+        "/v2/assets/v2-test.js",
+    ):
+        assert client.get(path).status_code == 200, path
+
+    assert client.get("/no-such-file.css").status_code == 404
+    assert client.get("/panel/music").status_code == 404
 
 
 def test_a_pre_078_config_without_the_key_loads_as_v2(tmp_path, monkeypatch) -> None:
@@ -130,11 +153,16 @@ def test_the_shipped_config_examples_name_v2() -> None:
         assert data["web"]["console"] == "v2", name
 
 
-def test_v2_legacy_links_point_at_the_legacy_mount() -> None:
-    """`/` in v2 mode is a redirect, so a v2 page linking to it would loop."""
+def test_v2_sources_have_no_links_to_the_removed_console() -> None:
+    """The old mount is a 404, so a v2 page linking to it would be a dead end."""
     v2 = REPO_ROOT / "web" / "src" / "v2"
-    shell = (v2 / "App.vue").read_text(encoding="utf-8")
-    assert 'class="v2-legacy" href="/legacy"' in shell
+    offenders = [
+        str(path.relative_to(v2))
+        for path in v2.rglob("*")
+        if path.suffix in {".ts", ".vue"} and "/legacy" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], offenders
+
     for rel in ("views/RunView.vue", "views/DevicesView.vue"):
         text = (v2 / rel).read_text(encoding="utf-8")
-        assert 'href="/legacy"' in text, rel
+        assert 'to="/setup"' in text, rel

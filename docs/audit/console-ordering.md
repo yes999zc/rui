@@ -22,7 +22,7 @@
 `assistant → session → devices → audio.capture → audio.voice → audio.playback → audio.aec → ack`；
 **ack 是第 8 组（末位）**。`multi_device` 不在本页（`showGroup` 未放行），在「设置/Rooms」页。
 
-旧面板（legacy，0.8.0 前回滚用）是另一套：设备与音频 → 音频与唤醒 tab 的 7 组
+旧面板（legacy，**0.8.0 已删除**；以下为历史记录）是另一套：设备与音频 → 音频与唤醒 tab 的 7 组
 （`app.py:519-550`），ack 同样在末位；它的排序由 `ConfigCenter.vue:165-175` 按 tier/order
 重排。该界面与 9 哥 的 v2 反馈无关，仅作并列说明。
 
@@ -45,7 +45,7 @@
 3. 旧面板代价：它的「音频与唤醒」块声明并过滤 `tier: 2`（`app.py:548`，
    `ConfigCenter.vue:165-175`），ack 变 tier 1 后会从旧面板消失。若要求旧面板 parity，
    需同步改该 block 的 tier 声明（另一套 UI 的改动）；否则接受 legacy 少这一组
-   （legacy 在 0.8.0 移除，本卡不代做决定）。
+   （legacy 已在 0.8.0 移除，该补偿问题随之消失）。
 
 **这条 P0 还有两条落地代价，需要 9 哥 明确接受（二选一）：**
 - **代价 1：既有测试会红**。`tests/test_config_catalog.py:94-96` 断言
@@ -171,13 +171,13 @@
   与旧面板不同，v2 这里**没有** `system.log_level` 编辑入口。顺序无需调整。
 - 体检页只读，不参与排序。
 
-### 2.8 旧面板并列说明（legacy，不计入 v2 页数）
+### 2.8 旧面板并列说明（legacy，**0.8.0 已删除**，仅历史）
 
 - 设备与音频 → 音频与唤醒 tab 的组：`multi_device, devices, audio.capture, audio.voice,
   audio.playback, audio.aec, ack`（`app.py:548-550`）；渲染序按 tier/order：
   `devices → multi_device → audio.capture → audio.voice → audio.playback → audio.aec → ack`
   （`ConfigCenter.vue:175` + `catalog.py:93…127`）。
-- 若 0.8.0 前仍要维护旧面板，它的顺序会随同一份 catalog 自动变化；ack 变 tier 1 后
+- **0.8.0 已删除旧面板，本条只作历史记录。** 它曾随同一份 catalog 自动变化；ack 变 tier 1 后
   旧面板该 tab 丢失 ack（§0.2 的代价），是否需要补偿属另卡决策。
 
 ## 3. 重复入口（同一项可在两处修改）
@@ -195,7 +195,7 @@
 - 唯一写入口：设备详情 `ConfigPanel`（`DeviceDetailView.vue:372`）。v2 无重复写入口；
   legacy 的重复入口见 §3.2。
 
-### 3.2 旧面板的同类双入口（legacy，仅记录）
+### 3.2 旧面板的同类双入口（legacy，**0.8.0 已删除**，仅历史）
 
 - `DeviceManager`（设备管理 tab，`DeviceManager.vue:103-109`、保存 patch `:1201-1209`）与
   catalog `devices` 组（音频与唤醒 tab，`catalog.py:1281-1345`）交集为

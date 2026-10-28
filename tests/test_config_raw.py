@@ -227,28 +227,3 @@ def test_empty_values_are_not_reported_as_redacted() -> None:
     assert keys == []
 
 
-def test_the_system_page_renders_the_view_bilingually() -> None:
-    """UI contract: the System panel consumes the endpoint read-only, with both languages.
-
-    No component test harness exists in this repo; the console contract tests read the
-    Vue source (tests/test_panels.py, tests/test_audit_fixes.py), and that is enough to
-    keep the section wired and the copy translated.
-    """
-    root = Path(__file__).resolve().parents[1]
-    view = (root / "web/src/views/SystemView.vue").read_text(encoding="utf-8")
-    assert "api.configRaw()" in view
-    assert "system.rawTitle" in view
-    assert "system.rawRedacted" in view
-    assert "<pre" in view and 'class="mono raw-yaml"' in view
-    # Read-only: no write call and no editable control for this data.
-    assert "saveConfig" not in view and "configRaw" in view
-    assert "contenteditable" not in view and "<textarea" not in view
-
-    i18n = (root / "web/src/i18n.ts").read_text(encoding="utf-8")
-    for key in ("system.rawTitle", "system.rawHint", "system.rawPath",
-                "system.rawMtime", "system.rawCopy", "system.rawRedacted",
-                "system.rawNoneRedacted", "system.rawTruncated", "system.rawDefaults"):
-        entries = [line for line in i18n.splitlines() if f"'{key}':" in line]
-        assert len(entries) >= 2, (key, "missing a translation")
-        for line in entries:
-            assert line.split("':", 1)[1].strip().strip("',"), (key, line)

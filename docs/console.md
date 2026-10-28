@@ -142,6 +142,7 @@ PanelSpec 声明 `"component": "<id>"` → `PanelHost` 从 `components/panelComp
 
 ## 3. 分期
 
+> **0.8.0 注**：旧面板已删除，`/panel/*` 与 `/legacy` 一律 404；本文保留历史记录。
 > P1–P6 记录 0.3.x 的落地过程；个别 legacy panel id（`devices-admin`、`mcp`、`phrases` 等）
 > 已在 0.4.2 Phase 4 删除，当前 IA 见 §0。
 

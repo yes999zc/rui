@@ -14,6 +14,20 @@ canonical per-version record.
 > Asia/Shanghai (+08:00). Only shipped, verifiable behaviour is listed; anything that
 > could not be confirmed from those sources is marked *(unverified)*.
 
+## [Unreleased]
+
+### Removed
+
+- **The legacy console is gone (0.8.0 breaking change).** `/legacy`, its SPA shell, the
+  root catch-all that served it and the **15 old-link 302s** (`/panel/*` × 11 plus
+  `/setup`, `/secrets`, `/diagnostics`, `/channels`) are deleted. Those paths answer
+  **404**; `/` is a 302 to `/v2/` (query preserved) and nothing else. The frontend keeps
+  only the v2 tree plus the shared `AppIcon.vue` / `theme.ts` / `style.css` /
+  `vite-env.d.ts` / `public/*`; root static assets (`/favicon.svg`, `/fonts/*`,
+  `/logo*.svg`, `/assets/*`) are explicit mounts now. `web.console` stays in the config
+  schema for compatibility but its value is ignored — there is no rollback switch.
+  `/api/v1/panels` remains (v1 is frozen); `/api/v2` and `/v2/assets` are untouched.
+
 ## [0.7.9] - 2026-10-27
 
 **Theme: patch release. Two behaviour changes in the intent layer (headless-verified

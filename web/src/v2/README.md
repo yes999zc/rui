@@ -1,6 +1,6 @@
 # Console v2 (M9 — config pages)
 
-A second, side-by-side console. The legacy console at `/` keeps working and none
+The only console: 0.8.0 removed the legacy panel shell (its old paths now 404). Nothing
 of its files (`panels.ts`, `PanelHost.vue`, legacy `views/`) are imported here.
 
 ## Layout
@@ -159,7 +159,7 @@ approval; it changes build config beyond the multi-page entry) or map
 
 ## Auth
 
-Same convention as the legacy console: token in `localStorage['rui-token']`,
+Same convention as the old console used: token in `localStorage['rui-token']`,
 sent as `X-Auth-Token` on every `/api/v2/*` call. Any 401 opens the v2 token
 dialog and shows an inline error; saving reloads the page.
 

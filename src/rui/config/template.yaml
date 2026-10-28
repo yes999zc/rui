@@ -24,9 +24,8 @@ web:
   # An empty token on 0.0.0.0 refuses to start unless allow_anonymous is true.
   auth_token: ""
   allow_anonymous: false
-  # `/` opens the v2 console (0.7.8); the old shell stays at `/legacy` until 0.8.0.
-  # `legacy` is the one-release rollback for a deployment that still needs the old
-  # entry point at `/`.
+  # Compatibility only since 0.8.0: the value is ignored. `/` always answers a 302 to
+  # `/v2/`; the old panel shell is gone (its paths are 404), and there is no rollback.
   console: v2
 security:
   # Outbound SSRF guard for HA, generic MCP, Navidrome and web search. The console

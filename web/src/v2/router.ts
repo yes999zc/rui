@@ -21,14 +21,12 @@ import { createRouter, createWebHistory, type RouteLocation } from 'vue-router'
  *   /v2/health           health, dependency probes and config recovery (M9b)
  *   /v2/config           compatibility redirect to /voice-assistant
  *
- * There is deliberately no import of the legacy panel registry, PanelHost, or
- * any legacy view: v2 owns its route table.
+ * v2 owns its route table: the legacy panel registry, PanelHost and every legacy
+ * view were removed in 0.8.0.
  */
 const routes = [
   {
-    // A bare `/v2/` lands on the device list. The query is carried over because
-    // 0.7.8 sends old links with no v2 page here as `/v2/?from=<old path>`
-    // (src/rui/web/api/legacy_links.py); dropping it would hide where we came from.
+    // A bare `/v2/` lands on the device list; the query (e.g. `?token=`) is carried.
     path: '/',
     redirect: (to: RouteLocation) => ({ path: '/devices', query: to.query }),
   },

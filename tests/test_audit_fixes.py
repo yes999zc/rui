@@ -292,20 +292,17 @@ def test_the_secrets_endpoint_returns_the_typed_table(tmp_path) -> None:
     assert "value" not in entry and "token" not in entry
 
 
-def test_credentials_pages_do_not_guess_consumers_from_names() -> None:
-    """The Phase 3 contract: typed `category`/`consumers`, no name regexes in Vue."""
+def test_the_v2_credentials_page_does_not_guess_consumers_from_names() -> None:
+    """The Phase 3 contract survived the legacy console removal: typed data, no regexes."""
     root = pathlib.Path(__file__).resolve().parents[1]
-    for relative in ("web/src/views/SecretsView.vue",
-                     "web/src/components/ConfigCenter.vue"):
-        text = (root / relative).read_text(encoding="utf-8")
-        assert "SECRET_MATCHERS" not in text, relative
-        assert "kindOf(" not in text, relative
-        for guessed in ("XFYUN", "SILICONFLOW", "HASS_TOKEN", "DEEPSEEK"):
-            assert guessed not in text, (relative, guessed)
-    secrets_view = (root / "web/src/views/SecretsView.vue").read_text(encoding="utf-8")
-    config_center = (root / "web/src/components/ConfigCenter.vue").read_text(encoding="utf-8")
-    assert "consumers" in secrets_view and "category" in secrets_view
-    assert "SECRET_CATEGORIES" in config_center
+    page = root / "web/src/v2/views/CredentialsView.vue"
+    text = page.read_text(encoding="utf-8")
+    assert "SECRET_MATCHERS" not in text, "the page must not guess from env names"
+    assert "kindOf(" not in text
+    for guessed in ("XFYUN", "SILICONFLOW", "HASS_TOKEN", "DEEPSEEK"):
+        assert guessed not in text, guessed
+    assert "consumers" in text and "category" in text
+    assert "secretCategoryLabel" in text
 
 
 def test_secret_names_follow_a_dev_config_too(monkeypatch) -> None:
@@ -443,9 +440,10 @@ def test_each_config_panel_owns_exactly_its_tier_groups(tmp_path) -> None:
     assert panels["providers"]["component"] == "providers-v2"
     assert {"providers.catalog", "providers.asr", "providers.tts",
             "providers.llm"} <= by_tier[3]
-    # Tier 4 is split by task: built-in tools/exposure in the integrations tabs,
-    # music on its own page, and tools.ha/tools.mcp owned by McpManager (the one
-    # hot-write path) instead of a second ConfigCenter form.
+    # Tier 4 is split by task in the v1 payload: tools/exposure in the integrations
+    # tabs, music on its own page, tools.ha/tools.mcp on the integrations page. The
+    # forms that used to render them (McpManager / ConfigCenter) were deleted with
+    # the legacy console in 0.8.0; the groups stay declared.
     assert config_groups(panels["integrations"]) | {"music", "tools.ha", "tools.mcp"} == by_tier[4]
     assert config_groups(panels["music"]) == {"music"}
     # Tier 1 is split by meaning: conversational fields vs process foundations.

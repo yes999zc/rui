@@ -1,12 +1,11 @@
 """The console registry contract (docs/console.md, docs/console-ia-audit.md §3).
 
-The backend declares the panels, the front end renders them. A page review keeps
-breaking the same things, so they are pinned here:
+The backend declares the panels and `/api/v1/panels` still serves them (v1 is
+frozen). 0.8.0 removed the legacy pages that rendered them - the routes are asserted
+404 in `test_console_switch.py` - so this file pins the registry payload:
 
-1. every console route opens by URL (a reload while sitting on /panel/music used
-   to answer a JSON 404 - the SPA had no history fallback);
-2. every declared source and action points at a real endpoint, so a renamed API
-   cannot leave a dead button behind;
+1. every declared source and action points at a real endpoint, so a renamed API
+   cannot leave a dead button behind (the hrefs are payload, not live pages);
 3. the merged pages own every field the deleted hand-written pages used to edit
    (assistant.* / session.* / speakers), otherwise a page deletion silently
    removes a setting from the console;
@@ -37,13 +36,13 @@ BLOCK_TYPES = {
     "component",    # hand-written view embedded in a tab (DeviceManager/McpManager/...)
 }
 
-# Phase 4 (docs/console-ia-audit.md §5): current destinations only. The legacy
-# route aliases were removed with their panel declarations.
-CONSOLE_ROUTES = [
-    "/", "/panel/overview", "/panel/turns", "/panel/memory", "/panel/logs",
+# 0.8.0 removed the legacy console: the panel routes that used to render these
+# declarations are 404 now, and only the `/api/v1/panels` registry remains.
+OLD_CONSOLE_PATHS = [
+    "/panel/overview", "/panel/turns", "/panel/memory", "/panel/logs",
     "/panel/voice-assistant", "/panel/devices", "/panel/music", "/panel/providers",
     "/panel/integrations", "/panel/system", "/panel/credentials",
-    "/channels", "/diagnostics", "/secrets", "/setup",
+    "/channels", "/diagnostics", "/secrets", "/setup", "/legacy",
 ]
 
 # Compatibility-only panels deleted in Phase 4. Their task is represented by a
@@ -96,12 +95,13 @@ def app_icon_names() -> set[str]:
     return set(re.findall(r"^  ([A-Za-z][A-Za-z0-9]*): \[", source, re.MULTILINE))
 
 
-def test_every_console_route_opens_by_url() -> None:
+def test_the_old_panel_routes_are_gone() -> None:
+    """The registry stays (`/api/v1/panels`, v1 is frozen); the pages do not."""
     c = client()
-    for route in CONSOLE_ROUTES:
+    assert c.get("/api/v1/panels").status_code == 200
+    for route in OLD_CONSOLE_PATHS:
         response = c.get(route)
-        assert response.status_code == 200, route
-        assert response.headers["content-type"].startswith("text/html"), route
+        assert response.status_code == 404, route
 
 
 def test_the_health_api_keeps_its_own_path() -> None:
@@ -112,7 +112,8 @@ def test_the_health_api_keeps_its_own_path() -> None:
     """
     c = client()
     assert c.get("/health").headers["content-type"].startswith("application/json")
-    assert c.get("/diagnostics").headers["content-type"].startswith("text/html")
+    # The old diagnostics page is gone; the API path must not turn into an HTML shell.
+    assert c.get("/diagnostics").status_code == 404
 
 
 def test_api_paths_never_fall_into_the_spa_shell() -> None:
@@ -122,14 +123,17 @@ def test_api_paths_never_fall_into_the_spa_shell() -> None:
     assert response.headers["content-type"].startswith("application/json")
 
 
-def test_the_console_still_opens_without_a_built_frontend(monkeypatch) -> None:
+def test_the_v2_shell_still_answers_without_a_built_frontend(monkeypatch) -> None:
     """A fresh checkout (or a container before `npm run build`) has no dist."""
     from rui.web.api import app as app_module
 
     monkeypatch.setattr(app_module, "WEB_DIST", app_module.Path("/nonexistent-web-dist"))
-    response = TestClient(create_app(Config())).get("/panel/music")
+    c = TestClient(create_app(Config()))
+    root = c.get("/", follow_redirects=False)
+    assert root.status_code == 302 and root.headers["location"] == "/v2/"
+    response = c.get("/v2")
     assert response.status_code == 200
-    assert "rui" in response.text
+    assert "v2 console" in response.text
 
 
 def test_panels_have_ids_groups_and_known_block_types() -> None:
@@ -189,8 +193,6 @@ def test_retired_panels_are_not_declared() -> None:
     """
     found = panels(client())
     assert RETIRED_PANEL_IDS.isdisjoint(found)
-    for route in CONSOLE_ROUTES:
-        assert route.rsplit("/", 1)[-1] not in RETIRED_PANEL_IDS, route
 
 
 def test_every_declared_source_answers() -> None:
@@ -320,11 +322,10 @@ COMBINED_TABS = {
 def test_combined_pages_compose_existing_components() -> None:
     """Phase 2 merges pages without copying their logic or adding a second save.
 
-    Each merged page is a tab list over the *existing* block vocabulary and
-    escape-hatch components: list/volume for the live speaker state, DeviceManager
-    for the lifecycle, ConfigCenter for catalog groups, McpManager/PhrasebookEditor
-    for the heavy editors. One `config` block per tab is what guarantees a single
-    sticky save bar is visible at a time.
+    The `/api/v1/panels` payload keeps the merged tab lists and the component ids the
+    old console used (DeviceManager, ConfigCenter, McpManager, PhrasebookEditor). The
+    Vue files behind those ids were deleted with the legacy console in 0.8.0; this
+    test only pins the v1 payload: one `config` block per tab, real catalog groups.
     """
     c = client()
     found = panels(c)
@@ -350,9 +351,10 @@ def test_combined_pages_compose_existing_components() -> None:
     assert audio_groups == {"multi_device", "devices", "audio.capture", "audio.voice",
                             "audio.playback", "audio.aec", "ack"}
 
-    # 工具与集成: ConfigCenter no longer renders the HA/MCP writers; McpManager is
-    # the only hot-write path. The read-only registry is embedded, and exposure
-    # gets its own tab (not a duplicate policy editor inside the registry).
+    # 工具与集成: the v1 payload still declares tools.ha/tools.mcp here. The old
+    # writers (ConfigCenter/McpManager) are deleted in 0.8.0, v2 has no writer for
+    # tools.mcp_servers (PUT /api/v1/mcp remains the API). The read-only registry is
+    # embedded, and exposure gets its own tab (not a duplicate policy editor).
     integrations = found["integrations"]
     assert _config_groups(_tab_blocks(integrations, "builtin")) == {
         "tools.weather", "tools.news", "tools.search"}
@@ -364,7 +366,8 @@ def test_combined_pages_compose_existing_components() -> None:
     all_integration_groups = {
         group for block in integrations["blocks"] for group in block.get("groups", [])}
     assert "music" not in all_integration_groups
-    # The HA/MCP fields still have a home: McpManager owns them.
+    # The v1 payload still declares the groups; the panel UI that rendered them
+    # (McpManager) was deleted with the legacy console in 0.8.0.
     assert {"tools.ha", "tools.mcp"} <= declared_groups
 
     # 语音助手: behavior/replies and the phrasebook are one destination.
@@ -421,13 +424,10 @@ def test_system_owns_the_process_data_and_logs_own_log_level() -> None:
     assert log_config[0]["groups"] == ["system"]
     assert log_config[0]["paths"] == ["system.log_level"]
     assert any(block["type"] == "log" for block in logs["blocks"])
-
-    response = c.get("/panel/system")
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/html")
+    assert c.get("/panel/system").status_code == 404
 
 
-def test_credentials_is_a_hidden_typed_ledger_with_the_old_route_alive() -> None:
+def test_credentials_is_a_hidden_typed_ledger() -> None:
     c = client()
     found = panels(c)
     credentials = found["credentials"]
@@ -437,10 +437,9 @@ def test_credentials_is_a_hidden_typed_ledger_with_the_old_route_alive() -> None
     assert credentials["source"] == "/api/v1/secrets"
     assert credentials["blocks"] == []
     assert credentials["nav"]["hidden"] is True
+    # The registry entry survives; the old pages that rendered it are 404.
     for route in ("/panel/credentials", "/secrets"):
-        response = c.get(route)
-        assert response.status_code == 200, route
-        assert response.headers["content-type"].startswith("text/html"), route
+        assert c.get(route).status_code == 404, route
 
 
 def test_the_console_declares_the_tools_the_review_found_missing() -> None:

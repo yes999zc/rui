@@ -7,8 +7,6 @@ reconnect path (no HA server in CI).
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -232,25 +230,6 @@ def test_save_applies_a_new_url_and_token_in_one_step(console) -> None:
     assert body["ha"]["has_token"] is True
     assert body["ha"]["connected"] is True
     assert FakeBridge.instances[-1].cfg.base_url == "http://ha2.local:8123"
-
-
-def test_the_ha_form_keeps_typed_values_after_a_test() -> None:
-    """Fill in -> Test -> Save must keep the address and token in the form.
-
-    A probe stores nothing, so it must not reload state; and a silent refresh must
-    never copy the saved (possibly empty) address back over unsaved edits. This is a
-    UI-source contract, like the other console tests: the Vue component is the only
-    place that can reset the input.
-    """
-    source = (Path(__file__).resolve().parents[1]
-              / "web/src/components/McpManager.vue").read_text(encoding="utf-8")
-    test_fn = source.split("async function testHa()", 1)[1].split(
-        "async function saveHa()", 1)[0]
-    assert "load(" not in test_fn          # probing has nothing to refresh
-    seed = source.split("async function load(", 1)[1].split("async function testHa()", 1)[0]
-    assert "if (!silent) baseUrl.value = next.ha.base_url" in seed
-    # The token is never seeded from the server (write-only) and only Save clears it.
-    assert "token.value = next." not in source
 
 
 def test_save_needs_a_config_file_on_disk(tmp_path, monkeypatch) -> None:

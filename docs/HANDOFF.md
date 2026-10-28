@@ -14,6 +14,11 @@
 - **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（已实现；review PASS + verify VERIFIED，全量 1738/6；残余风险写入 d.10）。
 - **P0/P1 均已收口**；B1（task-8）恢复，之后 B2→B3（桥双窗口先于 core）→C。
 - **当前 HEAD**：`8344085`（P1）；P0 `82d45d9`、P1 `8344085`。B2/B3/C 未开工。
+- **P0b（2026-10-28 12:1x 真机，dot2 掉线）：三件 rui 侧修复，插在 B1 期间/之后**
+  A 连接关闭必须丢弃未发送音频（禁止重放半句）；B 发送水位上限（256KB 或 2s 音频）+ 写超时→主动断开重连；
+  C 半开连接检测（TCP keepalive 或 ping_timeout 30–60s）+ `speaker_connected` 改实时。每项回归测试 + 双闸门。
+  证据：8870 连接 887s 未收包、`notsent 65160/unacked 15/retrans 1/25/backoff 15`、积压 85775 字节；
+  拔电时正在播报的 ~0.9s @48k 留在队列。A/B 在桥仓，C 涉及桥+house 音频面/健康状态。卡待建。
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
   不打 tag、不部署，真机与插设备等 9 哥 下午做。
 - 未完成项不宣称完成；上下文压缩后先读本节 + 任务板。
@@ -962,3 +967,24 @@ gh release view v0.7.1 --json tagName,url                                      #
 - **CHANGES 轮（reviewer-core，2026-10-26 21:27）**：基线按 0.7.3 最终值重建（cd2d0a2，1651/1634/17/0，行 80.95 / 分支 69.55）；plugins 缺口改归「可单测未写」；HANDOFF §「README 截图与稿件的当前状态」恢复 v0.7.2 快照并另起一行 0.7.3；X-01/D2-05/D2-09 命令与 cwd 修正；dot2 volume 口径三拆；§3 #4 备注改准。
 - **待做**：重跑 ruff/全量/grep/基线命令，send_message 给 reviewer（经 lead）；等复评。
 - **未做**：没有 commit；没有改代码/版本号；没有碰卡面写范围外文件（`docs/ROADMAP-0.8.md` 的未提交改动是 Lead 的，不是本卡）。
+
+### B1 / task-8 进行中（implementer，2026-10-28 12:0x，HEAD `8344085`）
+
+- **范围**：删 `/legacy` 旧面板与 15 条老链接 302；保留 `/`→`/v2/`、`/v2`、`/v2/assets`、`/api/v2`、`/api/v1/panels`。
+- **已确认事实**：v2 只跨树引用 `components/AppIcon.vue`、`theme.ts`、`style.css`、`vite-env.d.ts`、`public/*`；`web/v2.html` 产品名 `dist/v2.html`，字体/favicon 走根路径 `/fonts/*`、`/favicon.svg`；旧 catch-all 一旦删除，这些根静态资源必须显式 mount。
+- **已定做法**：删 `legacy_links.py`、`app.py` 的 `/legacy*`、`_legacy_shell`、`FALLBACK`、根 catch-all；`/` 恒 302 `/v2/`（保留 query）；`web.console` 枚举保留但值被忽略（文档写明）；v2 内 `/legacy` 链接与 `?from=` 提示一并删；`vite.config` 仅 `v2` 输入；Dockerfile 检查 `dist/v2.html`；根静态资源显式 mount（favicon.svg / fonts / logo*.svg），用 200 矩阵测试钉住。
+- **验证计划**：`cd web && npm run typecheck && npm run build`；`uv run pytest -o addopts=""`（基线 1738/6）；`uv run ruff check src tests`；新增 404/302/200 矩阵。
+- **状态（2026-10-28 12:2x 完成）**：代码/前端/测试/文档全部落改，**未 commit**；验证见下。
+- **验证**：`npm run typecheck` 绿；`npm run build` 绿（`dist/v2.html`，无 `index.html`）；
+  `uv run pytest -o addopts=""` → **1710 passed, 6 skipped**（基线 1738 − 删除的 28 条：`test_legacy_links.py`
+  7 条、2 条已删 Vue 的 UI 源码契约测试、其余为改写后参数化条数变化）；`ruff check src tests` 绿；
+  `grep '/legacy|legacy_links'` 在 `src/rui` + `web/src` 只剩注释。
+- **遗留/风险**：`/api/v1/config/raw` 与 HA 表单在 v2 没有对应 UI（原 UI 源码契约测试随之删除）；
+  `/api/v1/panels`（v1 冻结）里的 href 仍指 `/panel/*`，但页面已 404；`web.console` 值被忽略。
+  后续接手先看 `git status` 与任务卡 task-8。
+- **复评修正（2026-10-28，review CHANGES）**：`config.example.yaml` / `template.yaml` /
+  `schema.py` 的 `web.console` 注释统一为「compat-only、值被忽略、`/` 恒 302、无回滚」；
+  `test_panels.py` / `test_audit_fixes.py` 的 McpManager/ConfigCenter 注释改为「v1 payload only，
+  UI 已删」；`App.vue` 空 `<style scoped>` 删除；`known-limitations.md` 新增 **L18**（HA `base_url` 在 v2 ToolsView 仍可改；缺 HA token 表单 与
+  `/api/v1/config/raw` 视图，API 仍在）。删除项已在 Lead 的 `c28e5e4`（本地未 push）；
+  B1 剩余内容修改待最终 review/verify 后统一 re-commit 为干净提交。验证：目标 54 passed；全量 1710/6；ruff 绿；typecheck 绿。

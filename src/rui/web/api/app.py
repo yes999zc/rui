@@ -24,9 +24,7 @@ import httpx
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import (
     FileResponse,
-    HTMLResponse,
     JSONResponse,
-    RedirectResponse,
     Response,
 )
 from fastapi.staticfiles import StaticFiles
@@ -130,7 +128,6 @@ from .device_rules import (
     port_conflict,
 )
 from .device_write import DeviceWriteError, checked_device_config
-from .legacy_links import install_legacy_links
 from .security import install_security_headers
 from .setup_api import install_setup_routes
 from .v2_api import install_v2_routes
@@ -142,14 +139,6 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_WEB_DIST = Path(__file__).resolve().parents[3].parent / "web" / "dist"
 WEB_DIST = Path(env_get("RUI_WEB_DIR", _DEFAULT_WEB_DIST))
-
-FALLBACK = """<!doctype html><html><head><meta charset="utf-8"><title>rui</title>
-<style>body{font:15px/1.6 -apple-system,system-ui,sans-serif;max-width:640px;margin:12vh auto;padding:0 24px;color:#111}
-code{background:#f4f4f5;padding:2px 6px;border-radius:4px}</style></head>
-<body><h1>rui</h1><p>Control plane is running. The console is not built yet:</p>
-<p><code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code></p>
-<p>API: <code>/health</code>, <code>/api/v1/doctor</code>, <code>/api/v1/config</code></p></body></html>"""
-
 
 def _light(app: FastAPI, effect: str, repaint: bool = False,
            live: object | None = None) -> None:
@@ -610,9 +599,9 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
         },
         {
             # Phase 2 merge: built-in tools, MCP/HA, the read-only registry and the
-            # exposure policy are one destination. `tools.ha`/`tools.mcp` are owned
-            # by McpManager (the only hot-write path) instead of being re-rendered
-            # by ConfigCenter, so the old duplicate writer is gone.
+            # exposure policy are one destination in the v1 payload. `tools.ha` and
+            # `tools.mcp` stay declared here; the UIs that used to write them
+            # (McpManager / ConfigCenter) were deleted with the legacy console in 0.8.0.
             "id": "integrations", "title": "工具与集成", "title_en": "Tools & integrations",
             "icon": "⚒", "group": "config", "order": 44,
             "nav": {"section": "configure", "order": 50, "hidden": False,
@@ -785,7 +774,8 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
                 # The enable toggle and source live in the catalog, not in a music-only
                 # API. Keeping that group on this page means the page that shows "off"
                 # is also where music is turned on (audit §2.1: no dead end). Advanced
-                # fields stay behind ConfigCenter's own "show advanced" toggle.
+                # fields keep the catalog's `advanced` flag (the v2 renderer honours it;
+                # the old ConfigCenter toggle went with the legacy console in 0.8.0).
                 {"type": "config",
                  "section_title": {"zh": "高级", "en": "Advanced"},
                  "title": {"zh": "音乐配置", "en": "Music settings"},
@@ -6975,75 +6965,42 @@ def create_app(
         """Latency marks for recent turns. Empty until a turn runs through the plane."""
         return {"limit": max(1, min(limit, 200)), "turns": traces.recent(limit)}
 
-    # The console is a Vue SPA with history routing: /panel/music is not a file on
-    # disk, yet a reload, a bookmark or a link from the NAS dashboard must still
-    # land on the app. So: mount the hashed asset directory, then answer every
-    # remaining non-API path with index.html. Registered after all API routes, a
-    # real endpoint always wins, and an /api/* typo stays a JSON 404 instead of
-    # silently becoming the HTML shell.
+    # `/` is the only console entry point left: the old panel shell and its 15 link
+    # redirects were removed in 0.8.0, so every old path is a plain 404 and `/` always
+    # hands over to v2 (query preserved, e.g. `?token=`). `web.console` stays in the
+    # schema for config compatibility; its value is ignored.
+    @app.get("/")
+    async def console_root(request: Request) -> Response:
+        query = request.url.query
+        return Response(
+            status_code=302,
+            headers={"Location": f"/v2/?{query}" if query else "/v2/"},
+        )
+
+    # The v2 bundle is served by `install_v2_routes` (`/v2`, `/v2/assets`), but the
+    # built `v2.html` loads `/assets/*` and the page asks for `/favicon.svg`,
+    # `/fonts/*` and `/logo*.svg` from the site root. Those used to be reachable only
+    # through the old SPA catch-all; the catch-all is gone, so the roots are mounted
+    # explicitly. Unknown paths must stay 404 - do not add a catch-all back.
     if WEB_DIST.is_dir():
-        assets = WEB_DIST / "assets"
+        root = WEB_DIST.resolve()
+        assets = root / "assets"
         if assets.is_dir():
             app.mount("/assets", StaticFiles(directory=assets), name="assets")
+        fonts = root / "fonts"
+        if fonts.is_dir():
+            app.mount("/fonts", StaticFiles(directory=fonts), name="fonts")
 
-    # M10 (0.7): `web.console` picks the root entry point. The old shell is built from
-    # the same dist (only `v2.html` belongs to v2), so both mounts share one bundle.
-    # 0.7.8 flipped the default to "v2": `/` is the v2 console and the old shell is
-    # the deprecated `/legacy`. `legacy` stays accepted for one release (rollback is
-    # one config edit + restart, no new image).
-    def _legacy_shell() -> Response:
-        if WEB_DIST.is_dir():
-            index = WEB_DIST.resolve() / "index.html"
-            if index.is_file():
-                return FileResponse(index)
-        return HTMLResponse(FALLBACK)
+        @app.get("/favicon.svg", include_in_schema=False)
+        async def favicon() -> FileResponse:
+            return FileResponse(root / "favicon.svg")
 
-    @app.get("/", response_class=HTMLResponse)
-    async def console_root(request: Request) -> Response:
-        """`/` is the entry point; in v2 mode it redirects and keeps the query."""
-        if getattr(app.state, "cfg", cfg).web.console == "v2":
-            query = request.url.query
-            return RedirectResponse(url=f"/v2/?{query}" if query else "/v2/",
-                                    status_code=302)
-        return _legacy_shell()
+        @app.get("/logo.svg", include_in_schema=False)
+        async def logo() -> FileResponse:
+            return FileResponse(root / "logo.svg")
 
-    @app.get("/legacy", response_class=HTMLResponse)
-    @app.get("/legacy/{full_path:path}", response_class=HTMLResponse)
-    async def legacy_console(full_path: str = "") -> Response:
-        """The old SPA keeps its own mount, so bookmarks survive the switch.
-
-        History deep links (`/legacy/panel/music`, `/legacy/setup`) answer index.html;
-        the bundle's router base follows the mount point (web/src/router.ts). API
-        paths stay JSON 404s, exactly like the root catch-all below.
-        """
-        if full_path.startswith(("api/", "ws")):
-            raise HTTPException(status_code=404, detail="Not Found")
-        return _legacy_shell()
-
-    # 0.7.8: the 15 old console paths (eleven `/panel/<id>` + /setup /secrets
-    # /diagnostics /channels) answer 302 to their v2 page instead of falling into the
-    # deprecated shell. Registered here, before the catch-all, and after `/legacy` so
-    # the old mount always wins; in `console: legacy` mode the same paths keep
-    # serving the old shell unchanged.
-    install_legacy_links(
-        app,
-        console_mode=lambda: getattr(app.state, "cfg", cfg).web.console,
-        legacy_shell=_legacy_shell,
-    )
-
-    @app.get("/{full_path:path}", response_class=HTMLResponse)
-    async def console(full_path: str) -> HTMLResponse:
-        """Serve the SPA shell for console routes; never for API paths."""
-        if full_path.startswith(("api/", "ws")):
-            raise HTTPException(status_code=404, detail="Not Found")
-        if WEB_DIST.is_dir():
-            root = WEB_DIST.resolve()
-            candidate = (root / full_path).resolve()
-            if candidate.is_file() and root in candidate.parents:
-                return FileResponse(candidate)
-            index = root / "index.html"
-            if index.is_file():
-                return FileResponse(index)
-        return HTMLResponse(FALLBACK)
+        @app.get("/logo-dark.svg", include_in_schema=False)
+        async def logo_dark() -> FileResponse:
+            return FileResponse(root / "logo-dark.svg")
 
     return app

@@ -1,5 +1,7 @@
 # 控制台信息架构独立审计（RUI 0.3.2）
 
+> **0.8.0 注**：本文审计的是 0.3.2 的旧面板；旧面板与 `/panel/*` 已在 0.8.0 删除（保留 `/api/v1/panels` 注册表），本文只作历史依据。
+
 > 审计对象：`/Users/bakeyzhang/AI_Workspace/01_Code/projects/house-ear`（`main`，`4b279a7`）。
 > 方法：静态阅读 `web/src/**`、`src/rui/web/api/app.py`、`config/catalog.py`、`providers/*`、`music/*`、`setup_api.py`，
 > 核对现有契约/测试；未改代码、未提交、未连 NAS，未读取任何密钥。xfyun 结论另用进程内 fake fallback 复现（§6）。

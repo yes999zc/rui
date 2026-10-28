@@ -244,7 +244,9 @@ onMounted(() => {
         :title="t('v2.run.empty')"
         :hint="t('v2.run.emptyHint')"
       >
-        <a class="btn btn-primary" href="/legacy">{{ t('v2.run.emptyAction') }}</a>
+        <RouterLink class="btn btn-primary" to="/setup">
+          {{ t('v2.run.emptyAction') }}
+        </RouterLink>
       </StateBlock>
 
       <template v-else>
