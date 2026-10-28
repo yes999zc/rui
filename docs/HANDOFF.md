@@ -33,6 +33,10 @@
   每块 raise、LED 亮但无声。顺序改为：**task-26（字段归属/冲突：manifest 胜全局 explicit + WARN/拒绝）→
   task-24（R3 运行期自检 + 桥 play ValueError 上报为设备错误）→ task-25（catalog/runtime 一致性 + 三份值可见性）**。
   **与 task-22（params/layout）分开**。
+- **0.8.0 一次性授权（2026-10-28 9哥，含部署）**：tag/release/生产部署已授权；门禁=task-26→24→25 + task-22 收口 + **最小 C2（0.8.0，原“推迟 0.8.1”作废）** + `followup_max_wait_ms=0` + 四台真机验收。C2 最小范围：到点先停目标房间音乐→播报→不自动恢复；失败/全离线→default_output 播报+「<room>那台没在线」+health 失败计数；只停目标房间；播完 session 干净关闭、LED off、无免唤醒窗口；不做重试/排期/音乐恢复/去重。
+- **发布顺序**：xiaoai 桥 0.2.3（commit `0d82250`，未 tag）先发 → dot2 1.3.2 已发不动 → core 0.8.0。发布正文注明 C2 抢占语义与 followup 默认 8000/生产设 0。
+- **生产部署 runbook（已授权）**：SSH yes999zc@192.168.5.168；compose `/vol1/rui`（必须 -f docker-compose.yml -f rui-dot2-override.yml）；当前镜像 `sha256:5aa362f6b4f7d7fd24a7f01d41c31e1523ce2401296ac3b203b9f684a314b9f7`；plugins `/vol1/rui/plugins`、config `/vol1/rui/config/config.yaml`。D0 备份 config+plugins 并记 digest；D1 先换插件 1.3.2/0.2.3（旧窗口排除 0.8.0，不换会 fail-closed）；D2 换 core 0.8.0 新 digest；D3 只改 followup=0、保留 dot2-b audio 覆盖；D4 compose up；D5 验 version/devices/errors/registered/audio_summary/say/ followup/LED；D6 异常回滚到 digest+plugins 备份。边界：不改 rui_compat、不 force-push、不动 token/设备端/data。
+- **⚠ task-26 开工先解 lx06 矛盾**：lx06.yaml 声明 capture 48k/8ch，但生产实际/设备在跑 16k/8ch；直接 manifest 胜会弄坏客厅。先确认真实 wire，再修正 lx06.yaml 或改为“仅当探测与 manifest 一致时 manifest 胜”，选择写进卡面。冷启动时序（dot2-b 首测 ack=1200）必须在 task-26 复现并一并修。
 - **0.8.0 发布门禁（2026-10-28 9哥 决策）**：必须完成 **task-26 → task-24 → task-25**、task-22 收尾（三台最终 params/补齐步骤/五台布局）、发布说明设置 **`audio.voice.followup_max_wait_ms = 0`**（全局，0=每轮都要唤醒词；8s=保留一句自然续说；不做逐台覆盖），以及四台真机验收（living 4412 + 儿童房 8870 + 次卧 8871 + 主卧 8873）。**C2/task-21 推迟到 0.8.1**（新功能，不阻塞）；task-2（歌没停）/task-3（158ms gap）无样本不修、不列阻塞。
 - **生产现状（2026-10-28 16:0x）**：0.7.9 / 3 台在线 / device_errors 0 / warnings 0；living + 儿童房 dot2(8870, 16:03 重新上线 .69) + 次卧 dot2-b(8871) 全 running+connected。dot2-b 固件已对齐 **20261024-1911-dev + ref_uplink**（原 v2.18.1），server_a 保留可回滚；audio.say 237104 B、无 got 16000。两台 dot2 同固件同版本，4 台混合验收前置已具备。
 - **dot2-b `devices[].audio` 覆盖 = 永久显式声明，不是临时补丁，别删**（playback 48000 / capture 16k·1ch / ack 2500 / aec off）；根治后保留。
