@@ -36,7 +36,7 @@
   C 半开连接检测（TCP keepalive 或 ping_timeout 30–60s）+ `speaker_connected` 改实时。每项回归测试 + 双闸门。
   证据：8870 连接 887s 未收包、`notsent 65160/unacked 15/retrans 1/25/backoff 15`、积压 85775 字节；
   拔电时正在播报的 ~0.9s @48k 留在队列。A/B 在桥仓，C 涉及桥+house 音频面/健康状态。卡 task-15（已收口：桥 `9065d19`、house `88400aa`；两仓 review PASS + verify VERIFIED）、task-16（C，blocked_by B1）。B1 已收口 `7b9035a`。
-- **批次 B 进行中（2026-10-28 14:xx）**：B3a dot2 `4536968`、B3b xiaoai `0d82250` 已 push（双窗口，179/87 passed）；B2 house 已收口 `78d87df`（console/setup/save_config 均拒绝 xiaoai，1752/6；review PASS + verify VERIFIED）。B3c core 0.8.0 已收口 `e8f728c`（1752/6；版本/窗口/meta/fixtures/README/CHANGELOG；C-002 已同步；review PASS + verify VERIFIED）。**三仓 0.8.0 代码面完成**（桥 dot2 `4536968`、xiaoai `0d82250`；core `e8f728c`）。下一步：C1 task-20（语音提醒入口+房间，实现中）→ C2 task-21（抢占/去重/失败重排）→ 0.8.0 发布前报告（桥双窗口计划+回滚）。
+- **批次 B 进行中（2026-10-28 14:xx）**：B3a dot2 `4536968`、B3b xiaoai `0d82250` 已 push（双窗口，179/87 passed）；B2 house 已收口 `78d87df`（console/setup/save_config 均拒绝 xiaoai，1752/6；review PASS + verify VERIFIED）。B3c core 0.8.0 已收口 `e8f728c`（1752/6；版本/窗口/meta/fixtures/README/CHANGELOG；C-002 已同步；review PASS + verify VERIFIED）。**三仓 0.8.0 代码面完成**（桥 dot2 `4536968`、xiaoai `0d82250`；core `e8f728c`）。C1 task-20 已实现（语音固定句式 + Reminder.room + 三级路由；1794/6；review 中）。C2 task-21（抢占/去重/失败重排）待做。之后交 0.8.0 发布前报告（桥双窗口计划+回滚）。
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
   不打 tag、不部署，真机与插设备等 9 哥 下午做。
 - 未完成项不宣称完成；上下文压缩后先读本节 + 任务板。
