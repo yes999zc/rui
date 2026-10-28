@@ -2828,7 +2828,15 @@ class AudioPlane:
         reply_lead_max = 0.0
         while not self._stop.is_set():
             try:
-                chunk = await asyncio.wait_for(self._speak_queue.get(), timeout=0.5)
+                # `asyncio.timeout`, not `asyncio.wait_for`: 3.11's wait_for wraps the
+                # Queue.get() in an inner task and can leave the task awaiting it
+                # permanently "cancelling" when a chunk's wakeup races the cancel this
+                # loop gets at shutdown (`_stop.set()` + `task.cancel()` in `handle`'s
+                # finally). That is the 3.11-only CI hang documented in
+                # docs/ci-311-hang-0.8.5.md; `asyncio.timeout` (3.11+) awaits the queue
+                # itself, so the cancellation reaches one task and completes.
+                async with asyncio.timeout(0.5):
+                    chunk = await self._speak_queue.get()
             except TimeoutError:
                 # Nothing more is coming: that is the end of the answer, so hand the song
                 # back. Checking only after a send missed the case where the last chunk

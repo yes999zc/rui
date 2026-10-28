@@ -7,6 +7,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A hung leg must turn red, not sit `in_progress` until GitHub's 6 h default: that
+    # is how the 3.11 asyncio.wait_for hang (0.8.3-0.8.4) blocked every push while the
+    # 3.12 leg and the image built fine. A green leg takes ~5 min; see
+    # docs/ci-311-hang-0.8.5.md.
+    timeout-minutes: 20
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
