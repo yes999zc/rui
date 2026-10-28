@@ -231,7 +231,7 @@ audio:
 
 devices:
   - id: lx06
-    adapter: lx06            # 旧配置的 adapter: xiaoai 仍是单 minor 别名
+    adapter: lx06            # 0.8.0 起 adapter: xiaoai 会被拒绝，需改为 lx06
     room: 客厅
     host: lx06.local
     listen_port: 4412
