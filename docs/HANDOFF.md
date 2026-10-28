@@ -35,7 +35,7 @@
   A 连接关闭必须丢弃未发送音频（禁止重放半句）；B 发送水位上限（256KB 或 2s 音频）+ 写超时→主动断开重连；
   C 半开连接检测（TCP keepalive 或 ping_timeout 30–60s）+ `speaker_connected` 改实时。每项回归测试 + 双闸门。
   证据：8870 连接 887s 未收包、`notsent 65160/unacked 15/retrans 1/25/backoff 15`、积压 85775 字节；
-  拔电时正在播报的 ~0.9s @48k 留在队列。A/B 在桥仓，C 涉及桥+house 音频面/健康状态。卡 task-15（A/B + 重连槽位/日志：桥侧已 commit `9065d19` + push，164 passed，review PASS + verify VERIFIED；house speak-queue purge 仍待做）、task-16（C，blocked_by B1）。B1 已收口 `7b9035a`。
+  拔电时正在播报的 ~0.9s @48k 留在队列。A/B 在桥仓，C 涉及桥+house 音频面/健康状态。卡 task-15（已收口：桥 `9065d19`、house `88400aa`；桥 164 passed、house 1728 passed；两仓均 review PASS + verify VERIFIED）、task-16（C，blocked_by B1）。B1 已收口 `7b9035a`。
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
   不打 tag、不部署，真机与插设备等 9 哥 下午做。
 - 未完成项不宣称完成；上下文压缩后先读本节 + 任务板。
