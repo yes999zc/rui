@@ -71,6 +71,30 @@ def test_relative_seconds_and_optional_plus() -> None:
     assert parse_at("10m", now=REF) == REF + dt.timedelta(minutes=10)
 
 
+def test_relative_seconds_are_seconds_not_minutes() -> None:
+    """task-29: 「10秒钟之后」 must not become ten minutes.
+
+    ``+10s`` already round-tripped through ``_REL``; these cases pin the unit so a
+    future simplification of the regex cannot turn the ``s`` group into minutes.
+    """
+    for spec, expected in (
+        ("+10s", dt.timedelta(seconds=10)),
+        ("+1m30s", dt.timedelta(seconds=90)),
+        ("+90s", dt.timedelta(seconds=90)),
+        ("10s", dt.timedelta(seconds=10)),
+    ):
+        got = parse_at(spec, now=REF)
+        assert got - REF == expected, spec
+        assert abs((got - REF).total_seconds() - expected.total_seconds()) <= 1
+
+
+def test_thirty_seconds_before_midnight_crosses_to_the_next_day() -> None:
+    late = dt.datetime(2026, 10, 28, 23, 59, 30, tzinfo=ZONE)
+    assert parse_at("+30s", now=late) == dt.datetime(
+        2026, 10, 29, 0, 0, 0, tzinfo=ZONE
+    )
+
+
 def test_clock_time_later_today() -> None:
     assert parse_at("15:30", now=REF) == moment(22, 15, 30)
 
@@ -122,6 +146,13 @@ def test_unknown_time_is_refused_with_the_accepted_shapes() -> None:
             parse_at(spec, now=REF)
 
 
+def test_unsupported_units_are_refused_not_read_as_minutes() -> None:
+    """task-29: a unit the parser does not know must ask, never guess a nearby one."""
+    for spec in ("+10秒", "+10秒钟", "+10d", "+10min", "+10"):
+        with pytest.raises(TimeParseError):
+            parse_at(spec, now=REF)
+
+
 def test_a_date_that_does_not_exist_is_refused() -> None:
     with pytest.raises(TimeParseError):
         parse_at("2026-02-30T07:30", now=REF)
@@ -156,12 +187,23 @@ def test_the_zone_has_no_dst_to_get_wrong() -> None:
 
 
 # ------------------------------------------------------------------ humanize
-def test_humanize_minutes_then_clock() -> None:
-    assert humanize(REF + dt.timedelta(seconds=20), now=REF) == "马上"
+def test_humanize_seconds_then_minutes_then_clock() -> None:
+    # task-29: ten seconds is an exact moment, so the words must not round it away
+    # (「马上」 until 30 s, then 「2 分钟后」 for 90 s).
+    assert humanize(REF + dt.timedelta(seconds=10), now=REF) == "10 秒后"
+    assert humanize(REF + dt.timedelta(seconds=59), now=REF) == "59 秒后"
+    assert humanize(REF + dt.timedelta(seconds=60), now=REF) == "1 分钟后"
+    assert humanize(REF + dt.timedelta(seconds=90), now=REF) == "1 分 30 秒后"
     assert humanize(REF + dt.timedelta(minutes=10), now=REF) == "10 分钟后"
+    assert humanize(REF + dt.timedelta(minutes=10, seconds=5), now=REF) == "10 分 5 秒后"
     assert humanize(moment(22, 17), now=REF) == "今天17点"
     assert humanize(moment(23, 7, 30), now=REF) == "明天07点30分"
     assert humanize(moment(25, 7, 30), now=REF) == "10月25日07点30分"
+
+
+def test_humanize_rounds_a_hair_of_elapsed_time() -> None:
+    """The reply is rendered after the store write: 9.9996 s must still say 10."""
+    assert humanize(REF + dt.timedelta(seconds=9, microseconds=999_600), now=REF) == "10 秒后"
 
 
 # ------------------------------------------------------------------ the store
@@ -351,6 +393,47 @@ def test_set_then_list_then_cancel_through_the_tool_handlers(tmp_path) -> None:
     assert call(h["list_reminders"], {}) == "现在没有待办的提醒。"
 
 
+def test_a_ten_second_reminder_is_ten_seconds_and_the_reply_uses_that_at(tmp_path) -> None:
+    """task-29: the bug was a 10 s request stored as 10 min while the words said 10 s.
+
+    The reply is rendered from the stored ``item.at`` (the final scheduled moment),
+    never from the model's ``when`` argument and never from the utterance.
+    """
+    h = handlers(config_for(tmp_path))
+    reply = call(h["set_reminder"], {"text": "喝水", "when": "+10s"})
+    item = store(tmp_path).load()[0]
+    assert abs((item.at - item.created_at).total_seconds() - 10) <= 1
+    assert reply == f"好，{humanize(item.at)}提醒你喝水。"
+    assert reply == "好，10 秒后提醒你喝水。"
+    assert "10 分钟" not in reply
+
+
+def test_a_ninety_second_reply_says_one_minute_thirty_seconds(tmp_path) -> None:
+    """90 s used to read 「2 分钟后」 (30 s of overshoot); the reply says both units."""
+    h = handlers(config_for(tmp_path))
+    reply = call(h["set_reminder"], {"text": "关火", "when": "+90s"})
+    item = store(tmp_path).load()[0]
+    assert abs((item.at - item.created_at).total_seconds() - 90) <= 1
+    assert reply == f"好，{humanize(item.at)}提醒你关火。"
+    assert reply == "好，1 分 30 秒后提醒你关火。"
+
+
+def test_a_mixed_minute_and_second_when_is_90_seconds(tmp_path) -> None:
+    h = handlers(config_for(tmp_path))
+    call(h["set_reminder"], {"text": "关火", "when": "+1m30s"})
+    item = store(tmp_path).load()[0]
+    assert abs((item.at - item.created_at).total_seconds() - 90) <= 1
+
+
+def test_an_unsupported_unit_asks_and_creates_nothing(tmp_path) -> None:
+    h = handlers(config_for(tmp_path))
+    for when in ("+10秒", "+10d"):
+        reply = call(h["set_reminder"], {"text": "喝水", "when": when})
+        assert "没看懂" in reply, when
+        assert store(tmp_path).pending() == []
+        assert not (tmp_path / "data" / "reminders.json").exists()
+
+
 def test_the_store_lives_in_the_configured_data_dir(tmp_path) -> None:
     cfg = config_for(tmp_path)
     call(handlers(cfg)["set_reminder"], {"text": "关火", "when": "+10m"})
@@ -385,6 +468,16 @@ def test_llm_names_and_schemas_are_what_the_model_calls() -> None:
     assert tool["name"] == "set_reminder"
     assert tool["parameters"]["required"] == ["text", "when"]
     assert "when" in tool["parameters"]["properties"]
+
+
+def test_the_set_reminder_schema_teaches_seconds() -> None:
+    """task-29: the model picked +10m because the schema only showed minutes/hours."""
+    tool = SET_SPEC.as_llm_tool()
+    when = tool["parameters"]["properties"]["when"]["description"]
+    for shape in ("+10s", "+1m30s", "+90s", "+10m", "+1h30m"):
+        assert shape in when, shape
+    assert "+10s" in SET_SPEC.description
+    assert "秒钟" in SET_SPEC.description or "秒" in when
 
 
 def test_build_local_tools_keeps_the_information_tools_and_adds_reminders(tmp_path) -> None:

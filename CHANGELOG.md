@@ -18,6 +18,38 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.2] - 2026-10-28
+
+**Theme: reminders hear seconds.** 「十秒钟之后」 is now ten seconds, not ten minutes.
+No protocol change: `rui_compat` stays `>=0.8.1 <0.9.0`, and 0.8.1 plugins load
+unchanged.
+
+### Behaviour changes
+
+1. **`when` accepts second-scale relative times.** `+10s`, `+1m30s` and `+90s` join
+   `+10m` / `+1h30m` / `HH:MM` / ISO. The tool schema now names them and warns that
+   「十秒钟」 is `+10s`, not `+10m` — the model previously saw only minute/hour
+   examples and rounded a ten-second request up.
+2. **The spoken path claims 「N秒后 / N秒钟后 / N秒之后」 without an LLM.** The fixed
+   sentence grammar handles Arabic and Chinese numerals (`10秒`, `十秒`, `九十秒`),
+   including the time-first form 「10秒钟之后提醒我喝水」, and computes the moment
+   with `parse_at("+Ns")` — the same parser the tool path uses. Minute/hour relative
+   times still go to the model, as before.
+3. **The reply renders from the final scheduled `at`.** Both the voice path and
+   `local.set_reminder` speak/list the `humanize(item.at)` of the stored reminder, so
+   the words cannot disagree with what is actually scheduled. A missing action asks
+   for the action; an unparseable time or an unsupported unit (`+10秒`, `+10d`) asks
+   again and creates nothing.
+4. **Midnight is arithmetic, not a special case.** `23:59:45` + `+30s` lands at
+   `00:00:15` the next day through the same Shanghai-aware relative path.
+
+### Tests
+
+`tests/test_reminders.py` and `tests/test_reminder_voice.py`: `+10s` / `+1m30s` /
+`+90s` arithmetic, ten seconds ≠ ten minutes, Chinese numerals, cross-midnight,
+time-first sentences, reply text == stored `at`, the voice/tool parser spy, and
+unsupported units creating nothing.
+
 ## [0.8.1] - 2026-10-28
 
 **Theme: the follow-up window becomes honest.** A closed session no longer reopens

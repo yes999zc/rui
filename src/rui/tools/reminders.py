@@ -2,9 +2,9 @@
 
 职责边界（这一层刻意不做出声）
 --------------------------------
-本模块做三件事：把模型给的时间词（``+10m`` / ``+1h30m`` / ``07:30`` / ISO）换算成上海
-时区的绝对时刻；把提醒原子地落盘到 ``system.data_dir/reminders.json``；用一个纯内存调度
-器回答「现在有哪些到期了」，并保证同一条只交出去一次。
+本模块做三件事：把模型给的时间词（``+10s`` / ``+10m`` / ``+1h30m`` / ``07:30`` / ISO）
+换算成上海时区的绝对时刻；把提醒原子地落盘到 ``system.data_dir/reminders.json``；用一个
+纯内存调度器回答「现在有哪些到期了」，并保证同一条只交出去一次。
 
 到点之后怎么主动出声，是**下一层**（回合编排 / 音频面）的决定，不是这里的遗漏：
 
@@ -93,12 +93,14 @@ _CLOCK = re.compile(r"^(\d{1,2}):(\d{2})$")
 
 
 def parse_at(spec: str, now: dt.datetime | None = None) -> dt.datetime:
-    """`+10m` / `+1h30m` / `HH:MM` / ISO -> an aware Shanghai datetime.
+    """`+10s` / `+10m` / `+1h30m` / `HH:MM` / ISO -> an aware Shanghai datetime.
 
     Four accepted shapes, in the order they are tried:
 
-    - relative: ``+10m``, ``+1h30m``, ``+90s``, ``10m`` (the ``+`` is optional because a
-      model sometimes drops it; the unit is not optional, so ``10`` stays an error).
+    - relative: ``+10s``, ``+1m30s``, ``+90s``, ``+10m``, ``+1h30m``, ``10m`` (the ``+``
+      is optional because a model sometimes drops it; the unit is not optional, so
+      ``10`` stays an error). Seconds are part of the grammar because "十秒钟后" is a
+      different moment from "十分钟后", not a rounded one.
     - clock time: ``07:30`` — *the next* 07:30 in Shanghai. A time that already passed
       today means tomorrow, which is what "七点半叫我" means at 23:50 (00:10 is covered by
       the same rule: it rolls to the next day).
@@ -136,20 +138,27 @@ def parse_at(spec: str, now: dt.datetime | None = None) -> dt.datetime:
         parsed = dt.datetime.fromisoformat(text)
     except ValueError as exc:
         raise TimeParseError(
-            f"听不懂这个时间：{spec}（用 +10m / +1h30m / 07:30 / 2026-10-23T07:30）"
+            f"听不懂这个时间：{spec}（用 +10s / +1m30s / +10m / +1h30m / 07:30 / "
+            "2026-10-23T07:30）"
         ) from exc
     return parsed.replace(tzinfo=ZONE) if parsed.tzinfo is None else parsed.astimezone(ZONE)
 
 
 def humanize(at: dt.datetime, now: dt.datetime | None = None) -> str:
-    """What the answer says back: 「10 分钟后」「今天08点」「明天07点30分」."""
+    """What the answer says back: 「10 秒后」「1 分 30 秒后」「10 分钟后」「明天07点30分」."""
     at = _aware(at)
     base = _aware(now) if now is not None else dt.datetime.now(ZONE)
-    delta = (at - base).total_seconds()
-    if delta <= 30:
-        return "马上"
+    # Round once, up front: a reply rendered a few hundred microseconds after the store
+    # would otherwise turn a 10 s reminder into 「9 秒后」.
+    delta = int(round((at - base).total_seconds()))
+    if delta < 60:
+        # A moment that already passed never reads as a negative number of seconds.
+        return f"{max(0, delta)} 秒后"
     if delta < 3600:
-        return f"{max(1, round(delta / 60))} 分钟后"
+        minutes, seconds = divmod(delta, 60)
+        if seconds == 0:
+            return f"{minutes} 分钟后"
+        return f"{minutes} 分 {seconds} 秒后"
     day = at.date()
     today = base.date()
     if day == today:
@@ -215,12 +224,19 @@ _VOICE_TIME = re.compile(
 )
 _LEADING_JUNK = " \t，,、：:。.！!？?；;"
 _TRAILING_JUNK = " \t，,、：:。.！!？?；;"
-# Relative times belong to the LLM tool (`parse_at` takes +10m); the voice grammar
-# must not claim them and answer "when?" to a sentence that already said when.
+# Relative times in minutes/hours belong to the LLM tool (`parse_at` takes +10m); the
+# voice grammar must not claim them and answer "when?" to a sentence that already said
+# when. Seconds are the exception: they are claimed below and computed by `parse_at`.
 _RELATIVE_TIME = re.compile(
     r"(?:分钟|秒钟|秒|小时|钟头)\s*(?:之?后|以后)"
     r"|过\s*(?:\d+|[零〇一二两三四五六七八九十百]+|几)\s*"
     r"(?:分钟|秒钟|秒|小时|钟头)"
+)
+# task-29: 「10秒钟之后」 is an exact moment the grammar can compute, so it must not
+# reach the model (which used to answer +10m). The arithmetic is delegated to
+# `parse_at`; the voice path and the tool path therefore cannot disagree.
+_SECONDS_REL = re.compile(
+    rf"(?P<seconds>{_NUM})\s*(?:秒钟|秒)\s*(?:之?后|以后)"
 )
 # Any of these means the sentence already said when, even when the narrow grammar
 # cannot compute that shape. Asking "什么时候?" there is a wrong clarify; the LLM
@@ -406,16 +422,20 @@ def parse_voice(
         叫我后天晚上八点半在客厅关火
         下午三点提醒我在书房开会
         明天早上七点叫我在客厅吃药
+        10秒钟之后提醒我喝水
+        提醒我十秒后在客厅关火
 
     Time words: 今天/明天/后天 (optional; absent means "the next occurrence"),
     早上/上午/中午/下午/晚上, an hour with Chinese or Arabic digits, and 半 / 一刻 /
-    三刻 / N分. The action is the remainder; a leading ``在<room>`` is a routing target
-    only when the room equals a configured ``devices[].room`` exactly.
+    三刻 / N分; plus second-scale relative times (``N秒后`` / ``N秒钟之后`` / ``N秒以后``
+    with Chinese or Arabic digits), whose arithmetic comes from :func:`parse_at`. The
+    action is the remainder; a leading ``在<room>`` is a routing target only when the
+    room equals a configured ``devices[].room`` exactly.
 
     Returns None for a sentence without a trigger (the LLM path owns it), and for a
     triggered sentence that names a time shape this grammar does not compute
-    (「明早八点」「3天后」「每周一」「七点零一刻」): a wrong "什么时候?" is worse than
-    handing it to the model. The weak trigger 「叫我」 also returns None without a
+    (「明早八点」「3天后」「每周一」「七点零一刻」「十分钟后」): a wrong "什么时候?" is worse
+    than handing it to the model. The weak trigger 「叫我」 also returns None without a
     parseable time, because it is commonly a rename (「叫我小王」).
 
     Raises :class:`VoiceParseError` for a sentence that *is* a reminder but is missing
@@ -430,8 +450,9 @@ def parse_voice(
     taken = _take_trigger(raw)
     time_first = taken is None
     trigger, rest = ("", raw) if taken is None else taken
-    match = _VOICE_TIME.match(rest)
-    if match is None:
+    relative = _SECONDS_REL.match(rest)
+    match = None if relative is not None else _VOICE_TIME.match(rest)
+    if relative is None and match is None:
         if time_first:
             return None  # no trigger at the start and no leading time: not a reminder
         if _looks_like_time(rest):
@@ -441,13 +462,15 @@ def parse_voice(
             # 「叫我小王」「叫我怎么相信你」: a rename or other intent, not a reminder.
             return None
         raise VoiceParseError("time")
-    after_time = _lstrip_junk(rest[match.end():])
+    end = relative.end() if relative is not None else match.end()
+    after_time = _lstrip_junk(rest[end:])
     if time_first:
         triggered = _take_trigger(after_time)
         if triggered is None:
             return None  # a bare time is not a reminder request
         _, after_time = triggered
-    if (after_time.startswith("刻")
+    if relative is None and (
+            after_time.startswith("刻")
             or re.match(r"(?:差|过)[一二三]刻", after_time)):
         # An unhandled quarter shape (七点零一刻 / 差一刻 / 过一刻) matched the hour
         # but left the quarter in the action. Storing 07:01 or 07:00 would be wrong;
@@ -457,11 +480,20 @@ def parse_voice(
         # 「七点以后」 is an interval, not a moment: let the LLM ask or convert it.
         return None
 
+    if relative is not None:
+        seconds = _cn_number(relative.group("seconds"))
+        if seconds is None:
+            raise VoiceParseError("time")
+        # One arithmetic for both entry points: the tool passes "+10s" here too.
+        at = parse_at(f"+{seconds}s", now=base)
+    else:
+        at = _voice_moment(match, base)
+
     room, action = _take_room(after_time, rooms)
     text = " ".join(action.strip(_TRAILING_JUNK).split())
     if not text:
         raise VoiceParseError("text")
-    return VoiceReminder(text=text, at=_voice_moment(match, base), room=room)
+    return VoiceReminder(text=text, at=at, room=room)
 
 
 @dataclass(frozen=True)
@@ -762,10 +794,12 @@ class DueScheduler:
 SET_SPEC = ToolSpec(
     name="local.set_reminder",
     description=(
-        "定闹钟、提醒、计时。用户说「十分钟后提醒我关火」「半小时后叫我」「明早八点提醒我吃药」"
-        "就用这个。when 必须换算成这四种之一：+10m（十分钟后）、+1h30m（一个半小时后）、"
+        "定闹钟、提醒、计时。用户说「十秒钟后提醒我喝水」「十分钟后提醒我关火」"
+        "「半小时后叫我」「明早八点提醒我吃药」就用这个。when 必须换算成这几种之一："
+        "+10s（十秒后）、+1m30s（一分半后）、+10m（十分钟后）、+1h30m（一个半小时后）、"
         "07:30（下一个七点半）、2026-10-23T07:30（指定时刻）。"
-        "text 是到点要说的话，尽量短，比如「关火」「吃药」。"
+        "秒和分不能混：「十秒钟」是 +10s，不是 +10m。"
+        "text 是到点要说的话，尽量短，比如「喝水」「关火」「吃药」。"
     ),
     input_schema={
         "type": "object",
@@ -773,7 +807,10 @@ SET_SPEC = ToolSpec(
             "text": {"type": "string", "description": "到点要提醒的事，简短，例如「关火」"},
             "when": {
                 "type": "string",
-                "description": "时间：+10m / +1h30m / 07:30 / 2026-10-23T07:30",
+                "description": (
+                    "时间：+10s / +1m30s / +90s / +10m / +1h30m / 07:30 / "
+                    "2026-10-23T07:30；「十秒钟」用 +10s，不要写成 +10m"
+                ),
             },
         },
         "required": ["text", "when"],

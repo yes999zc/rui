@@ -20,11 +20,14 @@ from types import SimpleNamespace
 import pytest
 
 from rui.config.schema import Config, DeviceConfig, implicit_default_output_id
+from rui.tools import reminders as reminders_module
 from rui.tools.reminders import (
     ZONE,
     DueScheduler,
     ReminderStore,
     VoiceParseError,
+    humanize,
+    parse_at,
     parse_voice,
 )
 from rui.trace import TraceLog, TurnTrace
@@ -161,6 +164,70 @@ def test_relative_times_stay_on_the_llm_tool_path() -> None:
     assert parsed("提醒我过20分钟关火") is None
     # 「七点以后」 is an interval, not a moment.
     assert parsed("提醒我明天七点以后关火") is None
+
+
+@pytest.mark.parametrize(
+    ("sentence", "seconds", "text", "room"),
+    [
+        # task-29: 「10秒钟之后」 used to fall through to the model, which answered
+        # with +10m. Seconds now belong to the fixed grammar and never touch an LLM.
+        ("提醒我10秒钟之后喝水", 10, "喝水", None),
+        ("提醒我十秒之后喝水", 10, "喝水", None),
+        ("提醒我十秒钟后喝水", 10, "喝水", None),
+        ("提醒我10秒以后喝水", 10, "喝水", None),
+        ("10秒钟之后提醒我喝水", 10, "喝水", None),
+        ("十秒之后提醒我喝水", 10, "喝水", None),
+        ("提醒我30秒后喝水", 30, "喝水", None),
+        ("提醒我九十秒后喝水", 90, "喝水", None),
+        ("提醒我20秒之后在客厅喝水", 20, "喝水", "客厅"),
+        ("20秒后提醒我在客厅喝水", 20, "喝水", "客厅"),
+    ],
+)
+def test_voice_seconds_are_claimed_and_mean_seconds(
+    sentence: str, seconds: int, text: str, room: str | None,
+) -> None:
+    item = parsed(sentence)
+    assert item is not None, sentence
+    assert item.at - REF == dt.timedelta(seconds=seconds), sentence
+    # The bug: ten seconds was stored as ten minutes while the reply said ten seconds.
+    assert item.at - REF != dt.timedelta(minutes=seconds), sentence
+    assert item.text == text
+    assert item.room == room
+
+
+def test_voice_seconds_use_the_same_parser_as_the_tool(monkeypatch) -> None:
+    """task-29: both entry points must ask `parse_at`, not two arithmetic copies."""
+    seen: list[str] = []
+    real = reminders_module.parse_at
+
+    def spy(spec: str, now: dt.datetime | None = None) -> dt.datetime:
+        seen.append(spec)
+        return real(spec, now=now)
+
+    monkeypatch.setattr(reminders_module, "parse_at", spy)
+    item = parsed("提醒我十秒之后喝水")
+    assert item is not None and item.at == REF + dt.timedelta(seconds=10)
+    assert seen == ["+10s"]
+    assert parsed("30秒后提醒我喝水").at == real("+30s", now=REF)
+
+
+def test_voice_seconds_do_not_change_the_minutes_path() -> None:
+    """A minute-scale relative time still belongs to the tool (narrow grammar rule)."""
+    assert parsed("提醒我2分钟后喝水") is None
+    assert parse_at("+2m", now=REF) == REF + dt.timedelta(minutes=2)
+
+
+def test_voice_seconds_at_2359_cross_midnight() -> None:
+    late = dt.datetime(2026, 10, 28, 23, 59, 45, tzinfo=ZONE)
+    item = parsed("30秒之后提醒我喝水", now=late)
+    assert item is not None
+    assert item.at == dt.datetime(2026, 10, 29, 0, 0, 15, tzinfo=ZONE)
+
+
+def test_voice_seconds_without_an_action_asks_for_the_text() -> None:
+    with pytest.raises(VoiceParseError) as raised:
+        parsed("提醒我十秒之后")
+    assert raised.value.reason == "text"
 
 
 def test_time_shaped_sentences_are_left_to_the_model() -> None:
@@ -410,3 +477,27 @@ def test_a_non_reminder_sentence_is_left_to_the_model(tmp_path) -> None:
     assert _run_voice(app, runner, "今天天气怎么样") is False
     assert runner.spoken == []
     assert scheduler.store.pending(now=REF) == []
+
+
+def test_voice_ten_seconds_stores_ten_seconds_and_speaks_the_stored_at(tmp_path) -> None:
+    """task-29 end to end: no model, ten seconds stored, words derived from `item.at`."""
+    app, scheduler = _voice_app(tmp_path)
+    runner = _FakeRunner()
+    assert _run_voice(app, runner, "10秒钟之后提醒我喝水") is True
+    item = scheduler.store.pending(now=REF)[0]
+    assert item.at - REF == dt.timedelta(seconds=10)
+    assert item.text == "喝水"
+    assert runner.spoken[0] == f"好，{humanize(item.at, now=REF)}提醒你喝水。"
+    assert runner.spoken[0] == "好，10 秒后提醒你喝水。"
+    assert "10 分钟" not in runner.spoken[0]
+
+
+def test_voice_ninety_seconds_speaks_one_minute_thirty_seconds(tmp_path) -> None:
+    """The wording must match the stored moment to the second, not round to 「2 分钟后」."""
+    app, scheduler = _voice_app(tmp_path)
+    runner = _FakeRunner()
+    assert _run_voice(app, runner, "九十秒后提醒我关火") is True
+    item = scheduler.store.pending(now=REF)[0]
+    assert item.at - REF == dt.timedelta(seconds=90)
+    assert runner.spoken[0] == f"好，{humanize(item.at, now=REF)}提醒你关火。"
+    assert runner.spoken[0] == "好，1 分 30 秒后提醒你关火。"
