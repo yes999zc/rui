@@ -5,14 +5,18 @@
 phase-close: task-4
 
 **本阶段结论**：5 项 dot2 全局 env 已可按设备配；`max_planes` 默认 5；secrets/token 可逐台；
-P0-4 同房/跨房同词逻辑已自动化并有计数。**代码已 push，生产未部署**（仍 0.7.9，部署需 9 哥 执行）。
+P0-4 同房/跨房同词逻辑已自动化并有计数。**代码已 push；生产已由 9 哥 激活**（bridge `c64acb5`、manifest 已装、
+max_planes=5、`/health` 已确认，2 台 plane running）。验收可按 **3 台设备**（lx06 + 2×dot2）开始。
 
 ## 版本与契约
 
-- rui core：`75de4b4`（task-3）← `a36f678`（max_planes 5）← `7b5ca57`；**未打 tag、未发版**。
+- rui core：`cf1cf92`（§e/§f 文档）← `1a751ae`（d.8）← `6412b3a`（P0 收口）← `75de4b4`（task-3）
+  ← `a36f678`（max_planes 5）← `7b5ca57`；**未打 tag、未发版**。
 - rui-dot2-bridge：`c64acb5`；**未 bump 版本**（plug 仍 1.3.1）、`rui_compat` 仍 `>=0.6.0 <0.8.0`。
 - 契约：`rui-dot2-bridge/docs/contracts/C-001-per-device-params.md`（5 参数表 + 优先级 + 降级 + 回滚）。
-- 生产：NAS `/vol1/rui` 仍跑 0.7.9（`sha256:5aa362f6…`）；bridge 以源码挂载，需 pull + 重装 manifest + restart 才生效。
+- 生产（2026-10-28，9 哥 执行）：NAS `/vol1/rui` 仍跑 0.7.9 镜像；bridge 源码已 pull 到 `c64acb5`、
+  插件清单已装到 `/vol1/rui/data/plugs/dot2-echomuse/`、config `max_planes=5`；`/health` 已确认 `max_planes: 5`、2 台 plane running。
+- 第二台 dot2 的 token 已由 9 哥 刷成与第一台相同 ⇒ **P0-3 不需额外凭据工程**；共享 token 形态按 C-001 属可接受。
 
 ## 已完成
 
@@ -20,15 +24,22 @@ P0-4 同房/跨房同词逻辑已自动化并有计数。**代码已 push，生�
 2. **P0-2** `multi_device.max_planes` 默认 4→5（`schema.py:1068`，1–8 不变）；5 台通过、6 台按原文案拒绝；控制台中英文案同步。证据：house `1718/6`（task-2 时点）。
 3. **P0-3** secrets 隔离：`dev > params > DOT2_SECRETS_DIR > secrets/<id>(存在) > secrets`；token 逐台 `token_env` + 各自 `device_token`；共享仍兼容。证据：C-001 + 两设备独立复现。
 4. **P0-4** `arbitration_cross_echo_suppressed` 计数（coordinator.metrics）+ 同房 cross_echo/turn_open/同批 lost_same_word + 跨房 admit/409 测试 5 条（HEAD 上 5 failed → 当前 5 passed）。证据：house `1723 passed, 6 skipped`；全量曾因并发 pytest 抢临时端口 flaky 1 次（xiaoai bind），隔离/重跑均绿。
-5. **文档** `backlog-0.8.md §e` 登记 9 哥 两条房间策略（e.1 全场停止 / e.2 default_output），OPEN、决策权在 9 哥；`docs/待拍板.md` D-012 登记语音链路跨房打断风险。
+5. **文档/决策**：`backlog-0.8.md §e` 两项已 ANSWERED（e.1 全场停止 = **B**，词族待 9 哥 定稿；
+   e.2 提醒落点 = 三级规则：指令房间 → `default_output` → 离线回落并明说）；§f.1/§f.2 为后续落地卡（只登记）；
+   `d.8` 登记「唤醒后首句偶发空 ASR」；`docs/待拍板.md` D-012（语音跨房打断）、D-013（default_output 配哪台）OPEN。
+   代码核查纠正：rui 已有 `ReminderStore`/`build_scheduler`（真实缺口是语音入口/抢占/指定房间/离线明说）。
 
-## 下一步
+## 下一步（3 台设备验收起点 2026-10-28）
 
-1. **9 哥 插第 2 台前**：NAS `cd /opt/rui-dot2-bridge && git pull`（到 `c64acb5`）→ `sh deploy/downstream/install-plug-manifest.sh <data_dir>` → `docker compose -f docker-compose.yml -f rui-dot2-override.yml restart rui`。
-2. 第 2 台走 `/api/v2/devices`：独立 `listen_port`（8871）、`room`、`params.control_port`（0 或唯一端口）、`params.loudness_file` 指可写卷、`secrets_dir` 逐台（可选）；两台 `listen_port` 不同。
-3. 真机跑 `docs/release/acceptance-4devices.md` §6.5 同房交叉回声 + 跨房同词三用例；**录音/人耳**判「是否打断/双声」，异常升级 0.8 缺陷单。
-4. 第二台 PASS 后再插第 3 台，不要一次三台。
-5. P1：`d.7` volume 精确比较（加容差/仅配置变化写）；`e.1`/`e.2` 等 9 哥 拍板，实现者不许自行选。
+1. **确认第 2 台 dot2 已进配置**：`/health.devices` 应为 3（lx06 + dot2×2）；若仍 2 台，走 `/api/v2/devices`
+   加第 2 台：独立 `listen_port`（8871）、`room`、`params.control_port`（0 或唯一端口，如 8874）、
+   `params.loudness_file` 指可写卷（共享 token 已由 9 哥 刷好，无需另配 secrets）。
+2. 真机跑 `docs/release/acceptance-4devices.md` §6.5：同房交叉回声（A 播放→B 唤醒应 `cross_echo` + 计数）、
+   同房同词同时唤醒只一台接、跨房同词三个最不利用例；**录音/人耳**判「是否打断/双声」，异常升级 0.8 缺陷单。
+3. 3 台验收 PASS 后再插第 3 台 dot2（`listen_port` 8873），不要一次插三台。
+4. P1：`d.7` volume 精确比较（加容差/仅配置变化写）。
+5. 后续功能（不进本批）：§f.1 全场停止（等 9 哥 定词族 + 确认决策 2）、§f.2 语音定时提醒（等 D-013 定 `default_output`）。
+6. D-012：跨房语音唤醒当前会 `runner.abort()` 打断当前回合，真机听感后决定 A/B，不许实现者自行改。
 
 ## 收尾（0.7.9，2026-10-27）
 
