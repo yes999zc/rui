@@ -1207,7 +1207,7 @@ wheels = [
 
 [[package]]
 name = "rui"
-version = "0.8.3"
+version = "0.8.4"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

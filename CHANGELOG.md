@@ -18,6 +18,27 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.4] - 2026-10-28
+
+**Theme: every reminder remembers the room, and a comma is not a seam.** Two field
+reports from 21:13: the LLM tool path still dropped the room of an unnamed reminder, and
+a 13-character reply was still split at its comma because the merge window was 10 chars.
+
+### Fixed
+
+1. **The LLM `set_reminder` path carries the speaking room.** A per-turn
+   `ToolContext` (ContextVar, so one runner can serve every room) is scoped by
+   `TurnRunner.run`; the handler stores `room=context.room`. The voice fixed-sentence
+   path and the tool path share one `_reminder_room(cfg, client, named)` resolver;
+   channel/console turns have no speaking device and stay room-less. An unnamed
+   reminder from 次卧 now stops and speaks only in 次卧, never in 客厅.
+2. **Ultra-short merge window 10 → 16 characters.** 「一分钟后提醒你喝水，小志。」
+   (13 chars) is now one TTS request; the cap releases only at/after 16 chars, so the
+   extra wait is bounded by the next punctuation. 19-character two-sentence replies
+   still split, and first audio does not get later.
+
+No protocol or `rui_compat` change (`>=0.8.1 <0.9.0`); plugins unchanged.
+
 ## [0.8.3] - 2026-10-28
 
 **Theme: the seams you can hear, and the room that asked.** Two field reports from the
