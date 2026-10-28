@@ -426,6 +426,13 @@ class AudioPlane:
         ) / 1000.0
         # Post-playback mute (device-AEC plugs): frames are dropped from here on.
         self._mic_mute_until = 0.0
+        # Physical mute (task-18): device-sovereign state reported by drain_signals()
+        # as mute/unmute. Muted suppresses the wake cue but never the turn: the user
+        # still gets transcribed, and the ring stays red until it is unmuted.
+        self.device_muted = False
+        self._muted_known = False
+        self.key_events: dict[str, int] = {}
+        self.last_key: tuple[str, str] | None = None
         self.adapter: DeviceAdapter | None = None
         self.ring = PcmRing(capacity_ms=cfg.audio.playback.queue_ms, frame_ms=cfg.audio.voice.frame_ms)
         self.arrivals = ArrivalStats()
@@ -986,6 +993,9 @@ class AudioPlane:
             # counted and dropped instead of producing a second turn.
             vendor_wake = False
             for vendor in self._drain_signals():
+                # task-18: mute is applied before the wake branch below, so a key
+                # that arrives in this tick already suppresses this tick's cue.
+                self._handle_device_key(vendor)
                 if vendor.kind == "wake":
                     vendor_wake = True
                     # Mirror the control plane's VendorWindow locally: a device barge
@@ -1894,6 +1904,16 @@ class AudioPlane:
             mode = "none"
             cue_ms = 0.0
             hold_ms = 0.0
+        elif self.device_muted:
+            # task-18: silent ring, not a silent assistant. The mic keeps feeding the
+            # gate and ASR; only our own cue is suppressed (no cue also means no
+            # cue/echo hold, so the request after the wake keeps its first word).
+            audio = np.zeros(0, dtype="<i2")
+            mode = "none"
+            cue_ms = 0.0
+            hold_ms = 0.0
+            self.ack_skipped += 1
+            log.info("wake: device muted, ack skipped; the turn still opens")
         else:
             audio, mode, note = render_ack(self.cfg)
             self.ack_mode_effective = mode
@@ -1972,7 +1992,7 @@ class AudioPlane:
             # cue itself never reaches ASR.
             # A barge played no cue, so there is nothing to skip: holding here would swallow
             # the first words of the sentence the barge interrupted.
-            if not barge:
+            if not barge and audio.size:
                 # Hand the gate the cue we are about to play. A device's playback latency
                 # can push the cue past the skip window; the gate then measures how much
                 # was still unplayed and drops only that tail (2026-10-26 12:33: the
@@ -2747,6 +2767,68 @@ class AudioPlane:
         except Exception as exc:  # noqa: BLE001 - a light is never worth an outage
             log.info("led: %s", exc)
 
+    def _handle_device_key(self, event: _VendorEvent) -> None:
+        """Apply one physical-key signal (task-18).
+
+        Mute is device-sovereign: ``mute``/``unmute`` update the state, paint the
+        red ring (or hand the ring back on unmute) and make the next wake skip its
+        cue. Volume keys are reported and counted only: writeback to config is
+        task-19's job, and doing it here would fight the button's own ramp.
+        """
+        kind = event.kind
+        text = event.text
+        if kind in ("mute", "unmute"):
+            muted = kind == "mute"
+            if text in ("muted", "unmuted"):
+                muted = text == "muted"
+            self.device_muted = muted
+            self._muted_known = True
+            self.key_events[kind] = self.key_events.get(kind, 0) + 1
+            self.last_key = (kind, text)
+            log.info(
+                "device key: %s (observed=%s); wake cue %s, ring %s",
+                kind,
+                text or "?",
+                "suppressed" if muted else "restored",
+                "red" if muted else "restored",
+            )
+            if muted:
+                self._request_led("muted", repaint=True)
+            else:
+                gate = self.gate
+                listening = bool(gate is not None and getattr(gate, "armed", False))
+                self._request_led("listening" if listening else "off", repaint=True)
+        elif kind in ("volume_up", "volume_down"):
+            self.key_events[kind] = self.key_events.get(kind, 0) + 1
+            self.last_key = (kind, text)
+            # Clear + observed mute state; no config write yet (task-19).
+            log.info(
+                "device key: %s (observed=%s); volume writeback not implemented yet",
+                kind,
+                text or "?",
+            )
+        elif kind == "action":
+            self.key_events[kind] = self.key_events.get(kind, 0) + 1
+            self.last_key = (kind, text)
+            log.info("device key: action button (observed=%s)", text or "?")
+
+    def _seed_device_muted(self) -> None:
+        """Adopt the adapter's reported mute state before the first key event."""
+        adapter = self.adapter
+        if adapter is None or self._muted_known:
+            return
+        try:
+            health = dict(adapter.health() or {})
+        except Exception:  # noqa: BLE001 - diagnostics must not block capture
+            return
+        value = health.get("muted")
+        if value is True:
+            # Only "muted" is actionable here: seeding a false as *known* before the
+            # device has spoken would make a later real mute_state look unchanged.
+            self.device_muted = True
+            self._muted_known = True
+            log.info("device muted at connect; the wake cue stays off")
+
     def _request_led(self, effect: str, repaint: bool = False) -> None:
         """Paint the newest LED state and abandon any older paint still in flight.
 
@@ -2756,7 +2838,13 @@ class AudioPlane:
         after a later "off" and leave the ring green after the session closed. The
         newest state is the only one worth painting, so the previous task is cancelled
         as soon as a new one arrives.
+
+        While the device is muted the ring stays red: every later state (listening,
+        thinking, a stale off) is replaced by ``muted``, which is the one state the
+        key owns until it is pressed again (task-18).
         """
+        if self.device_muted:
+            effect = "muted"
         previous = self._led_task
         self._led_task = asyncio.create_task(
             self._apply_led(effect, repaint), name="led")
@@ -2983,6 +3071,9 @@ class AudioPlane:
             gate_interrupted=self.gate.interrupted if self.gate is not None else 0,
             speaker_connected=bool(health.get("connected")),
             speaker_rejected=int(health.get("rejected") or 0),
+            # Physical mute (task-18): the key's state, or the adapter's report
+            # before the first key frame. /health and the v2 console read this.
+            muted=bool(self.device_muted if self._muted_known else health.get("muted")),
             playback_s=round(self.playback_s, 1),
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
             playback_gap_count=self.playback_gap_count,
@@ -3120,6 +3211,9 @@ class AudioPlane:
         tasks: list[asyncio.Task] = []
         try:
             self.adapter = await self._open_adapter()
+            # A device that booted (or stayed) muted reports it through adapter
+            # health; adopt that before the first wake so the cue is not played.
+            self._seed_device_muted()
             # One probe for both Ready and capture: probing a second time in _capture
             # was an unguarded adapter call on the critical path (P1-3).
             probe = await safe_probe(self.adapter)

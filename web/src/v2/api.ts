@@ -1343,6 +1343,8 @@ export interface HealthAudioDevice {
   running: boolean
   speaker_connected: boolean
   speaker_rejected: number
+  /** Physical mute key state (task-18); a user choice, not a fault. */
+  muted: boolean
   restarts: number
   error: string
   pid: number | null

@@ -24,6 +24,7 @@ defineProps<{
             <th>{{ t('v2.health.audio.device') }}</th>
             <th>{{ t('v2.health.audio.plane') }}</th>
             <th>{{ t('v2.health.audio.speaker') }}</th>
+            <th>{{ t('v2.health.audio.muted') }}</th>
             <th>{{ t('v2.health.audio.wake') }}</th>
             <th>{{ t('v2.health.audio.restarts') }}</th>
             <th>{{ t('v2.health.audio.error') }}</th>
@@ -48,6 +49,12 @@ defineProps<{
               </span>
             </td>
             <td>{{ speakerText(row.speaker_connected) }}</td>
+            <td>
+              <span v-if="row.muted" class="badge badge-warn">
+                {{ t('v2.health.audio.muted') }}
+              </span>
+              <span v-else class="meta">{{ t('v2.common.no') }}</span>
+            </td>
             <td class="mono">
               {{ row.wake_admitted }} / {{ row.wake_candidates }}
               <span v-if="row.utterances" class="meta">

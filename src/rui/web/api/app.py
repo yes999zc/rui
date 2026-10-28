@@ -1896,6 +1896,9 @@ def _health_device_row(status: dict, device: DeviceConfig | None) -> dict:
         "running": bool(status.get("running")),
         "speaker_connected": bool(metrics.get("speaker_connected")),
         "speaker_rejected": int(metrics.get("speaker_rejected") or 0),
+        # task-18: the dot2 physical mute key, per device. A key press is not an
+        # error, so it never changes the row's severity.
+        "muted": bool(metrics.get("muted")),
         "restarts": int(status.get("restarts") or 0),
         "error": str(status.get("error") or ""),
         "pid": status.get("pid"),

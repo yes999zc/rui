@@ -216,3 +216,24 @@ def test_the_single_plane_health_gate_also_follows_the_fresh_flag(tmp_path: Path
     ok, reason = healthcheck.evaluate(body)
     assert ok is False
     assert "no speaker connected" in reason
+
+
+def test_health_row_exposes_the_physical_mute_state(tmp_path: Path) -> None:
+    """task-18: `/health.audio_devices[]` carries the dot2 mute key's state.
+
+    It is reported, not inferred, and it must not change the row's severity: a
+    muted speaker is a normal user choice, not a broken plane.
+    """
+    client, _ = _client(tmp_path, multi=False)
+    sup = _Sup("dot2", metrics={"speaker_connected": True, "muted": True})
+    client.app.state.audio = sup
+
+    body = client.get("/health", headers=AUTH).json()
+    row = next(row for row in body["audio_devices"] if row["id"] == "dot2")
+    assert row["muted"] is True
+    assert row["speaker_connected"] is True
+
+    sup.metrics = {"speaker_connected": True, "muted": False}
+    body = client.get("/health", headers=AUTH).json()
+    row = next(row for row in body["audio_devices"] if row["id"] == "dot2")
+    assert row["muted"] is False

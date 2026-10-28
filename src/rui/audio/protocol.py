@@ -136,6 +136,9 @@ class Metrics(BaseModel):
     aec_channel: int = 0
     ref_active: bool = False
     speaker_connected: bool = False
+    # Physical mute key (task-18), device-sovereign. Additive with a default so an
+    # older/third-party plane that never reports it still parses.
+    muted: bool = False
     # Connections refused for a bad/missing token since the plane started. The setup
     # wizard uses this to tell "no client yet" from "the client's token is wrong".
     speaker_rejected: int = 0
