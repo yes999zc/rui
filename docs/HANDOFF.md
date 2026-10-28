@@ -15,6 +15,11 @@
   13s 又 `led: listening` 并 repaint 卡住。要求：session closed（stop/结束词/farewell）后不得重回 listening；
   若保留 followup 窗口 N=8s，窗口结束立即 disarm + `led: off`；任何一轮结束 LED 事件最后一条必须是 `off`；
   repaint 有最大次数/超时；回归：stop 后 LED 序列以 off 结尾且 30s 无新 listening。
+- **P2 音量键回写（task-19，blocked_by task-18）**：真机 12:29–12:34 `volume: reconciled to 204 (config 80%)`
+  每 16s 一条且无 `dot2 link: volume` 事件 ⇒ 物理音量键改了设备但配置未回写，16s 内被拉回。
+  要求：volume_up/down 回写 `devices[].volume` 并持久化；按键后 10s 内 reconciler 不回拉；
+  d.7 容差（`8961cbf`）叠加后静置仍无每 16s 日志；测试注入按键→配置降低且不回拉、±1 级不下发。
+  跨桥/ house 两仓，两边 commit+push。
 - **P2 物理按键（task-18，blocked_by 15/17）**：桥 `device_link.py:461-467` 收到 button 但全仓无 `on_button` 注入，
   按键全丢；设备上报 `clickType` + `muted`。需注入 handler、映射 mute/volume_up/down/action、health+控制台+LED `muted`；
   静音时照常转写/亮灯但跳过 ack。`DOT2_MUTE` 是部署 env，别混。
