@@ -18,6 +18,70 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.5] - 2026-10-28
+
+**Theme: the line at the time you asked for, the minute you actually said, and a CI
+that can no longer hang.** A small release: no protocol change and no `rui_compat`
+change, plugins stay at **1.3.4** / **0.2.3**, and **nothing is deployed** by this tag
+(production remains 0.8.4).
+
+### Fixed
+
+1. **A due reminder is spoken as a reminder.** The online branch of `_reminder_line()`
+   returned the stored action text bare, so the room heard only 「起床」. It now uses
+   `reminder.due` (「时间到了，{text}。」); a leading setter trigger
+   (「提醒我 / 叫我 / 让我 / 叫你」) is stripped, trailing sentence marks are
+   normalised to one 「。」, and empty text degrades to 「时间到了。」. The offline
+   `reminder.offline` line is byte-for-byte unchanged. *(A)*
+2. **Minute-scale reminders are claimed by the fixed-sentence path.** 「一分钟后提醒我
+   喝水。」 used to fall through to the LLM tool because `parse_voice` only computed
+   seconds. It now claims `N分钟(之)后 / N分钟以后` (Chinese or Arabic digits) with the
+   same `parse_at("+Nm")` arithmetic as the tool path. The action must be **one
+   sentence**: a second sentence (「…。我是小志。」) still goes to the LLM, so the
+   task-32 behaviour and the speaking room are preserved. Both paths share the single
+   `_reminder_room()` resolver. Hours/days/weeks/quarters/intervals,
+   `过N分钟`/`半小时` and multi-sentence utterances stay with the model. *(B)*
+3. **A 17–20 character comma reply is one TTS request.** The 16-char clause window
+   still cut a reply whose comma sat at the 16th character into "16 chars + 1–4 char
+   tail" — the same vendor head/tail seam task-32 removed one band lower. A comma is
+   now a split point only when more than `SOFT_MERGE_MAX_CHARS` (20) characters of the
+   current sentence are buffered, so ≤20-char replies are one request while longer
+   answers still stream their first clause (release on the 21st buffered character).
+   Sentence ends, the ≤10-char hold and the 45-char cap are unchanged. *(E)*
+4. **CI `test (3.11)` no longer hangs.** CPython 3.11's `asyncio.wait_for` swallows a
+   cancellation that lands in the same event-loop tick as the inner future's completion
+   ([python/cpython#96764](https://github.com/python/cpython/issues/96764) — the
+   `wait_for` rewrite landed in 3.12 and was not backported to 3.11); `_speak_loop` waiting
+   on `wait_for(queue.get(), 0.5)` therefore stayed `cancelling` forever after shutdown,
+   which is why every push since 0.8.3 kept the 3.11 leg `in_progress`. The wait is now
+   `asyncio.timeout(0.5)` (same timeout, same `TimeoutError`, stdlib on 3.11+), and the
+   `test` job carries `timeout-minutes: 20` so a future hang fails fast instead of
+   burning GitHub's 6 h default. Tests were not weakened. *(G)*
+
+### Changed
+
+1. **LX06 客厅 example volume 60 → 45.** The shipped `config.example.yaml` lowers the
+   living speaker's `volume` (60 was measured too loud; dot2 units are fine and are not
+   touched). The schema default stays 60 on purpose, so a dot2 install that omits
+   `volume` keeps its old level. *(C)*
+2. **Docs**: a read-only diagnosis of the dot2 data-plane `code=1011` closes (bridge-side
+   WS keepalive, ~1.77% uplink gaps, **no behaviour change**, bridge untouched); the
+   sample-collection criteria for task-2 (「停止」 while music plays) / task-3
+   (158–221 ms gap after barge) as L25/L26 — **no code change** for either; and L21 was
+   refreshed to the 0.8.5 claim range (minute-scale relative times are now fixed-sentence,
+   multi-sentence utterances stay with the model). *(D/F)*
+
+### Not verified / not done
+
+- A/B/C/E are **not real-device verified** (wording, minute-claim hit-rate under ASR
+  noise, and the audible seam are all inference from unit tests).
+- **D is diagnosis only**; the bridge (`rui-dot2-bridge` 1.3.4) was not modified and no
+  runtime behaviour changed.
+- **task-2 / task-3 unchanged** (no stable sample); their observation criteria are in
+  `docs/known-limitations.md` L25/L26 and `docs/backlog-0.8.md`.
+- **H (console reply-segment metrics)** deferred to the backlog.
+- Production is **not** updated: 0.8.5 is tagged and released only.
+
 ## [0.8.4] - 2026-10-28
 
 **Theme: every reminder remembers the room, and a comma is not a seam.** Two field
