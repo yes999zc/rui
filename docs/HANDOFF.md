@@ -13,7 +13,7 @@
   全量 `1733 passed / 6 skipped`；review PASS + verify VERIFIED（修掉 1 处核心禁词注释）。卡 task-13，证据记 known-limitations L17。
 - **P1（紧随 P0）**：短回复「在，你说。」拆句 217 ms；≤8 字/≤1 句末标点不拆。卡 task-14（已实现；review PASS + verify VERIFIED，全量 1738/6；残余风险写入 d.10）。
 - **P0/P1 均已收口**；B1（task-8）恢复，之后 B2→B3（桥双窗口先于 core）→C。
-- **当前 HEAD**：`8344085`（P1）；P0 `82d45d9`、P1 `8344085`。B2/B3/C 未开工。
+- **当前 HEAD**：`7b9035a`（B1）；P0 `82d45d9`、P1 `8344085`、B1 `7b9035a`。B2/B3/C 未开工。
 - **P0b（2026-10-28 12:1x 真机，dot2 掉线）：三件 rui 侧修复，插在 B1 期间/之后**
   A 连接关闭必须丢弃未发送音频（禁止重放半句）；B 发送水位上限（256KB 或 2s 音频）+ 写超时→主动断开重连；
   C 半开连接检测（TCP keepalive 或 ping_timeout 30–60s）+ `speaker_connected` 改实时。每项回归测试 + 双闸门。
@@ -987,4 +987,4 @@ gh release view v0.7.1 --json tagName,url                                      #
   `test_panels.py` / `test_audit_fixes.py` 的 McpManager/ConfigCenter 注释改为「v1 payload only，
   UI 已删」；`App.vue` 空 `<style scoped>` 删除；`known-limitations.md` 新增 **L18**（HA `base_url` 在 v2 ToolsView 仍可改；缺 HA token 表单 与
   `/api/v1/config/raw` 视图，API 仍在）。删除项已在 Lead 的 `c28e5e4`（本地未 push）；
-  B1 剩余内容修改待最终 review/verify 后统一 re-commit 为干净提交。验证：目标 54 passed；全量 1710/6；ruff 绿；typecheck 绿。
+  B1 已最终 review PASS + verify VERIFIED，re-commit 为 `7b9035a`（feat(console)!，已 push）。验证：目标 54 passed；全量 1710/6；ruff 绿；typecheck 绿。
