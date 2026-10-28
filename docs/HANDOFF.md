@@ -48,6 +48,8 @@
 - **回滚顺序反向**：先 plugins 回 1.3.2 + 0.2.3（1.3.2 兼容 0.7.9/0.8.x），再镜像回 `sha256:5aa362f6…b9f7`，up -d，复验。
 - **部署前自检表**：core 0.8.1（—）；dot2 1.3.3（>=0.8.1 <0.9.0，需 core≥0.8.1）；xiaoai 0.2.3（>=0.7.0 <0.9.0，兼容）。必须用 v0.8.1 tag 的干净 commit 出镜像，不拿脏树。
 - **部署前 HANDOFF 必写一行**：「即将部署：core→0.8.1 → plugins→1.3.3」；部署后贴 /health + 三台 audio.say。
+- **task-31（提醒来源房间，0.8.3）**：固定句式不点名房间时用当前设备房间；次卧提醒不得播到客厅/停客厅歌；来源离线落 default_output+提示+计数。待 task-30 提交后做。
+- **0.8.3 范围冻结**：只装 task-30（接缝）+ task-31（来源房间）；task-2/task-3 无稳定样本不改；禁新功能/UI/契约/rui_compat/barge-AEC-音量-followup。门禁：全量+ruff+CI 四绿+双 review PASS+verify；顺序 task-30 收口 → task-31 → 一起 review/verify → 0.8.3 tag/release/镜像 → 一次部署 → D5；交付 ≤10 行 Δ + 改了什么/验收怎么判表。
 - **task-30（短回复逗号卡顿）**：已定位字面「在，你说。」本就不拆；真实触发是 `在，\n你说。` + 模型 >300ms 停顿导致 hold 到期拆段。已实现：ultra-short 缓冲区到期/force/tail 合并为一次 TTS + 段/段间静音插桩（process/protocol/trace/turn + tests/scripts）；全量在跑，review/verify 待做。
 - **secret-scan 已转绿（2026-10-28 20:06）**：实际命中是 HANDOFF 里的 LAN `192.168.5.168`（soft 类），不是 sha256；已改为 `<NAS-LAN-IP>`，run success。
 - **0.8.2 / 1.3.4 已发并部署（2026-10-28 20:0x）**：core tag `v0.8.2`→`7720709`，release https://github.com/yes999zc/rui/releases/tag/v0.8.2；桥 tag `v1.3.4`→`76b8947`，release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.4。部署：core digest `sha256:6b007a8c04e521efbc19c5624f6e397fc85160c701f8be1bd4d6da904da8d00d`，插件 1.3.4。D5：version 0.8.2/devices 3/errors 0/registered dot2+lx06；三台 say 均 ok；summaries 同前；followup 3000。
