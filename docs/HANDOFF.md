@@ -17,9 +17,9 @@ phase-close: task-11
   `docker-publish`（main 40717635389 / tag 40718665667）、`security`（40717635435 / 40718666213）、
   `secret-scan`（40717635240 / 40718665933）。`ci` 只在 main push 触发，以同一 commit 的 main run 为准。
 
-## 已完成（0.8.5，2026-10-28）
+## 已完成
 
-门禁：默认 3.12 全量 **1969 passed, 6 skipped**；Python 3.11 全量 **1969 passed, 6 skipped**；
+本批（0.8.5，2026-10-28）门禁：默认 3.12 全量 **1969 passed, 6 skipped**；Python 3.11 全量 **1969 passed, 6 skipped**；
 `ruff check src tests scripts/coverage_report.py` 绿；web `pnpm typecheck` + `pnpm build` 绿；
 fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；fresh verifier **VERIFIED**。
 
