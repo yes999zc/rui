@@ -41,6 +41,13 @@
   `tests/test_audio_wire_check.py` 12 项；全量 **1842 passed / 6 skipped**；ruff 通过、web typecheck 通过。
   细节 `docs/audio-wire-check.md`。桥侧无需改动（`dot2 adapter.play()` 直接 raise ValueError，未吞）。
 - **口径更新（2026-10-28 18:05，9哥）**：**0.8.0 不部署**，tag/release 保留作历史；0.8.1 合并 a–f 后发 v0.8.1 并直接部署。范围：a 告别/结束词不 arm 续听；b rs03qr 默认 followup_delay=300/post_mute=500（不动 lx06）；c 控制台暴露两字段；d task-23 part2 trace gap 块序号（protocol+trace additive）；e lx06 48k/16k 实测对齐 ADR + 冷启动可观测；f 文档。生产保持 0.7.9。D3 已改：followup 3000（非 0）、dot2-b params control_port=0 + loudness_file；dot2-b audio 保留。
+- **部署顺序纠正（2026-10-28，覆盖旧 D1→D2）**：**先 core 0.8.1，后插件 1.3.3**。
+  D1' 只改 override image→0.8.1 digest，up -d；验 version=0.8.1、devices=3、errors=0、registered dot2+lx06（插件仍 1.3.2，窗口兼容，可停）。
+  D2' 再换 plugins：桥 1.3.3（`>=0.8.1 <0.9.0`）+ xiaoai 0.2.3（`>=0.7.0 <0.9.0`），重启后复验。
+  D3' followup=3000（禁 0）、dot2-b params control_port=0 + loudness_file、保留 audio 覆盖。
+- **回滚顺序反向**：先 plugins 回 1.3.2 + 0.2.3（1.3.2 兼容 0.7.9/0.8.x），再镜像回 `sha256:5aa362f6…b9f7`，up -d，复验。
+- **部署前自检表**：core 0.8.1（—）；dot2 1.3.3（>=0.8.1 <0.9.0，需 core≥0.8.1）；xiaoai 0.2.3（>=0.7.0 <0.9.0，兼容）。必须用 v0.8.1 tag 的干净 commit 出镜像，不拿脏树。
+- **部署前 HANDOFF 必写一行**：「即将部署：core→0.8.1 → plugins→1.3.3」；部署后贴 /health + 三台 audio.say。
 - **进度（2026-10-28 18:55）**：c UI 卡片网格实现中（DevicesView/style + test_devices_view_grid）；d trace gap 块序号已实现（protocol/trace/app + 5 tests，全量 1887/6）；e/f 文档已写（ADR 0008、L23/L24、C-001 1.3.3、README 0.8.1 矩阵）。待 UI DONE + 三路 review/verify → 版本 bump 0.8.1 → tag/release → 部署 0.8.1。
 - **进度（2026-10-28 18:50）**：task-27 已提交 `d633d80`（house 1878/6，review PASS + verify VERIFIED）；桥 **1.3.3 已发**（`9866c6d`，tag `v1.3.3`→`31195ee`，`rui_compat >=0.8.1 <0.9.0`，release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.3）。生产插件仍是 1.3.2（无 voice）直到 0.8.1 部署。0.8.1 剩余：c 设备卡片网格、d trace gap 块序号、e lx06 ADR/冷启动、f 文档 + 版本 0.8.1。
 - **task-27（0.8.1 a/b/c）**：告别收尾不 arm + rs03qr 型号默认 + 控制台字段；house 1878/6、bridge 178/1；review 阻塞：`audio_defaults.voice` 被 <0.8.1 拒载 → **桥升 1.3.3，rui_compat >=0.8.1 <0.9.0**，生产插件 rs03qr 已回退到 1.3.2（无 voice）直到 0.8.1 部署。后续：task-28 卡片网格 UI、task-29 trace gap、task-30 lx06 ADR/冷启动/docs。生产 D3 已改 followup=3000、dot2-b params control_port=0 + loudness_file；dot2-b audio 保留；生产仍 0.7.9。
