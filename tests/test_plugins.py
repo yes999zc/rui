@@ -736,8 +736,8 @@ def test_builtin_uses_the_v1_matrix() -> None:
     assert builtin is not None
     # 0.6 M1: declaring audio_defaults requires rui-device/v1, whose matrix floor is
     # 0.3.0 (docs/socket-plug-v1.md §7). 0.6 M2: the manifest now ships in
-    # tests/fixtures/legacy_lx06/ and its ceiling leaves room for the 0.7.x line.
-    assert builtin.rui_compat == ">=0.3.0 <0.8.0"
+    # tests/fixtures/legacy_lx06/ and its ceiling leaves room for the 0.8.x line.
+    assert builtin.rui_compat == ">=0.3.0 <0.9.0"
     device = builtin.devices[0]
     assert device.schema == DEVICE_SCHEMA_V1
     assert device.compatibility is not None
@@ -751,7 +751,7 @@ def test_builtin_uses_the_v1_matrix() -> None:
 def test_the_example_v1_plugin_uses_the_v1_version_matrix() -> None:
     repo = Path(__file__).resolve().parents[1]
     example = load_plugin(repo / "examples" / "plugin-example")
-    assert example.rui_compat == ">=0.3.0 <0.8.0"
+    assert example.rui_compat == ">=0.3.0 <0.9.0"
     device = example.devices[0]
     assert device.schema == DEVICE_SCHEMA_V1
     assert device.compatibility is not None

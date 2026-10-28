@@ -6,7 +6,7 @@ schema: rui-plugin/v0
 id: sample-plug
 name: "Sample Plug (contract smoke fixture)"
 version: 1.0.0
-rui_compat: ">=0.3.0 <0.8.0"
+rui_compat: ">=0.3.0 <0.9.0"
 license: MIT
 maintainer: "rui maintainers"
 homepage: "https://example.invalid/sample-plug"

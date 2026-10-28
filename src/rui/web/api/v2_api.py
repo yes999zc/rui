@@ -1304,7 +1304,7 @@ def install_v2_routes(
             "contract": "C-002/1",
             "api_version": "2.0",
             "rui_version": __version__,
-            "compat": {"min": "0.6.0", "max_exclusive": "0.8.0"},
+            "compat": {"min": "0.7.0", "max_exclusive": "0.9.0"},
             "features": {
                 "house": True,
                 "house_audio": True,

@@ -111,7 +111,22 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
   （唯一白名单是 `config/removed_adapters.py` 里的修复句；`tests/fixtures/legacy_lx06/` 是外置桥的
   冻结夹具副本，不属于核心源码；测试里那条「旧拼写会被拒绝」的回归用例属测试白名单）。
 
-### b.3 `rui_compat` 契约窗口调整
+### b.3 `rui_compat` 契约窗口调整 —— **已落地 @（task-12）**
+
+- **落地结果（2026-10-28）**：core `/api/v2/meta` 的 `compat` 已改为
+  `{"min": "0.7.0", "max_exclusive": "0.9.0"}`（`src/rui/web/api/v2_api.py:1307`）；core 版本
+  `0.7.9 → 0.8.0`（`pyproject.toml`、`src/rui/__init__.py`、`uv.lock` 三处一致）。两个桥**先于** core
+  落地（顺序不可反）：`rui-dot2-bridge` **1.3.2**（`4536968`）、`rui-xiaoai-bridge` **0.2.3**（`0d82250`），
+  两边 manifest 都是 `rui_compat: ">=0.7.0 <0.9.0"`。core 侧夹具与示例
+  （`tests/fixtures/legacy_lx06/plugin.yaml`、`tests/fixtures/sample-plug/plugin.yaml`、
+  `examples/plugin-example/plugin.yaml`）上限抬到 `<0.9.0`；`tests/_plugin_compat.fixture_compat_range()`
+  仍由 `rui.__version__` 推导上限；`test_api_v2_read` 的 meta 断言与 `test_plugins` 的两条清单断言同步。
+  设备清单 `compatibility.rui_min` 未动（dot2 `0.3.0`、xiaoai `0.6.0`）。反向证据：临时 manifest 写
+  `rui_compat: ">=0.6.0 <0.8.0"` 被 loader 拒绝，报错原文
+  `plugin 'sample-plug' is incompatible: it requires RUI >=0.6.0 <0.8.0, but this build is 0.8.0; refusing to load it`。
+- **已做（2026-10-28，`053546a`）**：`docs/contracts/C-002-console-v2-api.md` 的旧窗口
+  `>=0.6.0, <0.8.0` 已同步为 `>=0.7.0, <0.9.0`，三处都改（§1 版本窗口 `:16`、§5.4
+  `meta.compat` 示例 `:372-373`、§7 兼容承诺 `:1137`）。发 tag 前不再欠契约侧同步。
 
 - **删的是什么（这里删的是旧窗口本身）**：**两个桥** manifest / `pyproject.toml` 里的 `rui_compat`
   与 **core 侧** `/api/v2/meta` 的 `compat`（`src/rui/web/api/v2_api.py`）一起从 `>=0.6.0 <0.8.0`

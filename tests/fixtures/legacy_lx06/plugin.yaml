@@ -4,9 +4,9 @@ name: "Xiaomi AI Speaker Pro (LX06)"
 version: 0.3.0
 # 0.6 M2: this package is image-shipped at /opt/rui-plugins/xiaoai and loaded by the
 # same manifest loader as a downstream plug. The floor moves with rui-device/v1; the
-# ceiling leaves room for the 0.7/0.7.x line, so a minor bump does not refuse the
+# ceiling leaves room for the 0.8.x line, so a minor bump does not refuse the
 # image plug (the 0.7.0 release hit exactly that gate).
-rui_compat: ">=0.3.0 <0.8.0"
+rui_compat: ">=0.3.0 <0.9.0"
 license: MIT
 maintainer: "rui maintainers"
 homepage: "https://github.com/coderzc/open-xiaoai"

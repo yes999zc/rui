@@ -51,9 +51,9 @@
 
 | rui 核心 | rui-dot2-bridge | rui-xiaoai-bridge |
 |---|---|---|
-| **0.7.9**（当前，patch）：意图层两处行为变更 + 唤醒应答提前，**真机未验**（见 [release notes](https://github.com/yes999zc/rui/releases/tag/v0.7.9)） | **1.3.1**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.3.0`（**本版无需重发**） | **0.2.2**：`rui_compat >=0.6.0 <0.8.0`、设备清单 `compatibility.rui_min=0.6.0`（**本版无需重发**） |
+| **0.8.0**（当前代码，**破坏性**；未打 tag、未发布）：删 `/legacy` 与 15 条老链接（一律 404）、旧 `adapter: xiaoai` 读入即拒绝（须改 `lx06`）、插件 `runtime.listen_port` 必填、契约窗口改为 `>=0.7.0 <0.9.0`；另含 P0/P1 修复（ack 回声、短回复、LED 收敛、掉线丢弃排队语音）与物理按键支持（静音、音量回写） | **1.3.2**：`rui_compat >=0.7.0 <0.9.0`（双窗口）、设备清单 `compatibility.rui_min=0.3.0` | **0.2.3**：`rui_compat >=0.7.0 <0.9.0`（双窗口）、设备清单 `compatibility.rui_min=0.6.0` |
+| 0.7.9（历史，patch）：意图层两处行为变更 + 唤醒应答提前 | 1.3.1（`>=0.6.0 <0.8.0`） | 0.2.2（`>=0.6.0 <0.8.0`） |
 | 0.7.8（历史）：控制台默认 v2、TLS 安装、插件外置 | 1.3.1 | 0.2.2 |
-| 0.8.0（计划，**破坏性**）：删 `/legacy`、旧 `adapter: xiaoai` 读入即拒绝（须改 `lx06`）、插件 `runtime.listen_port` 必填、契约窗口调整；桥**须先发双窗口**（`>=0.7.0 <0.9.0`），见 [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §a | 待定 | 待定 |
 | 0.7.4（历史） | 1.3.1 | 0.2.2 |
 
 > LX06 的插件**必须外置**：把 `rui-xiaoai-bridge` 挂到 `/opt/rui-plugins`，并设 `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`；挂上后日志为 `adapter plugins: registered dot2, lx06`。核心不再有兼容别名、也不回退内置实现；不挂插件时设备错误会明确提示去 mount 桥。**0.8.0 起旧配置里的 `adapter: xiaoai` 不再被迁移**：读入即失败，报错含 `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`，把该行改成 `lx06` 即可。
@@ -167,7 +167,7 @@ $ curl -s localhost:8080/health | python3 -c 'import json,sys;d=json.load(sys.st
 > 完整清单（编号 L1–L16）在 [`docs/known-limitations.md`](docs/known-limitations.md)；本节只列对外必须说的。
 
 - **HE-02 回声切除仍有缺口**：唤醒提示音的回声在「冷启动 + 不削波 + 设备播放延迟 > 800 ms」或「用户与提示音重叠 < 110 ms」时仍可能漏进 ASR；更细的门限实测是设备延迟 900–1200 ms 时不削波、1200 ms 削尾部、1200 ms 重叠时漏切（`docs/known-limitations.md` L1）。
-- **0.7.9 的意图层修复只经 headless 判定，真机未验**：C1（结束词 + 有歌 = 停歌**且**关会话）与 C2（结束词只认整句）以及随 0.7.9 落地的暂停/结束词语义，都只在单测里验过——**不要**把 0.7.9 描述成「意图层已修好」。真机验收项见 [`docs/acceptance-pending.md`](docs/acceptance-pending.md) 的 N1/N2/N3。
+- **0.7.9 的意图层修复：N1/N3 已在真机验过，N2 仍待按新口径复验**：2026-10-28 08:54–09:33（本地；UTC 00:54–01:33）在生产真机上确认了 C1（结束词 + 有歌 = 停歌**且**关会话）、暂停/结束词语义与唤醒应答改序，[`docs/acceptance-pending.md`](docs/acceptance-pending.md) 已勾 N1/N3/ACK-1/ACK-2。但**仍不要**把 0.7.9 描述成「意图层已修好」：N2 的判据被 d.6（`b91599a`）有意反转为「`停止你好` 命中结束词」，旧口径的真机记录作废，需按新口径复验 2 min；L17 唤醒回声修复（`82d45d9`，11:47）发生在那次真机之后，仍只经 headless 验证。
 - 对话运行器目前是单会话：一台设备唤醒时会中止另一台正在合成的回复（按房间隔离目前只覆盖播放与回合仲裁）；第二台同时发起对话会被 409 拒绝（2026-10-27 实测，见支持矩阵）。
 - 已播出的告别语尾音无法追回，只能阻止后续语音块。
 - 唤醒词暂不按房间隔离。**两台同型号 dot2 从未验证**（现网与全部真机记录都是 dot2 + lx06 异型号），同屋双设备的行为见 [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §c。
@@ -238,9 +238,9 @@ Two constraints must both hold: `compatibility.rui_min` in the device manifest (
 
 | rui core | rui-dot2-bridge | rui-xiaoai-bridge |
 |---|---|---|
-| **0.7.9** (current, patch): intent-layer behaviour + wake acknowledgement moved up, **not verified on hardware** (see [release notes](https://github.com/yes999zc/rui/releases/tag/v0.7.9)) | **1.3.1**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.3.0` (**no re-release needed**) | **0.2.2**: `rui_compat >=0.6.0 <0.8.0`, manifest `compatibility.rui_min=0.6.0` (**no re-release needed**) |
+| **0.8.0** (current code, **breaking**; not tagged, not released): `/legacy` and the 15 old links are gone (plain 404), a legacy `adapter: xiaoai` is rejected on load (change it to `lx06`), the plug manifest's `runtime.listen_port` is required, the compat window is now `>=0.7.0 <0.9.0`; also carries the P0/P1 fixes (ack echo, short replies, LED convergence, queued speech on link loss) and physical-key support (mute, volume write-back) | **1.3.2**: `rui_compat >=0.7.0 <0.9.0` (dual window), manifest `compatibility.rui_min=0.3.0` | **0.2.3**: `rui_compat >=0.7.0 <0.9.0` (dual window), manifest `compatibility.rui_min=0.6.0` |
+| 0.7.9 (historical, patch): intent-layer behaviour + wake acknowledgement moved up | 1.3.1 (`>=0.6.0 <0.8.0`) | 0.2.2 (`>=0.6.0 <0.8.0`) |
 | 0.7.8 (historical): v2 console default, TLS install, external plugs | 1.3.1 | 0.2.2 |
-| 0.8.0 (planned, **breaking**): remove `/legacy`, reject the old `adapter: xiaoai` spelling on load (change it to `lx06`), require the plug manifest's `runtime.listen_port`, adjust the compat window; bridges must ship **dual-window** first (`>=0.7.0 <0.9.0`), see [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §a | TBD | TBD |
 | 0.7.4 (historical) | 1.3.1 | 0.2.2 |
 
 > The LX06 plug is **external only**: mount `rui-xiaoai-bridge` under `/opt/rui-plugins` and set `RUI_ADAPTER_PLUGINS` + `PYTHONPATH=/opt/rui-plugins`; with it mounted the log reads `adapter plugins: registered dot2, lx06`. There is no compatibility alias and no built-in fallback, and without the plug the device error tells you to mount the bridge. **Since 0.8.0 a legacy `adapter: xiaoai` is no longer migrated**: it fails on load with `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`. Change that line to `lx06`; do not wait for a fallback.
@@ -354,7 +354,7 @@ Self-signed only makes the plane start; real-device acceptance depends on the de
 > The full list (entries L1–L16) lives in [`docs/known-limitations.md`](docs/known-limitations.md); this section only carries what users must know.
 
 - **The HE-02 echo-excision gap is still open**: the acknowledgement cue can still slip into ASR on a cold start with no clipping and >800 ms device latency, or when the user overlaps the cue by less than 110 ms; the finer thresholds are: no excision at 900–1200 ms device lag, tail clipped at 1200 ms, missed when overlapped at 1200 ms (`docs/known-limitations.md` L1).
-- **The 0.7.9 intent-layer fix is headless-only, not verified on a real device**: C1 (an end word with music playing now stops the song **and** closes the session) and C2 (end words match the whole utterance only), plus the pause/end-word semantics landing with 0.7.9, were checked in unit tests only — do **not** describe 0.7.9 as "the intent layer is fixed". Real-device items are N1/N2/N3 in [`docs/acceptance-pending.md`](docs/acceptance-pending.md).
+- **The 0.7.9 intent-layer fix: N1/N3 are verified on a real device, but N2 still needs a re-check**: production hardware on 2026-10-28 (08:54–09:33 local, 00:54–01:33 UTC) confirmed C1 (an end word with music playing stops the song **and** closes the session), the pause/end-word semantics and the reordered wake acknowledgement, and [`docs/acceptance-pending.md`](docs/acceptance-pending.md) ticks N1/N3/ACK-1/ACK-2. Do **not** describe 0.7.9 as "the intent layer is fixed" yet: `b91599a` (d.6) deliberately inverted N2 to "`停止你好` matches the end word", which voids the old-criterion hardware record, so N2 needs a 2 min re-check under the new wording; the L17 ack-echo fix (`82d45d9`, 11:47) landed after that run and is still headless-only.
 - The dialogue runner is single-session: a wake on one device aborts a reply being synthesised for another (per-room isolation currently covers playback and turn arbitration only); a second simultaneous turn is refused with 409 (measured 2026-10-27, see the support matrix).
 - A goodbye that has already been spoken cannot be recalled; only queued chunks are dropped.
 - Wake words are not yet isolated per room. **Two same-model Dot2 units have never been verified** (production and every real-device record use the mixed dot2 + lx06 pair); see [`docs/backlog-0.8.md`](docs/backlog-0.8.md) §c for the two-in-one-room behaviour we still have to measure.

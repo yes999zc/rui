@@ -16,33 +16,128 @@ canonical per-version record.
 
 ## [Unreleased]
 
-### Removed
+_Nothing yet._
 
-- **A stale adapter spelling and an implicit listen port are now load errors (0.8.0
-  breaking change).** `src/rui/config/legacy_adapters.py` and the on-load rewrite are
-  gone. `devices[].adapter` is required and has no model default, and a config that
-  still says `adapter: xiaoai` fails on load with
-  `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`.
-  Nothing is rewritten and no deprecation warning is emitted; change that line to
-  `lx06`. The 4412 compatibility port for `rui-device/v0` manifests is gone too:
-  `runtime.listen_port` is required, so a custom plug that omitted it is rejected
-  instead of silently binding 4412. `/health.adapter_plugins.warnings` no longer
-  counts old spellings, and `/health.warnings` no longer has a
-  `legacy_adapter_spelling` row. `config/recovery.py` keeps its policy: the bad file
-  is copied aside, the service starts from last-good/defaults, and the note exposed by
-  `GET /api/v1/config/recovery` carries the same fix sentence. 中文一句话：老配置不会
-  被悄悄改写，启动即报错并告诉你把 `adapter: xiaoai` 改成 `lx06`；自制插件的
-  `runtime.listen_port` 也必须写明。
+## [0.8.0] - 2026-10-28
 
-- **The legacy console is gone (0.8.0 breaking change).** `/legacy`, its SPA shell, the
-  root catch-all that served it and the **15 old-link 302s** (`/panel/*` × 11 plus
-  `/setup`, `/secrets`, `/diagnostics`, `/channels`) are deleted. Those paths answer
-  **404**; `/` is a 302 to `/v2/` (query preserved) and nothing else. The frontend keeps
-  only the v2 tree plus the shared `AppIcon.vue` / `theme.ts` / `style.css` /
-  `vite-env.d.ts` / `public/*`; root static assets (`/favicon.svg`, `/fonts/*`,
-  `/logo*.svg`, `/assets/*`) are explicit mounts now. `web.console` stays in the config
-  schema for compatibility but its value is ignored — there is no rollback switch.
-  `/api/v1/panels` remains (v1 is frozen); `/api/v2` and `/v2/assets` are untouched.
+**Theme: the 0.8.0 breaking release.** Three breaking changes, in the order they bite:
+(1) the legacy console and its 15 old links are gone — plain **404**, (2) a config that
+still says `adapter: xiaoai` (or a plug manifest that omits `runtime.listen_port`) is a
+**load error**, and (3) the compatibility window moves to **`>=0.7.0 <0.9.0`** in both
+`/api/v2/meta` and the two bridge manifests. Everything else in this version is the
+P0/P1 batch that landed on `main` after 0.7.9.
+
+> **Tree version — not tagged, not released, not deployed.** The version bump
+> (`pyproject.toml`, `src/rui/__init__.py`, `uv.lock`) and this section describe the
+> tree only: there is no `v0.8.0` tag, no image digest and no production change yet.
+> 生产仍是 0.7.9；发版与部署由 9 哥 亲手做。
+
+### Breaking changes
+
+1. **The legacy console is gone — `/legacy` and the 15 old links are 404.** `/legacy`,
+   its SPA shell, the root catch-all that served it and the **15 old-link 302s**
+   (`/panel/*` × 11 plus `/setup`, `/secrets`, `/diagnostics`, `/channels`) are deleted.
+   Those paths answer **404**; `/` is a 302 to `/v2/` (query preserved) and nothing else.
+   The frontend keeps only the v2 tree plus the shared `AppIcon.vue` / `theme.ts` /
+   `style.css` / `vite-env.d.ts` / `public/*`; root static assets (`/favicon.svg`,
+   `/fonts/*`, `/logo*.svg`, `/assets/*`) are explicit mounts now. `web.console` stays in
+   the config schema for compatibility but its value is ignored — there is no rollback
+   switch. `/api/v1/panels` remains (v1 is frozen); `/api/v2` and `/v2/assets` are
+   untouched. Anything bookmarked under `/panel/*`, `/setup`, `/secrets`, `/diagnostics`
+   or `/channels` must be re-pointed at its `/v2/*` page.
+
+2. **A stale adapter spelling and an implicit listen port are now load errors.**
+   `src/rui/config/legacy_adapters.py` and the on-load rewrite are gone.
+   `devices[].adapter` is required and has no model default, and a config that still says
+   `adapter: xiaoai` fails on load with
+   `devices[i] (room): adapter 'xiaoai' is no longer accepted in 0.8.0; change devices[].adapter to 'lx06'`.
+   Nothing is rewritten and no deprecation warning is emitted; change that line to
+   `lx06`. The 4412 compatibility port for `rui-device/v0` manifests is gone too:
+   `runtime.listen_port` is required, so a custom plug that omitted it is rejected
+   instead of silently binding 4412. `/health.adapter_plugins.warnings` no longer counts
+   old spellings, and `/health.warnings` no longer has a `legacy_adapter_spelling` row.
+   `config/recovery.py` keeps its policy: the bad file is copied aside, the service starts
+   from last-good/defaults, and the note exposed by `GET /api/v1/config/recovery` carries
+   the same fix sentence. 中文一句话：老配置不会被悄悄改写，启动即报错并告诉你把
+   `adapter: xiaoai` 改成 `lx06`；自制插件的 `runtime.listen_port` 也必须写明。
+
+3. **The compat window is now `>=0.7.0 <0.9.0`.** `GET /api/v2/meta` returns
+   `"compat": {"min": "0.7.0", "max_exclusive": "0.9.0"}`
+   (`src/rui/web/api/v2_api.py`). Both bridges ship the same window in their manifests:
+   `rui-dot2-bridge` **1.3.2** (`4536968`) and `rui-xiaoai-bridge` **0.2.3** (`0d82250`)
+   both declare `rui_compat: ">=0.7.0 <0.9.0"`. Core 0.8.0 **refuses** any manifest whose
+   ceiling is still `<0.8.0`, and a core still on 0.6.x refuses the new dual-window
+   bridges — upgrade the core and the bridges together. Device manifests are untouched:
+   `compatibility.rui_min` stays `0.3.0` (dot2) / `0.6.0` (xiaoai). 中文一句话：0.6.x
+   core 不再被支持（桥拒绝加载）；自制插件若还写 `rui_compat: ">=0.6.0 <0.8.0"`，
+   0.8.0 会拒绝并报出 manifest 窗口与当前构建（报错里不列 core 支持的区间）。
+
+### P0/P1 fixes
+
+- **P0 — the wake acknowledgement is no longer replayed as a user turn** (`82d45d9`;
+  known limitation L17). The echo gate computed the cue length with the *device* playback
+  rate (48 kHz) against a 16 kHz rendered cue, so a 460 ms "在呢" became 153 ms of cue and
+  the rest was replayed: `transcript='在呢？'` → `reply='在，你说。'`, a 4.18 s
+  self-answer. The window is now derived from the rendered rate, the hold starts when the
+  cue finishes (`ACK_PLAYOUT_LEAD_MS=850` + cue + `ack_echo_ignore_ms`), and the VAD's
+  first wake uses a measured prior (740 ms) instead of an unlearned lag. Cost, by design:
+  **+850 ms** of buffered suppression on every wake (audio is buffered, not dropped).
+  Covered by `tests/test_ack.py` and `tests/test_ack_echo_gate.py`; **hardware
+  re-verification is still pending** (L17).
+- **P0b — a dropped speaker link discards queued speech** (`88400aa`; bridge `9065d19`).
+  A Dot2 reconnect no longer replays the tail of the sentence that was being spoken when
+  the link died (measured: ~0.9 s @48 kHz left in the queue after unplugging). The bridge
+  side adds a send watermark, a write timeout and half-open detection, and
+  `speaker_connected` is reported fresh instead of sticky; the any-room health semantics
+  are pinned in `tests/test_health_planes.py` (`d9d4b76`).
+- **P1 — short replies are synthesised once** (`8344085`). Replies of ≤8 characters with
+  ≤1 sentence-final punctuation are no longer split into two utterances, removing the
+  217 ms gap after 「在，你说。」.
+- **P1 — a closed session stays closed** (`925eb18`). After a stop intent, an end word or
+  a farewell the LED no longer goes back to `listening`; the follow-up window is finite
+  (N=8 s) and disarms to `led: off` when it expires; the last LED event of a turn is
+  always `off`, and repaint attempts are bounded.
+- **P1 — stop matching strips a fixed wake-word tail** (`b91599a`). `停止你好` /
+  `停止小爱同学` now hit the stop intent instead of falling through to the model. This
+  **reverses** the 0.7.9 expectation recorded as N2 in `docs/acceptance-pending.md`; the
+  old wording said such utterances must not match.
+- **P1 — volume reconcile tolerates one mixer step** (`8961cbf`, backlog d.7).
+  `_reconcile_volume` no longer re-sends `set_vol` every ~16 s when the mixer reports a
+  one-step difference on the 0–255 scale. The cost is explicit: a genuine one-step drift
+  is not corrected.
+
+### Added
+
+- **Physical mute and volume keys are honoured** (`de89e65`, `58c845e`; bridge
+  `0698460`). Dot2 key events now reach the core: mute is applied (the acknowledgement is
+  skipped, transcription and LED still run) and exposed in `/health` and `/v2`; volume
+  up/down write back `devices[].volume`, persist it, and suppress the reconciler for 10 s
+  (5 % steps).
+
+### Evidence
+
+- `uv run pytest -o addopts=""` — **1752 passed / 6 skipped** (unchanged from the
+  pre-change baseline of 1752/6, no regressions); `uv run ruff check src tests` green;
+  `uv lock --check` green.
+- Probe: `GET /api/v2/meta` → `rui_version=0.8.0`,
+  `compat={"min":"0.7.0","max_exclusive":"0.9.0"}`; `rui.__version__ == "0.8.0"`; a
+  temp manifest declaring `rui_compat: ">=0.6.0 <0.8.0"` is refused by the loader:
+  `plugin 'sample-plug' is incompatible: it requires RUI >=0.6.0 <0.8.0, but this build
+  is 0.8.0; refusing to load it`.
+- Bridges: dot2 `4536968` (1.3.2) and xiaoai `0d82250` (0.2.3) both declare
+  `rui_compat ">=0.7.0 <0.9.0"`; neither is bumped by this release.
+
+### Known limitations
+
+- L17 (ack echo) is still headless-only: the fix (`82d45d9`) landed at 11:47 local on
+  2026-10-28, i.e. **after** the 08:54–09:33 hardware run, so the +850 ms suppression has
+  not been exercised on a speaker. The trade itself is deliberate.
+- The 0.7.9 intent-layer changes **were** checked on hardware on 2026-10-28 (08:54–09:33
+  local, 00:54–01:33 UTC): N1, N3, ACK-1 and ACK-2 are ticked in
+  `docs/acceptance-pending.md`. **N2 is the exception** — `b91599a` (d.6) inverted its
+  criterion to "matches the end word", so the 09:32 run used the now-void wording and N2
+  needs a ~2 min re-check (`停止你好` / `停止播放你好` → stop + close;
+  `停止你好吗` / `你好停止` → no match).
 
 ## [0.7.9] - 2026-10-27
 

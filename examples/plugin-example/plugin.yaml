@@ -2,7 +2,7 @@ schema: rui-plugin/v0
 id: example-plugin
 name: "Example Open Speaker Plug"
 version: 1.0.0
-rui_compat: ">=0.3.0 <0.8.0"
+rui_compat: ">=0.3.0 <0.9.0"
 license: MIT
 maintainer: "Example / EchoMuse <dev@example.invalid>"
 homepage: "https://example.invalid/plugin"

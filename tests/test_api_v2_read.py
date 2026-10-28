@@ -100,7 +100,7 @@ def test_meta_describes_the_contract(console):
     body = response.json()
     assert body["contract"] == "C-002/1"
     assert body["api_version"] == "2.0"
-    assert body["compat"] == {"min": "0.6.0", "max_exclusive": "0.8.0"}
+    assert body["compat"] == {"min": "0.7.0", "max_exclusive": "0.9.0"}
     assert body["features"]["house"] is True
     assert body["features"]["device_activity"] is True
     assert body["capabilities"] == [

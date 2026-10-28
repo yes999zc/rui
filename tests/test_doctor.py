@@ -274,7 +274,7 @@ def _write_manifest_only_dot2_plug(tmp_path: Path) -> None:
         "id": "dot2",
         "name": "Echo Dot 2",
         "version": "1.2.0",
-        "rui_compat": ">=0.5.0 <0.8.0",
+        "rui_compat": ">=0.5.0 <0.9.0",
         "license": "MIT",
         "maintainer": "rui maintainers",
         "homepage": "https://example.invalid/dot2",
