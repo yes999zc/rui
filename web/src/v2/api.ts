@@ -1472,6 +1472,82 @@ export interface ConfigRecoveryRestoreResponse {
   restart_required: boolean
 }
 
+/* — notification channels (D8) ——————————————————————————————
+ *
+ * `GET/PUT /api/v1/channels` is the v1 non-device surface the v2 console keeps
+ * (C-002 §1.2): the channel gateway is a separate process, so the page edits
+ * `channels.json` and the gateway reads it at startup. Token values are never
+ * part of this API: Telegram exposes `token_configured` only, and WeChat the
+ * saved login account. The gateway actions are start/stop/restart; a missing
+ * supervisor is a 503 the page renders as "gateway not ready".
+ */
+
+export type ChannelReplyMode = 'text' | 'voice' | 'both'
+
+export interface TelegramChannelState {
+  enabled: boolean
+  allowed_chat_ids: string[]
+  reply_mode: ChannelReplyMode
+  /** Presence only — the token itself is never returned to the console. */
+  token_configured: boolean
+}
+
+export interface WeixinChannelState {
+  enabled: boolean
+  allowed_user_ids: string[]
+  reply_mode: ChannelReplyMode
+  data_dir: string
+  logged_in: boolean
+  account_id: string
+  user_id: string
+}
+
+/** The managed gateway child process, as `ChannelSupervisor.status()` reports it. */
+export interface ChannelGatewayStatus {
+  running: boolean
+  pid: number | null
+  started_at: number | null
+  uptime_s: number
+  last_error: string
+  log_path: string
+  managed: boolean
+  enabled: boolean
+}
+
+export interface ChannelGateway {
+  command: string
+  config_note?: string
+  config_path: string
+  /** `null` when the control plane has no channel supervisor. */
+  status: ChannelGatewayStatus | null
+}
+
+export interface ChannelsState {
+  telegram: TelegramChannelState
+  weixin: WeixinChannelState
+  gateway: ChannelGateway
+}
+
+/** `PUT /channels` accepts only these two keys and only the editable fields. */
+export interface TelegramChannelPatch {
+  enabled: boolean
+  allowed_chat_ids: string[]
+  reply_mode: ChannelReplyMode
+}
+
+export interface WeixinChannelPatch {
+  enabled: boolean
+  allowed_user_ids: string[]
+  reply_mode: ChannelReplyMode
+}
+
+export interface ChannelsPatch {
+  telegram?: TelegramChannelPatch
+  weixin?: WeixinChannelPatch
+}
+
+export type ChannelGatewayAction = 'start' | 'stop' | 'restart'
+
 export const api = {
   meta: (): Promise<MetaInfo> => request<MetaInfo>('/api/v2/meta'),
   house: (): Promise<HouseInfo> => request<HouseInfo>('/api/v2/house'),
@@ -1694,6 +1770,28 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ mode }),
     }),
+
+  /* — notification channels (v1 non-device, D8) ————————————————— */
+
+  /** `GET /api/v1/channels` — both channels plus the gateway's status. */
+  channels: (): Promise<ChannelsState> => request<ChannelsState>('/api/v1/channels'),
+
+  /**
+   * `PUT /api/v1/channels` — send only the channel being saved.
+   *
+   * The server merges the patch into the current state, strips empty ids and
+   * rewrites `channels.json` atomically (0600). The page still re-reads with
+   * `channels()` afterwards: the write response is not treated as proof.
+   */
+  saveChannels: (patch: ChannelsPatch): Promise<ChannelsState> =>
+    request<ChannelsState>('/api/v1/channels', {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+
+  /** `POST /api/v1/channels/gateway/{action}` — 503 when no supervisor exists. */
+  channelGateway: (action: ChannelGatewayAction): Promise<ChannelGatewayStatus> =>
+    request<ChannelGatewayStatus>(`/api/v1/channels/gateway/${action}`, { method: 'POST' }),
 
   /** `GET /api/v1/turns?limit=N` — newest first; `limit` is clamped to 1..200. */
   turns: (limit = 20): Promise<TurnsResponse> =>

@@ -3276,3 +3276,87 @@ a.v2-run-badge:hover {
     flex-wrap: wrap;
   }
 }
+
+/* — notification channels (D8) ——————————————————————————— */
+
+.v2-channels-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s4);
+  align-items: start;
+}
+
+.v2-channels-grid > .v2-card {
+  margin-top: 0;
+}
+
+.v2-channel-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.v2-channel-card .field-row {
+  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+}
+
+.v2-channel-status {
+  margin-bottom: var(--s3);
+}
+
+.v2-channel-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.v2-id-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: 6px;
+}
+
+.v2-id-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.v2-channel-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: var(--s4);
+  border-top: 1px solid var(--line);
+}
+
+.v2-channel-feedback {
+  font-size: 12.5px;
+}
+
+.v2-channel-feedback.is-ok {
+  color: var(--ok);
+}
+
+.v2-channel-feedback.is-warn {
+  color: var(--warn);
+}
+
+.v2-channel-feedback.is-fail {
+  color: var(--fail);
+}
+
+.v2-gateway-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+@media (max-width: 900px) {
+  .v2-channels-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

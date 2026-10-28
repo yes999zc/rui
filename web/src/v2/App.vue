@@ -42,13 +42,14 @@ const runSubnav: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'memory', to: '/memory', labelKey: 'v2.nav.memory' },
 ]
 
-/** Sub-navigation under the Config section (M9): five config pages. */
+/** Sub-navigation under the Config section (M9/D8): six config pages. */
 const configSubnav: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'voice', to: '/voice-assistant', labelKey: 'v2.nav.voiceAssistant' },
   { key: 'tools', to: '/tools', labelKey: 'v2.nav.tools' },
   { key: 'music', to: '/music', labelKey: 'v2.nav.music' },
   { key: 'credentials', to: '/credentials', labelKey: 'v2.nav.credentials' },
   { key: 'health', to: '/health', labelKey: 'v2.nav.health' },
+  { key: 'channels', to: '/channels', labelKey: 'v2.nav.channels' },
 ]
 
 const section = computed(() => {
@@ -68,7 +69,8 @@ const section = computed(() => {
     route.path.startsWith('/tools') ||
     route.path.startsWith('/music') ||
     route.path.startsWith('/credentials') ||
-    route.path.startsWith('/health')
+    route.path.startsWith('/health') ||
+    route.path.startsWith('/channels')
   ) {
     return 'config'
   }
@@ -87,6 +89,7 @@ const configPage = computed(() => {
   if (route.path.startsWith('/music')) return 'music'
   if (route.path.startsWith('/credentials')) return 'credentials'
   if (route.path.startsWith('/health')) return 'health'
+  if (route.path.startsWith('/channels')) return 'channels'
   return 'voice'
 })
 
@@ -104,6 +107,7 @@ const pageLabel = computed(() => {
     if (configPage.value === 'music') return t('v2.nav.music')
     if (configPage.value === 'credentials') return t('v2.nav.credentials')
     if (configPage.value === 'health') return t('v2.nav.health')
+    if (configPage.value === 'channels') return t('v2.nav.channels')
     return t('v2.nav.voiceAssistant')
   }
   return t('v2.nav.devices')
@@ -281,7 +285,7 @@ onUnmounted(() => {
           {{ t(item.labelKey) }}
         </RouterLink>
       </nav>
-      <!-- Config sub-navigation: voice assistant, music, credentials, health (M9). -->
+      <!-- Config sub-navigation: voice assistant, tools, music, credentials, health, channels. -->
       <nav
         v-if="section === 'config'"
         class="v2-subnav"

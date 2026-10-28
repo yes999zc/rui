@@ -19,6 +19,7 @@ import { createRouter, createWebHistory, type RouteLocation } from 'vue-router'
  *   /v2/music            sources, playback status and write-only credentials (M9b)
  *   /v2/credentials      secret presence, writes and provider probes (M9b)
  *   /v2/health           health, dependency probes and config recovery (M9b)
+ *   /v2/channels         Telegram / WeChat cards + managed channel gateway (D8)
  *   /v2/config           compatibility redirect to /voice-assistant
  *
  * v2 owns its route table: the legacy panel registry, PanelHost and every legacy
@@ -78,6 +79,12 @@ const routes = [
     component: () => import('./views/CredentialsView.vue'),
   },
   { path: '/health', name: 'health', component: () => import('./views/HealthView.vue') },
+  {
+    // D8: notification channels (Telegram / WeChat) + managed channel gateway.
+    path: '/channels',
+    name: 'channels',
+    component: () => import('./views/ChannelsView.vue'),
+  },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('./views/NotFoundView.vue') },
 ]
 
