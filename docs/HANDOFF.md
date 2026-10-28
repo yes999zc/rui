@@ -15,7 +15,7 @@
   13s 又 `led: listening` 并 repaint 卡住。要求：session closed（stop/结束词/farewell）后不得重回 listening；
   若保留 followup 窗口 N=8s，窗口结束立即 disarm + `led: off`；任何一轮结束 LED 事件最后一条必须是 `off`；
   repaint 有最大次数/超时；回归：stop 后 LED 序列以 off 结尾且 30s 无新 listening。
-- **P2 音量键回写（task-19，blocked_by task-18）**：真机 12:29–12:34 `volume: reconciled to 204 (config 80%)`
+- **P2 音量键回写（task-19，已收口 `58c845e`：5% 步进 + 10s 抑制 + 持久化；house 1745；review PASS + verify VERIFIED）**：真机 12:29–12:34 `volume: reconciled to 204 (config 80%)`
   每 16s 一条且无 `dot2 link: volume` 事件 ⇒ 物理音量键改了设备但配置未回写，16s 内被拉回。
   要求：volume_up/down 回写 `devices[].volume` 并持久化；按键后 10s 内 reconciler 不回拉；
   d.7 容差（`8961cbf`）叠加后静置仍无每 16s 日志；测试注入按键→配置降低且不回拉、±1 级不下发。
@@ -36,6 +36,7 @@
   C 半开连接检测（TCP keepalive 或 ping_timeout 30–60s）+ `speaker_connected` 改实时。每项回归测试 + 双闸门。
   证据：8870 连接 887s 未收包、`notsent 65160/unacked 15/retrans 1/25/backoff 15`、积压 85775 字节；
   拔电时正在播报的 ~0.9s @48k 留在队列。A/B 在桥仓，C 涉及桥+house 音频面/健康状态。卡 task-15（已收口：桥 `9065d19`、house `88400aa`；两仓 review PASS + verify VERIFIED）、task-16（C，blocked_by B1）。B1 已收口 `7b9035a`。
+- **批次 B 进行中（2026-10-28 14:xx）**：B2 删 adapter:xiaoai 迁移（house，子代理）；B3a dot2 1.3.2 双窗口、B3b xiaoai 0.2.3 双窗口（两桥并行，未 commit）；B3c core 0.8.0 等三仓落地后做。
 - **批次 B（破坏性三项）/ C（§f.2 提醒）**：未开工。顺序 B1 → B2 → B3（桥双窗口先于 core 0.8.0）→ C；
   不打 tag、不部署，真机与插设备等 9 哥 下午做。
 - 未完成项不宣称完成；上下文压缩后先读本节 + 任务板。
