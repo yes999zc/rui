@@ -33,6 +33,9 @@
   每块 raise、LED 亮但无声。顺序改为：**task-26（字段归属/冲突：manifest 胜全局 explicit + WARN/拒绝）→
   task-24（R3 运行期自检 + 桥 play ValueError 上报为设备错误）→ task-25（catalog/runtime 一致性 + 三份值可见性）**。
   **与 task-22（params/layout）分开**。
+- **0.8.0 发布门禁（2026-10-28 9哥 决策）**：必须完成 **task-26 → task-24 → task-25**、task-22 收尾（三台最终 params/补齐步骤/五台布局）、发布说明设置 **`audio.voice.followup_max_wait_ms = 0`**（全局，0=每轮都要唤醒词；8s=保留一句自然续说；不做逐台覆盖），以及四台真机验收（living 4412 + 儿童房 8870 + 次卧 8871 + 主卧 8873）。**C2/task-21 推迟到 0.8.1**（新功能，不阻塞）；task-2（歌没停）/task-3（158ms gap）无样本不修、不列阻塞。
+- **生产现状（2026-10-28 16:0x）**：0.7.9 / 3 台在线 / device_errors 0 / warnings 0；living + 儿童房 dot2(8870, 16:03 重新上线 .69) + 次卧 dot2-b(8871) 全 running+connected。dot2-b 固件已对齐 **20261024-1911-dev + ref_uplink**（原 v2.18.1），server_a 保留可回滚；audio.say 237104 B、无 got 16000。两台 dot2 同固件同版本，4 台混合验收前置已具备。
+- **dot2-b `devices[].audio` 覆盖 = 永久显式声明，不是临时补丁，别删**（playback 48000 / capture 16k·1ch / ack 2500 / aec off）；根治后保留。
 - **P0 追加三点（2026-10-28 15:5x）**：
   1) **冷启动时序疑点**：dot2-b 初次生效 ack=1200（manifest 2500、全局未写 ack，优先级解释不了）；怀疑冷启动时 catalog/plug 未就绪，重启后 `plug_resolved` 才 true。task-26 必须复现“冷启动读一次 effective”，确认时序问题并一并修（否则根治后仍有间歇性）。
   2) **dot2-b `devices[].audio` 覆盖决定：保留**（等同显式声明该型号硬件参数）；根治后不删除，根修也不得覆盖/抹掉设备级显式值。
