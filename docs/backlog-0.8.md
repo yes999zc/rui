@@ -275,29 +275,27 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
   `stop_and_dismiss`）与 **C2**（`stop_intent` 只认整句，`_STOP_TAIL_CHARS` 已删）。
 - **已合入（`34e3629`）**：批次 2 的 **C3/C4/C5**（无歌说「暂停/停一下」→ 回「现在没在放音乐。」、会话保持
   `session_action="pause_no_music"`；paused 也算「有歌」；暂停词表收窄为「暂停」「停一下」）与批次 3 的
-  **C6** 文案、**C11**（暂停回复「好，暂停了。」+ `docs/interaction.md` 口径）。**代码已进 main，
-  但真机仍未验** —— 见 `known-limitations.md` L14 与 `docs/acceptance-pending.md` 的 N2/N3（**N1 已验，见本节下方 2026-10-28 更新**）。
+  **C6** 文案、**C11**（暂停回复「好，暂停了。」+ `docs/interaction.md` 口径）。**代码已进 main；
+  真机已于 2026-10-28 验（C1 正负 / C2 / C3 / C5；C4 措辞未验）** —— 见 `known-limitations.md` L14 与 `docs/acceptance-pending.md` 的 N1/N2/N3。
 - **不做**：批次 4 的 **C7**（单字「停」）、**C8**（无歌 transport）、**C9**（「大一点/小一点」）；
   以及批次 3 里踩决策 2 边界的 **C10**（「退一下」别名）。四条都写进
   `docs/known-limitations.md`（L10–L13），**不是**待办——要改先由 9 哥 改决策 2。
-- **剩下的不是代码，是验收**：N2（C2 真机；**C1 已于 2026-10-28 真机验证**）、N3（C3）在
+- **剩下的不是代码，是验收**：**C4 措辞**（无专项用例）与 **R79-1…6** 在
   `docs/acceptance-pending.md`，随 0.8 的真机窗口一起做（第二台 dot2 到位后与 §c 同场）。
 
-  > **2026-10-28 更新**：**N1（C1）已在生产真机验证**（见 §d.3）；仍未验的是 **N2（C2 收窄后的日常说法）、
-  > N3（C3）、ACK-1/ACK-2（D-011 目视）**，随 0.8 真机窗口做。
+  > **2026-10-28 更新**：**N1/N2/N3 已验**（C1 正负 / C2 / C3 / C5，本地 08:54–09:33；容器 UTC 00:54–01:33），
+  > **ACK-1/ACK-2 已验**（D-011 目视）；仍未验的是 **C4 措辞**与 **R79-1…6**。
 
 > 批次表与每条判据的权威版本是 `docs/audit/intent-collisions.md`；本文件只列状态，不复制矩阵。
 
 ### d.3 真机未测项（**引用，不复制**）
 
-- 入口只有一个：`docs/acceptance-pending.md`。0.7.9 之后**仍未测**的是「21 条只能真机」+ HE-01 补充
-  + 本阶段新增 5 条（N1/N2/N3/ACK-1/ACK-2）+ 0.7.9 新增 6 条（R79-1…6）。
-  **0.7.9 自己没有留下任何真机结论**：C1/C2/C3/C5 与 D-011 排序都只经 headless 判定，
-  N1/N2 没有在 0.7.9 窗口验过（原计划如此，9 哥 决定全部并入 0.8）。
+- 入口只有一个：`docs/acceptance-pending.md`。**0.7.9 发布当时未做真机；2026-10-28 已补验 N1/N2/N3/ACK-1/ACK-2**（见下）。
+  **仍未测**的是「21 条只能真机」+ HE-01 补充 + 0.7.9 新增 6 条（R79-1…6）。
 
-  > **2026-10-28 更新**：**N1（C1）已在生产真机验证**（`stop intent: '停止播放。' -> media stopped, session closed`，
-  > 旧行为 `media stopped, session open`），`docs/acceptance-pending.md` 已勾；上文「仍未测」里的 **N1 不再成立**，
-  > **N2 / N3 / ACK-1 / ACK-2 仍未验**。窗口排期时别再把 C1 排进去。
+  > **2026-10-28 更新**：**N1/N2/N3/ACK-1/ACK-2 均已验**（N1 `stop intent: '停止播放。' -> media stopped, session closed`；
+  > N2 `停止你好` 走模型、会话未关；N3 暂停；ACK 目视），`docs/acceptance-pending.md` 已勾；
+  > 剩余 **R79-1…6 + 21 条 + HE-01 补充**，窗口排期不再排这 5 条。
 - 来源与口径：`docs/audit/unverified-inventory.md`（全量 36 条 = §1 10 条 + §2 26 条真机协议）。
   **两处条数不同**（inventory 36/26、acceptance-pending 21+补充+新增）——以 acceptance-pending
   为执行口径，inventory 只作来源索引。若以后要按「某一固定条数」对齐，先统一这两份文件的统计口径，
@@ -322,3 +320,22 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 - §4 的打磨项（flaky 的 `test_plane_failure_is_reported_with_its_reason`、`mcp ha: down` 日志节流、
   覆盖率不低于 `docs/audit/coverage-baseline.md`、phrasebook 只中文、升级/回滚演练）；
 - `runner.abort()` 跨房隔离（0.7.x 已知限制，0.8.x 再评估，不在 0.8.0）。
+
+### d.6 ASR 尾巴剥离（**已拍板 B；0.8 独立卡，本轮不做**）
+
+- **决定（2026-10-28，9 哥）**：在 `stop_intent` 整句判定前，**先剥掉固定的唤醒词尾巴**，再按整句匹配。
+- **尾巴表（唯一受控例外，独立于结束词表与 `ALIASES`）**：`你好` / `你好小瑞` / `你好小智` / `你好小志` / `你好晓智` / `嗨小瑞` / `嗨小智`。
+- **只剥尾部**，且必须满足「整句 = 结束词 / 别名 / 结束词 + 语气词」+「一个尾巴词」的结构；剥完再整句判定。
+- **不恢复**旧的「任意位置子串」「总长 +2 容差」；**不许新增任何长度/位置容差**。
+- 在 `src/rui/session/rules.py` 的 docstring 写清「为什么允许这一条」。
+- **必测（先红后绿）**：`停止你好` → 命中；`停止播放你好` → 命中（经别名）；`你好小瑞` → **不**命中（纯唤醒）；`你好停止` → **不**命中（只剥尾不剥头）；`停止了吗` → **不**命中（疑问语气词已排除）。
+- **与 N2 的关系**：本卡落地后 `停止你好` 由「不命中」变为「命中」，`docs/acceptance-pending.md` 的 N2 判据需同步改写——这是**有意变更**，不要当回归。
+- **判据**：5 条测试先红后绿 + 既有意图测试全绿；`STOP_WORDS` / `ALIASES` 语义不动（尾巴表单独存在）。
+- **落点**：`src/rui/session/rules.py` + `tests/`。
+
+### d.7 `_reconcile_volume` 精确相等导致每 ~16 s 重复 `set_vol`（P1 性能 / 日志噪音）
+
+- **现状（2026-10-28 查代码）**：`src/rui/audio/process.py:2907` 的 `_reconcile_volume()` 用 `self.device_volume == want` 精确比较；设备读回值有取整/量化差，导致每个 metrics 周期（~16 s）重复 `set_volume` 并打 `volume: reconciled to N`。
+- **做法（择一，实现时定）**：① 加容差（例如 ≤1 设备刻度或 ±1%）后再写；② 只在配置变化时写，读回值只用于展示。
+- **判据**：静置 5 min，`set_vol` / `volume: reconciled` 日志 0 次（或从 ~19 次降到 0）；音量调整仍生效；新增回归测试（float/取整差不再触发）。
+- **来源**：9 哥 2026-10-28 真机 / 日志观察。
