@@ -588,6 +588,10 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
     「明早八点」「3天后」「每周一」「七点零一刻」）——仍交给既有 LLM 工具 `parse_at`，
     避免把本来能办的句子改成反问；弱触发「叫我」无可解析时间时同样交给 LLM，避免
     「叫我小王」被误追问「什么时候」。
+  - **0.8.5 修正（task-2/B，覆盖上一条的分钟口径）**：`N分钟(之)后/以后` 已由固定入口受理，
+    与工具路径共用 `parse_at("+Nm")`；仍交 LLM 的是小时/天/周/刻/区间、`过N分钟`、`半小时`
+    与多句（动作必须单句，如「一分钟后提醒我喝水。我是小志。」）。权威口径以
+    `docs/known-limitations.md` **L21** 为准，详见 `docs/reminder-dispatch-0.8.5.md`。
   - **测试**：`tests/test_reminder_voice.py`（时间表/23:59 边界/动作与房间/持久化/三级落点/播报入口）、
     `tests/test_app_fleet.py` 的落点用例。
   - **C2 已补（2026-10-28，见下条）**；**仍未做（0.8.1 及以后）**：失败重试/排期、
@@ -640,3 +644,70 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 - **明确不做**：重复提醒、日历同步、跨设备静音、自然语言复杂时间推理。
 - **排期**：f.1 之后；与 0.8 破坏性三项**并行不冲突**即可，但不许挤进多音箱前置批。
 - **来源**：9 哥 2026-10-28；现状与缺口由 2026-10-28 代码核查补正。
+
+## 等样本（0.8.5 观察项：task-2「停止」歌没停 / task-3 打断后 158 ms 空隙）
+
+> **0.8.5 结论：两项都没有稳定复现样本，不改代码**。本节只固定「怎么收样本、收到什么算命中」；
+> 样本到位后另立卡，**不并入 0.8.5 门禁**。已知限制编号：`docs/known-limitations.md` 的 **L25 / L26**。
+> 两项都属于「低频 + 需要真人嗓子 + 依赖当时音乐/打断状态」的场景，**不许用单次现象直接改词表或时序**。
+
+### s.1 等样本：放歌中说「停止」歌没停（task-2，低频约 1/4）
+
+- **现象**：音乐播放中说「停止 / 拜拜 / 停止播放」，多数时候正常停歌 + 关会话，偶尔（约 1/4）
+  音乐继续响；无稳定触发条件，R79 与 0.8.3/0.8.4 真机窗口均未抓到可复核样本。
+- **代码现状（只读核对）**：停止分支在 `src/rui/web/api/app.py` 的 `_stop_command` 之后，共有四条出口：
+  ① `stop_and_dismiss`（停歌 + 关会话，日志 `stop intent: '<text>' -> media stopped, session closed`）；
+  ② `stop_elsewhere`（本房间关会话、歌在别处，日志 `... -> output is owned by <dev>; this room closed`）；
+  ③ `bare_stop`（无歌，只关会话，日志 `... -> session closed`）；
+  ④ 未命中 → 落模型/普通回合。停歌后 owner 释放打 `output owner released: <dev>`。
+- **复现步骤**：
+  1. 任一真机房间点歌（≥10 s 播放后再操作，避免刚起播的边界）；
+  2. 说「停止」→ 听 3 s → 若未停，**立刻**记录时间并再放一首歌说「拜拜」，轮换触发词；
+  3. 换另一种曲目/房间重复；每次只说一次，句间等待 ≥10 s，避免上一轮残留状态；
+  4. 同一时段把 `docker logs --since 40m rui`（或 NAS `/vol1/rui/data/service.log`，**UTC**）
+     与 `service.log` 前后各 3 s 的行一起保存（含 ASR `transcript`、`stop intent`、`output owner`、
+     播放侧 `speak`/`reply:`）。
+- **日志关键字（`service.log` 真实行）**：
+  `stop intent: '<text>' -> media stopped, session closed`、
+  `stop intent: '<text>' -> output is owned by <dev>; this room closed`、
+  `stop intent: '<text>' -> session closed`、`output owner released: <dev>`、`session closed`。
+  **`session_action=stop_and_dismiss` 是响应/trace 字段，不是日志行**（只在接口返回/trace 里核对）。
+- **判据**：
+  - **命中缺陷**：日志明确走了 `media stopped` / `stop_and_dismiss`，但此后 **≥3 s** 仍能听到音乐
+    （或日志里 `output owner` 未释放、后续仍有播放 chunk/`reply:` 到该设备）；
+  - **不算命中**：「停止」被 ASR 听错、或在模型回合里没进停止分支（日志无 `stop intent`）→
+    记为**无效样本**，只补 ASR/词表观察，不当 task-2；
+  - **不算命中**：多房间串音/回声被识别（日志 `lost_same_word` / 其它房间 owner）→ 另算。
+- **最少样本与窗口**：**≥20 次**有效「放歌中（>10 s）说停止/结束词」，覆盖 **≥5 首曲目、≥2 个房间**；
+  一次窗口 **30–40 min**（20 次触发）。<20 次或日志缺关键行 → 只记录、不下结论。
+- **不做**：不新增停止词/别名、不改 `MUSIC_TRANSPORT` 词表（踩决策 2）；不在本批加代码。
+- **排期**：0.8.6；样本到位后按「命中/无效」分类另立卡。
+
+### s.2 等样本：barge 打断后应答开头 158–221 ms 空隙（task-3）
+
+- **现象**：放歌中喊唤醒词打断（「你好小瑞」等）→ 音乐停 → 应答/告别开头出现 **158–221 ms** 的
+  可闻空隙；只有单次真机记录，无法判断是播放队列排空、`flush barrier` 超时、还是首块 TTS 合成延迟。
+- **代码现状（只读核对）**：task-23 已插桩（0.8.3 起 INFO，不改行为）：
+  `src/rui/audio/process.py` 的 `_record_playback_gap()`（`PLAYBACK_GAP_MIN_MS=20`、
+  `REPLY_STALL_LOG_MS=100`）会打 `reply stall: chunk #N/M gap=NNN ms state=...`，
+  每个回复结束再打一行 `reply: N gaps, max NNN ms`；task-30 的段静音插桩另有
+  `reply: ... segments_ms=... silences_ms=... inner_ms=...`。barge 侧关键行：
+  `barge: N wake during playback, dropped X s queued`、`playback paused for speech`、
+  `flush barrier timed out`。
+- **复现步骤**：
+  1. 同一设备、同一房间、同音量与同 AEC 配置（记录配置版本；AEC 不同批不可比）；
+  2. 点歌 → 播 ≥10 s → 喊唤醒词打断 → 等应答说完 ≥2 句 → 再点歌重复；
+  3. 每次打断后保存该回合的 `barge:`、`reply stall:`、`reply: N gaps`、`segments_ms/silences_ms/inner_ms`
+     与 trace（`playback_gap_chunks` 的 chunk 序号）；
+  4. 记录是否在打断前播放过 TTS/是否刚发生过 farewell（两者都会改变队列排空形态）。
+- **日志关键字**：`reply stall: chunk #`、`reply: N gaps, max`、`segments_ms=`、`silences_ms=`、
+  `inner_ms=`、`barge:`、`playback paused for speech`、`flush barrier timed out`。
+- **判据**：
+  - **命中**：同一次打断回合里 `reply: N gaps, max ≥150 ms`，且 `reply stall` 的 chunk 是
+    **第 1–2 块**（打断后第一句的开头）；
+  - **不算命中**：gap 只出现在尾块/句末，或同一回合有 `flush barrier timed out` 能解释 → 归
+    「已知 barge 排空」；`segments_ms` 显示是 TTS 分段接缝的 → 归短回复/接缝问题（task-30 口径）。
+- **最少样本与窗口**：**≥5 次**「放歌中打断 → 应答（≥2 句）」；单次窗口 **10–15 min**，同一设备/房间。
+  少于 5 次或 AEC/音量配置不一致 → 只记录、不下结论。
+- **不做**：不改播放/排空时序，不调 `REPLY_STALL_LOG_MS`/`PLAYBACK_GAP_MIN_MS`，不在本批加代码。
+- **排期**：0.8.6；样本到位后按「首块 / 尾块 / barge 排空」分类另立卡。
