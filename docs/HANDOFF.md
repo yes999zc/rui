@@ -13,6 +13,9 @@ phase-close: task-11
 - **镜像（仅部署引用，未部署）**：index `sha256:20347039ee559db4e07989f9311c4fec78461163c6ce23312867e5350c51d383`；
   amd64 `sha256:4bfd73d5b8e0ffadd22512f888d922d6b3355041214f5d3cdaaf17d936bd50a1`；
   arm64 `sha256:c625d5c1a7469b1ab39163dbcbd2574cb5dd62e36a8cae05d4c556e00d2c8649`。
+- **重要：`v0.8.5` tag 只含 D1–D5**（tag commit `6d94155`）。D4/D6/D7/D8 是其后的 main 提交
+  （bridge 计数日志、三仓 README 通用化、arm64 验证文档、v2 通知通道页），**不在 0.8.5 镜像/release 里**；
+  要让这些上线（尤其 v2 通知通道页）需另发一版（如 0.8.6），本批未做。
 - tag commit 上四 workflow 绿：`ci`（含 `test (3.11)`，run 40717635334）、
   `docker-publish`（main 40717635389 / tag 40718665667）、`security`（40717635435 / 40718666213）、
   `secret-scan`（40717635240 / 40718665933）。`ci` 只在 main push 触发，以同一 commit 的 main run 为准。
