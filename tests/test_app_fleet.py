@@ -1017,3 +1017,55 @@ def test_a_delayed_listening_paint_sends_the_initial_paint_plus_all_three_repain
         assert app_module._led_after_tasks(app).get("living", set()) == set()
 
     asyncio.run(scenario())
+
+
+def test_health_exposes_reminder_delivery_counters(tmp_path, monkeypatch) -> None:
+    """C2: delivery failures are visible in /health, not only in the log."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+        assert body["reminders"] == {
+            "fired": 0, "spoken": 0, "failed": 0, "offline": 0,
+            "last_error": "", "last_failure_at": "", "last_room": "",
+        }
+
+
+def test_a_due_reminder_for_an_offline_room_falls_back_and_counts_it(
+    tmp_path, monkeypatch
+) -> None:
+    """§e.2 tier 3 + C2: speak on default_output, name the room, count the failure."""
+    FakeFleet.instances.clear()
+    config = CONFIG.replace(
+        "web:\n  host: 127.0.0.1",
+        f"system:\n  data_dir: {tmp_path / 'data'}\nweb:\n  host: 127.0.0.1",
+    )
+    app = _app(tmp_path, monkeypatch, config=config)
+    with TestClient(app) as client:
+        fleet = app.state.audio_fleet
+        fleet.supervisor("study").running = False
+        spoken: list[str] = []
+
+        async def say(text: str, _speak, _trace) -> int:
+            spoken.append(text)
+            return 3200
+
+        monkeypatch.setattr(app.state.runner, "say", say)
+        app.state.reminders.store.add(
+            "吃药", app.state.reminders.now() - dt.timedelta(seconds=1), room="书房")
+
+        deadline = time.monotonic() + 5.0
+        while not spoken and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert spoken and "书房那台没在线" in spoken[0] and "吃药" in spoken[0]
+
+        deadline = time.monotonic() + 2.0
+        stats = client.get("/health").json()["reminders"]
+        while stats["offline"] != 1 and time.monotonic() < deadline:
+            time.sleep(0.05)
+            stats = client.get("/health").json()["reminders"]
+        assert stats["fired"] == 1
+        assert stats["spoken"] == 1
+        assert stats["offline"] == 1
+        assert stats["failed"] == 1
+        assert "书房" in stats["last_error"]

@@ -1699,6 +1699,229 @@ def _reminder_line(item: Reminder, offline_room: str) -> str:
     return item.text
 
 
+# ---------------------------------------------------------------- reminder delivery (C2)
+# A due reminder is not a conversation. It may silence its own room, but it must not
+# touch another room's song or session, and a delivery that never sounded must leave a
+# trace an operator can see (C2, backlog §f.2). The counters below are the /health view;
+# they are deliberately in-memory: 0.8.0 does not retry or schedule reminders, so there
+# is no durable queue state to reconcile after a restart.
+REMINDER_PREEMPT_TTL_S = 30.0
+
+
+def _reminder_stats(app: FastAPI) -> dict[str, Any]:
+    """Mutable delivery counters (in-memory, one writer: the event loop)."""
+    stats = getattr(app.state, "reminder_stats", None)
+    if not isinstance(stats, dict):
+        stats = {
+            "fired": 0,
+            "spoken": 0,
+            # Not delivered to the room the user asked for: an offline fallback is a
+            # failure of the requested delivery even when default_output spoke.
+            "failed": 0,
+            "offline": 0,
+            "last_error": "",
+            "last_failure_at": "",
+            "last_room": "",
+        }
+        app.state.reminder_stats = stats
+    return stats
+
+
+def _reminder_health(app: FastAPI) -> dict[str, Any]:
+    """A copy of the counters for `/health` (callers must not mutate app state)."""
+    stats = _reminder_stats(app)
+    return {
+        "fired": int(stats.get("fired", 0)),
+        "spoken": int(stats.get("spoken", 0)),
+        "failed": int(stats.get("failed", 0)),
+        "offline": int(stats.get("offline", 0)),
+        "last_error": str(stats.get("last_error", "")),
+        "last_failure_at": str(stats.get("last_failure_at", "")),
+        "last_room": str(stats.get("last_room", "")),
+    }
+
+
+def _reminder_stamp() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
+
+def _reminder_failed(app: FastAPI, item: Reminder, reason: str) -> None:
+    """Record an undelivered reminder and log it at ERROR (never warning-only)."""
+    stats = _reminder_stats(app)
+    stats["failed"] = int(stats.get("failed", 0)) + 1
+    stats["last_error"] = reason
+    stats["last_failure_at"] = _reminder_stamp()
+    stats["last_room"] = item.room or ""
+    log.error("reminder not spoken: %r (room=%r): %s", item.text, item.room, reason)
+
+
+def _reminder_preempt_marks(app: FastAPI) -> dict[str, float]:
+    marks = getattr(app.state, "reminder_preempted", None)
+    if not isinstance(marks, dict):
+        marks = {}
+        app.state.reminder_preempted = marks
+    return marks
+
+
+def _mark_reminder_preempt(app: FastAPI, room: str) -> None:
+    """A reminder took this room: its interrupted turn must not arm a follow-up gate."""
+    if room:
+        _reminder_preempt_marks(app)[room] = time.monotonic()
+
+
+def _clear_reminder_preempt(app: FastAPI, room: str) -> None:
+    """A real new turn supersedes a stale preemption mark."""
+    marks = getattr(app.state, "reminder_preempted", None)
+    if isinstance(marks, dict):
+        marks.pop(room, None)
+
+
+def _consume_reminder_preempt(app: FastAPI, room: str) -> bool:
+    """True once for the `reply_finished` that belongs to a reminder-interrupted turn."""
+    marks = getattr(app.state, "reminder_preempted", None)
+    if not isinstance(marks, dict):
+        return False
+    stamp = marks.pop(room, None)
+    if stamp is None:
+        return False
+    return (time.monotonic() - float(stamp)) <= REMINDER_PREEMPT_TTL_S
+
+
+async def _reminder_yield_room(
+    app: FastAPI, room: str, client: object, runner: object,
+) -> tuple[bool, bool]:
+    """Silence only the named target room before its reminder speaks.
+
+    Returns ``(stopped, turn_here)``. Music is torn down through the service (queue +
+    plane + LED) only when the song is pinned to this room; a paused or playing song in
+    another room is left alone. ``turn_here`` says the target was mid-answer, so the
+    caller must abort the rest of that answer after the reminder has been queued.
+
+    A fallback room is never yielded: its caller passes an empty room because the named
+    room was offline, and cutting a song nobody asked us to interrupt would be worse
+    than waiting for a quieter moment.
+    """
+    if not room:
+        return False, False
+    service = getattr(app.state, "music", None)
+    owner = str(getattr(app.state, "output_owner", "") or "")
+    music_room = str(getattr(app.state, "music_room", "") or "")
+    # Playing *or* paused: a paused queue under this room is one the plane may hand
+    # back after a reply, and C2 promises no auto-resume. Stopping is the only way to
+    # keep that promise, so the reminder takes the room's place in the queue too.
+    music_here = bool(
+        service is not None
+        and getattr(service, "state", "idle") != "idle"
+        and (owner == room or music_room == room)
+    )
+    metrics = getattr(client, "metrics", None)
+    sounding = bool(metrics is not None and getattr(metrics, "output_owner", ""))
+    turn_here = bool(
+        getattr(runner, "busy", False)
+        and str(getattr(app.state, "turn_device", "") or "") == room
+    )
+    if music_here:
+        try:
+            await service.stop()  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001 - never let a teardown block the reminder
+            log.warning("reminder: stopping music in %r failed: %s", room, exc)
+    if music_here or sounding or turn_here:
+        with contextlib.suppress(Exception):
+            await client.send(StopAudio())  # type: ignore[attr-defined]
+    if turn_here:
+        _mark_reminder_preempt(app, room)
+    return music_here or sounding or turn_here, turn_here
+
+
+def _finish_reminder_session(
+    app: FastAPI, room: str, client: object, runner: object, spoken: int,
+    *, turn_here: bool = False,
+) -> None:
+    """Close the target's session window after the announcement (task-17 semantics).
+
+    No ``reply_finished`` is sent: that message is what makes the plane arm the
+    wake-free follow-up gate. A room whose session belonged to the reminder is stopped;
+    another room's session is left alone. The ring's last event is `off`, after the
+    announcement has actually drained.
+
+    The turn latch is released only when the reminder owned the turn. An offline named
+    room falls back to a speaker that may be mid-answer in another room; ``room`` is
+    then empty, so releasing that fallback's latch would let a concurrent wake start
+    while its answer is still draining (C2).
+    """
+    session_room = str(getattr(app.state, "turn_device", "") or "")
+    owns_turn = turn_here or not session_room or session_room == room
+    if owns_turn:
+        with contextlib.suppress(Exception):
+            runner.idle.stop()  # type: ignore[attr-defined]
+        coordinator = getattr(app.state, "wake_coordinator", None)
+        if coordinator is not None and not getattr(runner, "busy", False):
+            with contextlib.suppress(Exception):
+                coordinator.set_turn_open(False)  # type: ignore[attr-defined]
+                coordinator.touch(room)  # type: ignore[attr-defined]
+        _release_turn(client)
+    _light_after_audio(app, spoken, app.state.cfg.audio.voice.rate, "off", live=client)
+
+
+async def _deliver_reminder(app: FastAPI, item: Reminder, runner: object) -> bool:
+    """Speak one due reminder. Returns True when audio was produced.
+
+    The three-tier route of §e.2 decides the room. A named room that is online is the
+    target and may be silenced; an offline one falls back to `default_output` and the
+    line says 「<room>那台没在线」. The delivery is attempted once: 0.8.0 does not retry
+    or queue, so any failure is terminal and visible in `/health.reminders`.
+    """
+    client, offline_room = _reminder_route(app, item.room)
+    if client is None:
+        if offline_room:
+            # The room the user asked for is unreachable and no fallback is live:
+            # that is an offline delivery, not just a failed synthesis.
+            stats = _reminder_stats(app)
+            stats["offline"] = int(stats.get("offline", 0)) + 1
+        _reminder_failed(app, item, "no live speaker for the reminder")
+        return False
+    delivery_room = _led_room(client)
+    # Only a room the user actually asked for may be silenced. The route resolved the
+    # spoken room to its device id, which is also what owner/music_room store. When the
+    # named room is offline the fallback speaker keeps whatever it is doing (other room
+    # / other song), so there is no target to yield.
+    target_room = "" if offline_room else delivery_room
+    _stopped, turn_here = await _reminder_yield_room(app, target_room, client, runner)
+    try:
+        spoken = await runner.say(  # type: ignore[attr-defined]
+            _reminder_line(item, offline_room),
+            _speaking(app, client),
+            TurnTrace(device_id="reminder"),
+        )
+    except Exception as exc:  # noqa: BLE001 - TTS/plane failure is a visible outcome
+        _reminder_failed(app, item, f"{type(exc).__name__}: {exc}")
+        return False
+    if turn_here:
+        # `say()` clears the abort flag, so the interrupted answer can only be stopped
+        # after the reminder's own audio is queued. Its `reply_finished` is suppressed
+        # by the preemption mark, so the plane opens no follow-up window for it.
+        with contextlib.suppress(Exception):
+            runner.abort()  # type: ignore[attr-defined]
+    if spoken <= 0:
+        _reminder_failed(app, item, "nothing was spoken (empty or aborted reply)")
+        return False
+
+    _finish_reminder_session(app, target_room, client, runner, spoken, turn_here=turn_here)
+    stats = _reminder_stats(app)
+    stats["spoken"] = int(stats.get("spoken", 0)) + 1
+    if offline_room:
+        # The fallback spoke, but the requested room did not: visible, not silent.
+        stats["failed"] = int(stats.get("failed", 0)) + 1
+        stats["offline"] = int(stats.get("offline", 0)) + 1
+        stats["last_error"] = (
+            f"room {offline_room!r} is offline; announced on default_output")
+        stats["last_failure_at"] = _reminder_stamp()
+        stats["last_room"] = offline_room
+        log.warning("reminder: room %r is offline; announced on the default output",
+                    offline_room)
+    return True
+
+
 def _music_target(app: FastAPI, msg: object) -> tuple[object | None, str]:
     """The room one music message belongs to: ``(client, room)``.
 
@@ -1745,15 +1968,6 @@ def _live_clients(app: FastAPI) -> list[object]:
         if client is not None:
             clients.append(client)
     return clients
-
-
-def _any_output_owner(app: FastAPI) -> bool:
-    """True while any plane reports that it owns the speaker."""
-    for client in _live_clients(app):
-        metrics = getattr(client, "metrics", None)
-        if metrics is not None and bool(getattr(metrics, "output_owner", "")):
-            return True
-    return False
 
 
 def _plane_running(app: FastAPI) -> bool:
@@ -1815,7 +2029,17 @@ class _PlaneLink:
             self._coordinator.touch(self._device_id)  # type: ignore[attr-defined]
 
     async def reply_finished(self, *args: object, **kwargs: object) -> None:
+        allow_followup = not _consume_reminder_preempt(self._app, self._device_id)
         try:
+            if not allow_followup:
+                # A due reminder took this room and aborted the turn it interrupted.
+                # Sending ReplyFinished would open the wake-free follow-up gate that
+                # task-17 closed for dismissals; the reminder itself starts no window.
+                log.info(
+                    "reminder preempted %s: no follow-up window for the interrupted turn",
+                    self._device_id,
+                )
+                return
             await self._handle.reply_finished(*args, **kwargs)  # type: ignore[attr-defined]
         finally:
             self._end_turn()
@@ -3291,6 +3515,9 @@ def create_app(
             link.on_vendor = on_vendor
             def on_wake(msg: object) -> None:
                 vendor.ours_spoke()
+                # A real wake is a new turn: a preemption mark left by a reminder whose
+                # interrupted turn never sent reply_finished must not swallow this one.
+                _clear_reminder_preempt(app, device_id)
                 app.state.turn_device = device_id
                 app.state.last_active_room = device_id
                 if coordinator is not None:
@@ -3708,6 +3935,11 @@ def create_app(
                 await asyncio.sleep(1.0)
                 try:
                     for item in scheduler.collect_due():
+                        # One producer, one count: the tick is the only place a due item
+                        # becomes a delivery attempt (C1 review: a listener enqueued the
+                        # same item again, so every reminder was spoken twice).
+                        stats = _reminder_stats(app)
+                        stats["fired"] = int(stats.get("fired", 0)) + 1
                         log.info("reminder due: %s (room=%r)", item.text, item.room)
                         reminder_queue.put_nowait(item)
                 except Exception as exc:  # noqa: BLE001 - a tick must not die
@@ -3716,26 +3948,16 @@ def create_app(
         async def reminder_speak() -> None:
             while True:
                 item = await reminder_queue.get()
-                waited = 0.0
-                spoken = False
-                while waited < 120.0:
-                    # §e.2: a named online room wins; an offline named room falls back
-                    # to default_output and says so; no room is default_output. The
-                    # owner is only relevant while it blocks (a reminder never talks
-                    # over a turn or a song).
-                    client, offline_room = _reminder_route(app, item.room)
-                    if (client is not None and not runner.busy
-                            and not _any_output_owner(app)):
-                        await runner.say(
-                            _reminder_line(item, offline_room), client.speak,
-                            TurnTrace(device_id="reminder"),
-                        )
-                        spoken = True
-                        break
-                    await asyncio.sleep(0.5)
-                    waited += 0.5
-                if not spoken:
-                    log.warning("reminder not spoken (no free speaker): %s", item.text)
+                try:
+                    # C2: attempt once. The target room is silenced (music/answer) so
+                    # the reminder is heard; another room's output is never touched.
+                    # A failure is terminal and written to /health.reminders - no retry,
+                    # no queue scheduling (0.8.0 scope).
+                    await _deliver_reminder(app, item, runner)
+                except Exception as exc:  # noqa: BLE001 - one bad item must not kill delivery
+                    _reminder_failed(app, item, f"{type(exc).__name__}: {exc}")
+                finally:
+                    reminder_queue.task_done()
 
         app.state.reminder_tick = asyncio.create_task(reminder_tick(), name="reminder-tick")
         app.state.reminder_task = asyncio.create_task(reminder_speak(), name="reminder-speak")
@@ -3904,6 +4126,12 @@ def create_app(
                 "refused": list(getattr(app.state, "fleet_refused", []) or []),
                 "error": str(getattr(app.state, "fleet_error", "") or ""),
             },
+            # C2: due reminders are delivered at most once and never retried in 0.8.0.
+            # An offline target, a dead speaker or a TTS failure is counted here so it
+            # cannot disappear into a log line. `fired` increments when a due item is
+            # handed to the delivery queue; `failed` includes offline fallbacks (the
+            # requested room did not hear it) and hard failures (nothing was spoken).
+            "reminders": _reminder_health(app),
             "vendor": {
                 "quiet_s": cfg.session.vendor_quiet_s,
                 "muted_for": round(getattr(app.state, "vendor", None).remaining(), 1)

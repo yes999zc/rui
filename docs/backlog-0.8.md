@@ -544,7 +544,7 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
 - **文档同步**：落地时改 D3（`multi-device-design.md:452`）与 §4.4:198，并在 §9.3 记变更。
 - **排期**：多音箱前置 P0 收口之后第一张；**不挤进本批**。
 
-### f.2 语音定时提醒（固定句式 first，PARTIAL — C1 已落地入口与落点）
+### f.2 语音定时提醒（固定句式 first，PARTIAL — C1 入口/落点 + C2 最小抢占/失败可见已落地；重试/恢复待 0.8.1）
 
 - **落地记录（C1，2026-10-28，未提交/待评审）**：
   - **语音入口**：`src/rui/tools/reminders.py` 的 `parse_voice()`（固定句式，非自由 NL）+
@@ -565,27 +565,48 @@ core 0.8.0 删掉的是**读入期的兼容层**（`src/rui/config/legacy_adapte
     「叫我小王」被误追问「什么时候」。
   - **测试**：`tests/test_reminder_voice.py`（时间表/23:59 边界/动作与房间/持久化/三级落点/播报入口）、
     `tests/test_app_fleet.py` 的落点用例。
-  - **仍未做（本卡范围外）**：② 到点抢占（不 `stop` 音乐、120 s 超时仍只 `log.warning`）、
-    被让出的音乐不自动恢复、真机验收（重启不重播/不丢、离线回落实际出声）。
+  - **C2 已补（2026-10-28，见下条）**；**仍未做（0.8.1 及以后）**：失败重试/排期、
+    被让出的音乐自动恢复、真机验收（重启不重播/不丢、离线回落实际出声）。
   - 另修一处既有缺陷：tick 与 listener **重复入队**导致每条提醒播两遍；现只保留 tick 一个生产者
     （`tests/test_app_fleet.py::test_a_due_reminder_is_spoken_exactly_once` 为回归）。
   - **C1 review 修复（2026-10-28）**：一刻/三刻按 15/45 分解析（不再存成 1/3 分 + 「刻吃药」）；
     有时间线索的句子不再误问「什么时候」；`default_output` 留空时显式优先 `living`/客厅。
+  - **C2 最小到点抢占 + 失败可见（task-21，2026-10-28，代码侧已落地；真机未验证）**：
+    - **只抢占目标房间**：`_deliver_reminder()` 先按 §e.2 解析落点。目标有歌（playing/paused）且
+      `output_owner`/`music_room` 指向该设备 → `MusicService.stop()`（队列+平面+LED）并
+      `StopAudio`；目标在应答 → 只向该设备 `StopAudio` 清已排队音频，播报后
+      `runner.abort()` 停剩余合成。**其它房间的音乐/会话/owner 不动；被停的音乐不自动恢复。**
+    - **失败可见**：`/health.reminders` 新增 `fired / spoken / failed / offline /
+      last_error / last_failure_at / last_room`（进程内内存，重启清零）。目标离线 →
+      `default_output` 播报并说「<room>那台没在线」，同时计 `offline`+`failed`；
+      无任何在线音箱/TTS 失败 → `failed` + **ERROR** 日志（不再只有 `log.warning`）。
+    - **收尾（task-17 口径）**：不发 `reply_finished`（不给免唤醒续听窗口），目标会话
+      `idle.stop()`，LED 最后一条 `off`；被抢占回合的 `reply_finished` 由 30 s TTL 标记
+      吞掉。`reminder_speak` 只投递一次，**不做重试/排队**。
+    - **测试**：`tests/test_reminder_delivery.py`（目标放歌只停该房间/不恢复/其它房间不动、
+      应答中断、离线回落+提示、无音箱/TTS 失败计数、LED off/无 `reply_finished`）；
+      `tests/test_app_fleet.py` 的 `/health.reminders` 与离线到点集成用例。
+    - **残余取舍**：详见 `docs/known-limitations.md` **L22**（计数易失、`failed` 含降级、
+      fallback 房间不抢、30 s 后迟到的 `reply_finished` 仍可能开窗）。
 
 - **现状（2026-10-28 查代码，纠正原描述）**：rui **已有**提醒/定时能力——
   `src/rui/tools/reminders.py`（`ReminderStore`、`reminders.json` 原子落盘、`build_scheduler`、
   `fired_at` 防重播）、`app.py:3390-3429`（1 s tick + 播报队列 + `_reminder_client`）、
-  `tests/test_app_fleet.py:485`（落点测试）。**真实缺口只有四条**：
-  ① 语音固定句式入口（现在只有 LLM 工具调用）；② 到点抢占（现在等空闲，不 `stop` 音乐，120 s 超时只 `log.warning`）；
-  ③ 指令指定房间（reminder 无来源房间，固定 `default_output`）；④ 目标离线要明说。
+  `tests/test_app_fleet.py:485`（落点测试）。**当时真实缺口四条**：
+  ① 语音固定句式入口（只有 LLM 工具调用）；② 到点抢占（当时等空闲、不 `stop` 音乐、120 s 超时只 `log.warning`）；
+  ③ 指令指定房间（当时固定 `default_output`）；④ 目标离线要明说。
+  **2026-10-28 状态：① 由 C1 补齐；②/④ 由 C2 补齐；③ 由 C1 的 `Reminder.room` 补齐。**
 - **第一版范围（固定句式，不做任意自然语言）**：
   - 句式：「明天早上七点叫我在客厅…」「下午三点提醒我在书房…」；
   - 只识别 **时间 + 动作 + 房间** 三要素；句式外的话不承诺。
 - **到点行为**：先 `service.stop()` 让出音乐 → 在**目标房间**播报；落点按 §e.2 三级规则
   （指令房间优先 → `default_output` → 目标离线时回落 `default_output` 并明说「客厅那台没在线」）。
+  **C2 落地口径（2026-10-28）**：只有目标设备在放歌时才 `stop`，其它房间的歌不动；
+  播报后不自动恢复音乐；失败/离线计数见 `/health.reminders`。
   - **失败口径**：播报失败/目标全离线必须留用户可感知痕迹或至少 ERROR 计数，**不许只 `log.warning`**（对齐 e.1 的「不静默」）。
-  - **等待上限与音乐恢复**：现有 120 s 等待上限是否保留、被 `stop` 的音乐是否自动恢复，实现前定；
-    默认**不自动恢复**（提醒优先），若 9 哥 要恢复另开需求。
+  - **等待上限与音乐恢复（C2 已定）**：**不再保留**「等 owner/空闲最多 120 s」的全局等待；
+    目标房间到点即抢占，fallback 直接播；被 `stop` 的音乐**不自动恢复**（提醒优先）。
+    失败重试/排期/恢复一律留 0.8.1，本卡不做。
   - 新增播报文案（如「客厅那台没在线」）需进 `src/rui/session/phrases.py`，中英口径随实现确认。
     **C1 已加** `reminder.set / set_room / need_time / need_text / past_time / save_failed / offline`
     七条（当前话术表只有中文，沿用既有口径）。
