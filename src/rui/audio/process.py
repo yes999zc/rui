@@ -555,6 +555,10 @@ class AudioPlane:
         # Incremented by _flush_speech so a chunk already pulled off the queue cannot
         # still reach the speaker after a barge (the start gate widens that window).
         self._speak_generation = 0
+        # P0b-A: last known bridge-side link state. The purge belongs to the
+        # live -> lost transition, not to the state: a plane started while the speaker is
+        # still connecting must not treat every metrics tick as a fresh loss.
+        self._speaker_link_up: bool | None = None
         # Whether any audio has been handed to the device since the last explicit stop.
         # The pre-start stop exists to restart a drained aplay; when this is False the
         # device player is already stopped, so the control message is redundant - and on
@@ -2776,6 +2780,32 @@ class AudioPlane:
             except asyncio.QueueEmpty:
                 break
 
+    def _note_speaker_link(self, connected: bool) -> None:
+        """Drop queued speech when the speaker's link goes live -> lost (P0b-A).
+
+        The control plane pushes a whole answer faster than real time, so at the moment
+        the speaker drops `_speak_queue` still holds the rest of the sentence. The bridge
+        resets its own frame buffer and stream state on link loss (house-ear 9065d19);
+        without this purge the plane would replay the half sentence into the next
+        session. The purge is `_flush_speech` - the same thing a barge does - and it
+        sends nothing to the device: the link is already gone, so an EOS/stop_playback
+        would only race the adapter's reconnect.
+
+        Only the transition purges. `_speaker_link_up` starts as None, so a plane that
+        boots while the speaker is still connecting records False and stays quiet; the
+        metrics loop ticks every 2 s and must not re-purge an empty queue forever.
+        """
+        was_up = self._speaker_link_up
+        self._speaker_link_up = connected
+        if was_up is not True or connected:
+            return
+        chunks = self._speak_queue.qsize()
+        seconds = self._speak_queued_s
+        self._flush_speech()
+        room = str(getattr(self.device_cfg, "room", "") or self.device_id)
+        log.info("link lost: dropped %d speech chunks (%.1f s) for room %s",
+                 chunks, seconds, room)
+
     # 0 is the most important. A cue is 320 ms and must be heard over anything; a reply
     # preempts music; a reminder waits for the reply and preempts music.
     PRIORITY = {"cue": 0, "dialogue": 1, "reminder": 2, "music": 3}
@@ -2892,11 +2922,17 @@ class AudioPlane:
 
     def _build_metrics(self) -> Metrics:
         health: dict = {}
+        link_known = False
         if self.adapter is not None:
             try:
                 health = dict(self.adapter.health() or {})
+                link_known = True
             except Exception:  # noqa: BLE001 - diagnostics must not break the plane
+                # An adapter that cannot answer is "unknown", not "lost": a diagnostic
+                # hiccup must never purge a reply.
                 health = {}
+        if link_known:
+            self._note_speaker_link(bool(health.get("connected")))
         return Metrics(
             uptime_s=round(time.monotonic() - self.started, 1),
             aec_enabled=self.aec is not None,
