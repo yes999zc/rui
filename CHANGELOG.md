@@ -18,6 +18,30 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.3] - 2026-10-28
+
+**Theme: the seams you can hear, and the room that asked.** Two field reports from the
+same evening: a short reply paused at its comma, and an unnamed reminder rang in the
+wrong room. Both are fixed without touching barge/AEC/volume/follow-up semantics or
+the compat window (`>=0.8.1 <0.9.0`).
+
+### Fixed
+
+1. **Ultra-short replies are one TTS request.** When the model paused >300 ms after
+   the comma (`在，\n` … `你说。`), the short-hold cap used to release by *splitting*,
+   so the device played two renditions and the vendor's head/tail silence became an
+   audible ~160 ms seam. The cap/force/tail release now merges the whole ultra-short
+   buffer into one request; literal `在，你说。` was already one request. First audio
+   is unchanged (~400 ms in the measured case), and longer replies still stream.
+2. **Reminder provenance.** An unnamed voice reminder ("十秒钟后提醒我喝水") now keeps
+   the room of the device that heard it instead of falling back to `default_output`.
+   It rings/stops music only there; an offline source still falls back with
+   "<room>那台没在线" and the existing health counters.
+3. **Diagnostics:** each TTS call logs `tts_call#k chars/audio/gap`, the turn trace
+   records call count + inter-call silence, and the plane records per-reply segment
+   count, per-segment audio and seam/inner silence (additive `Metrics`/trace fields).
+   The segment ledger is closed on barge/stop, so the next reply cannot inherit it.
+
 ## [0.8.2] - 2026-10-28
 
 **Theme: reminders hear seconds.** 「十秒钟之后」 is now ten seconds, not ten minutes.
