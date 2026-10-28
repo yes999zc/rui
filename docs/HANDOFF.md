@@ -48,6 +48,8 @@
 - **回滚顺序反向**：先 plugins 回 1.3.2 + 0.2.3（1.3.2 兼容 0.7.9/0.8.x），再镜像回 `sha256:5aa362f6…b9f7`，up -d，复验。
 - **部署前自检表**：core 0.8.1（—）；dot2 1.3.3（>=0.8.1 <0.9.0，需 core≥0.8.1）；xiaoai 0.2.3（>=0.7.0 <0.9.0，兼容）。必须用 v0.8.1 tag 的干净 commit 出镜像，不拿脏树。
 - **部署前 HANDOFF 必写一行**：「即将部署：core→0.8.1 → plugins→1.3.3」；部署后贴 /health + 三台 audio.say。
+- **0.8.1 已发（2026-10-28 19:1x）**：tag `v0.8.1`→`ea1b8ba`（tag object `c373853`），release https://github.com/yes999zc/rui/releases/tag/v0.8.1；全量 1887/6；桥 1.3.3 tag `31195ee`。
+- **即将部署：core→0.8.1 → plugins→1.3.3**（按纠正顺序 D1' core 先、D2' 插件后、D3' 配置；D5 七项验证；异常反向回滚）。
 - **进度（2026-10-28 18:55）**：c UI 卡片网格实现中（DevicesView/style + test_devices_view_grid）；d trace gap 块序号已实现（protocol/trace/app + 5 tests，全量 1887/6）；e/f 文档已写（ADR 0008、L23/L24、C-001 1.3.3、README 0.8.1 矩阵）。待 UI DONE + 三路 review/verify → 版本 bump 0.8.1 → tag/release → 部署 0.8.1。
 - **进度（2026-10-28 18:50）**：task-27 已提交 `d633d80`（house 1878/6，review PASS + verify VERIFIED）；桥 **1.3.3 已发**（`9866c6d`，tag `v1.3.3`→`31195ee`，`rui_compat >=0.8.1 <0.9.0`，release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.3）。生产插件仍是 1.3.2（无 voice）直到 0.8.1 部署。0.8.1 剩余：c 设备卡片网格、d trace gap 块序号、e lx06 ADR/冷启动、f 文档 + 版本 0.8.1。
 - **task-27（0.8.1 a/b/c）**：告别收尾不 arm + rs03qr 型号默认 + 控制台字段；house 1878/6、bridge 178/1；review 阻塞：`audio_defaults.voice` 被 <0.8.1 拒载 → **桥升 1.3.3，rui_compat >=0.8.1 <0.9.0**，生产插件 rs03qr 已回退到 1.3.2（无 voice）直到 0.8.1 部署。后续：task-28 卡片网格 UI、task-29 trace gap、task-30 lx06 ADR/冷启动/docs。生产 D3 已改 followup=3000、dot2-b params control_port=0 + loudness_file；dot2-b audio 保留；生产仍 0.7.9。
