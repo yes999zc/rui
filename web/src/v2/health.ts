@@ -5,12 +5,13 @@
 import type { HealthAudioDevice, HealthWarning } from './api'
 import { t } from './i18n'
 
-/** `fail` for a stopped/erroring plane, `warn` for restarts or a rejected speaker. */
+/** `fail` for a stopped/erroring plane, `warn` for restarts/rejections/play errors. */
 export function audioSeverity(row: HealthAudioDevice): 'fail' | 'warn' | null {
   if (!row.enabled) return null
   if (row.error) return 'fail'
   if (!row.running) return 'fail'
   if (row.speaker_connected === false) return 'fail'
+  if (row.playback_errors > 0) return 'warn'
   if (row.restarts > 0 || row.speaker_rejected > 0) return 'warn'
   return null
 }

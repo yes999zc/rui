@@ -33,6 +33,13 @@
   每块 raise、LED 亮但无声。顺序改为：**task-26（字段归属/冲突：manifest 胜全局 explicit + WARN/拒绝）→
   task-24（R3 运行期自检 + 桥 play ValueError 上报为设备错误）→ task-25（catalog/runtime 一致性 + 三份值可见性）**。
   **与 task-22（params/layout）分开**。
+- **进度（2026-10-28 17:0x）**：**task-24（R3）已实现，待 review/verify**（未提交）：运行期 wire 自检
+  （inbound capture 由 probe、playback 由 manifest；outbound capture 仅告警不拒绝）在 `Ready` 前拒绝，
+  `audio_config_mismatch:` + 两值/source/fix；`play()` ValueError 立即断 plane，其他异常 3 连击熔断；
+  `Metrics.playback_errors/last_error` → `/health` + v2 `PlaneCard`/健康表；console `status_reason.code=
+  audio_config_mismatch` → 中文「配置与设备不符」+ `audio_wire_mismatch` warning。新增
+  `tests/test_audio_wire_check.py` 12 项；全量 **1842 passed / 6 skipped**；ruff 通过、web typecheck 通过。
+  细节 `docs/audio-wire-check.md`。桥侧无需改动（`dot2 adapter.play()` 直接 raise ValueError，未吞）。
 - **进度（2026-10-28 16:40）**：task-22 已收口 `36ad95f`（5 台布局+params，1812/6）。task-26 已实现（1828/6；manifest 硬件事实胜全局，capture.rate 协商；冷启动 catalog 先注册；ADR 0007），review CHANGES 1 项（neutral capture 字段 provenance source 仍报 global-config）修正中。xiaoai 0.2.3 已发：tag `v0.2.3`→`0d82250`（tag object `2676664`），release https://github.com/yes999zc/rui-xiaoai-bridge/releases/tag/v0.2.3。task-24/task-25/C2 待 task-26 提交后做。
 - **0.8.0 一次性授权（2026-10-28 9哥，含部署）**：tag/release/生产部署已授权；门禁=task-26→24→25 + task-22 收口 + **最小 C2（0.8.0，原“推迟 0.8.1”作废）** + `followup_max_wait_ms=0` + 四台真机验收。C2 最小范围：到点先停目标房间音乐→播报→不自动恢复；失败/全离线→default_output 播报+「<room>那台没在线」+health 失败计数；只停目标房间；播完 session 干净关闭、LED off、无免唤醒窗口；不做重试/排期/音乐恢复/去重。
 - **发布顺序**：xiaoai 桥 0.2.3（commit `0d82250`，未 tag）先发 → dot2 1.3.2 已发不动 → core 0.8.0。发布正文注明 C2 抢占语义与 followup 默认 8000/生产设 0。

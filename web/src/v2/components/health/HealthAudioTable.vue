@@ -27,6 +27,7 @@ defineProps<{
             <th>{{ t('v2.health.audio.muted') }}</th>
             <th>{{ t('v2.health.audio.wake') }}</th>
             <th>{{ t('v2.health.audio.restarts') }}</th>
+            <th>{{ t('v2.health.audio.playback') }}</th>
             <th>{{ t('v2.health.audio.error') }}</th>
           </tr>
         </thead>
@@ -63,8 +64,21 @@ defineProps<{
             </td>
             <td class="mono">{{ row.restarts }}</td>
             <td>
-              <span v-if="row.error" class="v2-warn-text mono v2-break">{{ row.error }}</span>
+              <span v-if="row.playback_errors" class="v2-warn-text mono">
+                {{ row.playback_errors }}
+              </span>
               <span v-else class="meta">{{ t('v2.common.na') }}</span>
+              <span v-if="row.playback_error" class="meta mono v2-break">
+                {{ row.playback_error }}
+              </span>
+            </td>
+            <td>
+              <span v-if="row.error" class="v2-warn-text mono v2-break">{{ row.error }}</span>
+              <span
+                v-if="row.refusal && row.refusal !== row.error"
+                class="meta mono v2-break"
+              >{{ row.refusal }}</span>
+              <span v-if="!row.error && !row.refusal" class="meta">{{ t('v2.common.na') }}</span>
             </td>
           </tr>
         </tbody>

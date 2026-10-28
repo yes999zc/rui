@@ -210,6 +210,11 @@ class Metrics(BaseModel):
     # plane started; a gap under 20 ms is scheduler noise, not an underrun.
     playback_gap_count: int = 0
     playback_max_gap_ms: float = 0.0
+    # task-24: blocks the adapter rejected in `play()`. Additive with defaults so an
+    # older plane still parses. The counter is cumulative; the console and /health
+    # show it (a wrong wire format used to be one INFO line per chunk).
+    playback_errors: int = 0
+    playback_last_error: str = ""
     barge_count: int = 0
     probe_hits: int = 0
     voice_peak_db: float | None = None

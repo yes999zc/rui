@@ -36,6 +36,14 @@ function connectedText(value: boolean | null | undefined): string {
         <dt>{{ t('v2.detail.planeUtterances') }}</dt>
         <dd class="mono">{{ plane.utterances }}</dd>
       </div>
+      <div v-if="plane.playback_errors">
+        <dt>{{ t('v2.detail.planePlaybackErrors') }}</dt>
+        <dd class="mono">{{ plane.playback_errors }}</dd>
+      </div>
+      <div v-if="plane.playback_error">
+        <dt>{{ t('v2.detail.planePlaybackError') }}</dt>
+        <dd class="v2-fail-text mono v2-break">{{ plane.playback_error }}</dd>
+      </div>
       <div v-if="plane.error">
         <dt>{{ t('v2.detail.planeError') }}</dt>
         <dd class="v2-fail-text">{{ plane.error }}</dd>

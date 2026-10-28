@@ -102,6 +102,11 @@ class AudioPlaneClient:
         # (audit 2026-10-23).
         self.pump_dead = False
         self.on_dead: Callable[[str], None] | None = None
+        # The plane's own Error text. A degraded plane sends it just before closing
+        # the socket; without keeping it the supervisor only sees "reader stopped"
+        # and /health loses the reason the moment the child is replaced (task-24).
+        self.last_error = ""
+        self.on_error: Callable[[str], object] | None = None
         self._closing = False
         self._turns: set[asyncio.Task] = set()
         self._metrics_event = asyncio.Event()
@@ -212,6 +217,12 @@ class AudioPlaneClient:
                     waiter.set_exception(RuntimeError(msg.error))
                 else:
                     waiter.set_result(msg.stdout)
+        elif isinstance(msg, Error):
+            # Keep the refusal/cause; the socket closes right after it, so this is
+            # the only place the reason can survive the restart.
+            self.last_error = msg.message
+            if self.on_error is not None:
+                self.on_error(msg.message)
         elif isinstance(msg, Ready):
             self.ready = msg
 
@@ -409,6 +420,9 @@ class AudioPlaneSupervisor:
         self._stopping = False
         self.restarts = 0
         self.error = ""
+        # The last Error/refusal the plane itself reported. It outlives a restart
+        # (metrics reset, error is cleared) so /health can still say why it died.
+        self.refusal = ""
 
     def _pick_device(self) -> str | None:
         if self.device_id:
@@ -449,6 +463,7 @@ class AudioPlaneSupervisor:
             # Whatever went wrong, the console must be able to say why: keep the reason
             # and take the half-started child down instead of leaving it running blind.
             self.error = str(exc)
+            self.refusal = str(exc)
             await self._kill_child()
             raise
         self.handle.bind(self.client)
@@ -579,6 +594,7 @@ class AudioPlaneSupervisor:
                     # the child is still alive, `running` must go false and the watchdog
                     # must rebuild - not keep answering /health with green (audit P1).
                     self.client.on_dead = self._client_died
+                    self.client.on_error = self._client_error
                     self.client.start_pump()
                     self.error = ""
                     return
@@ -605,6 +621,11 @@ class AudioPlaneSupervisor:
         code = self.proc.returncode if self.proc is not None else "?"
         tail = " / ".join(self._stderr_tail[-3:])
         return f"audio plane exited with {code}" + (f": {tail}" if tail else "")
+
+    def _client_error(self, message: str) -> None:
+        """Remember what the plane said before it closed: a restart erases metrics."""
+        self.refusal = message
+        log.warning("audio plane reported: %s", message)
 
     def _client_died(self, reason: str) -> None:
         """The plane's reader stopped: mark the plane down and make sure it is rebuilt.
@@ -650,6 +671,8 @@ class AudioPlaneSupervisor:
             "pid": self.proc.pid if self.proc is not None else None,
             "restarts": self.restarts,
             "error": self.error or ("" if running else "audio plane is not running"),
+            # Why the plane last refused/died, kept across restarts (task-24).
+            "refusal": self.refusal,
         }
         if ready is not None:
             out["device_id"] = ready.device_id

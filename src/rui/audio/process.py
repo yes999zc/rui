@@ -49,6 +49,7 @@ from ..device.contract import (
     DeviceAdapter,
     DeviceInfo,
     DeviceWake,
+    Transport,
     effective_capabilities,
     wake_validation_error,
 )
@@ -59,7 +60,13 @@ from .ack import render_cached as render_ack
 from .aec import AecChain, AecUnavailable
 from .decimate import Decimator
 from .kws import KwsUnavailable, WakeHit, WakeProbe, WakeWord
-from .probe import safe_probe
+from .probe import (
+    WIRE_MISMATCH_PREFIX,
+    WireCheck,
+    WireFormat,
+    check_wire_format,
+    safe_probe,
+)
 from .protocol import (
     CONTROL,
     DeviceVolume,
@@ -113,6 +120,12 @@ LEVEL_LOG_EVERY = 15
 # written immediately because this tolerance only applies to the read-back check.
 VOLUME_RECONCILE_TOLERANCE = 1
 PLAY_CHUNK_MS = 100
+# task-24: `adapter.play()` is the last place a wrong wire format can surface. A
+# deterministic rejection (ValueError: the Dot 2 accepts 48 kHz only) trips at once;
+# transient failures are counted and the plane is rebuilt after this many in a row.
+# The old code logged one INFO line per chunk and kept feeding a speaker that could
+# never play anything.
+PLAY_ERROR_LIMIT = 3
 # Reply pacing. Pushing a block and then waiting exactly its own duration leaves the
 # device's buffer empty the whole time: any scheduler hiccup (1-3 ms per send, GC, a
 # busy VM) and the speaker underruns - heard as stutter, invisible in every counter.
@@ -616,6 +629,13 @@ class AudioPlane:
         self.last_barge_stop_ms: float | None = None
         self.playback_path = ""
         self.last_playback_error = ""
+        # task-24: adapter.play() failures are a first-class health signal, not a log
+        # line. `playback_errors` never resets (history); the streak is the breaker.
+        self.playback_errors = 0
+        self.playback_last_error = ""
+        self._play_error_streak = 0
+        # The startup comparison, kept so /health/logs can explain a refusal.
+        self.wire_check: WireCheck | None = None
         self._playback_task: asyncio.Task | None = None
         # Where the current file is, and whether speech paused it. One device stream means
         # a reply and a song cannot both be written: the old build paused the song for
@@ -863,6 +883,119 @@ class AudioPlane:
             if layout_changed else "",
         )
         return True
+
+    # ----------------------------------------------------------- wire self-check
+    def _verify_wire_format(self, info: DeviceInfo) -> WireCheck:
+        """Compare what this device really is with what the config will send it.
+
+        Called once per plane start, after the manifest re-resolve and before Ready.
+        The production failure this exists for: a Dot 2 whose effective playback was
+        16 kHz (global template) while the bridge accepts 48 kHz only - the plane
+        looked healthy, every `play()` raised, and the console stayed green. A
+        mismatch is a refusal, with both values, their source and the fix.
+        """
+        effective = self.effective
+        configured_capture = WireFormat(
+            rate=effective.capture.rate,
+            channels=effective.capture.channels,
+            mic_channels=effective.capture.mic_channels,
+            ref_channels=effective.capture.ref_channels,
+            source="effective config (audio.capture + devices[].audio)",
+        )
+        reported = WireFormat(
+            # 0 means "the probe did not state it", the same rule the console uses.
+            rate=info.sample_rate or None,
+            channels=info.channels or None,
+            mic_channels=info.mic_channels or None,
+            ref_channels=info.ref_channels or None,
+            source=f"probe ({info.adapter} {info.model})".strip(),
+        )
+        # Which side owns the capture wire depends on the transport:
+        # * inbound - the device dials us and is told the layout; a probe that
+        #   reports another layout means frames will be interpreted at the wrong
+        #   rate/channel count. Compare it.
+        # * outbound - core dials the adapter, which delivers self-describing
+        #   frames and owns its own resampling. The effective capture block is
+        #   advisory there (the plane's decimator already uses `info`), so a
+        #   mismatch is not a reason to refuse; playback is still checked.
+        capture_reported = reported if info.transport is Transport.INBOUND else None
+        configured_playback = WireFormat(
+            rate=effective.playback.rate,
+            channels=effective.playback.channels,
+            source="effective config (audio.playback + devices[].audio)",
+        )
+        expected_playback: WireFormat | None = None
+        defaults = self.audio_defaults
+        if defaults is not None and defaults.playback is not None:
+            facts = self.audio_defaults_info
+            expected_playback = WireFormat(
+                rate=defaults.playback.rate,
+                channels=defaults.playback.channels,
+                source=(
+                    f"model manifest {facts.model_id or '?'} "
+                    f"({facts.plug_id or '?'})"
+                ),
+            )
+        check = check_wire_format(
+            capture_configured=configured_capture,
+            capture_reported=capture_reported,
+            playback_configured=configured_playback,
+            playback_expected=expected_playback,
+        )
+        self.wire_check = check
+        if check.ok:
+            log.info(
+                "audio wire (%s): %s",
+                self.device_id,
+                ", ".join(check.checked) or "nothing the device or manifest states",
+            )
+        else:
+            log.error(
+                "audio wire (%s): configuration does not match the device: %s",
+                self.device_id, check.as_error(),
+            )
+        return check
+
+    # --------------------------------------------------------- playback errors
+    async def _adapter_play(
+        self, adapter: DeviceAdapter, pcm: bytes, *, sample_rate: int, channels: int,
+    ) -> None:
+        """One place every PCM handover goes through, so no failure can be silent."""
+        try:
+            await adapter.play(pcm, sample_rate=sample_rate, channels=channels)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - surfaced by _note_play_error
+            self._note_play_error(exc, "play")
+            raise
+        else:
+            self._play_error_streak = 0
+
+    def _note_play_error(self, exc: BaseException, where: str) -> None:
+        """Count one rejected PCM block, log it once, and trip the breaker.
+
+        A ValueError from `play()` is deterministic (the adapter rejects this wire),
+        so it stops the plane immediately: continuing would raise once per chunk for
+        the rest of the reply and hide the config error behind log noise. Other
+        failures (the speaker went away) are retried until PLAY_ERROR_LIMIT in a row.
+        """
+        self.playback_errors += 1
+        detail = f"{where}: {type(exc).__name__}: {exc}"[:300]
+        self.playback_last_error = detail
+        self.last_playback_error = detail
+        self._play_error_streak += 1
+        if self._play_error_streak == 1:
+            log.error("playback error (%s) #%d: %s", where, self.playback_errors, detail)
+        else:
+            log.debug("playback error (%s) #%d: %s", where, self.playback_errors, detail)
+        if isinstance(exc, ValueError):
+            self._fail_plane(
+                f"{WIRE_MISMATCH_PREFIX}playback rejected by the adapter: {detail}"
+            )
+        elif self._play_error_streak >= PLAY_ERROR_LIMIT:
+            self._fail_plane(
+                f"playback failed {self._play_error_streak} times in a row: {detail}"
+            )
 
     @property
     def _post_playback_mute_s(self) -> float:
@@ -2217,7 +2350,8 @@ class AudioPlane:
                 chunk = audio[start : start + step]
                 if self._stop.is_set():
                     return
-                await adapter.play(
+                await self._adapter_play(
+                    adapter,
                     np.round(chunk * 32767.0).astype("<i2").tobytes(),
                     sample_rate=rate,
                     channels=1,
@@ -2245,7 +2379,9 @@ class AudioPlane:
         except Exception as exc:  # noqa: BLE001 - a broken cue must not kill the plane
             self.ack_failed += 1
             self.ack_error = f"{type(exc).__name__}: {exc}"
-            log.info("ack: %s", self.ack_error)
+            # `_adapter_play` already counted/logged the play failure; this line is
+            # about the cue, not about every PCM block.
+            log.debug("ack: %s", self.ack_error)
         finally:
             self._release("cue")
 
@@ -2419,7 +2555,8 @@ class AudioPlane:
                 chunk = audio[start:start + step]
                 seconds = chunk.size / target
                 credited = await self._credit_wait(adapter, seconds)
-                await adapter.play(
+                await self._adapter_play(
+                    adapter,
                     np.round(chunk * 32767.0).astype("<i2").tobytes(),
                     sample_rate=target,
                     channels=1,
@@ -2756,9 +2893,14 @@ class AudioPlane:
             # the fallback (a device that cannot report, or one that stopped reporting).
             credited = await self._credit_wait(adapter, seconds)
             try:
-                await adapter.play(pcm, sample_rate=target, channels=1)
-            except Exception as exc:  # noqa: BLE001 - the speaker may be gone
-                log.info("speak: %s", exc)
+                await self._adapter_play(
+                    adapter, pcm, sample_rate=target, channels=1
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - already counted/logged by the helper
+                # A ValueError has stopped the plane; a transient failure is retried
+                # until PLAY_ERROR_LIMIT. Never one INFO line per chunk again.
                 continue
             self.playback_s += seconds
             self._device_audio_pending = True
@@ -3292,6 +3434,8 @@ class AudioPlane:
             playback_lead_ms=round(self.playback_lead_s * 1000.0, 1),
             playback_gap_count=self.playback_gap_count,
             playback_max_gap_ms=round(self.playback_max_gap_ms, 1),
+            playback_errors=self.playback_errors,
+            playback_last_error=self.playback_last_error,
             device_volume=self.device_volume,
             output_owner=self._owner or "",
             voice_peak_db=(
@@ -3452,6 +3596,12 @@ class AudioPlane:
             # The manifest catalog is now as ready as the device is: re-resolve
             # before the first wake can read the cue window (cold-start fix).
             self._refresh_audio_defaults(reason="probe")
+            # task-24: refuse to open a speaker whose effective wire the device
+            # cannot accept. This runs before Ready, so the control plane never
+            # reports the room as up and the Error carries both values and the fix.
+            wire = self._verify_wire_format(info)
+            if not wire.ok:
+                raise RuntimeError(f"{WIRE_MISMATCH_PREFIX}{wire.as_error()}")
             writer.write(
                 encode_json(
                     Ready(

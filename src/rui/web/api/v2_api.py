@@ -40,7 +40,13 @@ from pydantic import ValidationError
 from ... import __version__, secrets
 from ... import setup_state as setup_store
 from ...audio.kws import KwsUnavailable, model_files
-from ...audio.probe import safe_probe
+from ...audio.probe import (
+    WireCheck,
+    WireFormat,
+    check_wire_format,
+    is_wire_mismatch,
+    safe_probe,
+)
 from ...config.catalog import field_specs
 from ...config.schema import (
     LED_STATES,
@@ -62,7 +68,7 @@ from ...config.schema import (
     effective_device_audio,
 )
 from ...config.store import ConfigError, explicit_audio_layers, load_config
-from ...device.contract import Capability, DeviceInfo
+from ...device.contract import Capability, DeviceInfo, Transport
 from ...log_setup import LOG_FILE_NAME, tail_lines
 from ...plugins import (
     ParamType,
@@ -363,6 +369,10 @@ _STATUS_REASONS: dict[str, tuple[str, str]] = {
         "Check the service log; the device may still be reachable after a restart.",
     ),
     "device_disabled": ("the device is disabled", "Enable it on the device page."),
+    "audio_config_mismatch": (
+        "the configuration does not match the device",
+        "Open the audio tab; both values, their source and the fix are listed.",
+    ),
     "plug_unresolved": (
         "no installed plug describes this device",
         "Install the plug that owns this model, or remove and re-add the device.",
@@ -391,6 +401,7 @@ _STATUS_REASONS: dict[str, tuple[str, str]] = {
 _REASON_PRIORITY = (
     "ready",
     "device_disabled",
+    "audio_config_mismatch",
     "probe_failed",
     "plug_unresolved",
     "adapter_unavailable",
@@ -1104,6 +1115,77 @@ def install_v2_routes(
             for conflict in device_audio_conflicts(config, device)
         ]
 
+    def _device_wire_check(
+        config: Config,
+        device: DeviceConfig,
+        info: object | None,
+        *,
+        probe_error: str,
+        summary_audio: dict[str, Any],
+    ) -> WireCheck:
+        """The same comparison the plane refuses on (task-24), computed independently.
+
+        The console must be able to say "配置与设备不符" even when the plane is stopped,
+        so this does not read plane state: probe (capture wire) and the model manifest
+        (playback wire) are compared with the effective config the API already merged.
+        """
+        defaults_info = device_audio_defaults_info(device, config.system.data_dir)
+        defaults = defaults_info.defaults
+        capture = summary_audio["capture"]
+        playback = summary_audio["playback"]
+        reported = None
+        if info is not None and not probe_error:
+            reported = WireFormat(
+                rate=int(getattr(info, "sample_rate", 0) or 0) or None,
+                channels=int(getattr(info, "channels", 0) or 0) or None,
+                mic_channels=int(getattr(info, "mic_channels", 0) or 0) or None,
+                ref_channels=int(getattr(info, "ref_channels", 0) or 0) or None,
+                source=(
+                    f"probe ({getattr(info, 'adapter', '?')} "
+                    f"{getattr(info, 'model', '?')})"
+                ).strip(),
+            )
+        expected_playback = None
+        if defaults is not None and defaults.playback is not None:
+            expected_playback = WireFormat(
+                rate=defaults.playback.rate,
+                channels=defaults.playback.channels,
+                source=(
+                    f"model manifest {defaults_info.model_id or '?'} "
+                    f"({defaults_info.plug_id or '?'})"
+                ),
+            )
+        # Same transport rule as the plane: only an inbound device is told the
+        # capture layout; an outbound adapter owns its wire and delivers
+        # self-describing frames, so its effective capture block is advisory.
+        if reported is not None and getattr(info, "transport", None) is not Transport.INBOUND:
+            reported = None
+        return check_wire_format(
+            capture_configured=WireFormat(
+                rate=capture["rate"],
+                channels=capture["channels"],
+                mic_channels=capture["mic_channels"],
+                ref_channels=capture["ref_channels"],
+                source="effective config (audio.capture + devices[].audio)",
+            ),
+            capture_reported=reported,
+            playback_configured=WireFormat(
+                rate=playback["rate"],
+                channels=playback["channels"],
+                source="effective config (audio.playback + devices[].audio)",
+            ),
+            playback_expected=expected_playback,
+        )
+
+    def _wire_warning(wire: WireCheck) -> list[dict[str, Any]]:
+        if wire.ok:
+            return []
+        return [{
+            "code": "audio_wire_mismatch",
+            "message": wire.as_error(),
+            "hint": " ".join(problem.fix for problem in wire.problems),
+        }]
+
     def _unknown_params(device: DeviceConfig, resolved: Any) -> list[str]:
         declared = ({spec.key for spec in resolved.device.params}
                     if resolved is not None else set())
@@ -1165,6 +1247,13 @@ def install_v2_routes(
         rows, effective, unknown = _capability_rows(
             declared, probed, resolved is not None)
 
+        summary_audio = app_module._device_audio_summary(config, device)
+        # task-24: the plane refuses on this exact comparison before Ready; the
+        # console computes it independently so a stopped plane still explains why.
+        wire = (_device_wire_check(
+            config, device, info, probe_error=probe_error,
+            summary_audio=summary_audio,
+        ) if device.enabled else WireCheck())
         codes: list[str] = []
         env = token_env_of(device, resolved)
         token_ok = token_configured(device, env)
@@ -1185,6 +1274,19 @@ def install_v2_routes(
             codes.append("audio_plane_error")
         if (device.enabled and token_ok and plane["running"] and connected is False):
             codes.append("not_connected")
+        # The plane may know what this API cannot recompute (probe or manifest
+        # missing): its own refusal carries the shared prefix, often wrapped by the
+        # supervisor ("audio plane refused: ...", "AudioPlaneError: ..."). Match the
+        # code anywhere in the text, never at the start.
+        plane_error = str(plane.get("error") or "")
+        plane_refusal = str(plane.get("refusal") or "")
+        refused = is_wire_mismatch(plane_error) or (
+            not plane["running"] and is_wire_mismatch(plane_refusal))
+        if not wire.ok or refused:
+            # A wrong wire is a configuration error, not an offline speaker: it
+            # outranks probe/plane noise because no amount of waiting fixes it.
+            status = "error"
+            codes.append("audio_config_mismatch")
         if not codes and device.enabled and status == "ready":
             codes.append("ready")
         if not codes:
@@ -1198,7 +1300,6 @@ def install_v2_routes(
                     else (getattr(info, "model", "") if info is not None else ""))
         transport = (str(resolved.device.transport) if resolved is not None
                      else str(getattr(info, "transport", "inbound")))
-        summary_audio = app_module._device_audio_summary(config, device)
         payload: dict[str, Any] = {
             "id": device.id,
             "room": device.room,
@@ -1226,6 +1327,7 @@ def install_v2_routes(
             "warnings": [
                 *device_warnings_for(device.id, warnings),
                 *_audio_conflict_warnings(config, device),
+                *_wire_warning(wire),
             ],
         }
         if not detail:
@@ -1249,6 +1351,8 @@ def install_v2_routes(
                 effective, device_id=device.id, adapter=device.adapter,
                 model=model, host=device.host),
             "audio": _audio_provenance(config, device),
+            # task-24: same values/source/fix the plane refuses on, machine-readable.
+            "audio_wire": wire.as_dict(),
             "plane": {
                 "running": bool(plane["running"]),
                 "speaker_connected": bool(plane["speaker_connected"]),
@@ -1256,6 +1360,10 @@ def install_v2_routes(
                 "restarts": int(plane.get("restarts") or 0),
                 "pid": _device_pid(app, device.id),
                 "error": str(plane.get("error") or ""),
+                "refusal": str(plane.get("refusal") or ""),
+                # task-24: bridge `play()` rejections, cumulative.
+                "playback_errors": int(plane.get("playback_errors") or 0),
+                "playback_error": str(plane.get("playback_error") or ""),
                 "wake_candidates": int(plane.get("wake_candidates") or 0),
                 "wake_admitted": int(plane.get("wake_admitted") or 0),
                 "wake_rejected": dict(plane.get("wake_rejected") or {}),
@@ -1266,6 +1374,7 @@ def install_v2_routes(
                 *device_warnings_for(device.id, warnings),
                 *_audio_conflict_warnings(config, device),
                 *_unknown_params_warning(_unknown_params(device, resolved)),
+                *_wire_warning(wire),
             ],
         })
         return payload

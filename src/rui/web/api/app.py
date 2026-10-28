@@ -1297,6 +1297,11 @@ def _plane_snapshot(app: FastAPI) -> dict:
         "speaker_device": str(status.get("device_id") or ""),
         "last_seen": getattr(app.state, "speaker_last_seen", 0.0) or None,
         "error": str(status.get("error") or ""),
+        # task-24: the plane's own last refusal, kept across a restart whose
+        # rebuilt metrics no longer carry the playback counter.
+        "refusal": str(status.get("refusal") or ""),
+        "playback_errors": int(metrics.get("playback_errors") or 0),
+        "playback_error": str(metrics.get("playback_last_error") or ""),
     }
 
 
@@ -2025,6 +2030,10 @@ def _device_plane(app: FastAPI, device_id: str) -> dict:
         "speaker_device": str(status.get("device_id") or device_id),
         "last_seen": last_seen,
         "error": str(status.get("error") or ""),
+        "refusal": str(status.get("refusal") or ""),
+        # task-24: `adapter.play()` rejections the plane counted (bridge wire mismatch).
+        "playback_errors": int(metrics.get("playback_errors") or 0),
+        "playback_error": str(metrics.get("playback_last_error") or ""),
         "restarts": int(status.get("restarts") or 0),
         "wake_count": int(status.get("wake_count") or 0),
         "wake_candidates": int(metrics.get("wake_candidates") or 0),
@@ -2050,6 +2059,11 @@ def _health_device_row(status: dict, device: DeviceConfig | None) -> dict:
         "muted": bool(metrics.get("muted")),
         "restarts": int(status.get("restarts") or 0),
         "error": str(status.get("error") or ""),
+        # task-24: why the plane last refused, kept after a restart resets metrics.
+        "refusal": str(status.get("refusal") or ""),
+        # task-24: a wrong playback wire is counted, not one INFO line per chunk.
+        "playback_errors": int(metrics.get("playback_errors") or 0),
+        "playback_error": str(metrics.get("playback_last_error") or ""),
         "pid": status.get("pid"),
         "wake_count": int(status.get("wake_count") or 0),
         "wake_candidates": int(metrics.get("wake_candidates") or 0),

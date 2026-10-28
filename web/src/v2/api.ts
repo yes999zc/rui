@@ -200,6 +200,11 @@ export interface DevicePlane {
   restarts: number
   pid: number | null
   error: string
+  /** task-24: the plane's own last refusal, kept across a restart. */
+  refusal: string
+  /** task-24: adapter `play()` rejections and the most recent one. */
+  playback_errors: number
+  playback_error: string
   wake_candidates: number
   wake_admitted: number
   wake_rejected: Record<string, number>
@@ -1362,6 +1367,11 @@ export interface HealthAudioDevice {
   muted: boolean
   restarts: number
   error: string
+  /** task-24: the plane's own last refusal, kept across a restart. */
+  refusal: string
+  /** task-24: adapter `play()` rejections and the most recent one. */
+  playback_errors: number
+  playback_error: string
   pid: number | null
   wake_count: number
   wake_candidates: number

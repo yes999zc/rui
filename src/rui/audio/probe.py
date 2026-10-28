@@ -50,6 +50,174 @@ class ProbeResult:
         return f"{self.error}: {self.detail}" if self.detail else self.error
 
 
+# ---------------------------------------------------------------- wire format
+#
+# The adapter contract reports the *capture* wire (rate/channels/mic/ref) but has
+# no playback field: a bridge like the Dot 2 accepts one PCM format only and
+# raises from `play()` for anything else. The model manifest is therefore the
+# expected playback wire. This comparison is deliberately pure so the plane can
+# refuse to start and the console can show the same answer independently.
+
+#: Stable prefix that marks a wire-mismatch refusal. It lives here (not in the
+#: plane) because the plane, the supervisor and the console must match one string.
+WIRE_MISMATCH_PREFIX = "audio_config_mismatch: "
+
+
+def is_wire_mismatch(text: object) -> bool:
+    """True when a plane/supervisor error carries the wire-mismatch code.
+
+    Never anchor on the start of the message: the supervisor wraps the plane's
+    own words ("audio plane refused: ..."), the plane prefixes degraded errors
+    ("audio plane degraded: ...") and the watchdog adds the exception class
+    ("AudioPlaneError: ..."). All of them must still read as a config mismatch.
+    """
+    return WIRE_MISMATCH_PREFIX.rstrip() in str(text or "")
+
+
+@dataclass(frozen=True)
+class WireFormat:
+    """One side of the comparison (configured, probe-reported or manifest)."""
+
+    rate: int | None = None
+    channels: int | None = None
+    mic_channels: int | None = None
+    ref_channels: int | None = None
+    #: Human-readable provenance, shown verbatim: "probe (dot2 ...)" or
+    #: "model manifest dot2 (dot2-echomuse)".
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class WireMismatch:
+    """One field where the effective config and the device disagree."""
+
+    path: str
+    configured: object
+    actual: object
+    source: str
+    fix: str
+
+    def line(self) -> str:
+        return (
+            f"{self.path}: configured {self.configured}, device {self.actual} "
+            f"(source: {self.source}); fix: {self.fix}"
+        )
+
+
+def _fix_for(path: str, actual: object) -> str:
+    if path == "capture.rate":
+        return (
+            f"set devices[].audio.capture.rate to {actual} "
+            "(the rate the device sends), or fix audio_defaults.capture.rate"
+        )
+    if path.startswith("capture."):
+        field = path.split(".", 1)[1]
+        return (
+            f"set devices[].audio.capture.{field} to {actual} "
+            "(channels must equal mic_channels + ref_channels)"
+        )
+    if path == "playback.rate":
+        return (
+            f"set devices[].audio.playback.rate to {actual} "
+            "(the rate the adapter accepts), or fix audio_defaults.playback.rate"
+        )
+    if path == "playback.channels":
+        return f"set devices[].audio.playback.channels to {actual}"
+    return f"set {path} to {actual} for this device"
+
+
+@dataclass(frozen=True)
+class WireCheck:
+    """The result of comparing effective config with the device's wire format."""
+
+    problems: tuple[WireMismatch, ...] = ()
+    checked: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+    def as_error(self) -> str:
+        """One sentence per disagreeing field; empty when the wire matches."""
+        return "; ".join(problem.line() for problem in self.problems)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "ok": self.ok,
+            "checked": list(self.checked),
+            "message": self.as_error(),
+            "mismatches": [
+                {
+                    "path": problem.path,
+                    "configured": problem.configured,
+                    "device": problem.actual,
+                    "source": problem.source,
+                    "fix": problem.fix,
+                }
+                for problem in self.problems
+            ],
+        }
+
+
+def _compare(
+    configured: WireFormat,
+    actual: WireFormat,
+    fields: tuple[str, ...],
+    *,
+    prefix: str,
+    problems: list[WireMismatch],
+    checked: list[str],
+) -> None:
+    for field in fields:
+        want = getattr(configured, field)
+        have = getattr(actual, field)
+        if want is None or have is None:
+            # One side did not state the field: an unknown is not a mismatch.
+            continue
+        path = f"{prefix}.{field}"
+        checked.append(path)
+        if want == have:
+            continue
+        problems.append(WireMismatch(
+            path=path,
+            configured=want,
+            actual=have,
+            source=actual.source or "device",
+            fix=_fix_for(path, have),
+        ))
+
+
+def check_wire_format(
+    *,
+    capture_configured: WireFormat | None = None,
+    capture_reported: WireFormat | None = None,
+    playback_configured: WireFormat | None = None,
+    playback_expected: WireFormat | None = None,
+) -> WireCheck:
+    """Compare the effective audio config with the device's actual wire format.
+
+    Capture comes from ``probe()``: that is what the device sends and what the
+    plane's decimator interprets. Playback comes from the model manifest, because
+    ``DeviceInfo`` has no playback field and a plug like the Dot 2 rejects every
+    block whose rate/channel count differs from its hardware wire.
+
+    A side that is absent (probe failed, manifest not installed) leaves those
+    fields unchecked rather than inventing an expectation: a false refusal is worse
+    than a late `play()` error, which the plane still counts and surfaces.
+    """
+    problems: list[WireMismatch] = []
+    checked: list[str] = []
+    capture_fields = ("rate", "channels", "mic_channels", "ref_channels")
+    playback_fields = ("rate", "channels")
+    if capture_configured is not None and capture_reported is not None:
+        _compare(capture_configured, capture_reported, capture_fields,
+                 prefix="capture", problems=problems, checked=checked)
+    if playback_configured is not None and playback_expected is not None:
+        _compare(playback_configured, playback_expected, playback_fields,
+                 prefix="playback", problems=problems, checked=checked)
+    return WireCheck(tuple(problems), tuple(checked))
+
+
 def _brief(exc: BaseException) -> str:
     text = " ".join(str(exc).split())
     if not text:
@@ -188,6 +356,12 @@ __all__ = [
     "PROBE_TIMEOUT",
     "PROBE_TIMEOUT_S",
     "ProbeResult",
+    "WIRE_MISMATCH_PREFIX",
+    "WireCheck",
+    "WireFormat",
+    "WireMismatch",
+    "check_wire_format",
     "fallback_info",
+    "is_wire_mismatch",
     "safe_probe",
 ]
