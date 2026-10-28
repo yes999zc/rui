@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from rui import healthcheck
 from rui.config import Config, DeviceConfig, save_config
 from rui.doctor import run_doctor
 from rui.web.api.app import create_app
@@ -23,14 +24,17 @@ def _devices() -> list[DeviceConfig]:
 
 
 class _Sup:
-    def __init__(self, device_id: str, running: bool = True, error: str = "") -> None:
+    def __init__(self, device_id: str, running: bool = True, error: str = "",
+                 metrics: dict | None = None) -> None:
         self.device_id = device_id
         self.running = running
         self.error = error
+        self.metrics = metrics or {}
 
     def status(self) -> dict:
         return {"device_id": self.device_id, "running": self.running,
-                "error": self.error or ("" if self.running else "not connected"), "metrics": {},
+                "error": self.error or ("" if self.running else "not connected"),
+                "metrics": dict(self.metrics),
                 "restarts": 0, "pid": 1, "wake_count": 0, "utterances": 0}
 
 
@@ -145,3 +149,70 @@ def test_fleet_device_that_never_started_keeps_its_launch_error(tmp_path: Path) 
     assert rows["dot2"]["state"] == "running"
     assert rows["lx06"]["state"] == "error"
     assert "missing TLS material" in rows["lx06"]["error"]
+
+
+def test_a_room_that_goes_silent_turns_health_and_the_probe_red(tmp_path: Path) -> None:
+    """P0b-C2 end of the chain: the plane's fresh `connected` is the only source.
+
+    The threshold itself lives in the bridge adapter (`SPEAKER_STALE_S = 45 s`:
+    no received mic frame and no written PCM frame -> connected false), so the
+    control plane needs no second timer. What this pins is that once the plane
+    reports the stale link, `/health`, the fleet row and the container probe all
+    follow - no sticky green at this layer. Any-room semantics stay as before: one
+    dead room is isolated (the probe stays green while another room is live and
+    the per-device row turns red); the aggregate, and therefore the probe, only
+    fails when every room is down.
+    """
+    client, _ = _client(tmp_path, multi=True)
+    fleet = client.app.state.audio_fleet
+    assert isinstance(fleet, _Fleet)
+    fleet._sups["dot2"].metrics = {"speaker_connected": True}
+    fleet._sups["lx06"].metrics = {"speaker_connected": True}
+
+    body = client.get("/health", headers=AUTH).json()
+    assert body["speaker_connected"] is True
+    assert healthcheck.evaluate(body)[0] is True
+
+    # dot2's power cut has now outlived the adapter's freshness window (or the
+    # bridge watchdog dropped the link); the plane reports it on its next tick.
+    fleet._sups["dot2"].metrics = {"speaker_connected": False}
+    body = client.get("/health", headers=AUTH).json()
+    rows = {row["id"]: row for row in body["audio_devices"]}
+    assert rows["dot2"]["speaker_connected"] is False
+    assert body["speaker_connected"] is True, "the live room still keeps the house up"
+    assert healthcheck.evaluate(body)[0] is True
+
+    # Both rooms are gone: now the aggregate and the probe must say so.
+    fleet._sups["lx06"].metrics = {"speaker_connected": False}
+    body = client.get("/health", headers=AUTH).json()
+    assert body["speaker_connected"] is False
+    rows = {row["id"]: row for row in body["audio_devices"]}
+    assert {row["speaker_connected"] for row in rows.values()} == {False}
+    ok, reason = healthcheck.evaluate(body)
+    assert ok is False
+    assert "no speaker connected" in reason
+
+    # Reconnect: the same fields come back green without a restart.
+    fleet._sups["dot2"].metrics = {"speaker_connected": True}
+    body = client.get("/health", headers=AUTH).json()
+    assert body["speaker_connected"] is True
+    assert healthcheck.evaluate(body)[0] is True
+
+
+def test_the_single_plane_health_gate_also_follows_the_fresh_flag(tmp_path: Path) -> None:
+    client, _ = _client(tmp_path, multi=False)
+    sup = _Sup("dot2", metrics={"speaker_connected": True})
+    client.app.state.audio = sup
+
+    body = client.get("/health", headers=AUTH).json()
+    assert body["speaker_connected"] is True
+    assert body["speaker_last_seen"]
+
+    sup.metrics = {"speaker_connected": False}
+    body = client.get("/health", headers=AUTH).json()
+    assert body["speaker_connected"] is False
+    # The last time it WAS live survives, for the console's "last seen".
+    assert body["speaker_last_seen"]
+    ok, reason = healthcheck.evaluate(body)
+    assert ok is False
+    assert "no speaker connected" in reason
