@@ -114,3 +114,24 @@ def test_resolve_caches_and_evicts(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         assert len(calls) == 2, calls               # A once, B once
 
     asyncio.run(run())
+
+
+def test_star_status_is_the_protocol_contract() -> None:
+    """T3: a source may answer three ways, and the old bool answer stays valid.
+
+    The enum lives on the protocol module (`music/source.py`) so an adapter never
+    imports from the tools layer; the tool maps bool -> StarStatus itself.
+    """
+    from typing import get_type_hints
+
+    from rui.music.source import MusicSource, StarStatus
+
+    assert StarStatus.OK == "ok"
+    assert StarStatus.UNSUPPORTED == "unsupported"
+    assert StarStatus.REJECTED == "rejected"
+    assert StarStatus("unsupported") is StarStatus.UNSUPPORTED
+    assert len(StarStatus) == 3
+
+    starred = get_type_hints(MusicSource.star)["return"]
+    assert "bool" in str(starred), "the old bool-only sources must stay valid"
+    assert "StarStatus" in str(starred)

@@ -30,13 +30,32 @@ from .library_index import LibraryIndex
 from .model import Track
 from .names import NameResolver
 from .service import MusicService
-from .source import MusicSource, SourceError
+from .source import MusicSource, SourceError, StarStatus
 
 log = logging.getLogger(__name__)
 
 PLAY_MAP = {"ok": "music.started", "ok_one": "music.started_one",
             "empty": "music.not_found", "unreachable": "music.unreachable",
             "unresolved": "music.unresolved"}
+
+
+def _star_outcome(answer: object) -> StarStatus:
+    """Normalise a source's `star` answer to the three states the tool speaks.
+
+    `True`/`False` are the old protocol and keep their meaning (ok / refused).
+    Anything that is neither a bool nor a `StarStatus` (a string, `None`, a
+    future adapter's mistake) must not crash a voice turn: it counts as rejected
+    and leaves the real type in the debug log for whoever reads it next.
+    """
+    if answer is True:
+        return StarStatus.OK
+    if answer is False:
+        return StarStatus.REJECTED
+    if isinstance(answer, StarStatus):
+        return answer
+    log.debug("music_favorite: unexpected star answer %s (%r) - treated as rejected",
+              type(answer).__name__, answer)
+    return StarStatus.REJECTED
 
 
 def _rank_hits(tracks: list[Track], want: str) -> list[Track]:
@@ -277,9 +296,11 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         if current is None:
             return ToolResult(status="empty")
         on = action != "remove"
-        ok = await source.star(current.id, on)
-        if not ok:
-            return ToolResult(status="unreachable")
+        outcome = _star_outcome(await source.star(current.id, on))
+        if outcome is StarStatus.UNSUPPORTED:
+            return ToolResult(status="unsupported")
+        if outcome is not StarStatus.OK:
+            return ToolResult(status="rejected")
         return ToolResult(status="ok_star" if on else "ok_unstar").slot(title=current.title)
 
     async def music_play_favorites(_args: dict[str, Any]) -> ToolResult:
@@ -350,6 +371,11 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
               {"ok_star": "music.starred", "ok_unstar": "music.unstarred",
                "ok_list": "music.favorites_count", "empty": "music.no_current",
                "empty_list": "music.favorites_empty",
+               # Three star answers, three sentences: a source without favourites
+               # is not a server that failed to answer. `unreachable` stays for the
+               # list read, where the server really did not answer.
+               "unsupported": "music.star_unsupported",
+               "rejected": "music.star_failed",
                "unreachable": "music.star_failed"},
               input_schema={"type": "object", "properties": {
                   "action": {"type": "string", "enum": ["add", "remove", "list"]}},

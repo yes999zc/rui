@@ -55,6 +55,9 @@ DEFAULTS: dict[str, str] = {
     "music.starred": "已收藏《{title}》。",
     "music.unstarred": "取消收藏《{title}》。",
     "music.star_failed": "收藏没成功，服务器没回应。",
+    # A source that has no favourites at all (online adapters): saying the server
+    # did not answer was a lie - the request was never possible.
+    "music.star_unsupported": "这个来源不支持收藏。",
     "music.no_current": "现在没有在播的歌，想收藏哪首就先放它。",
     "music.favorites_empty": "还没有收藏的歌，播放时说「收藏这首歌」。",
     "music.favorites_read_failed": "收藏这会儿读不出来。",
@@ -66,6 +69,9 @@ DEFAULTS: dict[str, str] = {
     # --- turn-level degrade (the system layer's own fallbacks) ---------------
     "turn.failed": "我没弄成，你再说一遍？",
     "turn.stuck": "我这卡了一下，你再说一遍。",
+    # A noise-only / empty transcript (a clipped close-talk capture, a cough): the
+    # person still gets an answer instead of silence (measured 2026-10-29 on dot2-b:
+    # barge + clipped capture -> 「。」 -> no cue and no words).
     # --- volume (the speaker's own mixer) -----------------------------------
     "volume.set": "音量调到 {pct}%了。",
     # The write succeeded but the mixer could not be read back: never invent a

@@ -41,7 +41,7 @@ def _clean_book():
 # slot contract
 # ---------------------------------------------------------------------------
 def test_every_default_key_has_a_derived_slot_set() -> None:
-    assert len(phrases.DEFAULTS) == 60  # +1 device.bad_args (#34), +1 due (0.8.5)
+    assert len(phrases.DEFAULTS) == 61  # +1 device.bad_args (#34), +1 music.star_unsupported (T3)
     assert set(phrases.DEFAULT_SLOTS) == set(phrases.DEFAULTS)
     for key, template in phrases.DEFAULTS.items():
         slots, errors = phrases._checked_slots(template)
@@ -239,7 +239,7 @@ def test_document_is_the_console_payload(tmp_path: Path) -> None:
     assert doc["effect"] == "next_phrase"
     assert doc["file_exists"] is True
     assert doc["overrides"] == {"music.stopped": "好，停。"}
-    assert len(doc["keys"]) == 60  # 59 + device.bad_args (#34)
+    assert len(doc["keys"]) == 61  # 60 + music.star_unsupported (T3)
     by_key = {item["key"]: item for item in doc["keys"]}
     started = by_key["music.started"]
     assert started["slots"] == ["artist", "count", "title"]

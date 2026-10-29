@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import logging
 import re
 from pathlib import Path
+
+import pytest
 
 from rui.config.schema import Config
 from rui.music.history import PlayHistory
 from rui.music.model import Track
 from rui.music.service import MusicService
-from rui.music.source import SourceError
+from rui.music.source import SourceError, StarStatus
 from rui.music.tools import build_music_tools
 from rui.session import phrases
 
@@ -25,6 +28,8 @@ class FlakySource:
     name = "fake"
     down = False
     no_refill = False   # deterministic transport tests: the queue stays what it was
+    # What `star` answers: bool (old protocol) or StarStatus (new). Tests flip it.
+    star_result: object = True
 
     async def search(self, term: str, limit: int) -> list[Track]:
         if self.down:
@@ -46,8 +51,8 @@ class FlakySource:
             raise SourceError("nas unreachable")
         return [Track(id="subsonic:f1", title="Fav", artist="A", duration=200)]
 
-    async def star(self, track_id: str, on: bool) -> bool:
-        return True
+    async def star(self, track_id: str, on: bool) -> object:
+        return self.star_result
 
     async def resolve(self, track: Track) -> Path:
         return Path(f"/tmp/music/{track.id}.pcm")
@@ -156,6 +161,84 @@ def test_favorite_and_taste_render(tmp_path: Path) -> None:
         assert "周杰伦" in tasted
 
     asyncio.run(run())
+
+
+def test_favorite_maps_the_three_star_states(tmp_path: Path) -> None:
+    """ok -> starred; unsupported -> 「这个来源不支持收藏」; rejected -> star_failed.
+
+    The bug this pins: an online source that cannot star answered a falsey value
+    and the listener was told 「服务器没回应」, which was never the problem.
+    """
+    async def run() -> None:
+        _service, source, tools, specs = make(tmp_path)
+        await tools["music_play"]({"query": "放周杰伦的晴天"})
+
+        source.star_result = StarStatus.OK
+        out = await tools["music_favorite"]({"action": "add"})
+        assert out.status == "ok_star"
+        assert say(specs, "music_favorite", out) == phrases.book.render(
+            "music.starred", title="晴天")
+
+        source.star_result = StarStatus.UNSUPPORTED
+        out = await tools["music_favorite"]({"action": "add"})
+        assert out.status == "unsupported"
+        phrase = say(specs, "music_favorite", out)
+        assert phrase == phrases.book.render("music.star_unsupported")
+        assert "不支持" in phrase
+        assert phrase != phrases.book.render("music.star_failed")
+
+        source.star_result = StarStatus.REJECTED
+        out = await tools["music_favorite"]({"action": "remove"})
+        assert out.status == "rejected"
+        assert say(specs, "music_favorite", out) == phrases.book.render(
+            "music.star_failed")
+
+    asyncio.run(run())
+
+
+def test_a_boolean_star_source_keeps_its_old_meaning(tmp_path: Path) -> None:
+    """The protocol is widened, not replaced: True/False still mean ok/refused."""
+    async def run() -> None:
+        _service, source, tools, specs = make(tmp_path)
+        await tools["music_play"]({"query": "放周杰伦的晴天"})
+
+        source.star_result = True
+        starred = await tools["music_favorite"]({"action": "add"})
+        assert starred.status == "ok_star"
+        unstarred = await tools["music_favorite"]({"action": "remove"})
+        assert unstarred.status == "ok_unstar"
+        assert say(specs, "music_favorite", unstarred) == phrases.book.render(
+            "music.unstarred", title="晴天")
+
+        source.star_result = False
+        out = await tools["music_favorite"]({"action": "add"})
+        assert out.status == "rejected"
+        assert say(specs, "music_favorite", out) == phrases.book.render(
+            "music.star_failed")
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("answer", [None, "ok", 0, object()])
+def test_an_unknown_star_answer_never_crashes_a_turn(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture, answer: object) -> None:
+    """A future/broken adapter must degrade to 「没收藏上」 and log the real type,
+    never raise into the voice turn. Note 0 is not False: only real bools count."""
+    async def run() -> None:
+        _service, source, tools, specs = make(tmp_path)
+        await tools["music_play"]({"query": "放周杰伦的晴天"})
+        source.star_result = answer
+        with caplog.at_level(logging.DEBUG, logger="rui.music.tools"):
+            out = await tools["music_favorite"]({"action": "add"})
+        assert out.status == "rejected"
+        rendered = say(specs, "music_favorite", out)
+        assert rendered == phrases.book.render("music.star_failed")
+        assert "不支持" not in rendered
+
+    asyncio.run(run())
+    assert any("unexpected star answer" in record.message
+               and type(answer).__name__ in record.message
+               for record in caplog.records), caplog.text
 
 
 def test_the_music_module_carries_no_wording_of_its_own() -> None:
