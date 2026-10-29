@@ -41,12 +41,18 @@
   `context_domains` 影响）、批量 8/批串行 + `call_timeout_s`（默认 10 s，总预算 ×1.5）、
   失败后**回查再说话**：`ok` / `partial`（`device.partial` 话术）/ `unreachable`，回查失败
   绝不报 ok。证据 `tests/test_ha_scene_batch.py`（23 条）+ `tests/test_ha_bridge.py`。
-- **C（`local.look`）** 待 Lead 提交：USB（`vision.usb_snapshot_url`，实时）与 HA
+- **C（`local.look`）** `b6789d5`：USB（`vision.usb_snapshot_url`，实时）与 HA
   `camera_proxy`（最近一帧）→ 内存 base64 → 现有 LLM 链 → 1–2 句 ≤80 字；`vision.cameras`
   别名映射；单帧、`vision.timeout_s`=一次 look 总预算（默认 15 s）、`cooldown_s`=1/10 s；
   不落盘；工具日志只记设备+字节+耗时；**画面以 base64 发到 `api.deepseek.com`**（多 provider
   兜底链每家都会收到）。话术全在 `phrases.py`（`vision.*` 6 条）。证据
-  `tests/test_local_look.py`（28 条）+ `test_phrasebook.py`。
+  `tests/test_local_look.py`（29 条）+ `test_phrasebook.py`。
+  **降级收口（记遗留）**：C 卡前两轮由独立 reviewer 评审（第一轮 CHANGES 4 条、第二轮
+  CHANGES 2 条，均已修复）；末轮评审 agent 在收口阶段不可用，按 9哥 指示不再新开 agent，
+  改由 Lead 复核：读了 `src/rui/tools/look.py:236-290`（单一 deadline、`left<=0` 停止、
+  finally 关闭链上全部 provider）、`look.py:330-375`（总预算 + `remaining<0.5` 闸门）、
+  `tests/test_local_look.py` 的 `status=="empty"`/`seen==[]` 断言与双 provider 预算测试；
+  跑了定向 77 passed + 全量 2308/6 + ruff 绿。**C 卡末轮未做独立 verifier**。
 - **C2（Mac USB 快照服务）** `6c0e14e`：`scripts/usb_snapshot_server.py` 单文件仅标准库，
   ffmpeg avfoundation 抓单帧走 stdout（不落盘），`GET /snapshot.jpg` → 200 image/jpeg，
   失败 503 + 一行原因，默认 `127.0.0.1:8766`（8765 被 pensieve 占用），无鉴权 →
@@ -57,9 +63,10 @@
   `docs/releases/v0.8.11.md`（含隐私口径、「版本号不可配置」取舍、兼容性、部署清单、
   静音/发声两张验收表、回滚锚、`<!-- digests -->` 占位）；`docs/local-look.md`（C 卡）、
   `docs/usb-snapshot.md`（C2 卡）。
-- **门禁**：本卡只跑 `tests/test_config.py` + `tests/test_config_catalog.py` 与
-  `ruff check src tests`（代码冻结前不跑全量，避免与并行改动冲突）；**全量 pytest 由
-  verifier 在冻结后独立重跑**，结果回填 `docs/releases/v0.8.11.md` 的 `<!-- gates -->`。
+- **门禁（代码冻结后由 Lead 跑一次全量）**：`uv run pytest -q -o addopts=""` →
+  **2308 passed, 6 skipped in 165.18s**（0.8.10 基线 2217 passed / 6 skipped，净增 91 条，
+  0 删除 0 新增 skip）；`uv run ruff check src tests` → **All checks passed!**。
+  已回填 `docs/releases/v0.8.11.md` 的 `<!-- gates -->`。
 - **部署与验收：还没做。** 0.8.11 未上生产，无部署实测、无真机听感证据。
 
 ## 下一步
