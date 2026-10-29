@@ -1,3 +1,51 @@
+# HANDOFF — rui 0.8.10（release 收口，部署待执行）
+
+phase-close: task-9
+
+## 版本与契约
+
+- 基线：tag `v0.8.9` → `a1d5afe`（已发布、**未部署**）；生产仍是 **0.8.8**（`2dac336`）。
+- 0.8.10 已 bump（`pyproject.toml` / `src/rui/__init__.py` / `uv.lock` 三处一致），待 tag + GitHub release + 镜像 digest 回填。
+- `rui_compat` 不变（`>=0.8.1 <0.9.0`）；协议仅 additive（WakeIdle.barge、Metrics overdrive 三字段）；
+  `rui-xiaoai-bridge`、`rui-dot2-bridge` 零改动。
+- **生产运行时不得改动**（部署验证按此核对）：capture 16k / 8ch / 6mic+2ref / `mic_shift=10` /
+  `ref_shift=16`；keywords `… :4.00 #0.07 @你好小宝`（客厅）与 `@你好小瑞`（dot2 三台）；
+  `wake_preroll_ms=500`；`standby_kws_gate=false`；AEC `cancel=mix filter_len=4096`。
+- 本批部署新增（仅 override 环境变量，不改桥代码）：`DOT2_MIC_GAIN_DB: "12"`。
+
+## 已完成
+
+- **T1** `3b359c4`：cue 切除的沉默唤醒也发 WakeIdle → 控制面立即释放 one-turn 闩；watchdog 降 debug。
+  reviewer PASS + verifier VERIFIED（真实 gate/控制面复现，HEAD 对照 idle_events 0→1）。
+- **T2** `dd2d752`：`silent` 仅 ok/ok_one；点歌失败（not_found/unreachable/unresolved）先判后播并念短语；
+  artist-pool 按标题过滤，现场「紫色的雨夜航线第三号」不再误播《云紫色》。PASS + VERIFIED。
+- **T3** `8e0ef50`：`StarStatus(ok/unsupported/rejected)` 三态；unsupported →「这个来源不支持收藏」；
+  bool 兼容、未知类型按 rejected 且 debug 日志。PASS + VERIFIED。
+- **T4** `651e89d`：`ha_batch_get_state` 五种入参归一为 `entity_ids: list[str]`；参数错误 → `bad_args`
+  说「没查到」而非「设备连不上」（issue #34）。PASS + VERIFIED。
+- **T5** `1ff00cf`：barge 短提示（`ack.barge_ack` 默认开，mode=none/muted 抑制，80–160 ms，不开 hold/echo）、
+  is_noise/空转写回「没听清，你再说一遍」且 session 不关、barge 的 WakeIdle 说一次（follow-up 不再误说）、
+  削波 overdrive（|x|≥0.97、连续 5 帧、限频 WARNING）+ Metrics 三字段 + `[seg] clipped=NN%`。
+  reviewer PASS（含 follow-up 标记残留 CHANGES 后修复）+ verifier VERIFIED（代码层）。
+- **T1b** `334751a`：`on_wake_idle` 在 `_turn_in_flight()`（app.state.turn_tasks 有活 task）时忽略迟到 WakeIdle，
+  不释放闩/不touch/不熄灯/不说话；turn 结束时仍由 `_release_when_done` 正常释放。reviewer PASS + verifier VERIFIED。
+- **门禁**：T1b 提交后全量 `2217 passed, 6 skipped`（本批基线 HEAD `7c9d738` 为 2165/6）；
+  `ruff check src tests` 全绿。6 个卡 commit：`3b359c4` T1、`dd2d752` T2、`651e89d` T4、`8e0ef50` T3、
+  `1ff00cf` T5、`334751a` T1b。
+
+## 下一步
+
+1. release 0.8.10：tag `v0.8.10` + GitHub release + 镜像 digest 回填；issue #34 回修复说明并关闭。
+2. 部署（9哥/bridge 确认后执行）：备份 config/plugins/override → override 加 `DOT2_MIC_GAIN_DB: "12"` →
+   `docker compose -f docker-compose.yml -f rui-dot2-override.yml pull && ... up -d rui` →
+   验证：`/api/v2/house` 的 `.version.rui=0.8.10`/`.multi_device.planes_running=4`/`.warnings=[]`；
+   `/api/v2/devices/living/audio` capture 仍 16k/8ch/mic_shift=10/ref_shift=16；T1 连续 3 次沉默唤醒 ≤2 s 可再唤醒；T2 debug/say 现场句
+   说出「曲库里没找到」；T3 在线曲「这个来源不支持收藏」；T4「现在都有哪个灯开着」正常；T5 barge 有提示音
+   + ≤1 s「没听清」、近讲 overdrive/clipped 正确、远场不触发。
+3. 回滚锚：0.8.8 = `2dac336`；0.8.9 = `a1d5afe`。
+
+---
+
 # HANDOFF — rui 0.8.9（release 收口，待 commit/tag，未部署）
 
 phase-close: task-3

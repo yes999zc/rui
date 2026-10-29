@@ -18,6 +18,61 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.10] - 2026-10-29
+
+**Theme: every wake and every barge now gets an answer, and a failed request stops
+looking like a successful one.** Two silent paths closed (point-and-play failures,
+noise/empty transcripts), the one-turn latch stops locking a room out for 20 s after a
+silent wake, favourites get a real three-state answer, HA batch reads stop reporting
+argument errors as "unreachable", and capture clipping becomes a metric instead of a
+mystery. No protocol or `rui_compat` change.
+
+### Changed
+
+1. **T1 — 沉默唤醒不再把房间锁死 20 s.** cue 被切除的唤醒（唤醒词落在被 AEC/cue gate
+   削掉的窗口里）不会增 `idle_events`，控制面收不到 `WakeIdle`，one-turn 闩一直开到
+   20 s watchdog；期间同房间每次唤醒都被 `rejected: turn_open`（真机 8ch/16k 上表现为
+   「唤醒后 20 秒内怎么喊都没反应」）。超时路径现在无条件上报 `WakeIdle`，房间立即
+   可再唤醒；watchdog 保留为兜底并降为 debug 日志。**T1b**：已有 turn 在转写/播报时，
+   迟到的 `WakeIdle` 被忽略（debug 日志、不动灯/不说话、不释放闩），不会拆掉正在
+   进行的回合；该回合自己结束时仍走原释放路径。
+2. **T2 — 点歌失败不再静默.** `local.music_play` 原先整条声明为 `silent`，runner 把每次
+   silent 调用当成完整回答而不看状态：`not_found` / `unreachable` / `unresolved` 既不
+   播确认也不报错，用户听到的是「什么都没发生」。现在 `silent` 只覆盖 `ok` / `ok_one`，
+   失败保持回合打开并念出短语；播放入口要求结果非空，artist-pool 兜底按标题接受度过滤，
+   模糊池子不再在点不到目标曲目时播一首无关的翻唱（现场「紫色的雨夜航线第三号」不再
+   误播《云紫色》）。
+3. **T3 — 收藏结果三态.** `MusicSource.star` 只能回 bool，不支持收藏的来源被说成「服务器
+   没响应」。协议改为 `StarStatus(ok / unsupported / rejected)`：bool-only 来源保持原语义
+   （`True`=ok、`False`=rejected），unsupported 说「这个来源不支持收藏」，未知返回值记
+   debug 日志并按 rejected 处理，不再让回合崩。
+4. **T4 — HA batch 读参数归一（#34）.** `ha_batch_get_state` 只接受复数
+   `entity_ids` 列表，而模型（以及写工具）用单数 `entity_id`，值可能是字符串也可能是
+   列表；参数错误被表面化成 `MCPUnavailable` 并被说成「设备连不上」。现在所有接受的形状
+   先归一为 `entity_ids: list[str]` 再上线，参数/校验失败映射到新的 `bad_args` 状态，
+   文案说「这次没查到」而不是「设备离线」；真正不可达的 HA 仍是 unreachable。
+5. **T5 — barge 和失败都有反馈，削波可见.** barge 唤醒过去完全没有提示音，噪声/空转写
+   被静默丢弃（站在削波中的 dot2 前喊两次，两次都没有回应）。现在：
+   - barge 播一次短提示（`audio.ack.barge_ack`，默认 `true`；长度限制在 **80–160 ms**，
+     不开 gate hold、不开 echo 窗口，避免盖住用户已经在说的第一句）；`ack.mode: none`
+     或设备静音时同样静默；`ack.barge_ack: false` 恢复旧的静默 barge。
+   - 噪声 / 空转写回「没听清，你再说一遍」并保持会话打开；barge 的 `WakeIdle` 通过新
+     字段 `WakeIdle.barge` 说同一句，普通沉默唤醒仍然不说（follow-up 不会误说）。
+   - 采集削波可见：`|x| ≥ 0.97` 的样本连续 5 帧超过 1% 记一次 overdrive burst（限频
+     WARNING），Metrics 新增 `overdrive_count` / `overdrive_ratio_max` /
+     `last_overdrive_at`，`[seg]` 行在削波超过 5% 时带 `clipped=NN%`。
+
+### Notes
+
+- **无协议破坏性变更**：`WakeIdle.barge` 与 Metrics 的三个 overdrive 字段都是 **additive**；
+  `rui_compat` 不变（`>=0.8.1 <0.9.0`）；插件不变（dot2 1.3.5 / xiaoai 0.2.3）。
+- `rui-xiaoai-bridge`、`rui-dot2-bridge` **零改动**。
+- **部署新增**：dot2 override 环境变量 `DOT2_MIC_GAIN_DB: "12"`（把近讲从削波拉回正常
+  电平；只改 override 的环境变量，不改桥代码）。
+- **老部署配置不变**：模板/示例新增的 `audio.ack.barge_ack` 有默认值，不写也会生效；
+  生产运行时参数（capture 16k/8ch、`mic_shift=10`/`ref_shift=16`、keywords、
+  `wake_preroll_ms=500`、`standby_kws_gate=false`、AEC `mix`/4096）本批不动。
+
 ## [0.8.9] - 2026-10-29
 
 **Theme: the 48 kHz capture path gets a polyphase decimator, and 8ch/48k devices now
