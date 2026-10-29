@@ -249,6 +249,18 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   impl-devdocs 修 house-ear #3–#7 + G2/G3（+decision-tree same-shell 提示）。完成后 verifier 只复跑
   受影响项（G1 起服务变体 + G4 config + quickstart 核心流程），reviewer 复评 → task-30 收口。
 - 备注：`42ec7ba` 是 impl-ci 顺手写的 HANDOFF B 行（越界但内容属实，Lead 已接受）。
+- **双路修复 ✅（待复验）**：
+  - house-ear `4bf941a`（docs 5 篇）：错令牌仍 `not_connected`（`speaker_rejected` 只是 plane 计数）、
+    install-paths 引用改 `device/loader.py:82`、audio.play 补 `music.cache_dir`、quickstart `$DATA_DIR/plugs/...`
+    与 WORK 改路径说明、label↔anchor 统一（registry.py 真实 EOF：`build_adapters` 286-310、
+    `_apply_manifest_runtime` 254-283）；链接脚本 **166 links / 138 refs / 0 problems**、20s 冒烟通过。
+  - 模板仓 `491a174`（https://github.com/yes999zc/rui-plugin-template）：§4 两条可照抄路线 + 完整最小 config；
+    `adapter` 注释改为「注册名（`RUI_ADAPTER_PLUGINS` 的 `name=` 前缀 / `RUI_PLUGINS_DIR` 下的 device manifest id）」；
+    sidecar 语义改为「0.8.x 无 runner，需审计后 trusted in-process 或等 runner」；`adapter.py` 加可选 `health()`。
+    两条路线真跑：A（`adapter: example-speaker`）/ B（`adapter: example-plugin`）均 `/health` device_errors=0、
+    plane running、`/api/v2/devices/example.ready=true`；`rui plug-test` PASS（20/0/0/1）。
+- **待做**：verifier-release 只复跑受影响项（G1 两条路线 + G4 config + quickstart 4 步）+ reviewer-code 复评
+  → PASS 后 task-29/task-31 complete → task-30 收口。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
 边界不变：**不发版/不 tag/不 release/不动生产**；只 commit 到 main，等下次核心发版自然带上。
