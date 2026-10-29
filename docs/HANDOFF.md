@@ -221,7 +221,15 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   **22 PASS exit 0**（本卡验收项）；`tests/fixtures/sample-plug` PASS + 1 WARN（未实现 `read_volume` 属可选面）；
   新增 pytest **12 passed**、ruff 绿、`uv pip install -e .` 后控制台命令可用；CI `secret-scan` **success**
   （ci/security/docker-publish 10:47 时仍在跑）。
-- A（docs）仍在进行中；B 已 DONE；下一步不变。
+- **A/task-28 ✅ DONE**：house `7bbe973`（5 篇 EN 文档 + README 一行，1498 insertions）+
+  桥 `c0bd0de`（README 双语各一句）。真跑自测：临时目录 `/tmp/rui-bridge-demo`、loopback :8088、
+  按文档代码块原样执行——起服务（registered fake-speaker / audio plane up）、**收声**
+  （`fake device: capture frame #51 (20 ms, 320 samples)`）、**出声**（`audio.play` ok + 5×playback chunk + finished）、
+  `/health` registered/audio_plane/speaker_connected 全绿；另实测 409 capability_unsupported、
+  `audio_config_mismatch`、`plug_unresolved` 报错路径；进程已清理。文档断言→代码(file:line) 对照表见实现报告。
+- **A/B/C 三路全部 DONE**；`task-29`（reviewer-code 一致性评审）与 `task-31`（verifier-release 全量+CLI+
+  「外人 30 分钟上手」自测）**并行进行中**；通过后 task-30 收口。
+- 备注：`42ec7ba` 是 impl-ci 顺手写的 HANDOFF B 行（越界但内容属实，Lead 已接受）。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
 边界不变：**不发版/不 tag/不 release/不动生产**；只 commit 到 main，等下次核心发版自然带上。
