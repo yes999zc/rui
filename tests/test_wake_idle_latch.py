@@ -9,10 +9,11 @@ next wake is admitted, while the idle countdown (and its farewell) stays untouch
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 from fastapi.testclient import TestClient
-from test_app_fleet import FakeFleet, _app, _candidate
+from test_app_fleet import FakeFleet, _app, _candidate, _pronounce
 
 from rui.audio.protocol import Wake, WakeIdle
 
@@ -61,3 +62,52 @@ def test_wake_idle_keeps_the_idle_countdown_and_says_nothing_early(
         time.sleep(0.05)  # let the fire-and-forget light paint run
         assert living.led[-1] == "off", living.led
         assert living.spoken == [], "a silent wake spoke a farewell before the idle timeout"
+
+
+def test_a_wake_idle_during_a_live_turn_is_ignored(tmp_path, monkeypatch) -> None:
+    """A stale WakeIdle must not cut a turn that is provably still running.
+
+    The gate's idle report and the utterance travel on different paths: a late
+    WakeIdle can land after the next turn already heard speech and opened the latch.
+    Releasing it (or painting the ring off / touching the idle clock / speaking) there
+    would cut the live turn; its own wrapper releases the latch when it ends.
+    """
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+        said = _pronounce(app, monkeypatch)
+        touches: list[object] = []
+        monkeypatch.setattr(app.state.runner.idle, "touch", touches.append)
+
+        async def slow_transcribe(pcm: bytes, trace: object) -> tuple[str, None]:
+            await asyncio.sleep(2)  # the turn is in flight when the WakeIdle lands
+            return "现在几点", None
+
+        monkeypatch.setattr(app.state.runner, "transcribe", slow_transcribe)
+
+        async def start() -> asyncio.Task:
+            return asyncio.create_task(living.on_utterance(b"\x00\x00"))
+
+        task = client.portal.call(start)
+        time.sleep(0.15)  # the handler has opened the latch and registered itself
+        assert coordinator.arbiter.state.turn_open is True
+        led_before = list(living.led)
+
+        client.portal.call(living.on_wake_idle, WakeIdle(waited_ms=5000, barge=True))
+        time.sleep(0.1)
+
+        assert coordinator.arbiter.state.turn_open is True, (
+            "a stale WakeIdle released the latch of a live turn")
+        assert touches == [], "the stale WakeIdle touched the idle clock"
+        assert living.led == led_before, "the ring was painted off under a live turn"
+        assert said == [], "a stale barge WakeIdle spoke over the live turn"
+        assert living.spoken == []
+
+        # The live turn's own end still releases the latch (the guard is not a leak).
+        client.portal.call(task.cancel)
+        time.sleep(0.15)
+        assert coordinator.arbiter.state.turn_open is False

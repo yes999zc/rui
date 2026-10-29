@@ -3828,6 +3828,15 @@ def create_app(
                 runner.abort()
 
             def on_wake_idle(msg: object) -> None:
+                if _turn_in_flight(app):
+                    # A late/duplicate WakeIdle can land after the next turn has already
+                    # heard speech (the gate's timeout and the utterance are reported on
+                    # different paths). Releasing the latch, touching the clock or
+                    # painting the ring off here would cut a turn that is provably
+                    # alive: its own wrapper (`_release_when_done`) closes it. The
+                    # watchdog uses the same signal.
+                    log.debug("wake_idle ignored: an utterance turn is in flight")
+                    return
                 if coordinator is not None:
                     # The gate closed without speech: the turn is over. Without this
                     # every later wake would be rejected turn_open (D1: no promotion).
