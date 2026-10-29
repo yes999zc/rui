@@ -240,7 +240,14 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   3) **G2/G3（轻微）** quickstart `:53` `plugins/fake-device-plug/` 应写 `$DATA_DIR/plugs/...`；
      L299/L305 硬编码 `/tmp/rui-bridge-demo`，建议加「If you change `WORK`, update the two paths」。
   修复后 verifier 复跑 G1 起服务变体 + G4 config + quickstart 核心流程即可。
-- 下一步：派 impl-obs 修模板仓 G1/G4、impl-devdocs 修 quickstart G2/G3 → verifier 复验 → task-30 收口。
+- **task-29（reviewer-code）结果：CHANGES**：136 条代码引用 136/136 存在、CLI/fixtures/bridge plug-test 均核对通过；
+  需修 7 项——模板仓 #1 adapter 注册名（=G1）、#2 sidecar 语义（0.8.x 无 runner）；house-ear
+  #3 `debugging.md:277/:10` 错令牌仍是 not_connected（speaker_rejected 只是计数器）、#4 `install-paths.md`
+  引用应为 `device/loader.py:82`、#5 `quickstart.md` play 允许 data_dir **或 music.cache_dir**、
+  #6/G2 `quickstart.md:53` 路径、#7 三处 label↔anchor 行号（compatibility/decision-tree/install-paths）。
+- **处置（已派回原实现者）**：impl-obs 修模板仓 #1/#2/G1/G4 并**真跑两条注册路线**；
+  impl-devdocs 修 house-ear #3–#7 + G2/G3（+decision-tree same-shell 提示）。完成后 verifier 只复跑
+  受影响项（G1 起服务变体 + G4 config + quickstart 核心流程），reviewer 复评 → task-30 收口。
 - 备注：`42ec7ba` 是 impl-ci 顺手写的 HANDOFF B 行（越界但内容属实，Lead 已接受）。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
