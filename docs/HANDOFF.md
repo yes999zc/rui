@@ -200,6 +200,13 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   contract.py / loader.py 逐条对得上；全量 pytest + ruff 绿。
 **边界**：不发版/不 tag/不 release（0.8.6 已发）；不改协议语义/rui_compat；不动生产。
 **状态**：0.8.6 发布+部署已收口（VERIFIED-D5-EXCEPTION）；9哥 2026-10-29 10:30 确认开工本卡。
+
+**Round 1（2026-10-29 10:4x，进行中，均未 commit）**：三路并行——
+- `impl-devdocs` → A+D（house-ear `docs/bridge-developer/` 五篇 + README 一行 + dot2 桥 README 一句）；
+- `impl-ci`（复用）→ B（`rui_adapter_check` CLI + pytest + `[project.scripts]`）；
+- `impl-obs`（复用）→ C（新仓 `rui-plugin-template`，已见 `plugin.yaml`/`devices/`/`tests/` 目录）。
+- team 成员数已达上限 16，**不再 spawn 新成员**；最后 review/verify 复用已有 fresh 角色（reviewer-code / verifier-release）。
+- 下一步：三路 DONE → task-29 reviewer 一致性核对 + verifier 全量/CLI/30 分钟自测 → task-30 收口。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
 边界不变：**不发版/不 tag/不 release/不动生产**；只 commit 到 main，等下次核心发版自然带上。
