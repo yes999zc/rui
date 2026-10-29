@@ -5,8 +5,9 @@ phase-close: task-3
 ## 版本与契约
 
 - **rui 0.8.9**：`pyproject.toml` / `src/rui/__init__.py` / `uv.lock` 三处一致；
-  tag `v0.8.9` → 本次 release commit（提交后 `git describe --tags` 可查）。CHANGELOG `[0.8.9] - 2026-10-29`，
-  release notes `docs/releases/v0.8.9.md`。
+  tag `v0.8.9` → `a1d5afe`（annotated tag `0a14e9e`），GitHub release
+  https://github.com/yes999zc/rui/releases/tag/v0.8.9 。CHANGELOG `[0.8.9] - 2026-10-29`，
+  release notes `docs/releases/v0.8.9.md`。镜像 digest 由 tag 的 docker-publish 产出，部署时再记。
 - **无协议 / `rui_compat` 变更**（仍 `>=0.8.1 <0.9.0`）；插件不变（dot2 1.3.5 / xiaoai 0.2.3）；
   `rui-xiaoai-bridge`（HEAD `7f8f8d8`）与 `rui-dot2-bridge`（HEAD `c0bd0de`）**零改动、工作区干净**。
 - **未部署**：生产仍是 **0.8.8**（`2dac336`，2026-10-29 15:00 部署）；living 当前按 48k wire 手工运行。
@@ -46,7 +47,8 @@ phase-close: task-3
    `py-spy`/perf 逐线程 profile（wire decode/plug、WS、ASR/VAD、设备侧），不要把多相化说成「CPU 已解决」。
 3. 文档小 nit（非阻塞）：`docs/audio-pipeline.md` 的「约 2.8×」可统一为 profile 的 2.74×；
    ADR 0007 仍为历史叙述，ADR 0008 已加 superseded 标注。
-4. release 发布动作：commit + tag `v0.8.9` + push 到 GitHub（等用户确认 push）。
+4. release 已发布：commit `a1d5afe` + tag `v0.8.9` 已 push 到 GitHub（main + tag），
+   GitHub release v0.8.9 已创建；部署与镜像 digest 由 9哥 决定后另行记录。
 
 ---
 
