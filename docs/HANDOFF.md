@@ -168,6 +168,29 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
 **边界**：不改生产 `config.yaml` 内容（living volume 不擅自改）；不改 `rui_compat`；不动 barge/AEC/followup/
 音乐抢占语义；xiaoai 桥只 README、不发版；不加依赖。
 
+### 2026-10-29 新卡：第三方桥开发者入口包（待执行；不发版/不 tag/不动生产）
+
+**背景**：外部开发者要自己研究设备、自己写桥接进 rui；协议不用改，缺「给外部人看的入口层」
+（现有 `docs/socket-plug-v1.md` 是内部草案体例）。
+
+**范围（任务板 task-26…29）**
+- A（task-28）：`docs/bridge-developer/` 英文五篇——quickstart（5 分钟假设备连上并出声）、
+  decision-tree（EchoMuse 路线 vs 写 adapter）、install-paths（RUI_PLUGINS_DIR /
+  `<data_dir>/plugs/<id>` / RUI_ADAPTER_PLUGINS）、debugging（注册被拒/能力缺失/audio wire mismatch/
+  未注册）、compatibility（0.8.x 只锁 minor、dual-window 示例、trust 自断言/in-process=完全权限）。
+- B（task-26）：`scripts/rui_adapter_check.py` conformance CLI（`--adapter <path>`，import 核心
+  contract.py + mock.py 不复制，逐项 PASS/FAIL，`pip install -e .` 后为控制台命令）+ pytest 覆盖
+  PASS 模板与 FAIL 实现。
+- C（task-27）：新独立仓 **`yes999zc/rui-plugin-template`**（MIT，kebab-case，README 中英）：
+  plugin.yaml + adapter.py 八方法骨架 + devices/example.yaml + 1 条契约测试；禁止内网 IP/token/个人路径/用户名。
+- D（并入 task-28）：house-ear README 加「第三方设备桥…见 docs/bridge-developer/」；
+  dot2 桥 README 加一句指向模板仓与文档（不加版本流水）。
+**验收**：外人只读 quickstart+模板仓 30 分钟内假设备接上本地 rui、出声+收声各一次；
+  `rui-adapter-check --adapter ../rui-plugin-template` 全 PASS、错实现明确 FAIL；三份指南互不矛盾且与
+  contract.py / loader.py 逐条对得上；全量 pytest + ruff 绿。
+**边界**：不发版/不 tag/不 release（0.8.6 已发）；不改协议语义/rui_compat；不动生产。
+**状态**：0.8.6 部署验证（task-24/25）优先收口，然后执行本卡。
+
 ## 未完成 / 阻塞
 
 - **真机未验证**：A/B/C/E 的文案听感、ASR 噪声下分钟句命中率、17–20 字接缝听感均为单测推断
