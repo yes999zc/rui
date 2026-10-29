@@ -1636,7 +1636,9 @@ def _turn_watchdog(app: FastAPI, coordinator: object) -> bool:
         return True
     age = coordinator.turn_open_for_s()  # type: ignore[attr-defined]
     if age is not None and age >= TURN_STALE_S:
-        log.warning(
+        # Debug, not warning: with the silent-wake WakeIdle path fixed this is only a
+        # last-resort backstop (a lost event / crashed turn). The release itself stays.
+        log.debug(
             "turn_open watchdog: no turn/plane activity for %.0f s; released the "
             "one-turn latch", age,
         )

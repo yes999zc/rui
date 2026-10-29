@@ -2564,10 +2564,11 @@ class AudioPlane:
         finished = gate.feed(pcm, ts_ms=ts_ms)
         idle_events = getattr(gate, "idle_events", 0)
         if was_armed and not getattr(gate, "armed", False):
-            # armed -> disarmed covers the task-15 silent timeout: when a cue was
-            # excised the gate disarms without incrementing `idle_events`, so the
-            # idle branch below never runs. Same assignment, so the two paths are
-            # idempotent (this runs on the event loop, single-writer).
+            # armed -> disarmed without an utterance (silent timeout, also when a cue
+            # was excised). The gate now always counts that as an idle event, so the
+            # idle branch below runs too; this is the idempotent belt-and-braces clear
+            # for any disarm path that does not report one (this runs on the event
+            # loop, single-writer).
             self._stale_speech_blocked = False
         if idle_events != before_idle:
             # The listening window closed without speech (`wake without speech` /

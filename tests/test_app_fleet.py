@@ -767,11 +767,15 @@ def test_the_watchdog_releases_a_stale_turn_with_no_activity(
         coordinator._turn_opened_at = (
             coordinator._clock() - app_module.TURN_STALE_S - 1.0)
 
-        with caplog.at_level(logging.WARNING, logger="rui.web.api.app"):
+        # The stale-age backstop is a debug line now: the silent-wake WakeIdle path is
+        # the normal release, and only debug keeps it out of the operator log.
+        with caplog.at_level(logging.DEBUG, logger="rui.web.api.app"):
             assert app_module._turn_watchdog(app, coordinator) is True
 
         assert coordinator.arbiter.state.turn_open is False
-        assert any("turn_open watchdog" in r.getMessage() for r in caplog.records)
+        records = [r for r in caplog.records if "turn_open watchdog" in r.getMessage()]
+        assert records and records[-1].levelno == logging.DEBUG, (
+            "the watchdog backstop must not log at warning any more")
 
 
 def test_the_watchdog_keeps_a_live_turn(tmp_path, monkeypatch) -> None:

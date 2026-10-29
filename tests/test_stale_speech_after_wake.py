@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from rui.audio.process import AudioPlane
+from rui.audio.protocol import CONTROL, FrameType, WakeIdle, parse_header
 from rui.audio.vad import GateConfig
 from rui.audio.vad import UtteranceGate as RealGate
 from rui.config import Config
@@ -42,6 +43,29 @@ class StubWriter:
 
     async def drain(self) -> None:
         return None
+
+
+class RecordingWriter(StubWriter):
+    """Keeps what `_feed_gate` writes: a WakeIdle must really reach the plane."""
+
+    def __init__(self) -> None:
+        self.writes: list[bytes] = []
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    def messages(self) -> list[object]:
+        out: list[object] = []
+        for data in self.writes:
+            if not data:
+                continue
+            kind, length = parse_header(data[:5])
+            if kind is FrameType.CONTROL:
+                out.append(CONTROL.validate_json(data[5:5 + length]))
+        return out
+
+    def frame_types(self) -> list[FrameType]:
+        return [parse_header(data[:5])[0] for data in self.writes if data]
 
 
 class UtteranceGate:
@@ -147,66 +171,139 @@ def test_a_silent_wake_restores_playback_for_a_later_reminder() -> None:
     assert plane._speak_queued_s > 0.0, "a reminder after a silent wake was dropped"
 
 
+class FakeSilero:
+    """Silero stand-in: tests toggle `speech`, the gate owns the end point."""
+
+    speech = False
+
+    def __init__(self, config, buffer_size_in_seconds: int = 30) -> None:  # noqa: ARG002
+        self.config = config
+
+    def reset(self) -> None:
+        return None
+
+    def accept_waveform(self, samples: object) -> None:  # noqa: ARG002
+        return None
+
+    def is_speech_detected(self) -> bool:
+        return FakeSilero.speech
+
+
 @pytest.fixture()
 def make_real_gate(tmp_path, monkeypatch):
-    """A real UtteranceGate on a fake Silero model (the production timeout path)."""
-    module = types.ModuleType("sherpa_onnx")
+    """A real UtteranceGate on a fake Silero model (the production paths)."""
 
     class _Cfg:
         def __init__(self) -> None:
             self.silero_vad = types.SimpleNamespace()
             self.sample_rate = 16000
 
-    class _Vad:
-        def __init__(self, config, buffer_size_in_seconds: int = 30) -> None:  # noqa: ARG002
-            self.config = config
-
-        def reset(self) -> None:
-            return None
-
-        def accept_waveform(self, samples: object) -> None:  # noqa: ARG002
-            return None  # never speech: only the timeout can close the window
-
-        def is_speech_detected(self) -> bool:
-            return False
-
+    module = types.ModuleType("sherpa_onnx")
     module.VadModelConfig = _Cfg
-    module.VoiceActivityDetector = _Vad
+    module.VoiceActivityDetector = FakeSilero
     monkeypatch.setitem(sys.modules, "sherpa_onnx", module)
     model = tmp_path / "silero_vad.onnx"
     model.write_bytes(b"fake")
-    return RealGate(GateConfig(max_wait_ms=100), model)
+    FakeSilero.speech = False
+    # A 100 ms end point keeps the utterance test short; the timeout path only reads
+    # `max_wait_ms`.
+    return RealGate(GateConfig(max_wait_ms=100, end_silence_ms=100), model)
 
 
-def test_a_timeout_disarm_without_a_wake_idle_clears_the_block(make_real_gate) -> None:
-    """Real vad path: a cue-excised silent timeout disarms WITHOUT an idle event.
+def _real_gate_timeout_setup(plane: AudioPlane) -> None:
+    """Skip the cue hold and the wake-phrase skip: these tests are about the counters."""
+    plane.gate._hold_ms = 0.0  # type: ignore[union-attr]
+    plane.gate._hold_skip_ms = 0.0  # type: ignore[union-attr]
+    plane.gate._skipping = 0  # type: ignore[union-attr]
 
-    `vad.UtteranceGate` only increments `idle_events` for a plain silent wake; with
-    `_cue_excised` set it disarms silently (task-15), so the old idle-event-only clear
-    left every later reminder/debug `PLAY_PCM` dropped.
-    """
-    plane = _plane()
-    plane.gate = make_real_gate
-    _wake(plane)
-    assert plane._stale_speech_blocked is True
-    plane.gate._cue_excised = True  # the task-15 path: disarm without WakeIdle
-    # Skip the cue hold and the wake-phrase skip: this test is about the timeout.
-    plane.gate._hold_ms = 0.0
-    plane.gate._hold_skip_ms = 0.0
-    plane.gate._skipping = 0
 
+def _feed(plane: AudioPlane, block: bytes, writer: RecordingWriter, ts_ms: float) -> None:
+    connected = asyncio.Event()
+    connected.set()
+    asyncio.run(plane._feed_gate(block, ts_ms, writer, connected))  # type: ignore[arg-type]
+
+
+def _run_until_disarmed(plane: AudioPlane, writer: RecordingWriter) -> None:
+    """Feed 10 ms silence blocks until the 100 ms `max_wait_ms` disarms the gate."""
     silence = b"\x00\x00" * 160
-    for i in range(20):  # 100 ms max_wait; blocks are 10 ms of audio
-        connected = asyncio.Event()
-        connected.set()
-        asyncio.run(plane._feed_gate(silence, float(i) * 20.0, StubWriter(), connected))
+    for i in range(20):
+        _feed(plane, silence, writer, float(i) * 10.0)
         if not plane.gate.armed:
-            break
+            return
+    raise AssertionError("the silent gate never disarmed")
 
+
+def _assert_silent_timeout_reported(plane: AudioPlane, writer: RecordingWriter) -> None:
     assert plane.gate.armed is False
+    assert plane.gate.idle_events == 1, "the silent timeout was not counted as an idle event"
+    idles = [m for m in writer.messages() if isinstance(m, WakeIdle)]
+    assert len(idles) == 1, f"no WakeIdle reached the control plane: {writer.messages()}"
     assert plane._stale_speech_blocked is False
     plane._accept_play_pcm(_chunk(np.zeros(1600, dtype="<i2").tobytes()))
     assert plane._speak_queued_s > 0.0, "a reminder after the timeout was dropped"
+
+
+def test_a_cue_excised_silent_timeout_reports_wake_idle(make_real_gate) -> None:
+    """A silent wake reports WakeIdle even when a cue was excised.
+
+    Production 2026-10-29: three silent wakes after 「你好小宝」 each left the control
+    plane's one-turn latch open for TURN_STALE_S (20 s), because vad.py swallowed the
+    idle event whenever `_cue_excised` was set. The cue is our own voice, not an
+    answer: the wake heard nothing and must close the turn.
+    """
+    plane = _plane()
+    plane.gate = make_real_gate
+    writer = RecordingWriter()
+    _wake(plane)
+    assert plane._stale_speech_blocked is True
+    plane.gate._cue_excised = True  # the cue/echo window was discarded
+    _real_gate_timeout_setup(plane)
+
+    _run_until_disarmed(plane, writer)
+
+    _assert_silent_timeout_reported(plane, writer)
+
+
+def test_a_plain_silent_timeout_still_reports_wake_idle(make_real_gate) -> None:
+    """The pre-existing silent-wake behaviour is unchanged."""
+    plane = _plane()
+    plane.gate = make_real_gate
+    writer = RecordingWriter()
+    _wake(plane)
+    assert plane._stale_speech_blocked is True
+    assert plane.gate._cue_excised is False
+    _real_gate_timeout_setup(plane)
+
+    _run_until_disarmed(plane, writer)
+
+    _assert_silent_timeout_reported(plane, writer)
+
+
+def test_a_spoken_turn_is_not_reported_as_wake_idle(make_real_gate) -> None:
+    """A turn that hears speech is untouched: no idle event, no WakeIdle."""
+    plane = _plane()
+    plane.gate = make_real_gate
+    writer = RecordingWriter()
+    _wake(plane)
+    _real_gate_timeout_setup(plane)
+
+    speech = b"\x01\x00" * 160
+    silence = b"\x00\x00" * 160
+    FakeSilero.speech = True
+    for i in range(25):  # 250 ms spoken, past `min_speech_ms`
+        _feed(plane, speech, writer, float(i) * 10.0)
+    FakeSilero.speech = False
+    for i in range(25, 40):  # enough silence for the 100 ms end point
+        _feed(plane, silence, writer, float(i) * 10.0)
+        if not plane.gate.armed:
+            break
+
+    assert plane.gate.armed is False, "the utterance never closed"
+    assert plane.gate.idle_events == 0, "speech was counted as a silent wake"
+    assert not any(isinstance(m, WakeIdle) for m in writer.messages()), (
+        "a spoken turn sent WakeIdle: the control plane would close it early")
+    assert FrameType.UTTERANCE_PCM in writer.frame_types(), (
+        "the utterance frame was not written")
 
 
 def test_our_own_announcement_disarms_an_armed_gate_and_plays() -> None:

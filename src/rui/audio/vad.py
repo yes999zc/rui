@@ -178,9 +178,9 @@ class UtteranceGate:
         self._cue_ms = 0.0
         self._hold_skip_total_ms = 0.0
         self._hold_total_ms = 0.0
-        # True once any part of the cue/echo window was discarded: a wake that then
-        # hears nothing disarms silently (pre-P2-1 behaviour), instead of reporting a
-        # wake-without-speech event the old code only emitted for a truly silent wake.
+        # True once any part of the cue/echo window was discarded. Diagnostic only: a
+        # wake that then hears nothing reports the silent timeout either way, because
+        # the cue is our own voice, not an utterance (see the timeout branch in feed).
         self._cue_excised = False
         self._hold_buf: deque[np.ndarray] = deque()
         self._preroll: deque[np.ndarray] = deque()
@@ -550,12 +550,16 @@ class UtteranceGate:
             if not speaking:
                 self._waited_ms += block_ms
                 if self._waited_ms >= self._max_wait_ms:
-                    log.info("wake with no speech after %.0f ms; disarming", self._waited_ms)
+                    log.info("wake with no speech after %.0f ms; disarming (cue=%s)",
+                             self._waited_ms,
+                             "excised" if self._cue_excised else "none")
                     self.discarded += 1
-                    if not self._cue_excised:
-                        # A cue-heavy wake disarms silently, as it did before P2-1 (the
-                        # old code also emitted WakeIdle only for a truly silent wake).
-                        self.idle_events += 1
+                    # A cue that was excised is our own voice, not an utterance: the
+                    # wake still heard nothing, so it must report the silent timeout
+                    # exactly like a truly silent wake. Swallowing this event left the
+                    # control plane's one-turn latch open until the 20 s watchdog
+                    # (production, 2026-10-29: three silent wakes, 20 s deaf each).
+                    self.idle_events += 1
                     self.disarm()
                 return None
             # First speech: include the preroll so the onset is not chopped.
