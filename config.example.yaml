@@ -259,15 +259,24 @@ tools:
     base_url: ""
     token_env: RUI_HA_TOKEN
     # What of the entity list reaches the prompt (0.8.11). The list carries names and
-    # ids only, never states, and is capped and filtered before injection. scene/script
-    # are absent from the defaults on purpose: calls to them are refused (they can run
-    # arbitrary sequences), so listing them would only invite a call that always fails.
+    # ids only, never states, and is capped and filtered before injection. script is
+    # absent from the defaults on purpose: calls to it are refused (arbitrary sequences),
+    # so listing it would only invite a call that always fails.
     context: true              # false = do not inject the list at all
     context_domains: [light, switch, cover]   # which domains get listed
     entity_cap: 120            # 1-1000 entities per turn (the fetch budget is 3x wider)
     # Regexes (case-insensitive re.search against the friendly name OR the entity id);
     # a match hides that entity. Invalid regex = config error at load, not at runtime.
     context_exclude: []        # e.g. ["Camera Control"] hides camera-side switches
+    # Scene entity ids the model may activate. Matched exactly; the friendly name is
+    # display-only (injected as its own prompt segment, not filtered by
+    # context_domains). Empty = every scene call stays refused (0.8.10 behaviour).
+    # lock/alarm/valve/script/automation/shell_command/python_script/hassio are never
+    # relaxed by this list.
+    allowed_scenes: []         # e.g. [scene.example_scene, scene.example_away]
+    # Per control call budget (2-60 s). Multi-entity calls go out serially in batches of
+    # at most 8, each with this budget; a timed-out batch is read back before speaking.
+    call_timeout_s: 10.0
 music:
   # Off until a Navidrome/Subsonic server is provisioned: point secrets_path at a
   # json with url/user/password (never in this file), then set enabled: true.

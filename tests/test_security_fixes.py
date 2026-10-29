@@ -116,7 +116,9 @@ class FakeClient:
         self._connected = asyncio.Event()
         self._connected.set()
 
-    async def call(self, tool: str, args: dict) -> object:
+    async def call(self, tool: str, args: dict, **kwargs: object) -> object:
+        # HaBridge now passes its `call_timeout_s` per call (0.8.11); the test double
+        # records only what it is asked to deliver to HA, not the transport budget.
         self.calls.append((tool, args))
         return self._result
 

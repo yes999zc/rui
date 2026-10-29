@@ -9,8 +9,14 @@ HA, and the degrade rule - HA down never touches voice, music or local tools.
 
 What is new on purpose:
 - the server-side hard refusal for lock/alarm/valve plus the trigger/code domains
-  (script/scene/automation/shell_command/python_script/hassio): the old build only
-  hid lock/alarm/valve in the console UI; the refusal now lives where calls execute;
+  (script/automation/shell_command/python_script/hassio): the old build only hid
+  lock/alarm/valve in the console UI; the refusal now lives where calls execute;
+- scenes are sanctioned one entity id at a time (`allowed_scenes`), not by domain:
+  the whitelisted ones are injected as their own prompt segment, every other
+  `scene.*` call stays refused;
+- multi-entity control goes out in serial batches of at most `SERVICE_BATCH` with a
+  configurable per-call budget, and a failed batch is read back before the reply -
+  partial success is reported as partial, never as ok and never as "nothing worked";
 - ToolResult + InteractionSpec: the HA tools declare their phrases, they do
   not carry them (docs/interaction.md);
 - entity names and read-tool output are labelled as untrusted external data and
@@ -41,14 +47,32 @@ DEFAULT_WHITELIST = (
     "batch_get_state", "get_system_status",
 )
 # Refused where calls execute, not hidden in a console list (old build's gap).
-# lock/alarm/valve were the old UI's hidden set; script/scene/automation can run
+# lock/alarm/valve were the old UI's hidden set; script/automation can run
 # arbitrary sequences and shell_command/python_script/hassio execute code or manage
 # the supervisor, so a misheard name must never reach them through the voice path.
+# `scene.` is deliberately NOT here since 0.8.11: a whitelist (`allowed_scenes`)
+# decides per entity id instead of refusing the domain outright (0.8.10 production:
+# 「关闭所有灯」 was denied, the model degraded to 20+ switch calls, timed out, and
+# finally claimed nothing was turned off). Scene is still closed by default.
 EXCLUDED_DOMAINS = (
     "lock.", "alarm_", "valve.",
-    "script.", "scene.", "automation.",
+    "script.", "automation.",
     "shell_command.", "python_script.", "hassio.",
 )
+# The only scene service that activates a whitelisted scene. Everything else in the
+# domain (`scene.delete`, `scene.reload`, `scene.create`, ...) is a management call
+# and stays denied even for a whitelisted id.
+SCENE_SERVICES = ("turn_on",)
+# Entities per wire call. 17 entities = 8/8/1, serially: one 20-entity call was what
+# timed out in 0.8.10 (a single unresponsive device held the whole batch).
+SERVICE_BATCH = 8
+# Wall-clock guard for one `_call_batches` run: no new batch after this much time.
+# 1.5 x the per-call budget leaves room for the read-back inside the turn's tool
+# timeout, while still letting a normal 17-entity run (milliseconds per batch) through.
+SERVICE_BUDGET_FACTOR = 1.5
+# Below this much remaining budget a batch is not worth starting: a sub-second call
+# would time out on its own handshake and only delay the read-back.
+SERVICE_MIN_TIMEOUT_S = 1.0
 SKIP_WORDS = ("指示灯", "确认", "已反转", "虚拟", "电量", "信号")
 CACHE_TTL_S = 7 * 86400
 MAX_ENTITIES_TO_LIST = 6   # search_entities cap: the picker, not the house
@@ -144,6 +168,10 @@ class HaBridge:
         self._entities_key: tuple[str, ...] | None = None
         # What the last injection actually contained (None = entity_context never ran).
         self._last_injected: int | None = None
+        # `entity_id -> friendly name` for the whitelisted scenes, fetched once from HA
+        # and kept in memory: the prompter asks every turn, HA does not need to be.
+        # None = never fetched successfully; {} = fetched and HA knows no names.
+        self._scene_names_cache: dict[str, str] | None = None
 
     async def start(self) -> bool:
         ok = await self.client.start()
@@ -163,27 +191,96 @@ class HaBridge:
         `entity_cap`. Applying the cap first would let an excluded entry eat a slot,
         and filtering domains after the cap would let an unwanted domain push wanted
         entities out.
+
+        Whitelisted scenes are a second, independent segment. They are the only
+        sanctioned composite actions, so the model has to see them or it will keep
+        assembling 20 switch calls (0.8.10); they are therefore not subject to
+        `context` / `context_domains`, which govern the entity list. One
+        `[不可信外部数据]` label covers the whole block.
         """
-        if not self.cfg.context:
-            self._last_injected = 0
-            return ""
-        raw = await self._entities()
-        entities = self._visible(raw)
+        entities: list[str] = []
+        fetched = 0
+        blocks: list[str] = []
+        if self.cfg.context:
+            raw = await self._entities()
+            entities = self._visible(raw)
+            fetched = len(raw)
+            if entities:
+                listed = "\n".join(entities)
+                note = ("" if self.client._connected.is_set()
+                        else phrases.book.render("ha.list_stale"))
+                blocks.append(phrases.book.render("ha.entity_list", count=len(entities),
+                                                  list=listed, note=note))
+                blocks.append(phrases.book.render("ha.multi_entity_rule"))
         self._last_injected = len(entities)
-        if not entities:
-            log.info("ha: entity context 0 entities, 0 chars (fetched %d)", len(raw))
+        scene_block = await self._scene_block()
+        if scene_block:
+            blocks.append(scene_block)
+        if not blocks:
+            log.info("ha: entity context 0 entities, 0 chars (fetched %d)", fetched)
             return ""
-        listed = "\n".join(entities)
-        note = "" if self.client._connected.is_set() else phrases.book.render("ha.list_stale")
-        rendered = phrases.book.render("ha.entity_list", count=len(entities),
-                                       list=listed, note=note) + "\n" + phrases.book.render(
-            "ha.multi_entity_rule")
-        text = _untrusted(rendered)
+        text = _untrusted("\n".join(blocks))
         # The one line that makes §7 measurable: production was fetched 75 / injected 75
         # (4121 chars, 82 % of the prompt); the point of the four knobs is the gap.
         log.info("ha: entity context %d entities, %d chars (fetched %d)",
-                 len(entities), len(text), len(raw))
+                 len(entities), len(text), fetched)
         return text
+
+    async def _scene_block(self) -> str:
+        """The whitelisted-scene paragraph, or "" when nothing is whitelisted."""
+        names = await self._scene_names()
+        if not names:
+            return ""
+        listed = "、".join(f"{name}={eid}" for eid, name in names.items())
+        return phrases.book.render("ha.scene_list", list=listed)
+
+    async def _scene_names(self) -> dict[str, str]:
+        """`scene.x -> spoken name` for the whitelist, in configured order.
+
+        Matching is by entity id; the name is decoration. HA supplies the friendly
+        name when it can be read, otherwise the id's tail keeps the scene visible
+        (an offline HA must not hide an action the operator sanctioned).
+        """
+        ids = list(self.cfg.allowed_scenes)
+        if not ids:
+            return {}
+        fetched = await self._scene_friendly_names()
+        return {eid: fetched.get(eid) or _scene_tail(eid) for eid in ids}
+
+    async def _scene_friendly_names(self) -> dict[str, str]:
+        """One `list_entities` for the scene domain, cached for the bridge's life.
+
+        All clean names are cached, not only the currently whitelisted ones: the
+        console can add a scene id without a restart, and the next injection should
+        use the name HA already told us instead of the id tail.
+        """
+        if not self.cfg.allowed_scenes:
+            return {}
+        if self._scene_names_cache is not None:
+            return self._scene_names_cache
+        if not self.client._connected.is_set():
+            return {}       # tails are still injected; nothing to cache from silence
+        try:
+            result = await self.client.call("list_entities",
+                                            {"domain": "scene", "limit": 200})
+        except MCPUnavailable as exc:
+            log.info("ha: scene names unavailable (%s), using entity id tails", exc)
+            return {}
+        names: dict[str, str] = {}
+        for item in _result_items(result):
+            eid = str(item.get("entity_id") or item.get("id") or "").strip()
+            # Defensive: a server ignoring the `domain` argument must not leak another
+            # domain's names into the scene segment.
+            if not _HA_ENTITY_ID.fullmatch(eid) or _domain_of(eid) != "scene":
+                continue
+            # "=" is the name=id separator and names are untrusted external text.
+            name = _clean_untrusted(
+                str(item.get("friendly_name") or item.get("name") or "")).strip()
+            name = name.replace("=", " ")
+            if name:
+                names[eid] = name
+        self._scene_names_cache = names
+        return names
 
     def _exclude_patterns(self) -> list[re.Pattern[str]]:
         patterns: list[re.Pattern[str]] = []
@@ -344,11 +441,15 @@ class HaBridge:
                 description="控制家里设备（开/关/调节）。service 形如 switch.turn_on，"
                             "entity_id 用实体清单里的 id。清单里没有的设备先调 search_entities。"
                             "同一名字有多个 entity_id（比如儿童房的主灯和筒灯）时全部传入，"
-                            "不要只挑一个，也不要反问用户。",
+                            "不要只挑一个，也不要反问用户。"
+                            "关灯/回家这类组合动作优先用 service=scene.turn_on + 场景清单里的 "
+                            "scene id；逐个实体是退路。",
                 input_schema=raw.get("inputSchema") or {},
                 interaction=InteractionSpec(
                     exec={"ok": "device.done", "empty": "device.missing_target",
-                          "unreachable": "device.unreachable", "denied": "device.excluded"},
+                          "unreachable": "device.unreachable",
+                          "partial": "device.partial",
+                          "denied": "device.excluded"},
                     choose="ask", danger="excluded", filler="auto"),
             ), call
 
@@ -420,23 +521,162 @@ class HaBridge:
             args["service"] = service
         if not target:
             return ToolResult(status="empty")
+        ids = [part.strip() for part in target.split(",") if part.strip()]
+        if not ids:
+            return ToolResult(status="empty")
         # The refusal the old build never had server-side (gap report §3.4-7).
         # Domains are compared exactly (or by prefix for `alarm_*`): a substring check
         # on the whole entity list would both miss split forms and match names by
         # accident.
         domains = {str(args.get("domain") or "").strip()}
-        domains.update(_domain_of(t.strip()) for t in target.split(",") if t.strip())
+        domains.update(_domain_of(entity_id) for entity_id in ids)
+        denied = ToolResult(status="denied").slot(
+            device=str(args.get("domain") or _domain_of(target)), action="")
         if any(_excluded_domain(domain) for domain in domains):
-            return ToolResult(status="denied").slot(
-                device=str(args.get("domain") or _domain_of(target)), action="")
+            return denied
+        # `scene` is not a domain exemption but a per-entity whitelist: the call must
+        # be a scene activation, every target id must be listed, and no foreign domain
+        # may ride along (a `domain: light` payload naming a scene id). A single
+        # unlisted id refuses the whole call, before any wire traffic - HA applies a
+        # service call for all its entities or none.
+        if "scene" in domains:
+            requested = str(args.get("domain") or "").strip()
+            service_tail = str(args.get("service") or "").rsplit(".", 1)[-1]
+            allowed = set(self.cfg.allowed_scenes)
+            if (requested != "scene"
+                    or any(_domain_of(entity_id) != "scene" for entity_id in ids)
+                    or any(entity_id not in allowed for entity_id in ids)
+                    or service_tail not in SCENE_SERVICES):
+                return denied
+        # One entity keeps the 0.8.10 path; several go out in serial batches so one
+        # unresponsive device cannot hold the whole house hostage.
+        if len(ids) == 1:
+            return await self._call_one(args, ids)
+        return await self._call_batches(args, ids)
+
+    async def _call_one(self, args: dict[str, Any], ids: list[str]) -> ToolResult:
+        target = ", ".join(ids)
         try:
-            await self.client.call("call_service", args)
+            await self.client.call("call_service", {**args, "entity_id": target},
+                                   timeout_s=self.cfg.call_timeout_s)
         except MCPUnavailable as exc:
             log.info("ha call_service %s failed: %s", args.get("service"), exc)
             return ToolResult(status="unreachable").slot(device=self._spoken_name(target))
         return ToolResult(status="ok").slot(
             device=self._spoken_name(target),
             action=_action_word(str(args.get("service") or "")))
+
+    async def _call_batches(self, args: dict[str, Any], ids: list[str]) -> ToolResult:
+        """Serial batches of at most `SERVICE_BATCH`, then a read-back before speaking.
+
+        0.8.10 sent 20+ ids in one call with a fixed 8 s budget: one unresponsive
+        device timed out the batch, HA still applied part of it, and the reply claimed
+        「全都没关」. The state of the house now decides the wording, not the timeout.
+
+        Two guards keep a broken HA from eating the turn:
+        * the first failed/timed-out batch stops the run - a transport death means the
+          next batches would fail too, and continuing only spends the turn's budget;
+        * no new batch is started once the run has spent `call_timeout_s * 1.5`.
+
+        Whatever was sent is read back, successful batches included: a transport-level
+        ok is not a device-level ok. Then:
+        * every sent entity confirmed, nothing unsent -> ok (unchanged wording);
+        * some confirmed, some not/unsent            -> `partial` with counts + names;
+        * nothing confirmed applied                  -> unreachable (existing wording);
+        * the read-back itself failed                -> partial when a batch answered,
+          otherwise unreachable. Never ok, never "none of them" (a claim we cannot
+          support).
+        """
+        service = str(args.get("service") or "")
+        done: list[str] = []            # batches that the transport accepted
+        sent: list[str] = []            # every id that reached the wire, in order
+        stopped = ""                    # "failed" | "budget" | "" (all batches sent)
+        budget_s = self.cfg.call_timeout_s * SERVICE_BUDGET_FACTOR
+        started = time.monotonic()
+        for start in range(0, len(ids), SERVICE_BATCH):
+            chunk = ids[start:start + SERVICE_BATCH]
+            remaining = budget_s - (time.monotonic() - started)
+            if remaining < SERVICE_MIN_TIMEOUT_S:
+                log.info("ha call_service: %.1fs of %.1fs budget left, %d of %d entities "
+                         "left unsent", remaining, budget_s,
+                         len(ids) - len(sent), len(ids))
+                stopped = "budget"
+                break
+            # The configured value stays the per-batch cap; a late batch only gets what
+            # is left of the run budget, so the whole run stays inside the turn's tool
+            # timeout instead of letting the last batch eat a full call_timeout_s.
+            batch_timeout = min(self.cfg.call_timeout_s, round(remaining, 1))
+            sent.extend(chunk)
+            try:
+                await self.client.call("call_service",
+                                       {**args, "entity_id": ", ".join(chunk)},
+                                       timeout_s=batch_timeout)
+            except MCPUnavailable as exc:
+                log.info("ha call_service batch %d-%d failed, %d entities left unsent: %s",
+                         start + 1, start + len(chunk), len(ids) - len(sent), exc)
+                stopped = "failed"
+                break
+            done.extend(chunk)
+        if not stopped:
+            return ToolResult(status="ok").slot(
+                device=self._spoken_name(", ".join(ids)), action=_action_word(service))
+        # Read back everything that was sent, not only the failed batch: a batch that
+        # answered can still have been applied to only part of its entities.
+        verified = await self._verify_states(sent, service)
+        unsent = ids[len(sent):]
+        if verified is None:
+            # No usable read-back. What the transport accepted is still real; nothing
+            # else is claimed.
+            unknown = [entity_id for entity_id in ids if entity_id not in set(done)]
+            log.info("ha call_service: %d of %d confirmed, state check unavailable",
+                     len(done), len(ids))
+            if done:
+                return self._partial(len(done), len(ids), unknown)
+            return ToolResult(status="unreachable").slot(
+                device=self._spoken_name(", ".join(ids)))
+        applied = [entity_id for entity_id in sent if verified.get(entity_id)]
+        not_applied = [entity_id for entity_id in sent if not verified.get(entity_id)]
+        if not applied:
+            return ToolResult(status="unreachable").slot(
+                device=self._spoken_name(", ".join(ids)))
+        if not_applied or unsent:
+            return self._partial(len(applied), len(ids), not_applied + unsent)
+        # A timed-out batch that the house says did apply is a success: report the state,
+        # not the transport.
+        return ToolResult(status="ok").slot(
+            device=self._spoken_name(", ".join(ids)), action=_action_word(service))
+
+    def _partial(self, ok_count: int, total: int, failed: list[str]) -> ToolResult:
+        return ToolResult(status="partial").slot(
+            ok_count=ok_count, total=total,
+            failed=self._spoken_name(", ".join(failed)))
+
+    async def _verify_states(self, ids: list[str], service: str) -> dict[str, bool] | None:
+        """Read the failed entities back: True = reached the state the service asked for.
+
+        `None` means "cannot tell" (unverifiable service, or the read itself failed)
+        and the caller stays conservative. Uses the read-only `batch_get_state` tool
+        the bridge already exposes - no second connection, no new transport.
+        """
+        desired = _desired_state(service)
+        if desired is None or not ids:
+            return None
+        wanted = set(ids)
+        try:
+            result = await self.client.call("batch_get_state", {"entity_ids": ids})
+        except MCPUnavailable as exc:
+            log.info("ha: state check after a failed batch failed: %s", exc)
+            return None
+        states: dict[str, str] = {}
+        for item in _result_items(result):
+            eid = str(item.get("entity_id") or item.get("id") or "").strip()
+            state = str(item.get("state") or "").strip().lower()
+            if eid in wanted and state:
+                states[eid] = state
+        if not states:
+            return None
+        # An id the answer left out is not confirmed as applied: conservative False.
+        return {entity_id: states.get(entity_id) == desired for entity_id in ids}
 
     def _spoken_name(self, target: str) -> str:
         """Entity ids -> the names a person uses, from the cached list.
@@ -479,6 +719,21 @@ def _server_cfg(url: str):
 
 def _domain_of(entity_id: str) -> str:
     return entity_id.split(".", 1)[0] if "." in entity_id else entity_id
+
+
+def _scene_tail(entity_id: str) -> str:
+    """Name fallback for a whitelisted scene HA could not name: `scene.a_b` -> `a_b`."""
+    return entity_id.split(".", 1)[-1]
+
+
+def _desired_state(service: str) -> str | None:
+    """The state a `turn_*` service should leave an entity in; None = unverifiable.
+
+    Only these two are mapped: covers/climate/media use other services or other
+    state vocabularies, and guessing there would turn "cannot tell" into a wrong
+    failure. None keeps the caller conservative.
+    """
+    return {"turn_on": "on", "turn_off": "off"}.get(service.rsplit(".", 1)[-1])
 
 
 def _excluded_domain(domain: str) -> bool:

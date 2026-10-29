@@ -194,12 +194,20 @@ tools:
     base_url: ""
     token_env: RUI_HA_TOKEN
     # The list injected into the prompt (names + ids only, never states). Defaults are
-    # the safe, small set: scene/script stay out because calls to them are refused, and
-    # the cap plus the exclude regexes keep the block from crowding out the prompt.
+    # the safe, small set: script stays out because calls to it are refused, and the cap
+    # plus the exclude regexes keep the block from crowding out the prompt.
     context: true              # false = no entity list in the prompt
     context_domains: [light, switch, cover]
     entity_cap: 120            # 1-1000; truncation happens after the exclude rules
     context_exclude: []        # case-insensitive regex against name or entity id, e.g. ["Camera Control"]
+    # Scene entity ids the model may activate, matched exactly (the friendly name is
+    # display-only and is injected as its own prompt segment). Empty = every scene call
+    # is refused, i.e. the 0.8.10 behaviour. lock/alarm/valve/script/automation/
+    # shell_command/python_script/hassio stay refused whatever is listed here.
+    allowed_scenes: []         # e.g. [scene.example_scene, scene.example_away]
+    # Per control call budget in seconds (2-60). Multi-entity calls go out serially in
+    # batches of at most 8; after a timeout the state is read back before speaking.
+    call_timeout_s: 10.0
 music:
   # Off until a Navidrome/Subsonic server exists: the credentials file must be
   # provisioned first (url/user/password), never in this file.

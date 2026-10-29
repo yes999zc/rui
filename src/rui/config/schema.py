@@ -1112,6 +1112,9 @@ class ProvidersConfig(BaseModel):
 
 _MCP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _MCP_ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+# An HA entity id is a slug. `allowed_scenes` accepts nothing else: a friendly name
+# (or a typo with a space/capital) would silently never match at call time.
+_SCENE_ENTITY_ID = re.compile(r"^scene\.[a-z0-9_]+$")
 
 
 class McpServerConfig(BaseModel):
@@ -1194,9 +1197,10 @@ class HaConfig(BaseModel):
     # 4121 chars on the production install, 82 % of the prompt. These four knobs make it
     # a decision instead of an accident.
     context: bool = True
-    # Domains the prompt lists. scene/script are deliberately absent by default:
-    # EXCLUDED_DOMAINS in tools/ha.py refuses calls to them (they run arbitrary
-    # sequences), so listing them would only teach the model to try what always fails.
+    # Domains the prompt lists. script stays absent by default: EXCLUDED_DOMAINS in
+    # tools/ha.py refuses calls to it (arbitrary sequences), so listing it would only
+    # teach the model to try what always fails. Whitelisted scenes are injected by
+    # their own segment (`allowed_scenes`) and need no entry here.
     context_domains: list[str] = Field(
         default_factory=lambda: ["light", "switch", "cover"])
     # Entities injected per turn. The fetch budget is deliberately wider (3x, 200..1000):
@@ -1206,6 +1210,37 @@ class HaConfig(BaseModel):
     # one match hides that entity. Compiled here so a typo is a config error instead of
     # a turn that dies halfway through the prompt.
     context_exclude: list[str] = Field(default_factory=list)
+    # --- sanctioned composite actions (0.8.11) ------------------------------------
+    # Scene ids the model may activate. Empty (the default) keeps the 0.8.10 behaviour:
+    # every `scene.*` call is refused. A listed id is matched **exactly**; the friendly
+    # name is only shown in the prompt, never used to decide whether a call is allowed,
+    # so a renamed scene cannot smuggle a different entity past the guard. This is a
+    # whitelist, not a widening: lock/alarm/valve/script/automation/shell_command/
+    # python_script/hassio stay refused whatever is written here.
+    allowed_scenes: list[str] = Field(default_factory=list)
+    # Per-call budget for one `call_service` wire call (the multi-entity path sends
+    # serial batches of at most 8). The old build's timeout was a fixed 8 s inside
+    # MCPClient.call; a slow-but-working HA needs the operator to be able to say 20.
+    call_timeout_s: float = Field(default=10.0, ge=2.0, le=60.0)
+
+    @field_validator("allowed_scenes")
+    @classmethod
+    def _allowed_scenes_valid(cls, values: list[str]) -> list[str]:
+        """Entity ids only, deduped: a typo must fail at load, not at "关全屋灯"."""
+        out: list[str] = []
+        for raw in values:
+            text = str(raw or "").strip()
+            if not text:
+                continue        # an empty YAML list item is not an entity id
+            if not _SCENE_ENTITY_ID.fullmatch(text):
+                raise ValueError(
+                    f"allowed_scenes entry {raw!r} must be a scene entity id such as "
+                    "'scene.example_scene' (lowercase letters, digits and underscores "
+                    "after the 'scene.' prefix)"
+                )
+            if text not in out:
+                out.append(text)
+        return out
 
     @field_validator("context_exclude")
     @classmethod

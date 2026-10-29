@@ -19,11 +19,15 @@ class FakeClient:
         self._fail = fail
         self._error = error
         self.calls: list[tuple[str, dict]] = []
+        # The per-call budget HaBridge passes through (0.8.11 `call_timeout_s`).
+        self.timeouts: list[float | None] = []
         self._connected = asyncio.Event()
         self._connected.set()
 
-    async def call(self, tool: str, args: dict) -> object:
+    async def call(self, tool: str, args: dict,
+                   timeout_s: float | None = None) -> object:
         self.calls.append((tool, args))
+        self.timeouts.append(timeout_s)
         if self._fail:
             raise MCPUnavailable(self._error)
         return self._result

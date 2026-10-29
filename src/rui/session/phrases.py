@@ -105,6 +105,11 @@ DEFAULTS: dict[str, str] = {
     # --- devices over HA (V2's first application) ----------------------------
     "device.done": "好，{device}{action}。",
     "device.unreachable": "{device}这会儿连不上，没能执行，别当我成功了。",
+    # A timed-out batch can still have applied part of the house (measured 0.8.10:
+    # 20+ switches, one timeout, the reply claimed 「全都没关」). The read-back decides
+    # the wording: say what landed and what did not, never "all" or "none".
+    # Spoken: no "9/17" (a TTS reads the slash unpredictably), so the total leads.
+    "device.partial": "只做成了一部分：{total} 个里有 {ok_count} 个照做了，{failed}没成功，别当成全好了。",
     # A rejected argument shape is the caller's mistake, not an offline house
     # (issue #34): never tell the user the device is unplugged.
     "device.bad_args": "这次没查到，换个说法再试试。",
@@ -119,6 +124,12 @@ DEFAULTS: dict[str, str] = {
         "全部传入 call_service，不要只挑一个，也不要反问用户要哪个。"
         "开关灯用 domain=switch/light，service=turn_on 或 turn_off；"
         "没有真的调用工具并拿到成功结果，就绝不能说已经做了。）"),
+    # The whitelisted scenes, injected as their own block regardless of
+    # `context_domains`: without it the model never learns a scene exists and goes
+    # back to assembling 20 switch calls (0.8.10).
+    "ha.scene_list": (
+        "可用场景（离家/回家/关全屋灯这类组合动作优先用 service=scene.turn_on，"
+        "entity_id 用下面这些 id；逐个实体是退路）：\n{list}"),
 }
 
 # P6 rules (docs/phrasebook-editor.md §6). Speech keys are short by ear, prompt

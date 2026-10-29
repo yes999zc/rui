@@ -1209,6 +1209,25 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "\"Camera Control\" hides ids/names carrying it. An invalid regex is a save "
                   "error, never a runtime crash. Applies on the next injection."),
                advanced=True),
+        _field("tools.ha.allowed_scenes", "tools.ha", "list",
+               _t("放行的场景", "Allowed scenes"),
+               _t("允许模型调用的场景实体 ID 白名单（必须是 scene.xxx 形式，逐字匹配；"
+                  "名字只用于提示词展示，不参与放行判断）。留空 = 所有 scene 调用继续一律拒绝"
+                  "（0.8.10 的行为）。锁/警报/阀门/脚本等危险域不受这里影响，永远拒绝。"
+                  "保存后下一次注入就生效。",
+                  "Scene entity ids the model may activate (must look like scene.xxx, matched "
+                  "exactly; the friendly name is display-only and never decides a call). "
+                  "Empty = every scene call stays refused (0.8.10 behaviour). Danger domains "
+                  "(lock/alarm/valve/script/...) are unaffected and always refused. Applies "
+                  "on the next injection.")),
+        _field("tools.ha.call_timeout_s", "tools.ha", "number",
+               _t("单次调用超时", "Per-call timeout"),
+               _t("一次 control 调用的等待上限（2–60 秒，默认 10）。多实体控制按每批最多 8 个"
+                  "串行发送，每批都用这个上限；超时后会回查设备状态再回话，部分成功就如实说部分成功。",
+                  "How long one control call may take (2-60 s, default 10). Multi-entity calls "
+                  "go out serially in batches of at most 8, each with this budget; after a "
+                  "timeout the state is read back and a partial result is reported as partial."),
+               unit=_t("秒", "s"), minimum=2, maximum=60),
         _field("tools.mcp_servers", "tools.mcp", "list",
                _t("MCP 服务器列表", "MCP servers"),
                _t("通用 MCP 服务器列表（name/transport/url/command/enabled），每台的连接"
