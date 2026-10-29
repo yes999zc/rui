@@ -376,6 +376,9 @@ class TurnRunner:
         history_turns: int = 6,
         assistant: AssistantConfig | None = None,
         session: SessionConfig | None = None,
+        # The config file's format version, for the `{config_version}` placeholder.
+        # None = this build's CONFIG_VERSION (a runner built without a Config).
+        config_version: int | str | None = None,
         wake_words: Sequence[str] = (),
         tools: Sequence[tuple[Any, Any]] = (),
         spoken: Any = None,
@@ -403,6 +406,10 @@ class TurnRunner:
         # Per-turn prompt addition (HA entities today, memory in D2).
         self.extra_context: Callable[[], str] | None = None
         self.assistant = assistant or AssistantConfig()
+        # `{config_version}` in the persona/system prompt. Refreshed by PUT
+        # /api/v1/config together with `assistant`, so an edited file is visible on the
+        # next turn without rebuilding the runner.
+        self.config_version = config_version
         # Session-level decisions: how long silence may last and what the goodbye says.
         # Held as the model (not copied into fields) so a console edit is one
         # `apply_session` away instead of a list of attributes to keep in sync.
@@ -504,6 +511,7 @@ class TurnRunner:
                 self.assistant,
                 tools_ok=bool(self.tools),
                 tool_names=[getattr(spec, "name", "") for spec, _handler in self.tools],
+                config_version=self.config_version,
             )
         # One hook, many tenants: HA's entity list today, memory's recall in D2.
         # A callable so the content is as fresh as the turn that uses it.

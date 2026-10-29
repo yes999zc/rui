@@ -464,15 +464,22 @@ def _assistant_fields() -> list[dict]:
         _field("assistant.persona", "assistant", "textarea",
                _t("人设", "Persona"),
                _t("追加在内置提示词后面的一段身份描述（叫什么叫、什么脾气）。只写身份，"
-                  "别写「说话要简短」这类规则，那些在回答上限里。保存后下一轮生效。",
+                  "别写「说话要简短」这类规则，那些在回答上限里。可用占位符：{name}、"
+                  "{max_chars}、{long_chars}、{version}（本程序版本，不可改）、"
+                  "{config_version}（配置格式版本）。保存后下一轮生效。",
                   "Extra identity text appended to the built-in prompt. Keep it to "
-                  "identity; length rules belong to the reply budgets. Next turn.")),
+                  "identity; length rules belong to the reply budgets. Placeholders: "
+                  "{name}, {max_chars}, {long_chars}, {version} (this build, read-only), "
+                  "{config_version}. Next turn.")),
         _field("assistant.system_prompt", "assistant", "textarea",
                _t("整段系统提示词", "Full system prompt"),
                _t("整段替换内置提示词。留空 = 用内置的（推荐）。改错会改变全部回答风格，"
-                  "排障时可用来对照。保存后下一轮生效。",
+                  "排障时可用来对照。可用占位符同人设（{name}、{max_chars}、"
+                  "{long_chars}、{version}、{config_version}）。保存后下一轮生效。",
                   "Replaces the whole built-in prompt. Empty = built-in (recommended). A "
-                  "wrong value changes every answer; useful for A/B. Next turn."),
+                  "wrong value changes every answer; useful for A/B. Same placeholders as "
+                  "the persona ({name}, {max_chars}, {long_chars}, {version}, "
+                  "{config_version}). Next turn."),
                advanced=True),
         _field("assistant.reply_max_chars", "assistant", "number",
                _t("日常回答上限", "Everyday reply budget"),
@@ -1166,6 +1173,42 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "Fill the value on the Secrets or Home Assistant page. Read-only: the "
                   "variable name decides which credential is sent where."),
                advanced=True, writable=False),
+        _field("tools.ha.context", "tools.ha", "bool",
+               _t("注入设备清单", "Inject entity list"),
+               _t("每轮把家里的设备清单（名字=实体ID，不含状态）写进提示词。关掉 = 提示词里没有清单，"
+                  "模型只能靠 search_entities 现查；工具本身还在。保存后下一次注入就生效。",
+                  "Write the entity list (name=entity id, never states) into the prompt each "
+                  "turn. Off = no list in the prompt and the model falls back to "
+                  "search_entities; the tools remain. Applies on the next injection.")),
+        _field("tools.ha.context_domains", "tools.ha", "list",
+               _t("清单包含的域", "Listed domains"),
+               _t("只列这些域（light / switch / cover 等）的实体。默认不含 scene / script："
+                  "对它们的调用会被拒绝（可能执行任意动作序列），列出来只会诱导模型去调一个必然失败的东西。"
+                  "留空 = 不列任何实体。保存后下一次注入就生效。",
+                  "Only entities in these domains (light / switch / cover ...). scene/script "
+                  "are absent by default: calls to them are refused (they can run arbitrary "
+                  "sequences), so listing them only invites a call that always fails. Empty = "
+                  "list nothing. Applies on the next injection.")),
+        _field("tools.ha.entity_cap", "tools.ha", "number",
+               _t("单轮清单上限", "Entity cap per turn"),
+               _t("每轮最多注入多少条实体（1–1000，默认 120）。抓取预算比它宽 3 倍，"
+                  "所以被排除规则过滤掉的条目不会占掉名额。按「域过滤 → 排除正则 → 截断」的顺序生效。"
+                  "保存后下一次注入就生效。",
+                  "How many entities one turn may inject (1-1000, default 120). The fetch "
+                  "budget is 3x wider, so entries dropped by the exclude rules do not eat the "
+                  "cap. Order: domain filter, exclude regex, then truncation. Applies on the "
+                  "next injection."),
+               minimum=1, maximum=1000),
+        _field("tools.ha.context_exclude", "tools.ha", "list",
+               _t("清单排除正则", "Exclude patterns"),
+               _t("一组正则（不区分大小写，按 re.search 匹配实体的名字或实体ID），命中的实体不进清单。"
+                  "例：\"摄像机|Camera Control\" 会隐藏名字或ID里带这些词的实体。"
+                  "写错的正则保存时直接报错，不会等到运行时才崩。保存后下一次注入就生效。",
+                  "Regexes (case-insensitive, re.search against the friendly name OR the "
+                  "entity id); a match keeps that entity out of the list. Example: "
+                  "\"Camera Control\" hides ids/names carrying it. An invalid regex is a save "
+                  "error, never a runtime crash. Applies on the next injection."),
+               advanced=True),
         _field("tools.mcp_servers", "tools.mcp", "list",
                _t("MCP 服务器列表", "MCP servers"),
                _t("通用 MCP 服务器列表（name/transport/url/command/enabled），每台的连接"

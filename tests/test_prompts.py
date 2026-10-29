@@ -53,6 +53,12 @@ def test_persona_is_appended_and_tools_ok_drops_the_no_tools_note() -> None:
 def test_a_hand_edited_prompt_with_braces_does_not_raise() -> None:
     a = AssistantConfig(system_prompt="只有一句 {name} {unknown}", persona="")
     assert prompts.build(a)            # KeyError is swallowed, raw text is used
+    # A literal JSON-ish brace pair is not a placeholder: it must survive verbatim, and
+    # it must not stop the rest of the turn (0.8.11 identity placeholders regression).
+    raw = '{"a":1} 你就是你，别乱猜。'
+    text = prompts.build(AssistantConfig(system_prompt=raw, persona=""))
+    assert '{"a":1}' in text
+    assert text.startswith('{"a":1}')
 
 
 def test_clean_reply_drops_markup_lines() -> None:
@@ -232,3 +238,11 @@ def test_a_claim_without_a_tool_call_is_caught() -> None:
     assert rules.claims_device_success("把窗帘拉上", "好，窗帘关好了。")
     assert not rules.claims_device_success("今天天气怎么样", "沈阳今天晴。")
     assert not rules.claims_device_success("关闭餐厅灯。", "好的，我来看看。")
+
+
+def test_the_prompt_says_the_speaker_is_not_a_controllable_device() -> None:
+    """0.8.11 B: the entity list contains the speaker itself (a media_player/switch
+    entity), and the model offered to "turn it off" as if it were another device."""
+    text = prompts.build(AssistantConfig())
+    assert "你自己就是客厅那台音箱" in text
+    assert "不要把你自己当可控制设备" in text

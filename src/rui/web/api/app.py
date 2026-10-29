@@ -3373,6 +3373,7 @@ def create_app(
             cfg.providers,
             sample_rate=cfg.audio.voice.rate,
             assistant=cfg.assistant,
+            config_version=cfg.version,
             history_turns=cfg.session.history_rounds,
             wake_words=[w for d in cfg.devices for w in d.wake_words],
             tools=local_tools,
@@ -4605,6 +4606,9 @@ def create_app(
         runner = getattr(app.state, "runner", None)
         if runner is not None:
             runner.assistant = updated.assistant
+            # `{config_version}` comes from the file that was just written, not from the
+            # copy the app started with.
+            runner.config_version = updated.version
             runner.history_turns = updated.session.history_rounds
             # timeout / farewell / history live in `session`, and an edited window must
             # take effect without a restart - the console writes that section.
@@ -4737,6 +4741,7 @@ def create_app(
         if runner is not None and any(
                 path.startswith(("assistant.", "session.")) for path in applied):
             runner.assistant = updated.assistant
+            runner.config_version = updated.version
             runner.history_turns = updated.session.history_rounds
             runner.apply_session(updated.session)
         if "system.timezone" in applied:

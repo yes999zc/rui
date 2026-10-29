@@ -19,7 +19,8 @@ import logging
 from collections.abc import Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ..config.schema import AssistantConfig
+from .. import __version__ as RUI_VERSION
+from ..config.schema import CONFIG_VERSION, AssistantConfig
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +49,12 @@ def _zone() -> dt.tzinfo | None:
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是家里的语音助手，叫{name}。"
+    "用户问你是谁、你是什么系统、版本是多少时，说的是你自己（rui {version}），"
+    "不是 Home Assistant；提到 Home Assistant 的版本时必须明确说成是它的版本，"
+    "不要说成你的。"
+    # The entity list carries the speaker itself (a media_player / switch entity), and
+    # the model used to offer to "turn off the speaker" when asked to stop the music.
+    "你自己就是客厅那台音箱，不要把你自己当可控制设备。"
     "说话自然、口语化。信息量优先：需要解释、对比、讲经过、或一轮里问了多件事时，"
     "把话说完整、说清楚，不要为了短而漏掉关键信息；日常寒暄一句，不超过{max_chars}个字。"
     "开关灯、调音量、放歌这类设备操作只回一句确认，不要解释。"
@@ -141,14 +148,26 @@ def build(
     tools_ok: bool = False,
     tool_names: Sequence[str] = (),
     now: dt.datetime | None = None,
+    config_version: int | str | None = None,
 ) -> str:
-    """Assemble the system prompt exactly as the model receives it."""
+    """Assemble the system prompt exactly as the model receives it.
+
+    `config_version` is the config file's format version (`Config.version`), passed by
+    the turn loop. `{version}` is never configurable: it is this build's `__version__`.
+    """
     a = assistant or AssistantConfig()
     template = a.system_prompt or DEFAULT_SYSTEM_PROMPT
+    # One mapping for both the template and the persona: a hand-written persona that
+    # says 「跑在 rui {version} 上」 must fill the same values as the built-in prompt.
+    values = {
+        "name": a.name,
+        "max_chars": a.reply_max_chars,
+        "long_chars": a.reply_max_chars_long,
+        "version": RUI_VERSION,
+        "config_version": CONFIG_VERSION if config_version is None else config_version,
+    }
     try:
-        text = template.format(
-            name=a.name, max_chars=a.reply_max_chars, long_chars=a.reply_max_chars_long
-        )
+        text = template.format(**values)
     except (KeyError, IndexError, ValueError):
         # a hand-edited prompt may contain literal braces; fall back to the raw text
         text = template
@@ -157,7 +176,7 @@ def build(
         # the default persona names the assistant ("叫{name}"); a hand-written one without
         # braces must not raise
         try:
-            persona = persona.format(name=a.name)
+            persona = persona.format(**values)
         except (KeyError, IndexError, ValueError):
             pass
         text += "\n" + persona

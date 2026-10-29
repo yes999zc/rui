@@ -1189,6 +1189,40 @@ class McpServerConfig(BaseModel):
 class HaConfig(BaseModel):
     base_url: str = ""
     token_env: str = "RUI_HA_TOKEN"
+    # --- what of the entity list reaches the prompt (0.8.11) ---------------------
+    # The list used to be "everything HA has", injected whole every turn: 75 entities /
+    # 4121 chars on the production install, 82 % of the prompt. These four knobs make it
+    # a decision instead of an accident.
+    context: bool = True
+    # Domains the prompt lists. scene/script are deliberately absent by default:
+    # EXCLUDED_DOMAINS in tools/ha.py refuses calls to them (they run arbitrary
+    # sequences), so listing them would only teach the model to try what always fails.
+    context_domains: list[str] = Field(
+        default_factory=lambda: ["light", "switch", "cover"])
+    # Entities injected per turn. The fetch budget is deliberately wider (3x, 200..1000):
+    # entries dropped by `context_exclude` must not eat the cap.
+    entity_cap: int = Field(default=120, ge=1, le=1000)
+    # Regexes (re.search, case-insensitive) against a friendly name OR an entity_id;
+    # one match hides that entity. Compiled here so a typo is a config error instead of
+    # a turn that dies halfway through the prompt.
+    context_exclude: list[str] = Field(default_factory=list)
+
+    @field_validator("context_exclude")
+    @classmethod
+    def _exclude_patterns_compile(cls, values: list[str]) -> list[str]:
+        out: list[str] = []
+        for raw in values:
+            text = str(raw or "")
+            if not text.strip():
+                continue        # an empty YAML list item is not a pattern
+            try:
+                re.compile(text)
+            except re.error as exc:
+                raise ValueError(
+                    f"context_exclude entry {raw!r} is not a valid regular expression: {exc}"
+                ) from exc
+            out.append(text)
+        return out
 
 
 class WeatherConfig(BaseModel):
@@ -1330,7 +1364,12 @@ class AssistantConfig(BaseModel):
     # what is *not* here: the old deployment's local override said 「说话简短干脆，先给结论，
     # 不铺垫、不客套」, which it then appended after a prompt that says 「信息量优先，把话说
     # 完整」 - the two pull in opposite directions and the later one wins. Identity only.
-    persona: str = "你是家里的小助理，叫{name}。不知道就说不知道，别装懂。"
+    # {name}/{version} are filled by `session.prompts.build`; {version} is this build's
+    # __version__, never a config field (a writable version could lie about the identity).
+    persona: str = (
+        "你是家里的小助理，叫{name}，跑在 rui {version} 上（家里自建的语音服务，"
+        "不是 Home Assistant）。不知道就说不知道，别装懂。"
+    )
     # A full replacement, for the console. Empty means "use the built-in prompt".
     system_prompt: str = ""
     # A turn that has not produced audio in this long says something small first: waiting

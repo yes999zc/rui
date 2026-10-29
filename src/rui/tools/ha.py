@@ -4,8 +4,8 @@ old-build plan, generalized.
 What is ported verbatim (the old build ran it for weeks, gap report §3):
 the six-tool whitelist, the entity list injected into the prompt as
 ``名字=entity_id`` **without state** ("stale truth is worse than none"), the
-120-entry cap with dedupe, the 7-day on-disk cache that bridges an offline HA,
-and the degrade rule - HA down never touches voice, music or local tools.
+configurable entry cap with dedupe, the 7-day on-disk cache that bridges an offline
+HA, and the degrade rule - HA down never touches voice, music or local tools.
 
 What is new on purpose:
 - the server-side hard refusal for lock/alarm/valve plus the trigger/code domains
@@ -50,7 +50,6 @@ EXCLUDED_DOMAINS = (
     "shell_command.", "python_script.", "hassio.",
 )
 SKIP_WORDS = ("指示灯", "确认", "已反转", "虚拟", "电量", "信号")
-ENTITY_CAP = 120
 CACHE_TTL_S = 7 * 86400
 MAX_ENTITIES_TO_LIST = 6   # search_entities cap: the picker, not the house
 
@@ -137,7 +136,14 @@ class HaBridge:
             policy=policy,
         )
         self._data_dir = data_dir
+        # Raw `名字=id` lines, as fetched or read from `.ha_entities.json`.
         self._entities_cache: list[str] | None = None
+        # The domain set those raw lines were obtained for. A config change must not
+        # wait for the 7-day cache TTL, so a mismatch refetches (or re-reads the cache
+        # and re-filters it) on the next injection.
+        self._entities_key: tuple[str, ...] | None = None
+        # What the last injection actually contained (None = entity_context never ran).
+        self._last_injected: int | None = None
 
     async def start(self) -> bool:
         ok = await self.client.start()
@@ -151,19 +157,78 @@ class HaBridge:
 
     # ------------------------------------------------------------------ context
     async def entity_context(self) -> str:
-        """The prompt block: names and ids, never states, cached for offline runs."""
-        entities = await self._entities()
+        """The prompt block: names and ids, never states, cached for offline runs.
+
+        Filtering order is fixed and visible: domain -> `context_exclude` regex ->
+        `entity_cap`. Applying the cap first would let an excluded entry eat a slot,
+        and filtering domains after the cap would let an unwanted domain push wanted
+        entities out.
+        """
+        if not self.cfg.context:
+            self._last_injected = 0
+            return ""
+        raw = await self._entities()
+        entities = self._visible(raw)
+        self._last_injected = len(entities)
         if not entities:
+            log.info("ha: entity context 0 entities, 0 chars (fetched %d)", len(raw))
             return ""
         listed = "\n".join(entities)
         note = "" if self.client._connected.is_set() else phrases.book.render("ha.list_stale")
         rendered = phrases.book.render("ha.entity_list", count=len(entities),
                                        list=listed, note=note) + "\n" + phrases.book.render(
             "ha.multi_entity_rule")
-        return _untrusted(rendered)
+        text = _untrusted(rendered)
+        # The one line that makes §7 measurable: production was fetched 75 / injected 75
+        # (4121 chars, 82 % of the prompt); the point of the four knobs is the gap.
+        log.info("ha: entity context %d entities, %d chars (fetched %d)",
+                 len(entities), len(text), len(raw))
+        return text
+
+    def _exclude_patterns(self) -> list[re.Pattern[str]]:
+        patterns: list[re.Pattern[str]] = []
+        for raw in self.cfg.context_exclude:
+            text = str(raw or "")
+            if not text.strip():
+                continue
+            try:
+                patterns.append(re.compile(text, re.IGNORECASE))
+            except re.error:
+                # The schema refuses these at load time; a bridge built from an older
+                # in-memory config must still answer a turn, so skip the bad pattern.
+                log.warning("ha: ignoring invalid context_exclude pattern %r", text)
+        return patterns
+
+    def _visible(self, raw: list[str]) -> list[str]:
+        """domain filter -> exclude regexes (name OR entity id) -> cap."""
+        domains = set(self.entity_domains())
+        patterns = self._exclude_patterns()
+        out: list[str] = []
+        for line in raw:
+            name, _, eid = line.partition("=")
+            if _domain_of(eid) not in domains:
+                continue
+            if any(p.search(name) or p.search(eid) for p in patterns):
+                continue
+            out.append(line)
+            if len(out) >= self.cfg.entity_cap:
+                break
+        return out
 
     async def _entities(self) -> list[str]:
-        if self._entities_cache is not None:
+        """Raw `名字=id` lines for the configured domains, cached for offline runs.
+
+        The cache stores the raw list, not the injected block: every injection re-runs
+        the domain/exclude/cap filter, so changing any of them takes effect on the next
+        turn instead of after the 7-day TTL. `.ha_entities.json` written by an older
+        build (no `domains` key) is still read - its lines are re-filtered too.
+        """
+        key = tuple(self.entity_domains())
+        offline = not self.client._connected.is_set()
+        # Offline the raw list is the best data there is, and it is re-filtered below,
+        # so a domains change needs no disk round-trip. Online, a different domain set
+        # means the cache was never asked for it: refetch instead of waiting out the TTL.
+        if self._entities_cache is not None and (self._entities_key == key or offline):
             return self._entities_cache
         cache_path = self._data_dir / ".ha_entities.json"
         fresh: list[str] | None = None
@@ -173,12 +238,14 @@ class HaBridge:
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
                 cache_path.write_text(
-                    json.dumps({"t": int(time.time()), "entities": fresh},
-                               ensure_ascii=False), encoding="utf-8")
+                    json.dumps({"t": int(time.time()), "domains": list(key),
+                                "entities": fresh}, ensure_ascii=False),
+                    encoding="utf-8")
                 os.chmod(cache_path, 0o600)
             except OSError:
                 pass
             self._entities_cache = fresh
+            self._entities_key = key
             return fresh
         try:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -187,20 +254,37 @@ class HaBridge:
                     clean for line in data.get("entities") or []
                     if (clean := _clean_entity(line))
                 ]
+                # Record what the FILE says it covers, never what we asked for now.
+                # A cache written by 0.8.10 has no `domains` key at all: `None` can
+                # never equal a requested key, so the first injection after HA comes
+                # back refetches instead of trusting a list that may predate the
+                # configured domains.
+                stored = data.get("domains")
+                self._entities_key = (tuple(str(domain) for domain in stored)
+                                      if isinstance(stored, list) else None)
                 return self._entities_cache
         except (OSError, ValueError):
             pass
         return []
 
     async def _fetch_entities(self) -> list[str]:
-        """`list_entities` per domain, states STRIPPED: the prompt carries names
-        and ids only - a stale state is worse than none (old build ha.py:227)."""
+        """`list_entities` per configured domain, states STRIPPED: the prompt carries
+        names and ids only - a stale state is worse than none (old build ha.py:227).
+
+        The fetch budget is wider than `entity_cap` on purpose: entries the exclude
+        regexes drop must not leave the cap half empty.
+        """
+        domains = self.entity_domains()
+        if not domains:
+            return []
+        budget = min(max(self.cfg.entity_cap * 3, 200), 1000)
+        allowed = set(domains)
         out: list[str] = []
         seen: set[str] = set()
-        for domain in self.entity_domains():
+        for domain in domains:
             try:
                 result = await self.client.call("list_entities",
-                                                {"domain": domain, "limit": ENTITY_CAP})
+                                                {"domain": domain, "limit": budget})
             except MCPUnavailable:
                 return []   # half a list is worse than the cache
             for item in _result_items(result):
@@ -210,19 +294,32 @@ class HaBridge:
                 # cache round-trip.
                 name = _clean_untrusted(str(raw_name)).strip().replace("=", " ")
                 # An entity id is a slug; anything else is not addressable and only
-                # gives an attacker another way to write text into the prompt.
+                # gives an attacker another way to write text into the prompt. The
+                # domain check is defensive: a server that ignores the `domain`
+                # argument must not leak scene/script into the list.
                 if (not name or not _HA_ENTITY_ID.fullmatch(eid) or eid in seen
+                        or _domain_of(eid) not in allowed
                         or any(word in name for word in SKIP_WORDS)):
                     continue
                 seen.add(eid)
                 out.append(f"{name}={eid}")
-                if len(out) >= ENTITY_CAP:
+                if len(out) >= budget:
                     return out
         return out
 
     def entity_domains(self) -> list[str]:
-        # The old build's default five (assistant_v3.py:3726), configurable.
-        return ["light", "switch", "cover", "scene", "script"]
+        """The prompt's domains, from config (0.8.11). Not hard-coded any more.
+
+        Empty `context_domains` means "list nothing" (the same practical result as
+        `context: false` for the list); an explicitly configured domain, even one whose
+        calls are refused, is honoured as written - the defaults are the safe set.
+        """
+        out: list[str] = []
+        for raw in self.cfg.context_domains:
+            domain = str(raw or "").strip().lower().rstrip(".")
+            if domain and domain not in out:
+                out.append(domain)
+        return out
 
     # ------------------------------------------------------------------ handlers
     def tool_specs(self) -> list[tuple[ToolSpec, Any]]:
@@ -363,11 +460,15 @@ class HaBridge:
 
     @property
     def status(self) -> dict:
+        # `entities` is what the prompt actually carries (after domain/exclude/cap),
+        # not the raw cache: the console number should match the injected block.
+        injected = (self._last_injected if self._last_injected is not None
+                    else len(self._entities_cache or []))
         return {
             "connected": self.client._connected.is_set(),
             "latency_ms": self.client.latency_ms,
             "tools": len(self.client.tools),
-            "entities": len(self._entities_cache or []),
+            "entities": injected,
         }
 
 
