@@ -259,8 +259,16 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
     sidecar 语义改为「0.8.x 无 runner，需审计后 trusted in-process 或等 runner」；`adapter.py` 加可选 `health()`。
     两条路线真跑：A（`adapter: example-speaker`）/ B（`adapter: example-plugin`）均 `/health` device_errors=0、
     plane running、`/api/v2/devices/example.ready=true`；`rui plug-test` PASS（20/0/0/1）。
-- **待做**：verifier-release 只复跑受影响项（G1 两条路线 + G4 config + quickstart 4 步）+ reviewer-code 复评
-  → PASS 后 task-29/task-31 complete → task-30 收口。
+- **reviewer 复评（task-29）：CHANGES 仅剩 1 项**（house 5 项 + 模板 G1/G4/sidecar/health 全部 PASS；
+  链接脚本 165 links/138 refs/0 问题）：
+  模板仓 README「路线 B」把 `adapter:` 与 `RUI_ADAPTER_PLUGINS` 的 `name=` 写成 `example-plugin`，
+  实测 catalog 解析为 **`plug_unresolved`**（控制台 ready 与 plug_unresolved 并存、硬件事实回退 global）。
+  期望：路线 B 也统一用 **device manifest id `example-speaker`**
+  （`RUI_ADAPTER_PLUGINS="example-speaker=adapter:build"` + `adapter: example-speaker`），
+  或在最小 config 的 device 下加 `params: {plug_id: example-plugin}`；并把 `status_reason=ready` 纳入验收断言。
+  路线 A 实测正确无需改。
+- **待做**：impl-obs 修模板 README 路线 B（一行级）→ verifier 复跑受影响项 + reviewer 复评
+  → task-29/task-31 complete → task-30 收口。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
 边界不变：**不发版/不 tag/不 release/不动生产**；只 commit 到 main，等下次核心发版自然带上。
