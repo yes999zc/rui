@@ -100,6 +100,35 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
 
 **本批结束**：D1–D8 全部完成；**未部署生产**。
 
+### 2026-10-29 新阶段：rui 0.8.6 + dot2 桥 1.3.5 + 生产部署（9哥 授权，进行中）
+
+**9哥 指令**：发 0.8.6 和/或 dot2 桥新版本，并部署；同时修 3 项非阻塞观察。
+（本阶段 supersedes 上文「本批只发 release 不部署」——部署已获明确授权。）
+
+**已核实部署现场（2026-10-29 09:2x，只读）**
+- 生产：rui **0.8.4**，amd64 digest `sha256:f1b6a992…6462`，4 台设备，`/health` 200 / device_errors 0 /
+  registered [dot2,lx06]。compose：`/vol1/rui/docker-compose.yml` + `/vol1/rui/rui-dot2-override.yml`
+  （override 含 image digest、`./plugins:/opt/rui-plugins:ro`、`RUI_ADAPTER_PLUGINS`、DOT2_* env）。
+- 插件：`/vol1/rui/plugins/rui_dot2_bridge/`（plugin.yaml 1.3.4）；catalog 副本
+  `/vol1/rui/data/plugs/dot2-echomuse/{plugin.yaml,devices/}`。
+- 写权限：`yes999zc` 无免密 sudo，但属 docker 组 → 用一次性 root 容器写 `/vol1/rui`
+  （`docker run --rm -v /vol1/rui:/mnt alpine:3.20`，已验证 WRITE_OK）；compose v2.40.3；GHCR 可访问。
+- 回滚锚（部署前）：override `.bak-20261028-220433`；本阶段会再备份 override/plugins/config。
+
+**按顺序执行（任务板 task-19…25）**
+1. task-19 ⏳ 修 3 项观察：§10 示例行改用单一真实事件（#12：`close#12 interval=305.1s rx=9329320B tx=0B`）；
+   `v2.channels.saveFailed` 未使用 → 删或用；ChannelsView 503 文案按上下文分流（gateway vs 保存/加载）。
+2. task-20 ⏳ rui 0.8.6 release prep（依赖 19）：pyproject/`__init__`/uv.lock + CHANGELOG 0.8.6 + release notes。
+3. task-21 ⏳ 桥 1.3.5 release prep（并行）：pyproject/plugin.yaml 1.3.5 + CHANGELOG + C-001；`rui_compat` 不变。
+4. task-23 ⏳ fresh reviewer（tag 前）→ Lead 打 tag `v0.8.6` / `v1.3.5` + GitHub release + 等 CI 四绿。
+5. task-22 ⏳ 部署（Lead）：备份 → override 换 0.8.6 amd64 digest → 插件 1.3.5 到 plugins + catalog 副本 →
+   一次 `docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d` → D5 + 0.8.6 专项
+   （/v2/channels 200、channels API、插件 1.3.5、四台 say、errors 0、日志 0 次 got16000/play ValueError/audio_config_mismatch）。
+6. task-24 ⏳ fresh verifier：tag/workflow 门禁 + 从本机独立复验生产；task-25 ⏳ HANDOFF 收口。
+
+**边界**：不改生产 `config.yaml` 内容（living volume 不擅自改）；不改 `rui_compat`；不动 barge/AEC/followup/
+音乐抢占语义；xiaoai 桥只 README、不发版；不加依赖。
+
 ## 未完成 / 阻塞
 
 - **真机未验证**：A/B/C/E 的文案听感、ASR 噪声下分钟句命中率、17–20 字接缝听感均为单测推断
