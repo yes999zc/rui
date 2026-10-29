@@ -34,6 +34,7 @@ rui 是一个**跑在你自己机器上的家庭语音助手端点**。家里已
 - **音乐**：接入你自己的音乐源（如 Navidrome / OpenSubsonic），支持「下一首」「停止播放」等播放中短指令。
 - **提醒**：到点与分钟级相对时间提醒由本机播报，不依赖第三方定时服务。
 - **控制台 v2**：设备、房间、配置、日志、轨迹、音乐、凭据与体检；中英双语，不用再手改 YAML。
+- **第三方设备桥**：可自己写，见 [docs/bridge-developer/](docs/bridge-developer/)。
 
 ## 新设备接入：一条命令，AI 可代劳
 
@@ -138,6 +139,7 @@ It is for households that want to own their voice data, keep the speakers they a
 - **Music**: your own music source (e.g. Navidrome / OpenSubsonic), including short commands such as next and stop while playing.
 - **Reminders**: due and minute-scale relative reminders are spoken locally, without a third-party timer service.
 - **Console v2**: devices, rooms, configuration, logs, traces, music, credentials and health checks; bilingual, no hand-editing YAML.
+- **Third-party device bridges**: write your own; see [docs/bridge-developer/](docs/bridge-developer/).
 
 ## Onboarding a new device: one command, an AI can do it
 
