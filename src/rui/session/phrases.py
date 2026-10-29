@@ -98,6 +98,9 @@ DEFAULTS: dict[str, str] = {
     # --- devices over HA (V2's first application) ----------------------------
     "device.done": "好，{device}{action}。",
     "device.unreachable": "{device}这会儿连不上，没能执行，别当我成功了。",
+    # A rejected argument shape is the caller's mistake, not an offline house
+    # (issue #34): never tell the user the device is unplugged.
+    "device.bad_args": "这次没查到，换个说法再试试。",
     "device.excluded": "{device}这类操作我不做。",
     "device.missing_target": "没听清要操作哪个设备。",
     "device.ask_verb": "要开还是关？我只听到设备名，没听清你说开还是关。",

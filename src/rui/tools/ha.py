@@ -266,9 +266,26 @@ class HaBridge:
 
     async def _read(self, tool: str, args: dict[str, Any]) -> ToolResult:
         """The read tools are data for the model, not phrases: `say` passthrough."""
+        if tool == "batch_get_state":
+            # HA's batch read wants `entity_ids` (plural, a list) while the write tool
+            # takes `entity_id` (singular, comma string), and a model that just used
+            # call_service reuses the write spelling here. HA then rejected the call
+            # and the user was told the house was offline (issue #34), so the shapes
+            # are unified before the wire; other read tools are passed untouched.
+            ids, ok = _normalize_entity_ids(args)
+            if not ok:
+                return _bad_args()
+            args = {key: value for key, value in args.items() if key != "entity_id"}
+            args["entity_ids"] = ids
         try:
             result = await self.client.call(tool, args)
-        except MCPUnavailable:
+        except MCPUnavailable as exc:
+            # A validation error is a caller mistake, not an offline house. The
+            # transport wraps both in one exception, so the message is the only
+            # signal there is; when it is not conclusive, unreachable stays.
+            if _looks_like_bad_args(exc):
+                log.info("ha %s rejected its arguments: %s", tool, exc)
+                return _bad_args()
             return ToolResult(status="unreachable", payload={
                 "say": phrases.book.render("device.unreachable", device="家庭设备")})
         # States/attributes are editable on the HA side: label them as data and strip
@@ -376,6 +393,62 @@ def _excluded_domain(domain: str) -> bool:
 def _action_word(service: str) -> str:
     return {"turn_on": "开了", "turn_off": "关了", "toggle": "切换了"}.get(
         service.rsplit(".", 1)[-1], "操作了")
+
+
+# HA's two spellings and the argument errors that used to be reported as an
+# offline house (issue #34). Conservative on purpose: the transport wraps tool
+# validation failures and connection deaths in one MCPUnavailable, so only a
+# message naming the argument contract counts as the caller's mistake.
+_BAD_ARGS_HINTS = (
+    "validation", "invalid", "required", "missing", "unexpected",
+    "entity_id", "schema", "not a list", "bad request",
+)
+
+
+def _normalize_entity_ids(args: dict[str, Any]) -> tuple[list[str], bool]:
+    """`entity_ids`/`entity_id` in any known shape -> (ids, usable).
+
+    Accepted: a list, a comma-separated string, or a JSON array string (the forms
+    measured in issue #34). `usable=False` means the caller passed nothing usable:
+    that is the caller's error (`bad_args`), never "the device is unreachable".
+    """
+    value = args.get("entity_ids")
+    if value is None:
+        value = args.get("entity_id")
+    items: list[Any] | tuple[Any, ...]
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return [], False
+            if not isinstance(parsed, list):
+                return [], False
+            items = parsed
+        else:
+            items = text.split(",")
+    elif isinstance(value, (list, tuple)):
+        items = value
+    else:
+        return [], False
+    ids: list[str] = []
+    for item in items:
+        if not isinstance(item, (str, int, float)):
+            return [], False
+        # A list entry may itself carry "a, b" (a model flattening the write form).
+        ids.extend(part.strip() for part in str(item).split(",") if part.strip())
+    return ids, bool(ids)
+
+
+def _bad_args() -> ToolResult:
+    return ToolResult(status="bad_args", payload={
+        "say": phrases.book.render("device.bad_args")})
+
+
+def _looks_like_bad_args(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(hint in message for hint in _BAD_ARGS_HINTS)
 
 
 def _result_items(result: Any) -> list[dict]:
