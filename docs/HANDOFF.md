@@ -1,8 +1,23 @@
-# HANDOFF — rui 阶段快照（0.8.5 已发布，未部署）
+# HANDOFF — rui 阶段快照（v0.8.6 已部署生产）
 
-2026-10-28 · 批次：0.8.5 攒批（A–G） · 本会话：rui 0.8.5 收口
+2026-10-29 · 本轮收口到 **task-5（第三方桥开发者入口包）** · 下一批从 **task-6「music 外部音源钩子」** 开始
 
 phase-close: task-11
+
+## 当前状态（2026-10-29 11:10 收口，替换旧顶部快照）
+
+- **生产版本：v0.8.6**（已部署，生产 NAS `/vol1/rui`；镜像 amd64 `sha256:9ad8e03f…6cbc`；
+  dot2 插件 **1.3.5**；4 台设备 / device_errors 0；tag `v0.8.6` → `9610969`，
+  release https://github.com/yes999zc/rui/releases/tag/v0.8.6）。
+- **本轮收口到 task-5**：第三方桥开发者入口包完成（docs 五篇 + `rui-adapter-check` CLI +
+  新仓 https://github.com/yes999zc/rui-plugin-template + 两处 README 链接），
+  reviewer PASS + verifier VERIFIED；**未发版/未 tag/未动生产**。
+- **下一批起点：task-6「music 外部音源钩子」**（新开会话做；本会话停手，不再改代码/发版/部署）。
+- **其余待办（各行一行）**：task-2/3 等真机样本（L25/L26）；H（控制台段指标）backlog；
+  task-6 之后的优先级以 `docs/backlog-0.8.md` 与 9哥 新卡为准。
+- **不归本仓**：设备侧 token/静音（dot2/dot2-b 的 `speaker_connected` 需现场解除静音/确认上行）；
+  dot2 桥 main 已含未发版提交（计数日志 `516c0e8` 已随 1.3.5 发布）；
+  `rui-adapter-check` 尚未进 tag（下次核心发版自然带上）。
 
 ## 版本与契约
 
