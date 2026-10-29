@@ -116,10 +116,17 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
 - 回滚锚（部署前）：override `.bak-20261028-220433`；本阶段会再备份 override/plugins/config。
 
 **按顺序执行（任务板 task-19…25）**
-1. task-19 ⏳ 修 3 项观察：§10 示例行改用单一真实事件（#12：`close#12 interval=305.1s rx=9329320B tx=0B`）；
-   `v2.channels.saveFailed` 未使用 → 删或用；ChannelsView 503 文案按上下文分流（gateway vs 保存/加载）。
-2. task-20 ⏳ rui 0.8.6 release prep（依赖 19）：pyproject/`__init__`/uv.lock + CHANGELOG 0.8.6 + release notes。
-3. task-21 ⏳ 桥 1.3.5 release prep（并行）：pyproject/plugin.yaml 1.3.5 + CHANGELOG + C-001；`rui_compat` 不变。
+1. task-19 ✅ 修 3 项观察（rui `85c20f4`）：§10 示例行改为 §2.2 表 #12 单一真实事件
+   （`close#12 interval=305.1s rx=9329320B tx=0B`，并加测试断言与表一致）；`v2.channels.saveFailed`
+   改为保存失败标题（zh/en 同步，不再 dead key）；503 文案按上下文分流——gateway start/stop/restart
+   → 「网关未就绪」，channels 加载/保存 → 新增 `v2.channels.serviceUnavailable`「服务暂不可用（503）」，
+   422 仍显示 detail；`tests/test_channels_view.py` 覆盖两条 503 分支。
+2. task-20 ⏳ rui 0.8.6 release prep（进行中）：pyproject/`__init__`/uv.lock 已改 0.8.6、CHANGELOG 0.8.6 段、
+   `docs/releases/v0.8.6.md` 已写（**尚未 commit/push**；impl-console 正在跑全量门禁）。
+3. task-21 ✅ 桥 1.3.5 release prep（`d20a129`，已 push）：pyproject/plugin.yaml=1.3.5、CHANGELOG
+   `[1.3.5]`（计数日志/check.sh/README；1.3.4 内容正确落入新 `[1.3.4]` 段）、C-001 版本引用同步、
+   `test_manifest.py` 版本断言同步；`rui_compat` 与 v1.3.4 **逐字相同**（`>=0.8.1 <0.9.0`）；
+   `./scripts/check.sh --nodevice` EXIT=0（183 tests / lint / doctor 0 fail）。
 4. task-23 ⏳ fresh reviewer（tag 前）→ Lead 打 tag `v0.8.6` / `v1.3.5` + GitHub release + 等 CI 四绿。
 5. task-22 ⏳ 部署（Lead）：备份 → override 换 0.8.6 amd64 digest → 插件 1.3.5 到 plugins + catalog 副本 →
    一次 `docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d` → D5 + 0.8.6 专项
