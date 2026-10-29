@@ -1,9 +1,9 @@
 """The external music-source hook: `RUI_MUSIC_SOURCES`.
 
 The hook is an explicit allowlist (`id=module:factory`) for private sources that
-never enter the preset registry. These tests pin the 0.8.6 compatibility contract:
+never enter the preset registry. These tests pin the 0.8.x compatibility contract:
 
-* parsing (whitespace, dotted factories, errors quoting the raw entry, unset = 0.8.6);
+* parsing (whitespace, dotted factories, errors quoting the raw entry, unset = built-ins only);
 * presets win over an env entry with the same id, unknown ids keep the old ValueError;
 * the five-method interface, missing/non-callable methods named exactly;
 * `music_sources_compat`: required, parsed with the plugin range grammar, mismatch
@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from rui import __version__
 from rui.config import Config, load_config, save_config
 from rui.music import build_source
 from rui.music.sources.external import (
@@ -287,7 +288,7 @@ music_sources_compat = ">=0.9.0 <1.0.0"
         build_source("future", None, tmp_path / "cache", 1)
     message = str(caught.value)
     assert ">=0.9.0 <1.0.0" in message
-    assert "0.8.6" in message
+    assert __version__ in message
 
 
 def test_compat_that_is_not_a_range_names_the_declaration(

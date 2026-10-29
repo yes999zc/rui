@@ -18,6 +18,60 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.7] - 2026-10-29
+
+**Theme: private music sources, a joke tool that never fails, and a quieter standby.**
+No protocol or `rui_compat` change (`>=0.8.1 <0.9.0`); plugins unchanged.
+
+### Added
+
+1. **External music sources (`RUI_MUSIC_SOURCES`).** An operator can register an
+   out-of-tree `MusicSource` as `id=module:factory` (comma-separated allowlist).
+   The factory receives a read-only `SourceContext`; the module must declare
+   `music_sources_compat` in the plugin range grammar (`>=0.8.7 <0.9.0`) and the
+   result is validated against the five methods by name. Unknown ids still raise
+   `ValueError` (422 at every write path); an import/compat/factory failure leaves
+   music off with one warning and an honest console panel. Docs:
+   `docs/music-private-sources.md`; example: `examples/music_sources/stub_source.py`.
+2. **`local.tell_joke`.** Calls the self-hosted joke service
+   (`GET <url>/v1/joke?kind=&topic=&pid=`, `X-Internal-Token` from the
+   `JOKE_SERVICE_TOKEN` secret), with 20 bundled samples, two-stage riddles
+   (`action=new|answer`), and an optional `audio_url` that rui downloads to
+   `<data_dir>/tmp`, validates as WAV and plays through the audio plane.
+   Degradation is `audio_url -> text -> bundled sample`; no failure raises.
+3. **Music aliases on the main intent path.** `AliasStore.apply` now runs before
+   `q.plan()` for voice and console search (longest key first, music path only),
+   the console passes the `NameResolver`, and the alias file is repaired/created
+   `0640` (runbook: `docs/music-alias-0.8.7.md`).
+4. **Short replies after a barge-in.** With music playing or paused, a closed set
+   of short answers (`行/好/继续/别停/换一首/停止/放吧/听吧`) maps to
+   resume/hold/next/stop instead of the anti-hallucination refusal; non-music
+   questions are still refused.
+
+### Fixed
+
+1. **`voice peak` log on silence.** Silent windows no longer print `0.0 dBFS`
+   (which reads as full-scale clipping). The aggregate starts at `-120 dBFS`,
+   only voiced windows log, and the line is
+   `[level] voice peak -20.5 dBFS (active 6 s)`.
+2. **Standby KWS gate.** With no uplink audio and a quiet room, the spotter is
+   suspended; on onset it replays 500 ms of preroll so the wake word's head is
+   not lost. Playback, turns, cues, music and device wake keep it hot.
+   Defaults: `audio.voice.standby_kws_gate=true`, `-60 dBFS`, `1000 ms`.
+   Measured synthetic idle: 1500 steps -> 50 processed + 1450 skipped (96.7%).
+   Device wake active disables the saving (documented limitation).
+3. **WAV validation for joke audio.** Clips are checked with `wave` and the
+   audio plane's own `read_wav_mono` before playback; invalid clips fall back to
+   text instead of skipping TTS.
+
+### Notes
+
+- **P2 not done:** the living-room profile (py-spy) and the ref-channel/AEC
+  standby evaluation stay on the backlog.
+- **B1/B2/B3 not in this batch:** ASR hot words, three-way wording
+  (not heard / answer / not in library), and the known-limitations entry.
+- No `rui_compat` change; no plugin changes.
+
 ## [0.8.6] - 2026-10-29
 
 **Theme: the channels page comes back to the v2 console, the landing pages stop

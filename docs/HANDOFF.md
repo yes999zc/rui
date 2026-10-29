@@ -8,8 +8,10 @@
 - 门禁：task-1/2/3/4/5/6 全部独立 reviewer PASS（task-2/4 经多轮 CHANGES 收口），
   fresh verifier **VERIFIED**（全量 2096 passed / 6 skipped、ruff 绿、web typecheck+build 绿、
   wheel 含 `rui/data/jokes.fallback.json` 20 条）。
-- 进行中：task-7（A 卡：`AliasStore.apply` 接音乐主路径、控制台 `music_search` 传 names、
-  打断后短应答放行、别名文件 640）。
+- 进行中：task-7（A 卡）已完成并提交 `0bcdfa3`（别名接音乐主路径、控制台 names、打断后
+  短应答放行、别名文件 0640 + runbook），reviewer-music-a PASS + verifier-a VERIFIED
+  （全量 2128 passed / 6 skipped、ruff 绿）。task-8 发布/部署进行中。
+- 已知 CI：`5fbef35`（0.8.7 前一批）四 workflow 全绿；`0bcdfa3`（A）CI 进行中。
 - 待做：task-8 `[phase] v0.8.7 发布与部署`（版本 0.8.7、CHANGELOG/release notes、CI 四绿、
   tag、`gh release`、生产部署 + D5 七项 + 待机 CPU/load + 回滚锚）。
 - 不在本批：B1/B2/B3（ASR 热词、话术三分、known-limitations）；P2（living 专项 profile /
