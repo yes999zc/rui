@@ -121,8 +121,9 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
    改为保存失败标题（zh/en 同步，不再 dead key）；503 文案按上下文分流——gateway start/stop/restart
    → 「网关未就绪」，channels 加载/保存 → 新增 `v2.channels.serviceUnavailable`「服务暂不可用（503）」，
    422 仍显示 detail；`tests/test_channels_view.py` 覆盖两条 503 分支。
-2. task-20 ⏳ rui 0.8.6 release prep（进行中）：pyproject/`__init__`/uv.lock 已改 0.8.6、CHANGELOG 0.8.6 段、
-   `docs/releases/v0.8.6.md` 已写（**尚未 commit/push**；impl-console 正在跑全量门禁）。
+2. task-20 ✅ rui 0.8.6 release prep（`6b11b51`，已 push）：pyproject/`__init__`/uv.lock=0.8.6、
+   CHANGELOG `[0.8.6] - 2026-10-29`、`docs/releases/v0.8.6.md`（含部署后四项验证口径）；
+   全量 **1990 passed / 6 skipped**、ruff 绿、web typecheck+build 绿。**未打 tag/未 release**（等 review 后）。
 3. task-21 ✅ 桥 1.3.5 release prep（`d20a129`，已 push）：pyproject/plugin.yaml=1.3.5、CHANGELOG
    `[1.3.5]`（计数日志/check.sh/README；1.3.4 内容正确落入新 `[1.3.4]` 段）、C-001 版本引用同步、
    `test_manifest.py` 版本断言同步；`rui_compat` 与 v1.3.4 **逐字相同**（`>=0.8.1 <0.9.0`）；
