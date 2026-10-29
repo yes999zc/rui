@@ -119,8 +119,11 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
 - task-23 首轮 **CHANGES**（唯一阻塞为文档现状陈述）：`docs/analysis/dot2-data-plane-1011.md` 仍写「桥未发版/仍是 1.3.4」。
   已修 `b42f42e`：头部标「分析基线 1.3.4」、§10 标题与版本状态改为「随桥 1.3.5（tag `v1.3.5`）发布；
   生产 NAS 部署前仍是 1.3.4，部署后线上才有新字段」；HANDOFF task-21 记录补 `e44d333`。
-- 待 reviewer-release 复评 PASS 后：打 tag `v0.8.6`（→ 当时 rui main HEAD）/ `v1.3.5`（→ 桥 `e44d333`）
-  + GitHub release → 等四 workflow 绿 → 执行 task-22 部署 → task-24 独立复验 → task-25 收口。
+- **reviewer-release 复评 PASS**（task-23 complete，revision 3；复核 HEAD `b42f42e`，diff 仅 2 docs 文件；
+  `test_channels_view.py`+`test_version.py` 22 passed；`未发版` 字样 0 命中）。
+- 下一步（待执行）：打 tag **`v0.8.6`（→ 打分时 rui main HEAD，含本 checkpoint 与发布内容）** /
+  **`v1.3.5`（→ 桥 `e44d333`）** + GitHub release → 等四 workflow 绿 → 执行 task-22 部署
+  → task-24 独立复验 → task-25 收口（顺手清历史段落的「生产插件仍 1.3.4」措辞）。
 - 其余非阻塞观察（service 503 措辞、errorText 标点）本批不改，已记录。
 
 **按顺序执行（任务板 task-19…25）**
