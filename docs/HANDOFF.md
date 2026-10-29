@@ -15,6 +15,15 @@ phase-close: task-9
   `ref_shift=16`；keywords `… :4.00 #0.07 @你好小宝`（客厅）与 `@你好小瑞`（dot2 三台）；
   `wake_preroll_ms=500`；`standby_kws_gate=false`；AEC `cancel=mix filter_len=4096`。
 - 本批部署新增（仅 override 环境变量，不改桥代码）：`DOT2_MIC_GAIN_DB: "12"`。
+- **0.8.10 包含已发布未部署的 0.8.9**（多相 decimator 48k 路径 + 模板不再写
+  `audio.capture.rate`）：**部署 0.8.10 即同时上线 0.8.9**。依据 **0.8.10 批次生产运行时
+  基线（2026-10-29，9哥 任务书）**，现网显式 `audio.capture.rate: 16000`，显式 global 值赢
+  （`kind: negotiated`），manifest 48k 不生效。
+- **部署前先看 `/api/v2/devices/living/audio` 的 `sources` 实测**：**16k 分支**（默认预期）→
+  `sources["capture.rate"] = "global-config"`、`effective.capture.rate = 16000`、decimator
+  `factor = 1`（不执行多相滤波）；**若现网实际为 48k**（`device-manifest` / global 48000）→
+  `effective = 48000`、`factor = 3`，验证按 48k 分支并照 `docs/known-limitations.md` L27
+  复核 CPU/ASR 与带宽取舍。
 
 ## 已完成
 
@@ -37,14 +46,22 @@ phase-close: task-9
   `1ff00cf` T5、`334751a` T1b。
 - **发布**：tag `v0.8.10` 的 CI 四绿（ci / security / secret-scan / docker-publish）；
   issue #34 已回评修复说明并关闭。
+- **文档欠账（task-11，`[0.8.10]` 收尾）**：`docs/known-limitations.md` 新增 **L28** ——
+  `audio.aec.who` 的 `none`/`both` 无独立实现（`_build_aec()` 只有 `who == "device"`
+  一条提前返回，两者当前等同 `controller`），本批只登记、不改行为；release notes 补
+  「本版包含 0.8.9（已发布未部署）」段与部署后 `sources.capture.rate = global-config` +
+  decimator `factor = 1` 的验证口径；CHANGELOG `[0.8.10]` Notes 同步一句。
 
 ## 下一步
 
-1. release 0.8.10：tag `v0.8.10` + GitHub release + 镜像 digest 回填；issue #34 回修复说明并关闭。
+1. 收尾 task-11 文档欠账：commit + `git push` + `gh release edit v0.8.10` 把补充后的
+   release notes 正文同步到 GitHub release（tag 指向的 commit 不变）。
 2. 部署（9哥/bridge 确认后执行）：备份 config/plugins/override → override 加 `DOT2_MIC_GAIN_DB: "12"` →
    `docker compose -f docker-compose.yml -f rui-dot2-override.yml pull && ... up -d rui` →
    验证：`/api/v2/house` 的 `.version.rui=0.8.10`/`.multi_device.planes_running=4`/`.warnings=[]`；
-   `/api/v2/devices/living/audio` capture 仍 16k/8ch/mic_shift=10/ref_shift=16；T1 连续 3 次沉默唤醒 ≤2 s 可再唤醒；T2 debug/say 现场句
+   `/api/v2/devices/living/audio` capture 仍 16k/8ch/mic_shift=10/ref_shift=16、
+   **`sources["capture.rate"]="global-config"`**（显式 16k 仍赢）、**decimator `factor=1`**（16k wire 不跑多相）→
+   即 0.8.9 并入后行为未漂移；T1 连续 3 次沉默唤醒 ≤2 s 可再唤醒；T2 debug/say 现场句
    说出「曲库里没找到」；T3 在线曲「这个来源不支持收藏」；T4「现在都有哪个灯开着」正常；T5 barge 有提示音
    + ≤1 s「没听清」、近讲 overdrive/clipped 正确、远场不触发。
 3. 回滚锚：0.8.8 = `2dac336`；0.8.9 = `a1d5afe`。
@@ -63,10 +80,14 @@ phase-close: task-3
   release notes `docs/releases/v0.8.9.md`。镜像 digest 由 tag 的 docker-publish 产出，部署时再记。
 - **无协议 / `rui_compat` 变更**（仍 `>=0.8.1 <0.9.0`）；插件不变（dot2 1.3.5 / xiaoai 0.2.3）；
   `rui-xiaoai-bridge`（HEAD `7f8f8d8`）与 `rui-dot2-bridge`（HEAD `c0bd0de`）**零改动、工作区干净**。
-- **未部署**：生产仍是 **0.8.8**（`2dac336`，2026-10-29 15:00 部署）；living 当前按 48k wire 手工运行。
+- **未部署**：生产仍是 **0.8.8**（`2dac336`，2026-10-29 15:00 部署）。
+  0.8.9 实测窗口曾由 9哥 手工切到 48k wire 跑对照；**0.8.10 批次任务书确认现网运行时已按基线为
+  显式 16000**（capture 16k/8ch/mic_shift=10/ref_shift=16），48k 只是当时的实测配置。
   部署必须等 **9哥 单独点头**。
-- **部署前置（重要）**：现网 `/config/config.yaml` 若仍显式写着 `audio.capture.rate: 16000`，升级不会自动改；
-  要吃 48k 必须删除该键（或改成 48000）并重启音频平面。模板改动只影响新装/重装。
+- **部署前置（重要）**：现网按批次基线为显式 `audio.capture.rate: 16000`，升级不会自动改；
+  要吃 48k 必须删除该键（或改成 48000）并重启音频平面。**部署前以
+  `/api/v2/devices/living/audio` 的 `sources` 实测为准**：若现网实际为 48k
+  （`device-manifest` / global 48000）则按 48k 分支判读。模板改动只影响新装/重装。
 - 回滚锚：v0.8.8 = `2dac336`；回滚只回退 rui 镜像/版本，桥仓无需动。
 
 ## 已完成

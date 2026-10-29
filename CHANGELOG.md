@@ -69,6 +69,16 @@ mystery. No protocol or `rui_compat` change.
 - `rui-xiaoai-bridge`、`rui-dot2-bridge` **零改动**。
 - **部署新增**：dot2 override 环境变量 `DOT2_MIC_GAIN_DB: "12"`（把近讲从削波拉回正常
   电平；只改 override 的环境变量，不改桥代码）。
+- **本版构建自 `main`，包含已发布未部署的 0.8.9**（多相 decimator、模板不再写
+  `audio.capture.rate`）：**部署 0.8.10 即同时上线 0.8.9**。依据 **0.8.10 批次生产运行时
+  基线（2026-10-29，9哥 任务书）**，现网显式 `audio.capture.rate: 16000`，显式值赢
+  （`kind: negotiated`），manifest 48k 不生效。部署前先看
+  `/api/v2/devices/living/audio` 的 `sources` 实测：16k 分支 → `global-config` +
+  `factor = 1`（不执行多相滤波）；若实际为 48k（`device-manifest` / global 48000）→
+  `factor = 3`，按 48k 分支与 L27 复核 CPU/ASR。
+- `audio.aec.who` 的 `none` / `both` **仍无独立实现**（只有 `device` 有真实分支，
+  `none`/`both` 当前等同 `controller`），已登记 `docs/known-limitations.md` **L28**；
+  本版不改行为。
 - **老部署配置不变**：模板/示例新增的 `audio.ack.barge_ack` 有默认值，不写也会生效；
   生产运行时参数（capture 16k/8ch、`mic_shift=10`/`ref_shift=16`、keywords、
   `wake_preroll_ms=500`、`standby_kws_gate=false`、AEC `mix`/4096）本批不动。
