@@ -126,31 +126,35 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   → task-24 独立复验 → task-25 收口（顺手清历史段落的「生产插件仍 1.3.4」措辞）。
 - 其余非阻塞观察（service 503 措辞、errorText 标点）本批不改，已记录。
 
-**Round 3 进度（2026-10-29 09:33–09:42，已部署）**
-- tag/release：rui **`v0.8.6`** → commit `9610969`，release https://github.com/yes999zc/rui/releases/tag/v0.8.6 ；
-  桥 **`v1.3.5`** → `e44d333`，release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.5 。
-  四 workflow（ci / docker-publish / security / secret-scan）在 v0.8.6 commit 上**全绿**。
-- 镜像：index `sha256:430840eb…a879`；amd64 `sha256:9ad8e03f…6cbc`；arm64 `sha256:e18034e3…da9b`。
-- 备份（NAS `20261029-0933`）：`rui-dot2-override.yml.bak-20261029-0933`、
-  `plugins.bak-20261029-0933.tar.gz`、`config/config.yaml.bak-20261029-0933`。
-- 插件：`/vol1/rui/plugins/rui_dot2_bridge/` 与 `/vol1/rui/data/plugs/dot2-echomuse/`
-  均已替换为 **1.3.5**（tar sha256 `daaa2dcb…e5fd`，校验一致）；运行日志 `adapter plugins: registered dot2, lx06`。
-- 核心：override image 已改 `ghcr.io/yes999zc/rui@sha256:9ad8e03f…6cbc`，`docker compose … up -d`
-  重建并启动（09:40 左右）。
-- 已看到：`/health` 200、**version=0.8.6**、devices=4、device_errors=0、warnings=[]、
-  registered [dot2,lx06]；`/v2/channels` HTTP **200**；日志无 `got 16000` / `play ValueError` /
-  `audio_config_mismatch`；四台平面 running=True、restarts=0。
-- **D5 现状（需 9哥 知悉）**：`living`（客厅）与 `dot2-c`（主卧）`connected=true`；
-  `dot2`（儿童房）与 `dot2-b`（次卧）`connected=false`，`/api/v2/devices/<id>` 的
-  `status_reason.code=token_missing`（"no device token is configured"）。四台平面都 `running=true`、
-  `errors=0`、`restarts=0`；桥侧日志显示设备已 register、`X-EM-Token source: file`，
-  容器内 `secrets.resolve("RUI_DEVICE_TOKEN")=True`——即**核心侧 token 存在**，问题在设备回连时带的凭据
-  或设备端文件（0.8.4 D5 已记录 dot2 在部署前就是 `token_missing`；dot2-b 是本次重启后出现）。
-  本批代码路径不含设备 token/鉴权改动（core 差异只有 v2 web；桥差异只有计数日志），
-  **不触发回滚**；待 9哥 现场看两台设备 token/重连（或下一轮 verifier 用只读手段继续定位）。
-- **待收口**：task-24 verifier 全量/独立复验（tag/workflow 已绿；生产 D5 四台 say 需在两台
-  恢复连接后补做，或按「设备侧 token 非本批路径」记录）；task-25 HANDOFF 最终收口。
-- 待执行：task-24 独立 verifier 全量复验（含 tag/workflow/生产 D5 七项）；task-25 HANDOFF 最终收口。
+**Round 3–6 收口（2026-10-29 09:33–09:55，已发布并部署；verifier VERIFIED-D5-EXCEPTION）**
+
+- **发布**：rui tag **`v0.8.6`** → commit `9610969`，release https://github.com/yes999zc/rui/releases/tag/v0.8.6 ；
+  桥 tag **`v1.3.5`** → `e44d333`，release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.5 。
+  v0.8.6 commit 上四 workflow **全绿**（ci `40801032284` / docker-publish `40801076851` /
+  security `40801076917` / secret-scan `40801076710`）。
+- **镜像**：index `sha256:430840eb…a879`；amd64 `sha256:9ad8e03f…6cbc`；arm64 `sha256:e18034e3…da9b`。
+- **部署**（09:40 重建容器，`docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d`）：
+  override image → 0.8.6 amd64 digest；dot2 插件 1.3.5 已进 `/vol1/rui/plugins/rui_dot2_bridge/` 与
+  catalog 副本 `/vol1/rui/data/plugs/dot2-echomuse/`（tar sha256 `daaa2dcb…e5fd`）。
+- **备份/回滚锚（NAS）**：`rui-dot2-override.yml.bak-20261029-0933`(787B)、
+  `plugins.bak-20261029-0933.tar.gz`(147489B)、`config/config.yaml.bak-20261029-0933`(9403B)
+  ——**三者 root:root mode 000，回滚必须用部署同样的 root 容器 helper**（`docker run --rm -v /vol1/rui:/mnt alpine`）。
+  回滚镜像：0.8.4 amd64 `sha256:f1b6a992…6462`；回滚插件：上面的 plugins tar（1.3.4）。
+- **独立 verifier 结论**：**VERIFIED-D5-EXCEPTION**（全量 `1990 passed / 6 skipped`、ruff 绿、
+  web typecheck+build 绿、桥 `check.sh --nodevice` 183 tests OK、tag/release 存在、四 workflow 绿）。
+- **生产实测**：`/health` 200、version=**0.8.6**、devices=4、device_errors=0、warnings=[]、
+  registered=[dot2,lx06]、config_version=3、console=v2；`/v2/channels` **200**；
+  `/api/v1/channels`（X-Auth-Token）200，telegram token_configured=true/enabled=true、
+  gateway running；日志近 10 分钟 `got 16000`/`play ValueError`/`audio_config_mismatch`/ERROR/Traceback/1011 均 0。
+  **四台 `debug/say` 全部 200 + reply + error=""**（living 63396B、dot2 57560B、dot2-b 57728B、dot2-c 57542B）。
+- **D5 偏差归因（已定性，设备侧，非本批回归）**：`dot2`/`dot2-b` 的 `speaker_connected=false` 是因为
+  两台**物理静音键为 muted=true** → 静音后无 mic 上行 → 触发桥既有 `SPEAKER_STALE_S=45` 新鲜度判据
+  （自 v1.3.2 起，非 1.3.5 新增）；console 的 `token_missing` 是**既有显示口径**（`effective_token_env`
+  把默认 `RUI_DEVICE_TOKEN` 映射为 manifest 的 `DOT2_EM_TOKEN`，自 v0.4.1 起，0.8.6 未改），
+  仅 connected 时被 `token_managed_by_adapter` 压制。反向验证：对两台各 say 一次后 health 立即 true，
+  静默 ~70 s 回落 false。已排除 token 丢失/错误、adapter 未注册、数据面被拒/被关闭、本批鉴权/连接改动。
+  **无需回滚**；要彻底消除属设备侧（解除静音/确认上行）。
+- **后续**：新卡「第三方桥开发者入口包」（task-26/27/28，见下节）尚未开工。
 
 **按顺序执行（任务板 task-19…25）**
 1. task-19 ✅ 修 3 项观察（rui `85c20f4`）：§10 示例行改为 §2.2 表 #12 单一真实事件
