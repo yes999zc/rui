@@ -206,7 +206,12 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
 - `impl-ci`（复用）→ B（`rui_adapter_check` CLI + pytest + `[project.scripts]`）；
 - `impl-obs`（复用）→ C（新仓 `rui-plugin-template`，已见 `plugin.yaml`/`devices/`/`tests/` 目录）。
 - team 成员数已达上限 16，**不再 spawn 新成员**；最后 review/verify 复用已有 fresh 角色（reviewer-code / verifier-release）。
-- 下一步：三路 DONE → task-29 reviewer 一致性核对 + verifier 全量/CLI/30 分钟自测 → task-30 收口。
+- **C/task-27 ✅ DONE**：新仓 https://github.com/yes999zc/rui-plugin-template （MIT，main `afee821`）。
+  7 文件：`plugin.yaml`（`rui_compat ">=0.8.1 <0.9.0"`、trust trusted）、`devices/example.yaml`、
+  `adapter.py`（八方法骨架 + TODO）、`tests/test_contract.py`（CLI 未合入时 skip+hint）、README 中英、LICENSE、.gitignore。
+  验证：house-ear loader → `OK example-plugin 0.1.0`；`rui plug-test ../rui-plugin-template --adapter …:build`
+  → **EXIT=0，pass=20 fail=0 warn=0 skip=1**；禁用内容 grep 0 命中、仓干净。`rui-adapter-check` 合入后由 verifier 补跑模板契约测试。
+- A（docs）、B（CLI）仍在进行中；下一步不变。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
 边界不变：**不发版/不 tag/不 release/不动生产**；只 commit 到 main，等下次核心发版自然带上。
