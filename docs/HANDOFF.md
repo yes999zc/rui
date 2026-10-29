@@ -267,8 +267,26 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   （`RUI_ADAPTER_PLUGINS="example-speaker=adapter:build"` + `adapter: example-speaker`），
   或在最小 config 的 device 下加 `params: {plug_id: example-plugin}`；并把 `status_reason=ready` 纳入验收断言。
   路线 A 实测正确无需改。
-- **待做**：impl-obs 修模板 README 路线 B（一行级）→ verifier 复跑受影响项 + reviewer 复评
-  → task-29/task-31 complete → task-30 收口。
+- **最终结果 ✅（2026-10-29 11:0x 收口）**
+  - **task-29 reviewer-code：PASS**（9 文件/链接 166、code refs 139、0 问题；模板 `ae1d19f` route B
+    在隔离环境独立起服务：`status_reason=ready`、`plugin_id=example-plugin`、`model_id=example-speaker`、
+    `capabilities.playback.declared=true`、无 `no usable model manifest` 警告）。
+  - **task-31 verifier-release：VERIFIED**（全量 `2004 passed / 6 skipped`、ruff 绿；CLI 模板 22 PASS/exit 0、
+    FAIL fixture exit 1；模板契约测试 1 passed；路线 A/B 抽验均 PASS；链接/锚点 0 问题；四仓 clean 且
+    `HEAD==origin/main`）。
+  - **「外人 30 分钟上手」自测记录**：跑者 = verifier-release（独立，只读 quickstart + 模板 README）；
+    文档精读 ≈4 min + 执行 **20 s**，总 ≈4.5 min（<30 min）；流程：照抄文件→起服务 1 s 内 /health 200→
+    出声 5×3200B=16000B→收声 757 帧→`rui plug-test` 20/0/0/1→SIGINT 优雅关停。
+    **首轮卡点**：模板 README route B 的 adapter 注册名与 §4 config 不可运行（`plug_unresolved` /
+    `Permission denied`）——已修 `491a174`+`ae1d19f`；house docs 7 处语义/引用/行号——已修 `4bf941a`；
+    修后复跑无卡点。
+  - **交付物**：A `docs/bridge-developer/` 5 篇（house `7bbe973` + `4bf941a`）；B `rui-adapter-check`
+    （house `c431f70`，`[project.scripts]` + 12 tests）；C 新仓
+    https://github.com/yes999zc/rui-plugin-template （MIT，`afee821`→`491a174`→`ae1d19f`）；D 两处 README 链接
+    （house `7bbe973`、桥 `c0bd0de`）。
+  - **边界**：未发版、未 tag、未 release、未动生产；桥 `rui_compat` 未变；新增依赖 0。
+  - **遗留（非阻塞）**：文档 `#L` 行号锚点随核心代码漂移，后续改 `src/rui` 时需同步；
+    `rui-adapter-check` 尚未进 tag（下次核心发版自然带上）；模板自带的 CLI 测试在 CLI 不在 PATH 时 skip+hint。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
 边界不变：**不发版/不 tag/不 release/不动生产**；只 commit 到 main，等下次核心发版自然带上。
