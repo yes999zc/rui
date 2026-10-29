@@ -357,26 +357,40 @@ def _dbfs(samples) -> float:
     return 20.0 * math.log10(max(peak, 1e-5))
 
 
+# task-9 (0.8.8): the standby threshold is relative to the room, not absolute. On the
+# production deployment the ambient peaks sat at -35..-49 dBFS, so the absolute -60
+# threshold never saw "quiet" and the gate never suspended. The floor tracks the room:
+# down immediately (a quieter frame is the new floor), up slowly (EMA 0.01/frame) so a
+# passing word or door does not raise it. `audio.voice.standby_kws_db` stays the absolute
+# lower bound, so digital silence below it cannot be pulled down by a noisy stretch.
+STANDBY_KWS_FLOOR_RISE = 0.01
+STANDBY_KWS_FLOOR_MARGIN_DB = 6.0
+
+
 class StandbyKwsGate:
-    """task-6: run the streaming KWS only while there is something to hear.
+    """task-6/9: run the streaming KWS only while there is something to hear.
 
     `_capture_frames` used to feed every 20 ms block to the spotter - 50 inferences a
     second even on a silent microphone. That per-frame model work is the bulk of the
     plane's standby CPU on devices that keep their uplink open (2026-10-29: living 29 %,
     dot2 11 %, dot2-c 10 %; the physically muted dot2-b, which sends no uplink, sat at
     1 %). This gate watches the frame level `_frame_to_voice` has already computed (a
-    cheap RMS, not another model) and keeps the spotter cold while the block is below
-    `threshold_db`, after `hold_s` of continuous quiet.
+    cheap RMS, not another model) and keeps the spotter cold while the block is at or
+    below the current room floor plus a small margin, after `hold_s` of continuous quiet.
+
+    task-9: a fixed absolute threshold does not survive production ambient (-35..-49
+    dBFS). `floor_db` now tracks the room (fast down, slow EMA up) and the quiet test is
+    `rms_db < max(threshold_db, floor_db + STANDBY_KWS_FLOOR_MARGIN_DB)`, with
+    `threshold_db` (`audio.voice.standby_kws_db`) kept as the absolute lower bound. The
+    first frame at or above the effective threshold is a speech onset and resumes.
 
     Cold frames are counted and skipped. On the cold -> hot edge the caller resets the
     spotter and replays the preroll ring, so a wake word's onset is processed exactly as
     if the spotter had never stopped. The gate is deliberately fail-open: any activity
     (`engaged` - a turn, playback, a cue, a follow-up window: the caller decides) keeps
-    it hot, and the first frame at or above the threshold resumes it. A noisy room
-    never goes cold (no saving, no regression). The cost is documented in
-    `docs/standby-cpu-0.8.7.md`: a wake word quieter than `threshold_db` for its whole
-    duration is not seen, so the default stays well below speech and the knob is
-    configurable (`audio.voice.standby_kws_*`).
+    it hot. The cost is documented in `docs/standby-cpu-0.8.7.md`: a sound that never
+    exceeds the learned floor by the margin is treated as ambient, so a person speaking
+    at the room's own level for a long stretch is not a wake onset.
     """
 
     PROCESS = "process"
@@ -389,15 +403,35 @@ class StandbyKwsGate:
         self.threshold_db = float(threshold_db)
         self.hold_s = max(0.0, float(hold_s))
         self.hot = True
+        # Room floor estimate (dBFS). It starts at the absolute lower bound and is
+        # learned from the idle frames; see `_track_floor`.
+        self.floor_db = self.threshold_db
         # Observability: `skipped` is the number of frames the spotter never saw,
         # `suspends`/`resumes` count cold <-> hot edges (one log line each), and
         # `quiet_peak_db` is the loudest quiet frame that led to a suspend - the number
-        # 9哥 needs to tune `threshold_db` on a real device.
+        # 9哥 needs to sanity-check the learned floor on a real device.
         self.skipped = 0
         self.suspends = 0
         self.resumes = 0
         self.quiet_peak_db = -100.0
         self._quiet_since: float | None = None
+
+    @property
+    def effective_threshold_db(self) -> float:
+        """Max(absolute lower bound, learned floor + margin) - the silence line."""
+        return max(self.threshold_db, self.floor_db + STANDBY_KWS_FLOOR_MARGIN_DB)
+
+    def _track_floor(self, rms_db: float) -> None:
+        """Fast down, slow up: the floor follows a quieter room immediately.
+
+        An upward EMA of 0.01/frame (~2 s time constant at 20 ms frames) means one loud
+        word cannot make the room look noisy; a genuinely louder room is learned over a
+        few seconds and then its ambient is quiet for the gate.
+        """
+        if rms_db < self.floor_db:
+            self.floor_db = rms_db
+        else:
+            self.floor_db += STANDBY_KWS_FLOOR_RISE * (rms_db - self.floor_db)
 
     def observe(self, *, rms_db: float | None, engaged: bool, now: float) -> str:
         """Decide what to do with one frame. Returns a `PROCESS`/`SKIP`/`RESUME`/`RESTART`."""
@@ -424,15 +458,17 @@ class StandbyKwsGate:
             self.resumes += 1
             self.quiet_peak_db = -100.0
             return self.RESTART
-        if rms_db >= self.threshold_db:
+        self._track_floor(rms_db)
+        if rms_db >= self.effective_threshold_db:
+            # Speech onset (or a louder room): full rate from this frame on.
             self._quiet_since = None
             self.quiet_peak_db = -100.0
             if self.hot:
                 return self.PROCESS
             self.hot = True
             self.resumes += 1
-            # Speech onset: the caller replays the preroll ring before this frame, so
-            # neither side of the threshold crossing loses samples.
+            # The caller replays the preroll ring before this frame, so neither side of
+            # the threshold crossing loses samples.
             return self.RESUME
         # Quiet frame.
         if not self.hot:
@@ -1421,9 +1457,10 @@ class AudioPlane:
         writer: asyncio.StreamWriter,
         connected: asyncio.Event,
     ) -> None:
-        """Feed one frame to the KWS/probe, honouring the standby gate (task-6).
+        """Feed one frame to the KWS/probe, honouring the standby gate (task-6/9).
 
-        The gate only drops frames below `audio.voice.standby_kws_db` for longer than
+        The gate only drops frames at or below the learned room floor plus a margin
+        (never below `audio.voice.standby_kws_db`) for longer than
         `standby_kws_hold_ms` and while nothing else is happening; earlier blocks are
         already in the preroll ring (the caller keeps the current frame right after
         this call, unchanged), so a resume replays the onset it skipped. A configured
@@ -1445,8 +1482,9 @@ class AudioPlane:
             if gate.suspends != suspends:
                 log.info(
                     "kws standby: suspended after %.1f s at or below %.0f dBFS "
-                    "(quiet frames peaked at %.0f dBFS)",
-                    gate.hold_s, gate.threshold_db, gate.quiet_peak_db,
+                    "(room floor %.0f dBFS, quiet frames peaked at %.0f dBFS)",
+                    gate.hold_s, gate.effective_threshold_db, gate.floor_db,
+                    gate.quiet_peak_db,
                 )
             elif action == StandbyKwsGate.RESUME:
                 log.info("kws standby: resumed on speech")
@@ -3931,6 +3969,14 @@ class AudioPlane:
         level_peak = LEVEL_FLOOR_DBFS
         had_voice = False
         active_ticks = 0
+        # task-9: ambient alone must not produce the line. A window is worth reporting
+        # only when a person actually interacted in it: a wake (local or device), a
+        # finished utterance, or the VAD gate saw speech while it was armed. The
+        # baselines are re-read at every window boundary.
+        wake_base = self.wake_count
+        utterance_base = self.utterances
+        device_wake_base = self.device_wakes
+        speaking_seen = False
         while not self._stop.is_set():
             await asyncio.sleep(METRICS_EVERY_S)
             ticks += 1
@@ -3940,6 +3986,10 @@ class AudioPlane:
                 continue
             try:
                 snapshot = self.metrics()
+                if self.gate is not None and self.gate.speaking:
+                    # Sampled per metrics tick; short utterances are covered by
+                    # `utterances` below, this catches a turn still being spoken.
+                    speaking_seen = True
                 # A number nobody can read is not a measurement: every threshold argument
                 # so far compared hit levels with nothing. The window's peak is reported
                 # once per LEVEL_LOG_EVERY ticks (30 s), not every 2 s - the old cadence
@@ -3950,18 +4000,26 @@ class AudioPlane:
                     had_voice = True
                     active_ticks += 1
                 if ticks % LEVEL_LOG_EVERY == 0:
-                    # task-5: only a window that actually contained voice is
-                    # reported; an idle window is silent in the log too. "active"
-                    # is the speech-bearing part of the 30 s window (at most
-                    # METRICS_EVERY_S * LEVEL_LOG_EVERY), never the whole window -
-                    # a full-scale number is what made the old line look like
-                    # clipping at standby.
-                    if had_voice and level_peak > LEVEL_LOG_MIN_DBFS:
+                    # task-5: only a window that actually contained voice is reported;
+                    # task-9: and only if a wake/utterance/active gate proves someone
+                    # was interacting. A living room's ambient peaks (-35..-49 dBFS) are
+                    # not a measurement of speech and used to fill 3-4 devices x 2/min.
+                    interacted = (
+                        self.wake_count != wake_base
+                        or self.utterances != utterance_base
+                        or self.device_wakes != device_wake_base
+                        or speaking_seen
+                    )
+                    if interacted and had_voice and level_peak > LEVEL_LOG_MIN_DBFS:
                         log.info("[level] voice peak %.1f dBFS (active %.0f s)",
                                  level_peak, METRICS_EVERY_S * active_ticks)
                     level_peak = LEVEL_FLOOR_DBFS
                     had_voice = False
                     active_ticks = 0
+                    wake_base = self.wake_count
+                    utterance_base = self.utterances
+                    device_wake_base = self.device_wakes
+                    speaking_seen = False
                 writer.write(encode_json(snapshot))
                 await writer.drain()
             except (ConnectionResetError, BrokenPipeError):

@@ -700,25 +700,27 @@ def _audio_fields() -> list[dict]:
          "改完重启音频面。",
          "Silero VAD model file (fetch-models). Empty = no segmentation: a wake is never "
          "transcribed. Restart the audio plane.", None, True),
-        # task-6 (0.8.7): standby CPU. The spotter runs per frame today, which is the
-        # bulk of the plane's idle CPU on a device that keeps its uplink open. Cold
-        # means "below standby_kws_db for standby_kws_hold_ms, with no turn/playback";
-        # the first louder frame reopens it and the preroll ring restores the onset.
+        # task-6/9 (0.8.7/0.8.8): standby CPU. The spotter runs per frame today, which is
+        # the bulk of the plane's idle CPU on a device that keeps its uplink open. Cold
+        # means "below the silence line (max(standby_kws_db, room floor+6)) for
+        # standby_kws_hold_ms, with no turn/playback"; the first louder frame reopens it
+        # and the preroll ring restores the onset.
         ("standby_kws_gate", "待机唤醒门控", "Standby KWS gate", "bool", None, None,
-         "待机（无唤醒词、无问答、无播放）时，麦克风电平持续低于阈值就暂停唤醒模型，"
-         "有声音立即恢复并回灌预录音频，唤醒词开头不丢。关掉 = 恢复常开（CPU 高）。"
+         "待机（无唤醒词、无问答、无播放）时，麦克风电平持续低于静音线就暂停唤醒模型；"
+         "静音线 = max(本组 standby_kws_db, 自动学习的房间底+6 dB)。有声音立即恢复并回灌"
+         "预录音频，唤醒词开头不丢。关掉 = 恢复常开（CPU 高）。改完重启音频面。",
+         "Suspend the wake model while standby audio stays below the silence line, "
+         "max(standby_kws_db, learned room floor + 6 dB); the first louder frame resumes it "
+         "and replays the preroll, so the wake word's onset is kept. Off = always-on "
+         "(higher idle CPU). Restart the audio plane.", None, True),
+        ("standby_kws_db", "待机门控绝对下限", "Standby gate lower bound", "number", -90, -20,
+         "静音线 = max(本值, 房间底+6 dB)；房间底由空闲帧自动学习。默认 -60 是绝对下限，"
+         "只在极安静房间（房间底+6 < 本值）才起作用；主调参请用 standby_kws_hold_ms。"
          "改完重启音频面。",
-         "Suspend the wake model while standby audio stays below the threshold; the first "
-         "louder frame resumes it and replays the preroll, so the wake word's onset is kept. "
-         "Off = always-on (higher idle CPU). Restart the audio plane.", None, True),
-        ("standby_kws_db", "待机门控阈值", "Standby gate threshold", "number", -90, -20,
-         "低于这个电平（dBFS）持续一段时间即暂停唤醒模型。默认 -60 远低于正常说话，"
-         "房间噪声大时可能一直不暂停（不省电也不退化）；想更省电可调到 -50 左右，"
-         "但不要高到接近唤醒词本身。改完重启音频面。",
-         "Audio below this level (dBFS) for the hold time suspends the wake model. The "
-         "default -60 is far below speech; a noisy room may never suspend (no saving, no "
-         "regression). -50 saves more but must stay below the wake word itself. Restart "
-         "the audio plane.", _t("dBFS", "dBFS"), True),
+         "Silence line = max(this value, room floor + 6 dB); the room floor is learned from "
+         "idle frames. The default -60 is an absolute lower bound, so it only matters in "
+         "very quiet rooms (floor+6 < this value); use standby_kws_hold_ms as the main knob. "
+         "Restart the audio plane.", _t("dBFS", "dBFS"), True),
         ("standby_kws_hold_ms", "待机门控保持", "Standby gate hold", "number", 0, 10000,
          "连续安静多久才暂停唤醒模型（毫秒）。1000 ms 只是防句间停顿误暂停，不增加唤醒"
          "延迟（有声音立刻恢复）；0 = 第一个安静帧就暂停，更省电但切换更频繁。"

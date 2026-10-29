@@ -22,6 +22,17 @@
   需 `/1000` 转 `Track.duration` 秒。
 - 注意：`config.example.yaml` 不写 RFC1918 地址（secret-scan soft 规则），示例用
   `joke-svc.example.lan`；生产真实地址只写部署机 config/override。
+- **0.8.7 已发布并部署（2026-10-29 14:15）**：tag `v0.8.7` → `439f973`；CI 四绿
+  （main 439f973: ci/security/secret-scan/docker-publish；tag: 后三者）；镜像 index
+  `sha256:6a6da058…` / amd64 `sha256:29120924…`。生产 `/health` version=0.8.7、
+  devices=4、device_errors=0、plugins registered [dot2,lx06]。回滚锚：0.8.6 amd64
+  `sha256:9ad8e03f…6cbc`；备份 `rui-dot2-override.yml.bak-20261029-1410`、
+  `config/config.yaml.bak-20261029-1410`、`plugins.bak-20261029-1410.tar.gz`（root 600）。
+- **P1 部署后实测问题（task-6 已 reopen）**：绝对阈值 `-60` 在本机 ambient 峰值
+  -35…-49 下**从不挂起**（无 `kws standby: suspended`），容器 CPU 仍 57.6%；临时把
+  `standby_kws_db=-20` 强制冷后 57.6%→34.5%，证明 KWS 是主成本。`voice peak` 仍每
+  30 s 打 ambient。已建 task-9：相对噪声底门控 + 仅交互窗口打点，计划 0.8.8 hotfix；
+  `<20%` 需要 P2（AEC/resample profile，本批未做）。
 
 2026-10-29 · 本轮收口到 **task-5（第三方桥开发者入口包）** · 下一批从 **task-6「music 外部音源钩子」** 开始
 

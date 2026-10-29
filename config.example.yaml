@@ -96,12 +96,14 @@ audio:
     kws_keywords_file: /config/keywords.txt
     kws_probe_file: ""
     kws_chunk: 8
-    # Standby KWS gate (0.8.7, docs/standby-cpu-0.8.7.md): while nothing is happening,
-    # a microphone below `standby_kws_db` for `standby_kws_hold_ms` stops feeding the
-    # wake model (the biggest per-frame cost when idle). The first louder frame resumes
-    # it and replays the preroll ring, so the wake word's onset is not lost. A noisy
-    # room never goes cold: no saving, but no regression either. Threshold too high =
-    # missed wakes; keep it well below speech. Restart the audio plane after edits.
+    # Standby KWS gate (0.8.7/0.8.8, docs/standby-cpu-0.8.7.md): while nothing is
+    # happening, the spotter is fed only while the mic is above the silence line
+    # max(`standby_kws_db`, learned room floor + 6 dB). The room floor is tracked from
+    # idle frames (fast down, slow EMA up), so playback echo cannot raise it; the first
+    # frame above the line resumes the spotter and replays the preroll ring, so the wake
+    # word's onset is not lost. `standby_kws_db` is the absolute lower bound and only
+    # matters in very quiet rooms; use `standby_kws_hold_ms` as the main knob. Restart
+    # the audio plane after edits.
     standby_kws_gate: true
     standby_kws_db: -60.0
     standby_kws_hold_ms: 1000

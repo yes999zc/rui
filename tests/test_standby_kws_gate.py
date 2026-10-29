@@ -54,7 +54,8 @@ def test_the_first_frame_at_or_above_the_threshold_resumes_on_speech() -> None:
     assert gate.observe(rms_db=QUIET_DB, engaged=False, now=0.0) == StandbyKwsGate.SKIP
     assert gate.hot is False
 
-    # The comparison is >=: a frame exactly at the configured threshold is speech.
+    # The comparison is >=; with the learned floor at -80 the absolute -60 bound is
+    # the effective threshold, so a frame exactly at -60 is speech.
     assert gate.observe(rms_db=-60.0, engaged=False, now=0.02) == StandbyKwsGate.RESUME
     assert gate.hot is True
     assert gate.resumes == 1
@@ -75,14 +76,66 @@ def test_activity_resumes_without_replaying_the_quiet_ring() -> None:
     assert gate.resumes == 1
 
 
-def test_a_noisy_room_never_goes_cold() -> None:
+def test_ambient_above_the_absolute_threshold_is_learned_and_suspends() -> None:
+    """task-9: -40 dBFS is above the -60 absolute bound, but it is still the room.
+
+    The floor starts at the absolute lower bound and rises ~0.2 dB/frame at a
+    -40 dBFS ambient, so it needs ~2.4 s before -40 is below floor+6. With hold 0 the
+    gate suspends on the first frame that qualifies.
+    """
     gate = quiet_gate(hold_s=0.0)
-    for i in range(50):
-        assert gate.observe(rms_db=-55.0, engaged=False, now=i * 0.02) == (
-            StandbyKwsGate.PROCESS
-        )
+    for i in range(100):  # 2 s: not learned yet
+        gate.observe(rms_db=-40.0, engaged=False, now=i * 0.02)
     assert gate.hot is True
-    assert gate.skipped == 0
+    for i in range(100, 150):  # up to 3 s
+        gate.observe(rms_db=-40.0, engaged=False, now=i * 0.02)
+    assert gate.hot is False
+    assert gate.suspends == 1
+    assert gate.skipped > 0
+    assert gate.floor_db > -60.0
+    assert gate.effective_threshold_db > -45.0
+
+
+def test_ambient_with_the_default_hold_suspends_within_a_few_seconds() -> None:
+    gate = quiet_gate(hold_s=1.0)
+    for i in range(200):  # 4 s: ~2.4 s to learn the floor + 1 s hold
+        gate.observe(rms_db=-40.0, engaged=False, now=i * 0.02)
+    assert gate.hot is False
+    assert gate.suspends == 1
+
+
+def test_speech_above_the_learned_floor_resumes() -> None:
+    gate = quiet_gate(hold_s=0.0)
+    for i in range(150):
+        gate.observe(rms_db=-40.0, engaged=False, now=i * 0.02)
+    assert gate.hot is False
+    # -15 dBFS is 25 dB above the learned -40 room: a speech onset, not ambient.
+    assert gate.observe(rms_db=-15.0, engaged=False, now=3.0) == StandbyKwsGate.RESUME
+    assert gate.hot is True
+    assert gate.resumes == 1
+
+
+def test_the_absolute_threshold_is_still_the_lower_bound() -> None:
+    gate = quiet_gate(hold_s=0.0)
+    gate.observe(rms_db=-80.0, engaged=False, now=0.0)
+    assert gate.floor_db == -80.0
+    assert gate.effective_threshold_db == -60.0  # floor+6 = -74, capped at -60
+    assert gate.hot is False
+    assert gate.observe(rms_db=-55.0, engaged=False, now=0.02) == StandbyKwsGate.RESUME
+
+
+def test_the_floor_drops_immediately_and_rises_slowly() -> None:
+    gate = quiet_gate(hold_s=10.0)  # stay hot so every frame goes through observe
+    for i in range(100):
+        gate.observe(rms_db=-40.0, engaged=False, now=i * 0.02)
+    raised = gate.floor_db
+    assert -60.0 < raised < -40.0
+
+    gate.observe(rms_db=-80.0, engaged=False, now=2.0)
+    assert gate.floor_db == -80.0  # down immediately
+
+    gate.observe(rms_db=-40.0, engaged=False, now=2.02)
+    assert abs(gate.floor_db - (-80.0 + 0.01 * 40.0)) < 1e-9  # one slow EMA step
 
 
 def test_a_disabled_gate_is_transparent() -> None:
@@ -201,6 +254,34 @@ def test_a_wake_word_arriving_while_cold_is_still_fed_and_fires() -> None:
     # stamp: the hit position is the same as the always-on path.
     assert wakes[0].ts_ms == 40.0
     assert plane.standby_kws.skipped == 2
+
+
+def test_ambient_then_speech_resumes_and_replays_the_ring() -> None:
+    plane = make_plane(hold_s=0.0)
+    wake = plane.wake
+    assert isinstance(wake, FakeWake)
+    blocks = [bytes([i % 256, 0]) * 320 for i in range(150)]
+    wake_block = b"wake-word-block"
+    wake.hit_block = wake_block
+
+    # 3 s of -40 dBFS room noise: loud in absolute terms, but the relative gate learns
+    # it as the floor and goes cold; the first speech frame must wake it, not stay cold.
+    drive(plane, [(blocks[i], -40.0, i * 20.0) for i in range(150)])
+    assert plane.standby_kws.hot is False
+    assert plane.standby_kws.skipped > 0
+    fed_before = len(wake.fed)
+
+    wakes = drive(plane, [(wake_block, -15.0, 3000.0)])
+
+    assert plane.standby_kws.resumes == 1
+    assert wake.resets == 1
+    # 500 ms preroll (25 frames) replayed in timestamp order, then the live frame.
+    replayed = wake.fed[fed_before:]
+    assert len(replayed) == 26
+    assert replayed[-2] == (2980.0, blocks[149])
+    assert replayed[-1] == (3000.0, wake_block)
+    assert [hit.keyword for hit in wakes] == ["你好小瑞"]
+    assert wakes[0].ts_ms == 3000.0
 
 
 def test_the_wake_hit_used_the_gate_not_a_stale_always_on_path() -> None:

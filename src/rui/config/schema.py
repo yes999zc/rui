@@ -356,20 +356,21 @@ class VoiceConfig(BaseModel):
     # 2 threads on the N100 kept three ONNX workers at 100%; one is enough for KWS
     # and leaves the other cores to AEC/VAD/control.
     kws_num_threads: int = Field(default=1, ge=1, le=4)
-    # Standby KWS gate (task-6, docs/standby-cpu-0.8.7.md). In true standby - no wake,
+    # Standby KWS gate (task-6/9, docs/standby-cpu-0.8.7.md). In true standby - no wake,
     # no turn, no playback - feed the streaming spotter only while the microphone is
-    # above the threshold; a silent room then costs no model inferences. On speech the
-    # gate reopens on the first frame at/above the threshold and replays the
-    # `wake_preroll_ms` ring into the spotter, so the wake word's onset is not lost.
-    # The default is well below speech (and below any wake word the spotter can hear):
-    # a noisy room simply never goes cold - the fail-open direction, no saving but no
-    # regression. 0 dBFS would be full scale; -100 dBFS is digital silence here.
+    # above the silence line, max(standby_kws_db, floor_db + 6 dB); a steady room then
+    # costs no model inferences. `floor_db` is tracked from idle frames only (fast down,
+    # slow EMA up), so a turn's or playback's own audio cannot raise it. The gate reopens
+    # on the first frame at/above the line and replays the `wake_preroll_ms` ring into
+    # the spotter, so the wake word's onset is not lost. `standby_kws_db` is the
+    # absolute lower bound: it only matters in very quiet rooms; `standby_kws_hold_ms`
+    # is the main knob. 0 dBFS is full scale; -100 dBFS is digital silence here.
     standby_kws_gate: bool = True
     standby_kws_db: float = Field(default=-60.0, ge=-90.0, le=-20.0)
-    # Continuous quiet needed before the spotter is suspended. One second does not add
-    # wake latency (the gate reopens on the first speech frame); it only stops a pause
-    # between words from suspending it. 0 suspends on the first quiet frame (more
-    # saving, more churn).
+    # Continuous quiet needed before the spotter is suspended; this is the main tuning
+    # knob. One second does not add wake latency (the gate reopens on the first speech
+    # frame); it only stops a pause between words from suspending it. 0 suspends on the
+    # first quiet frame (more saving, more churn).
     standby_kws_hold_ms: int = Field(default=1000, ge=0, le=10000)
     # Turn segmentation. Empty path disables it (wake fires, nothing is transcribed).
     vad_model_path: str = ""

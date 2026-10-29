@@ -18,6 +18,39 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.8] - 2026-10-29
+
+**Hotfix: the standby KWS gate now learns the room floor, and `voice peak` only logs
+interaction windows.** 0.8.7 shipped an absolute `-60 dBFS` threshold; the production
+mics' ambient peaks measured `-35..-49 dBFS`, so the gate never suspended (container
+idle stayed at 57.6%). Forcing it cold showed the real split: 57.6% -> 34.5%.
+No protocol or `rui_compat` change.
+
+### Fixed
+
+1. **Relative-floor standby gate.** `StandbyKwsGate` keeps `floor_db` (instant down,
+   0.01/frame EMA up, ~2 s); the silence line is
+   `max(audio.voice.standby_kws_db, floor_db + 6 dB)`. Ambient can therefore go cold,
+   while a speech onset resumes the spotter and replays the 500 ms preroll. The
+   configured `standby_kws_db` is now the **absolute lower bound** (mainly for very
+   quiet rooms); `standby_kws_hold_ms` is the main tuning knob.
+2. **`voice peak` only in interaction windows.** The 30 s log is emitted only when
+   `wake_count` / `utterances` / `device_wakes` grew or the VAD was speaking in the
+   window, and the peak is visible (> -55 dBFS). Pure-ambient windows are silent.
+   The line keeps `[level] voice peak … (active …)` and never prints `0.0 dBFS`.
+3. **Console/example/schema text** for `standby_kws_db` now describes the absolute
+   bound and the learned floor; the old "a noisy room never goes cold" claim is gone
+   (`docs/standby-cpu-0.8.7.md` §1.1/§3.1/§5.1/§6 updated with the real numbers).
+
+### Notes
+
+- **<20% idle CPU is not reached by this hotfix.** 0.8.7's forced-cold measurement
+  (34.5%) is the expected ceiling of the gate; the rest is per-frame AEC/resample
+  (P2, not in this batch). The gate saves KWS work only.
+- All 0.8.7 features are unchanged (private music sources, `local.tell_joke`,
+  music aliases, short replies after barge-in).
+- No `rui_compat` change; no plugin change.
+
 ## [0.8.7] - 2026-10-29
 
 **Theme: private music sources, a joke tool that never fails, and a quieter standby.**
