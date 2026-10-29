@@ -148,6 +148,10 @@ ack:
   # tone when the cap is exceeded.
   mode: tts              # none | earcon | tts (9哥 picked the spoken cue)
   text: 在呢。            # only used by mode: tts; rendered once at startup
+  # A barge wake plays one short earcon (same chime/chime_trim below, capped to a
+  # short length) instead of the spoken cue: the person is already talking. false =
+  # silent barge (pre-0.9 behaviour); an old config without the key behaves as true.
+  barge_ack: true
   chime: soft2           # soft2 | blip | marimba | glass | piano
   chime_ms: 160          # 0 = the preset's natural length (soft2 500, woodblock 120)
   chime_trim: 1.0        # 0..1: the cue is already at the level the path likes

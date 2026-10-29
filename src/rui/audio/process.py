@@ -58,6 +58,8 @@ from ..log_setup import setup_logging
 from ..trace import now_ms
 from .ack import render_cached as render_ack
 from .aec import AecChain, AecUnavailable
+from .chime import PRESETS as CHIME_PRESETS
+from .chime import render as render_chime
 from .decimate import Decimator
 from .kws import KwsUnavailable, WakeHit, WakeProbe, WakeWord
 from .probe import (
@@ -348,6 +350,24 @@ ACK_TAIL_MS = 250
 # device-barge suppression on each wake. Buffered audio is delayed, not dropped, and
 # only a device whose own lead exceeds a measured 850 ms would need more.
 ACK_PLAYOUT_LEAD_MS = 850
+# T5: a barge used to play no cue at all, so a successful barge followed by a clipped
+# capture gave the user no feedback whatsoever (dot2-b, 2026-10-29). A barge still gets
+# an audible confirmation, but never the configured ack: a spoken 「我在。」 or the
+# 320 ms tone talks over the sentence the person is already saying (measured
+# 2026-10-26 12:07: barge -> cue -> seg 「在呢。」 -> reply -> barge again). The short
+# tone respects `ack.chime`/`ack.chime_trim`, is capped at BARGE_CUE_MAX_MS, and opens
+# no gate hold/echo window (see `_begin_wake_turn`). `ack.barge_ack: false` silences it.
+BARGE_CUE_MIN_MS = 80.0
+BARGE_CUE_MAX_MS = 160.0
+# Capture overdrive (T5): close-talk at the deployed +12 dB gain clips the microphone
+# and turns speech into harmonic noise (dot2-b: [seg] rms=0.0012 peak=0.0265 -> ASR
+# 「。」). A single loud sample is normal; a run of frames with a visible clipped share
+# is not. One burst = `OVERDRIVE_FRAMES` consecutive frames at/above the frame ratio,
+# counted once until the signal falls back below it (the rate limit only gates the log).
+OVERDRIVE_SAMPLE = 0.97
+OVERDRIVE_FRAME_RATIO = 0.01
+OVERDRIVE_FRAMES = 5
+OVERDRIVE_LOG_EVERY_S = 30.0
 log = logging.getLogger(__name__)
 
 
@@ -596,6 +616,10 @@ class AudioPlane:
         self.arbitrate = bool(cfg.multi_device.enabled)
         self._pending_wakes: dict[str, asyncio.Future[tuple[bool, str]]] = {}
         self._active_wake_id = ""
+        # Whether the currently armed wake barged over playback: a WakeIdle carries it
+        # so the control plane can answer a failed barge (turn.not_heard) while a
+        # normal silent wake stays silent (T5).
+        self._active_wake_barge = False
         self._wake_seq = 0
         self.wake_candidates = 0
         self.wake_admitted = 0
@@ -748,6 +772,15 @@ class AudioPlane:
         # by the metrics snapshot so each window is a fresh measurement.
         self.voice_peak_db: float | None = None
         self._peak_hold: float = 0.0
+        # T5 capture overdrive: cumulative burst counter, worst single-frame clipped
+        # share and the epoch of the last burst; the streak/active/log-clock fields are
+        # the sliding-window state that decides when a burst starts.
+        self.overdrive_count = 0
+        self.overdrive_ratio_max = 0.0
+        self.last_overdrive_at: float | None = None
+        self._overdrive_streak = 0
+        self._overdrive_active = False
+        self._overdrive_logged_at = 0.0
         self.ref_rms_db: float | None = None
         self.playback_s = 0.0
         self.playback_lead_s = 0.0
@@ -1192,6 +1225,30 @@ class AudioPlane:
             self.cfg.ack, self.device_cfg, self.audio_defaults
         )
 
+    def _barge_cue(self) -> np.ndarray:
+        """The short barge confirmation, built from the configured earcon settings.
+
+        A barge never speaks, even when `ack.mode: tts`: the person is mid-sentence.
+        It does respect the rest of the ack config - the same `chime` preset and
+        `chime_trim` as the normal cue - but the length is clamped to
+        [BARGE_CUE_MIN_MS, BARGE_CUE_MAX_MS] so the configured 320 ms tone (or a
+        700 ms natural preset) cannot cover the first word. Rendered at the global
+        playback rate, like `render_ack`; `_play_ack` resamples for a device override.
+        """
+        ack = self.cfg.ack
+        name = ack.chime
+        natural_ms = CHIME_PRESETS[name].natural_ms if name in CHIME_PRESETS else 0.0
+        if natural_ms <= 0.0:  # defensive: the schema validator already proves the name
+            name, natural_ms = "soft2", CHIME_PRESETS["soft2"].natural_ms
+        duration_ms = ack.chime_ms or natural_ms
+        duration_ms = min(max(duration_ms, BARGE_CUE_MIN_MS), BARGE_CUE_MAX_MS)
+        return render_chime(
+            name,
+            rate=self.cfg.audio.playback.rate,
+            duration_ms=int(round(duration_ms)),
+            trim=ack.chime_trim,
+        )
+
     def _ack_gate_windows(self, audio: np.ndarray, mode: str) -> tuple[float, float]:
         """(cue_ms, hold_ms) for this wake's ack, in the gate's audio clock.
 
@@ -1331,7 +1388,44 @@ class AudioPlane:
         if mono.size:
             peak = float(np.abs(mono).max())
             self._peak_hold = max(self._peak_hold, peak)
+            self._observe_overdrive(mono)
         return np.clip(mono * 32768.0, -32768, 32767).astype("<i2").tobytes()
+
+    def _observe_overdrive(self, samples: np.ndarray) -> None:
+        """Count one overdrive burst when consecutive voice frames carry clipped samples.
+
+        Runs on the mono voice stream (post-AEC, the samples that reach ASR), not on the
+        raw mic: that stream is what a clipped capture destroys. `overdrive_ratio_max`
+        follows every frame; the burst needs `OVERDRIVE_FRAMES` consecutive frames at or
+        above `OVERDRIVE_FRAME_RATIO`, and the WARNING is limited to one per
+        `OVERDRIVE_LOG_EVERY_S` while the counter still moves.
+        """
+        if not samples.size:
+            return
+        ratio = float(np.count_nonzero(np.abs(samples) >= OVERDRIVE_SAMPLE)) / samples.size
+        if ratio > self.overdrive_ratio_max:
+            self.overdrive_ratio_max = round(ratio, 4)
+        if ratio < OVERDRIVE_FRAME_RATIO:
+            self._overdrive_streak = 0
+            self._overdrive_active = False
+            return
+        self._overdrive_streak += 1
+        if self._overdrive_streak < OVERDRIVE_FRAMES or self._overdrive_active:
+            return
+        # One event per burst: a sustained clipped sentence is one problem, not one per
+        # 100 ms. A fresh burst can only start after a frame below the threshold.
+        self._overdrive_active = True
+        self.overdrive_count += 1
+        now = time.time()
+        self.last_overdrive_at = now
+        if now - self._overdrive_logged_at < OVERDRIVE_LOG_EVERY_S:
+            return
+        self._overdrive_logged_at = now
+        log.warning(
+            "overdrive: device=%s clipped=%.1f%% peak=%.3f; the capture is saturating "
+            "(lower the device mic gain)",
+            self.device_id, ratio * 100.0, float(np.abs(samples).max()),
+        )
 
     async def _capture(
         self,
@@ -2431,14 +2525,27 @@ class AudioPlane:
             asyncio.create_task(adapter.pause_vendor_player("wake takeover"))
 
         # A cue answers a wake nobody is talking over. A barge is the opposite: the
-        # user is already mid-sentence, so 「在呢」 talks over their first words and its
-        # echo comes back through the microphone as the next turn - measured 2026-10-26:
-        # 12:07:03 barge -> cue -> 12:07:05 seg 「在呢。」 -> 12:07:07 reply -> 12:07:12
-        # barge again. No cue also means no cue-length gate hold and no cue/echo window
-        # below, so the speech the barge interrupted reaches ASR from its first word.
+        # user is already mid-sentence, so the configured cue (「在呢」 or the 320 ms
+        # tone) talks over their first words and its echo comes back through the
+        # microphone as the next turn - measured 2026-10-26: 12:07:03 barge -> cue ->
+        # 12:07:05 seg 「在呢。」 -> 12:07:07 reply -> 12:07:12 barge again. A barge
+        # still needs *some* audible confirmation (2026-10-29: barge + clipped capture
+        # = no cue and no words), so it gets one short tone, with no cue-length gate
+        # hold and no cue/echo window below: the speech the barge interrupted reaches
+        # ASR from its first word. The tone obeys every existing silence switch: off
+        # with `ack.barge_ack: false`, with `ack.mode: none` (the user turned the ack
+        # off) or while the device is muted.
         if barge:
-            audio = np.zeros(0, dtype="<i2")
-            mode = "none"
+            if (self.cfg.ack.barge_ack and self.cfg.ack.mode != "none"
+                    and not self.device_muted):
+                audio = self._barge_cue()
+                mode = "earcon"
+                self.ack_mode_effective = mode
+                self.ack_error = ""
+            else:
+                audio = np.zeros(0, dtype="<i2")
+                mode = "none"
+                self.ack_skipped += 1
             cue_ms = 0.0
             hold_ms = 0.0
         elif self.device_muted:
@@ -2487,6 +2594,7 @@ class AudioPlane:
             action=action,
         )
         self.last_wake = event
+        self._active_wake_barge = bool(barge)
 
         if self.gate is not None:
             if self.gate.armed:
@@ -2583,13 +2691,21 @@ class AudioPlane:
                 self._resume_after_speech()
         if idle_events != before_idle and connected.is_set():
             # The wake heard nothing: tell the control plane to close the session
-            # silently, otherwise the light/session stay in listening.
+            # silently, otherwise the light/session stay in listening. `barge` lets the
+            # control plane answer a failed barge; a normal silent wake stays silent.
             try:
                 writer.write(encode_json(WakeIdle(waited_ms=float(gate.cfg.max_wait_ms),
-                                               wake_id=self._active_wake_id)))
+                                               wake_id=self._active_wake_id,
+                                               barge=self._active_wake_barge)))
                 await writer.drain()
             except (ConnectionResetError, BrokenPipeError):
                 connected.clear()
+        if finished is not None:
+            # The wake formed a turn: a later follow-up idle is not a failed barge.
+            # Keeping the marker made the reply's own follow-up timeout emit
+            # WakeIdle(barge=True), so the control plane said「没听清」after a normal
+            # answer (reviewer-t4 reproduction, 2026-10-29).
+            self._active_wake_barge = False
         if finished is None or not connected.is_set():
             return
         utt, ts = finished
@@ -3463,6 +3579,10 @@ class AudioPlane:
                 self._music_hold_until = None   # nothing is held; resume next tick
             return
         if gate is not None and not gate.armed and not self._stop.is_set():
+            # A follow-up window is not the wake's listening window: never inherit a
+            # stale barge marker (its timeout must not answer「没听清」after a normal
+            # answer). Belt-and-braces with the clear when the utterance formed.
+            self._active_wake_barge = False
             log.info("follow-up gate open (%.1f s, %s)", wait_ms / 1000.0, reason)
             gate.arm(followup=True, max_wait_ms=wait_ms)
             await self._replay_followup_tail()
@@ -3898,6 +4018,11 @@ class AudioPlane:
                 None if self._peak_hold <= 1e-6
                 else round(20.0 * float(np.log10(self._peak_hold)), 1)
             ),
+            # T5: clipped capture is a measurement, not a one-off log line. Cumulative
+            # since the plane started; the ratio is the worst frame since then.
+            overdrive_count=self.overdrive_count,
+            overdrive_ratio_max=round(self.overdrive_ratio_max, 4),
+            last_overdrive_at=self.last_overdrive_at,
             barge_count=self.barges,
             probe_hits=self.probe_hits,
             ack_mode=self.ack_mode_effective,

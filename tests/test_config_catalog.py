@@ -125,6 +125,7 @@ def test_the_directory_offers_an_input_for_every_editable_parameter() -> None:
         "audio.playback.rate", "audio.playback.channels", "audio.playback.credit_window",
         "audio.aec.enabled", "audio.aec.filter_len", "audio.aec.cancel",
         "ack.mode", "ack.text", "ack.chime", "ack.chime_ms", "ack.max_ms",
+        "ack.barge_ack",
         "assistant.name", "assistant.persona", "assistant.system_prompt",
         "assistant.reply_max_chars", "assistant.reply_max_chars_search",
         "assistant.reply_max_chars_long", "assistant.filler_after_s",
@@ -153,6 +154,13 @@ def test_the_directory_offers_an_input_for_every_editable_parameter() -> None:
     assert set(values) == paths
     assert values["assistant.reply_max_chars"] == 120
     assert values["devices"][0]["id"] == "living"
+    # T5: the barge switch is a real console input, not a schema-only field.
+    barge = next(field for field in body["fields"] if field["path"] == "ack.barge_ack")
+    assert barge["kind"] == "bool"
+    assert barge["writable"] is True
+    assert barge["label"]["zh"] and barge["label"]["en"]
+    assert barge["effect"] == "restart"
+    assert values["ack.barge_ack"] is True
 
 
 def test_providers_catalog_and_the_three_chains_are_in_the_directory(tmp_path) -> None:

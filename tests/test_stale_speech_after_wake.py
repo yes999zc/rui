@@ -238,9 +238,91 @@ def _assert_silent_timeout_reported(plane: AudioPlane, writer: RecordingWriter) 
     assert plane.gate.idle_events == 1, "the silent timeout was not counted as an idle event"
     idles = [m for m in writer.messages() if isinstance(m, WakeIdle)]
     assert len(idles) == 1, f"no WakeIdle reached the control plane: {writer.messages()}"
+    # T5: a normal silent wake carries barge=False (the control plane stays silent).
+    assert idles[0].barge is False
     assert plane._stale_speech_blocked is False
     plane._accept_play_pcm(_chunk(np.zeros(1600, dtype="<i2").tobytes()))
     assert plane._speak_queued_s > 0.0, "a reminder after the timeout was dropped"
+
+
+def test_a_barge_wake_idle_carries_the_barge_flag(make_real_gate) -> None:
+    """T5: the control plane needs the barge flag to answer only a failed barge.
+
+    The plane remembers whether the current armed wake barged over playback and sends
+    it on WakeIdle; the control plane must not answer a normal silent wake (T1).
+    """
+    plane = _plane()
+    plane.gate = make_real_gate
+    writer = RecordingWriter()
+    plane._speak_queued_s = 1.0  # `_on_wake` classifies this wake as a barge
+    _wake(plane)
+    assert plane.last_wake is not None and plane.last_wake.barge is True
+    _real_gate_timeout_setup(plane)
+
+    _run_until_disarmed(plane, writer)
+
+    idles = [m for m in writer.messages() if isinstance(m, WakeIdle)]
+    assert len(idles) == 1, f"no WakeIdle reached the control plane: {writer.messages()}"
+    assert idles[0].barge is True, "the barge marker was lost on the WakeIdle"
+    assert plane.gate.armed is False
+
+
+def _form_utterance(plane: AudioPlane, writer: RecordingWriter) -> None:
+    """Feed speech then silence so the armed real gate returns one segment."""
+    speech = b"\x01\x00" * 160
+    silence = b"\x00\x00" * 160
+    FakeSilero.speech = True
+    for i in range(25):  # 250 ms spoken, past `min_speech_ms`
+        _feed(plane, speech, writer, float(i) * 10.0)
+    FakeSilero.speech = False
+    for i in range(25, 40):  # enough silence for the 100 ms end point
+        _feed(plane, silence, writer, float(i) * 10.0)
+        if not plane.gate.armed:
+            return
+    raise AssertionError("the utterance never closed")
+
+
+def test_a_followup_idle_after_a_barge_utterance_is_not_a_barge_idle(
+        make_real_gate) -> None:
+    """A barge that formed a turn must not answer its follow-up timeout.
+
+    Reviewer-t4 reproduction (2026-10-29): barge -> the user speaks -> answer -> the
+    reply's follow-up gate times out. The stale barge marker made that second WakeIdle
+    arrive as `barge=True`, so the control plane said「没听清」after a normal answer.
+    """
+    plane = _plane()
+    plane.gate = make_real_gate
+    writer = RecordingWriter()
+    plane._speak_queued_s = 1.0  # `_on_wake` classifies this wake as a barge
+    _wake(plane)
+    assert plane.last_wake is not None and plane.last_wake.barge is True
+    _real_gate_timeout_setup(plane)
+
+    _form_utterance(plane, writer)
+
+    assert plane.utterances == 1
+    assert not any(isinstance(m, WakeIdle) for m in writer.messages())
+    assert plane._active_wake_barge is False, "the barge marker survived the utterance"
+
+    # The follow-up window opens after the reply and times out with nothing said.
+    plane.gate.arm(followup=True, max_wait_ms=100)
+    _run_until_disarmed(plane, writer)
+
+    idles = [m for m in writer.messages() if isinstance(m, WakeIdle)]
+    assert len(idles) == 1, f"no WakeIdle reached the control plane: {writer.messages()}"
+    assert idles[0].barge is False, "a follow-up timeout was reported as a failed barge"
+
+
+def test_opening_a_followup_window_clears_a_stale_barge_marker(make_real_gate) -> None:
+    """Second guard: the follow-up arm itself drops any leftover barge marker."""
+    plane = _plane()
+    plane.gate = make_real_gate
+    plane._active_wake_barge = True  # e.g. an event lost before the utterance branch
+
+    asyncio.run(plane._arm_followup_later(0.0, reason="reply drained"))
+
+    assert plane.gate.armed is True, "the follow-up window was not opened"
+    assert plane._active_wake_barge is False
 
 
 def test_a_cue_excised_silent_timeout_reports_wake_idle(make_real_gate) -> None:

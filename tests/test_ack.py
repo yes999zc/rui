@@ -839,6 +839,11 @@ def test_wake_idle_is_a_control_message() -> None:
     msg = CONTROL.validate_json('{"type":"wake_idle","waited_ms":6000}')
     assert isinstance(msg, WakeIdle)
     assert msg.waited_ms == 6000
+    # T5 additive field: an older plane's payload (no `barge`) is a normal silent wake.
+    assert msg.barge is False
+    barge = CONTROL.validate_json('{"type":"wake_idle","waited_ms":6000,"barge":true}')
+    assert isinstance(barge, WakeIdle)
+    assert barge.barge is True
 
 
 def test_the_ack_gate_windows_use_the_render_rate_not_the_device_rate(tmp_path: Path) -> None:

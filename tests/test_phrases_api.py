@@ -27,7 +27,7 @@ def test_lists_every_template_with_the_slot_contract(client) -> None:
     api, _data = client
     body = api.get("/api/v1/phrases").json()
     assert body["effect"] == "next_phrase"
-    assert len(body["keys"]) == len(phrases.DEFAULTS) == 61  # +1 music.star_unsupported (T3)
+    assert len(body["keys"]) == len(phrases.DEFAULTS) == 62  # +1 turn.not_heard (T5), +1 music.star_unsupported (T3)
     assert any(key["advanced"] for key in body["keys"])
     assert body["file"].endswith("phrases.yaml")
     every = {key["key"] for key in body["keys"]}

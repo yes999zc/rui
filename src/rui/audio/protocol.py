@@ -235,6 +235,15 @@ class Metrics(BaseModel):
     barge_count: int = 0
     probe_hits: int = 0
     voice_peak_db: float | None = None
+    # Capture overdrive (T5): sample-level clipping in the voice stream that reaches
+    # ASR. `overdrive_count` counts bursts (>=5 consecutive frames whose |x| >= 0.97
+    # share is >= 1%), `overdrive_ratio_max` is the worst single-frame share (0..1),
+    # and `last_overdrive_at` is epoch seconds of the last burst (None = never seen).
+    # Additive with defaults: an older control plane ignores them and an older plane
+    # that never sends them still parses.
+    overdrive_count: int = 0
+    overdrive_ratio_max: float = 0.0
+    last_overdrive_at: float | None = None
     # mysoftvol (0-255): the only knob that changes loudness on this device. None = the
     # shell channel could not read it.
     device_volume: int | None = None
@@ -293,7 +302,7 @@ class Wake(BaseModel):
     ref_rms_db: float | None = None
     # Which acknowledgement actually played ("none" / "earcon" / "tts"): the config asks
     # for a mode, the plane reports what it could deliver. "none" = no cue this time
-    # (e.g. a barge wake).
+    # (barge_ack off, ack.mode=none, or a muted device; a normal barge plays "earcon").
     ack_mode: str = ""
     # Socket & Plug v1: "rui" for RUI's own KWS, "device" for a DeviceWake. The score,
     # threshold and barge hint travel so the turn trace can record why it fired; they
@@ -334,12 +343,19 @@ class WakeIdle(BaseModel):
     the session stayed "open" with the light in listening (measured 16:10:38: 「你好小瑞」
     then silence, and nothing ended). Closing is silent on purpose: the old build said
     goodbye 15 s after a silent wake and 9哥 asked for it to stop.
+
+    `barge=True` is the exception: that wake interrupted something and the person was
+    already talking, so the control plane answers「没听清」instead of leaving the failed
+    barge silent (2026-10-29 dot2-b). Additive with a default: an older plane that never
+    sends it parses as a normal silent wake.
     """
 
     type: Literal["wake_idle"] = "wake_idle"
     waited_ms: float = 0.0
     # Phase 2: which admitted candidate went idle (empty in single-plane mode).
     wake_id: str = ""
+    # This idle belongs to a wake that barged over playback (see the class docstring).
+    barge: bool = False
 
 
 class VendorSignalMsg(BaseModel):

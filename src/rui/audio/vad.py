@@ -72,6 +72,12 @@ CUE_POST_SILENCE_MS = 100.0
 # reply lining up with the cue's tail (a false positive that would cut the reply).
 CUE_ONSET_MS = 100.0
 CUE_ONSET_RATIO = 0.1
+# T5: sample-level clipping in one utterance. At or above this magnitude a sample is
+# treated as saturated (0.97 leaves headroom for dither/DC offset); a segment with a
+# larger clipped share gets `clipped=NN%` appended to its [seg] line. Diagnostic only:
+# the transcript pipeline is not changed.
+CLIP_SAMPLE = 0.97
+CLIP_LOG_RATIO = 0.05
 
 
 class VadUnavailable(RuntimeError):
@@ -593,8 +599,18 @@ class UtteranceGate:
         # ASR sees, not dBFS.
         rms = float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
         peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-        log.info("[seg] %.2f s rms=%.4f peak=%.4f speech=%.2f s",
-                 audio.size / self.rate, rms, peak, speech_ms / 1000.0)
+        # T5: a close-talk clip is invisible in rms/peak (a saturated capture can look
+        # quiet to an energy average). Annotate the segment only when the clipped share
+        # is material; the transcript path itself is untouched.
+        clipped = (
+            float(np.count_nonzero(np.abs(audio) >= CLIP_SAMPLE)) / audio.size
+            if audio.size else 0.0
+        )
+        clipped_note = (
+            f" clipped={clipped * 100.0:.0f}%" if clipped > CLIP_LOG_RATIO else ""
+        )
+        log.info("[seg] %.2f s rms=%.4f peak=%.4f speech=%.2f s%s",
+                 audio.size / self.rate, rms, peak, speech_ms / 1000.0, clipped_note)
         self.disarm()
         if speech_ms < self.cfg.min_speech_ms:
             log.info("utterance discarded: %.0f ms of speech", speech_ms)

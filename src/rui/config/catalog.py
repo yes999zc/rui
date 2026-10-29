@@ -799,6 +799,12 @@ def _audio_fields() -> list[dict]:
          "none = 不出声；earcon = 提示音（不占麦克风）；tts = 说话（会压麦克风约 1.2 s）。"
          "改完重启音频面。", "none = silent; earcon = a tone (no mic loss); tts = a "
          "spoken word (~1.2 s of muted mic). Restart the audio plane.", "restart", False),
+        ("barge_ack", "打断提示音", "Barge ack", "bool", None,
+         "打断唤醒时是否给一声短提示音（默认开）。tts 模式下打断也只出短音、不说话；"
+         "关掉后打断完全无声，应答方式为 none 或设备静音时同样不响。改完重启音频面。",
+         "Whether an interrupting wake gets a short earcon (default on). Even in tts "
+         "mode a barge only beeps, never speaks; off is silent, and `mode: none` or a "
+         "muted device also keeps it silent. Restart the audio plane.", "restart", False),
         ("text", "应答文字", "Ack text", "text", None,
          "tts 模式下说的那句（默认「我在。」）。控制在 max_ms 以内，否则会退回提示音。"
          "改了会自动重新合成，保存即生效。",

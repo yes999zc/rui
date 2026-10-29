@@ -95,6 +95,10 @@ ack:
   # Spoken cue by default (9哥's choice after the V2 work); `earcon` is the tone.
   mode: tts
   text: 在呢。
+  # A barge wake gets one short earcon (same `chime`/`chime_trim`, capped short)
+  # instead of the spoken cue, so it does not cover the sentence already in progress.
+  # false = the old silent barge. A config without this key behaves as true.
+  barge_ack: true
   chime: soft2
   chime_ms: 320
   chime_trim: 1.0

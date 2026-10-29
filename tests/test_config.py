@@ -33,6 +33,9 @@ def test_defaults_are_sane() -> None:
     assert cfg.audio.playback.channels == 1
     # The neutral core ack is the tone, not a spoken word.
     assert cfg.ack.mode == "earcon"
+    # T5: an interrupting wake is audible by default (`barge_ack: false` restores the
+    # pre-T5 silent barge; a config written before the key existed reads as true).
+    assert cfg.ack.barge_ack is True
     assert cfg.tools.expose == "domain"
 
 
@@ -111,6 +114,32 @@ def test_shipped_example_config_parses() -> None:
     # native rate (LX06 48000) wins. See the wire-rate section of docs/audio-pipeline.md.
     assert cfg.audio.capture.rate == 16000
     assert "rate" not in cfg.audio.capture.model_fields_set
+    # T5: an interrupting wake is audible by default; both shipped files state it.
+    assert cfg.ack.barge_ack is True
+
+
+def test_barge_ack_is_optional_and_defaults_to_true(tmp_path) -> None:
+    """Backward compatibility: an old config has no ack.barge_ack and still parses.
+
+    The key is additive, so every installed config.yaml predating T5 keeps working -
+    and gets the new audible barge (the user can turn it off explicitly).
+    """
+    from ruamel.yaml import YAML
+
+    for relative in ("src/rui/config/template.yaml", "config.example.yaml"):
+        raw = YAML(typ="safe").load((REPO / relative).read_text(encoding="utf-8"))
+        assert raw["ack"]["barge_ack"] is True, relative
+
+    path = tmp_path / "old.yaml"
+    path.write_text("version: 3\ndevices: []\n", encoding="utf-8")
+
+    cfg = load_config(path)
+    assert cfg.ack.barge_ack is True
+    assert "barge_ack" not in cfg.ack.model_fields_set
+
+    path.write_text("version: 3\ndevices: []\nack:\n  barge_ack: false\n",
+                    encoding="utf-8")
+    assert load_config(path).ack.barge_ack is False
 
 
 def test_the_shipped_template_leaves_capture_rate_to_the_manifest(tmp_path) -> None:

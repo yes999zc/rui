@@ -463,6 +463,14 @@ class AckConfig(BaseModel):
 
     mode: Literal["none", "earcon", "tts"] = "earcon"
     text: str = "我在。"
+    # A barge wake confirms itself with one short earcon instead of the configured
+    # cue: the person is already mid-sentence, so a spoken 「我在。」 or the 320 ms tone
+    # would cover their first word (measured 2026-10-26 12:07: cue -> seg 「在呢。」 ->
+    # reply -> barge again). False restores the pre-T5 silent barge (no feedback at
+    # all); `mode: none` and a muted device keep the barge silent too (existing ack
+    # semantics). The short tone still uses `chime`/`chime_trim`; `mode: tts` is not
+    # spoken here. Old configs without the key keep the new (audible) behaviour.
+    barge_ack: bool = True
     chime: str = "soft2"
     # 0 = the preset's natural length (soft2 500 ms, woodblock 120, windchime 700).
     # 320 ms, not 160: the client fills a 300 ms buffer before it starts playing, so a

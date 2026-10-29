@@ -24,9 +24,13 @@ class StubAdapter:
     def __init__(self) -> None:
         self.stops = 0
         self.played = 0
+        self.pcm_bytes = 0
+        self.pcm = b""
 
     async def play(self, pcm: bytes, sample_rate: int = 48000, channels: int = 1) -> None:
         self.played += 1
+        self.pcm_bytes += len(pcm)
+        self.pcm += pcm
 
     async def stop_playback(self, fade_ms: int = 120) -> None:
         self.stops += 1
@@ -124,34 +128,150 @@ def fake_ack(audio_ms: int = 33) -> tuple[list, object]:
     return calls, render
 
 
-def test_a_barge_wake_does_not_play_the_cue(monkeypatch) -> None:
-    """2026-10-26: the barge cue「在呢」 became the next turn (self-hearing loop).
+def test_a_barge_gets_a_short_cue_but_no_hold(monkeypatch) -> None:
+    """2026-10-26: the full barge cue「在呢」 became the next turn (self-hearing loop).
 
     Logged on the Dot2: 12:07:03 barge -> cue -> 12:07:05 seg 「在呢。」 -> 12:07:07
     reply -> 12:07:12 barge again. A barge means the user is already talking, so the
-    cue talks over their first words and its echo feeds ASR. No cue may be rendered,
-    and no cue-length hold or post-playback mute window may be opened for it.
+    configured cue would talk over their first words and its echo feeds ASR. But a
+    barge with no cue at all is the 2026-10-29 dot2-b failure: a clipped capture gave
+    the user no feedback whatsoever. One short earcon (>= 80 ms, from the configured
+    chime but capped) confirms the wake; no cue-length hold, echo reference or
+    post-playback mute window is opened for it.
     """
     calls, render = fake_ack()
     monkeypatch.setattr(process, "render_ack", render)
     plane, adapter = make_plane()
+    assert plane.cfg.ack.barge_ack is True, "the default must keep the barge audible"
     gate = RecordingGate()
     plane.gate = gate
     queue_seconds(plane, 2.0)
 
-    frames = run_wake_and_settle(plane)
+    frames = run_wake_and_settle(plane, settle_s=0.2)
 
-    assert calls == [], "a barge rendered an ack cue"
-    assert adapter.played == 0, "a barge handed cue audio to the speaker"
-    assert plane.ack_attempts == 0
-    assert plane._ack_task is None
+    assert calls == [], "a barge rendered the configured ack cue"
+    assert plane.ack_attempts == 1, "a barge started no cue at all"
+    assert adapter.played > 0, "a barge handed no cue audio to the speaker"
+    played_ms = adapter.pcm_bytes / 2 / plane.effective.playback.rate * 1000.0
+    assert played_ms >= process.BARGE_CUE_MIN_MS, (
+        f"the barge cue is {played_ms:.0f} ms, below the 80 ms floor")
+    assert played_ms <= process.BARGE_CUE_MAX_MS, (
+        f"the barge cue is {played_ms:.0f} ms, above the short-cue cap")
     wake = next(f for f in frames if f.get("type") == "wake")
     assert wake["barge"] is True
-    assert wake["ack_mode"] == "none", "the wake event must report that no cue played"
-    assert plane._wake_hold_until == 0.0, "the ack hold was opened for a cue-less barge"
+    assert wake["ack_mode"] == "earcon", "the wake event must report the tone that played"
+    assert plane._wake_hold_until == 0.0, "the cue opened an ack hold for a barge"
     assert plane._mic_mute_until == 0.0, "the barge opened a post-playback mute window"
-    assert gate.echo_reference is None, "a cue-less barge handed the gate a reference"
-    assert gate.holds == [], "a cue-less barge opened a gate hold"
+    assert gate.echo_reference is None, "the barge cue handed the gate a reference"
+    assert gate.holds == [], "the barge cue opened a gate hold"
+
+
+def _assert_silent_barge(plane, adapter, gate, frames, calls) -> None:
+    """The three silence switches share one contract: no cue, nothing else moves."""
+    assert calls == [], "the configured ack was rendered for a barge"
+    assert adapter.played == 0 and adapter.pcm_bytes == 0, (
+        "a silent barge still handed audio to the speaker")
+    assert plane.ack_attempts == 0
+    wake = next(f for f in frames if f.get("type") == "wake")
+    assert wake["barge"] is True and wake["action"] == "barge"
+    assert wake["ack_mode"] == "none", "the wake event must report the silent barge"
+    # Silencing the cue must not touch the barge path itself.
+    assert gate.arms == 1, "the barge did not arm the gate"
+    assert plane.preroll_replays == 1, "the barge skipped the pre-wake replay"
+    assert gate.holds == [], "a silent barge opened a gate hold"
+    assert gate.echo_reference is None
+    assert plane._wake_hold_until == 0.0
+    assert plane._mic_mute_until == 0.0
+
+
+def _barge_with(monkeypatch, configure) -> tuple:
+    calls, render = fake_ack()
+    monkeypatch.setattr(process, "render_ack", render)
+    plane, adapter = make_plane()
+    configure(plane)
+    gate = RecordingGate()
+    plane.gate = gate
+    queue_seconds(plane, 2.0)
+    frames = run_wake_and_settle(plane, settle_s=0.05)
+    return plane, adapter, gate, frames, calls
+
+
+def test_a_barge_ack_off_restores_the_silent_barge(monkeypatch) -> None:
+    """`ack.barge_ack: false` = the pre-T5 behaviour: no cue, nothing else changes."""
+    plane, adapter, gate, frames, calls = _barge_with(
+        monkeypatch, lambda p: setattr(p.cfg.ack, "barge_ack", False))
+
+    _assert_silent_barge(plane, adapter, gate, frames, calls)
+
+
+def test_ack_mode_none_keeps_the_barge_silent(monkeypatch) -> None:
+    """The user turned the ack off: a barge must not be the one sound left."""
+    plane, adapter, gate, frames, calls = _barge_with(
+        monkeypatch, lambda p: setattr(p.cfg.ack, "mode", "none"))
+
+    _assert_silent_barge(plane, adapter, gate, frames, calls)
+
+
+def test_a_muted_device_keeps_the_barge_silent(monkeypatch) -> None:
+    """device_muted is the device's own silence: even barge_ack=true plays nothing."""
+    plane, adapter, gate, frames, calls = _barge_with(
+        monkeypatch, lambda p: setattr(p, "device_muted", True))
+
+    _assert_silent_barge(plane, adapter, gate, frames, calls)
+
+
+def test_a_tts_ack_only_beeps_on_a_barge(monkeypatch) -> None:
+    """`ack.mode: tts` speaks on a normal wake; a barge must only beep (no TTS)."""
+    calls, render = fake_ack()
+    monkeypatch.setattr(process, "render_ack", render)
+    plane, adapter = make_plane()
+    plane.cfg.ack.mode = "tts"
+    plane.cfg.ack.text = "我在。"
+    gate = RecordingGate()
+    plane.gate = gate
+    queue_seconds(plane, 2.0)
+
+    frames = run_wake_and_settle(plane, settle_s=0.2)
+
+    assert calls == [], "a barge rendered the tts ack instead of the short tone"
+    wake = next(f for f in frames if f.get("type") == "wake")
+    assert wake["barge"] is True
+    assert wake["ack_mode"] == "earcon", "the barge must report the tone that played"
+    assert plane.ack_mode_effective == "earcon"
+    played_ms = adapter.pcm_bytes / 2 / plane.effective.playback.rate * 1000.0
+    assert process.BARGE_CUE_MIN_MS <= played_ms <= process.BARGE_CUE_MAX_MS, played_ms
+
+
+@pytest.mark.parametrize(("configured_ms", "expected_ms"), [(140, 140), (1000, 160), (0, 160)])
+def test_the_barge_cue_respects_the_configured_chime_but_stays_short(
+        monkeypatch, configured_ms, expected_ms) -> None:
+    """The short tone is the configured `ack.chime`, capped - not a hardcoded preset."""
+    calls, render = fake_ack()
+    monkeypatch.setattr(process, "render_ack", render)
+    plane, adapter = make_plane()
+    plane.cfg.ack.chime = "soft2"
+    plane.cfg.ack.chime_ms = configured_ms  # 0 = natural length (500 ms for soft2)
+    queue_seconds(plane, 2.0)
+
+    run_wake_and_settle(plane, settle_s=0.2)
+
+    played_ms = adapter.pcm_bytes / 2 / plane.effective.playback.rate * 1000.0
+    assert played_ms == pytest.approx(expected_ms, abs=2.0), (
+        f"configured chime_ms={configured_ms} produced {played_ms:.0f} ms")
+
+
+def test_a_barge_cue_uses_the_configured_trim(monkeypatch) -> None:
+    """`ack.chime_trim` still applies to the barge tone (quieter rooms)."""
+    plane, adapter = make_plane()
+    plane.cfg.ack.chime_trim = 0.5
+    queue_seconds(plane, 2.0)
+
+    run_wake_and_settle(plane, settle_s=0.2)
+
+    pcm = np.frombuffer(adapter.pcm, dtype="<i2").astype(np.float32)
+    peak = float(np.abs(pcm).max()) / 32768.0
+    # PEAK (0.12) * trim (0.5) = 0.06; the preset's own attack keeps it at the top.
+    assert 0.03 <= peak <= 0.08, f"the trim did not apply to the barge cue (peak={peak})"
 
 
 def test_a_quiet_wake_still_plays_the_cue(monkeypatch) -> None:
@@ -187,7 +307,7 @@ def test_a_barge_does_not_extend_the_cue_hold() -> None:
 
     run_wake(plane)
 
-    assert plane._wake_hold_until == before, "a cue-less barge moved the ack hold"
+    assert plane._wake_hold_until == before, "the barge cue moved the ack hold"
 
 
 def test_a_barge_still_arms_the_gate_and_replays_the_preroll() -> None:

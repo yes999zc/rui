@@ -385,6 +385,149 @@ def test_a_clarify_turn_that_skips_reply_finished_releases_the_turn(
         assert _next_wake_is_admitted(client, living, "w-after-clarify") == "wake_admit"
 
 
+def _pronounce(app, monkeypatch) -> list[str]:
+    """Replace the TTS path with a recorder; returns the lines `runner.say` got."""
+    said: list[str] = []
+
+    async def say(text, speak, trace, **kwargs):  # noqa: ANN001, ARG001
+        said.append(text)
+        return 0
+
+    monkeypatch.setattr(app.state.runner, "say", say)
+    return said
+
+
+def test_a_noise_transcript_answers_instead_of_dropping_the_turn(
+        tmp_path, monkeypatch) -> None:
+    """T5 (dot2-b 2026-10-29): a clipped capture -> ASR 「。」 -> audible「没听清」.
+
+    The old `noise, no turn` path released the latch and said nothing, so a person who
+    had just woken the speaker heard no cue and no answer at all.
+    """
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+        said = _pronounce(app, monkeypatch)
+
+        _utter(client.portal, app, living, "嗯。", monkeypatch)
+
+        assert said == ["没听清，你再说一遍。"], said
+        assert app.state.last_turn["tools"] == ["turn.not_heard"]
+        assert app.state.last_turn["reply"] == "没听清，你再说一遍。"
+        assert coordinator.arbiter.state.turn_open is False
+        assert app.state.runner.idle.active is True, "the repeat answer closed the session"
+        assert _next_wake_is_admitted(client, living, "w-after-noise") == "wake_admit"
+
+
+def test_an_empty_transcript_also_answers(tmp_path, monkeypatch) -> None:
+    """A wake with no usable words (empty/punctuation-only ASR) gets the same reply."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+        said = _pronounce(app, monkeypatch)
+
+        _utter(client.portal, app, living, "", monkeypatch)
+
+        assert said == ["没听清，你再说一遍。"], said
+        assert app.state.last_turn["tools"] == ["turn.not_heard"]
+        assert app.state.runner.idle.active is True
+
+
+def test_health_rows_expose_the_overdrive_metrics(tmp_path, monkeypatch) -> None:
+    """The new fields are additive and readable in /health per device."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        body = client.get("/health").json()
+        row = next(row for row in body["audio_devices"] if row["id"] == "living")
+        assert row["overdrive_count"] == 0
+        assert row["overdrive_ratio_max"] == 0.0
+        assert row["last_overdrive_at"] is None
+
+
+def test_a_barge_wake_idle_answers_once_and_keeps_the_session(
+        tmp_path, monkeypatch) -> None:
+    """9哥's T5 acceptance: only a **barge** silent wake gets「没听清」.
+
+    The person was already talking when the barge landed, so a failed barge that says
+    nothing is the reported failure. The latch still releases, the light goes off and
+    the idle countdown keeps running (the farewell is still the timeout's job); the next
+    normal WakeIdle must stay silent (T1 semantics unchanged).
+    """
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+        said = _pronounce(app, monkeypatch)
+
+        client.portal.call(living.on_wake_idle, WakeIdle(waited_ms=5000, barge=True))
+        time.sleep(0.1)  # the spoken line runs as a fire-and-forget task
+
+        assert said == ["没听清，你再说一遍。"], said
+        assert coordinator.arbiter.state.turn_open is False
+        assert app.state.runner.idle.active is True, "the barge answer closed the session"
+        assert app.state.last_turn["tools"] == ["turn.not_heard"]
+        assert living.led[-1] == "off"
+
+        # A normal (non-barge) silent wake is unchanged: no spoken line.
+        client.portal.call(living.on_wake_idle, WakeIdle(waited_ms=5000))
+        time.sleep(0.1)
+        assert said == ["没听清，你再说一遍。"], "a normal WakeIdle started speaking"
+
+
+def test_a_normal_wake_idle_stays_silent(tmp_path, monkeypatch) -> None:
+    """T1 regression: an ordinary silent wake says nothing until the idle goodbye."""
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        client.portal.call(living.on_wake, Wake(ts_ms=1.0, keyword="你好小瑞"))
+        said = _pronounce(app, monkeypatch)
+
+        client.portal.call(living.on_wake_idle, WakeIdle(waited_ms=5000))
+        time.sleep(0.1)
+
+        assert said == [], said
+        assert app.state.runner.idle.active is True
+
+
+def test_a_followup_idle_after_a_barge_turn_stays_silent(
+        tmp_path, monkeypatch) -> None:
+    """Only WakeIdle.barge=True speaks: the plane clears it once a turn has formed.
+
+    The chain reviewer-t4 flagged: barge wake -> user speaks -> follow-up timeout. Its
+    WakeIdle arrives with barge=False (plane-side clear), so the control plane must not
+    say「没听清」a second time after the normal answer.
+    """
+    FakeFleet.instances.clear()
+    app = _app(tmp_path, monkeypatch)
+    with TestClient(app) as client:
+        fleet = FakeFleet.instances[-1]
+        living = fleet.handle("living")
+        coordinator = app.state.wake_coordinator
+        client.portal.call(living.on_wake,
+                           Wake(ts_ms=1.0, keyword="你好小瑞", barge=True))
+        said = _pronounce(app, monkeypatch)
+
+        client.portal.call(living.on_wake_idle, WakeIdle(waited_ms=5000))
+        time.sleep(0.1)
+
+        assert said == [], "the follow-up timeout answered after the barge's own turn"
+        assert coordinator.arbiter.state.turn_open is False
+        assert app.state.runner.idle.active is True
+
+
 def test_a_normal_reply_still_releases_the_turn_through_reply_finished(
         tmp_path, monkeypatch) -> None:
     """Regression: an ordinary answer keeps its reply_finished (follow-up window)."""

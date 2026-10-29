@@ -72,6 +72,7 @@ DEFAULTS: dict[str, str] = {
     # A noise-only / empty transcript (a clipped close-talk capture, a cough): the
     # person still gets an answer instead of silence (measured 2026-10-29 on dot2-b:
     # barge + clipped capture -> 「。」 -> no cue and no words).
+    "turn.not_heard": "没听清，你再说一遍。",
     # --- volume (the speaker's own mixer) -----------------------------------
     "volume.set": "音量调到 {pct}%了。",
     # The write succeeded but the mixer could not be read back: never invent a

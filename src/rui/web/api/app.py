@@ -2486,6 +2486,11 @@ def _device_plane(app: FastAPI, device_id: str) -> dict:
         "wake_admit_timeouts": int(metrics.get("wake_admit_timeouts") or 0),
         "wake_rejected": dict(metrics.get("wake_rejected") or {}),
         "utterances": int(status.get("utterances") or 0),
+        # T5: clipped capture is visible in /health, not only in a rate-limited
+        # warning. Additive: a plane that never sends the fields reads as 0/None.
+        "overdrive_count": int(metrics.get("overdrive_count") or 0),
+        "overdrive_ratio_max": float(metrics.get("overdrive_ratio_max") or 0.0),
+        "last_overdrive_at": metrics.get("last_overdrive_at"),
     }
 
 
@@ -2516,6 +2521,9 @@ def _health_device_row(status: dict, device: DeviceConfig | None) -> dict:
         "wake_admit_timeouts": int(metrics.get("wake_admit_timeouts") or 0),
         "wake_rejected": dict(metrics.get("wake_rejected") or {}),
         "utterances": int(status.get("utterances") or 0),
+        "overdrive_count": int(metrics.get("overdrive_count") or 0),
+        "overdrive_ratio_max": float(metrics.get("overdrive_ratio_max") or 0.0),
+        "last_overdrive_at": metrics.get("last_overdrive_at"),
     }
 
 
@@ -3501,6 +3509,27 @@ def create_app(
                         coordinator.set_turn_open(False)
                         coordinator.touch(device_id)
 
+                async def _not_heard(reason: str, heard: str) -> None:
+                    """A noise-only/empty transcript still gets one spoken answer.
+
+                    Production 2026-10-29 (dot2-b): the barge cue was skipped, the
+                    close-talk capture clipped and ASR returned 「。」 - the turn was
+                    dropped silently, so the user heard nothing at all. Answer once,
+                    keep the session open (only the idle clock is touched): this asks
+                    the person to repeat, it is not a dismissal. The turn latch is
+                    released by the `_release_when_done` wrapper after this reply.
+                    """
+                    log.info("%s: %r -> asking to repeat", reason, heard)
+                    line = phrases.book.render("turn.not_heard")
+                    runner.idle.touch()
+                    spoken = await runner.say(line, _speaking(app, link), trace)
+                    _record_turn(app, {
+                        "transcript": heard, "reply": line, "audio_bytes": spoken,
+                        "error": "", "tools": ["turn.not_heard"], "stages": {},
+                    }, device_id)
+                    _light_after_audio(app, spoken, cfg.audio.voice.rate, live=link)
+                    traces.add(trace)
+
                 if vendor.muted():
                     # The speaker's own assistant is answering; answering too would
                     # double-reply to one sentence.
@@ -3527,8 +3556,9 @@ def create_app(
                     vendor.vendor_spoke("wake", clean)
                     return
                 if not clean.strip():
-                    # Only the wake word arrived: the wake residue case, not a request.
-                    _no_turn("utterance was wake residue only; no turn")
+                    # Only the wake word arrived: a wake with nothing behind it still
+                    # gets an answer instead of the old silent drop (T5).
+                    await _not_heard("utterance was wake residue only", clean)
                     return
                 if app.state.spoken.is_echo(clean):
                     # Our own answer came back through the arrays: measured 2026-10-22,
@@ -3536,9 +3566,11 @@ def create_app(
                     _no_turn("own voice heard back, no turn: %r", clean)
                     return
                 if rules.is_noise(clean):
-                    # 「嗯。」 after the wake word: measured on the real speaker, and it
-                    # used to become a whole turn ("嗯，你说。").
-                    _no_turn("noise, no turn: %r", clean)
+                    # 「嗯。」/「。」 after the wake word: measured on the real speaker, and
+                    # it used to become a whole turn ("嗯，你说。"). A clipped capture
+                    # makes this look like noise too, so answer instead of dropping it
+                    # silently (T5, dot2-b 2026-10-29).
+                    await _not_heard("noise, no turn", clean)
                     return
                 # A real request: from here this room owns the turn (volume/music/stop
                 # target it, and the idle goodbye follows it).
@@ -3822,6 +3854,37 @@ def create_app(
                 else:
                     log.info("wake without speech (%.1f s); idle goodbye in %.0f s",
                              waited_s, max(0.0, remaining_s))
+                if not bool(getattr(msg, "barge", False)):
+                    return
+                # A barge is the one silent wake that answers: the person was already
+                # talking when the wake landed (often the close-talk capture clipped and
+                # the gate heard nothing), so dead silence is the failure 9哥 reported
+                # (2026-10-29, dot2-b). A normal wake keeps the T1 semantics: silent
+                # until the session.timeout_s goodbye. The latch/light/idle clock above
+                # are already handled; this only adds the spoken line.
+                async def answer_barge_idle() -> None:
+                    trace = TurnTrace(device_id=link.ready.device_id if link.ready else "")
+                    line = phrases.book.render("turn.not_heard")
+                    try:
+                        runner.idle.touch()
+                        spoken = await runner.say(line, _speaking(app, link), trace)
+                        _record_turn(app, {
+                            "transcript": "", "reply": line, "audio_bytes": spoken,
+                            "error": "", "tools": ["turn.not_heard"], "stages": {},
+                        }, device_id)
+                        _light_after_audio(app, spoken, cfg.audio.voice.rate, live=link)
+                        traces.add(trace)
+                    except Exception as exc:  # noqa: BLE001 - feedback must not kill the app
+                        log.warning("barge wake-idle answer failed: %s", exc)
+
+                task = asyncio.create_task(answer_barge_idle(),
+                                           name=f"wake-idle-{device_id}")
+                pending = getattr(app.state, "wake_idle_tasks", None)
+                if pending is None:
+                    pending = set()
+                    app.state.wake_idle_tasks = pending
+                pending.add(task)
+                task.add_done_callback(pending.discard)
 
             link.on_wake = on_wake
             link.on_wake_idle = on_wake_idle
