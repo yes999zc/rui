@@ -1,5 +1,45 @@
 # HANDOFF — rui 阶段快照（v0.8.6 已部署生产）
 
+## 版本与契约
+
+- 生产：**rui 0.8.8**（tag `v0.8.8` → `2dac336`，2026-10-29 15:00 部署）。镜像 index
+  `sha256:8cf725fa…f71e` / amd64 `sha256:b18c37f9…2213`。0.8.7 的发布内容全部包含。
+- 0.8.8 是 0.8.7 的 hotfix：待机 KWS 门控改相对噪声底、`voice peak` 只打交互窗口。
+- `rui_compat` 不变（`>=0.8.1 <0.9.0`）；插件不变（dot2 1.3.5 / xiaoai 0.2.3）；
+  不改 barge/AEC/音量/followup/播放语义；无新依赖、无前端改动。
+- 回滚锚：0.8.7 index `sha256:6a6da058…3570` / amd64 `sha256:29120924…cbcc9`；
+  override 备份 `/vol1/rui/rui-dot2-override.yml.bak-20261029-1457`；
+  0.8.7 部署前备份 `rui-dot2-override.yml.bak-20261029-1410`、
+  `config/config.yaml.bak-20261029-1410`、`plugins.bak-20261029-1410.tar.gz`。
+
+## 已完成
+
+- **0.8.7 功能**（tag → `439f973`，已随 0.8.8 在生产）：`RUI_MUSIC_SOURCES` 外部音源钩子
+  （compat + 五方法 + 降级 + `docs/music-private-sources.md` + stub）、`local.tell_joke`
+  （joke-svc / 20 条兜底 / 两段谜语 / `audio_url` 下载播放，降级 audio→text→内置）、
+  音乐别名接主路径 + 控制台 names + 打断后短应答、错误 `standby_kws_db` 的 P0 日志修复。
+- **0.8.8 hotfix**：相对噪声底门控（floor 下限 -60、静音线 `max(db, floor+6)`、hold 主调参）
+  + `voice peak` 仅交互窗口；7 个文件、28+ 测试；reviewer PASS、verifier VERIFIED、
+  CI 四绿（main `2dac336`：ci/security/secret-scan/docker-publish；tag 后三者）。
+- **部署实测（0.8.8，静置 5 min）**：`/health` version=0.8.8、devices=4、device_errors=0、
+  plugins [dot2,lx06]；容器 CPU **50.4%**（0.8.6/0.8.7 为 57.6%）、load 0.81；
+  `kws standby: suspended` 出现（room floor -50…-52 dBFS）；`voice peak` 5 分钟内 **0 条**；
+  日志 0 次 `got 16000` / `play ValueError` / `audio_config_mismatch`。
+- 说明：强制冷（阈值 -20）的 CPU 下限是 **34.5%**，0.8.8 实际 50.4% 是因为 ambient 抖动
+  >6 dB 导致 suspend/resume 反复（P2 floor 颤振抑制）。**<20% 未达成**，需 P2 的
+  AEC/resample profile，不伪造。
+
+## 下一步
+
+1. 9哥 真机验收 0.8.8：待机 CPU 降幅（57.6→50.4，未到 <20%）、唤醒延迟/识别率 A/B、
+   播放/打断/音乐别名/短句应答/笑话。异常按上面的 0.8.7 digest 回滚。
+2. P2（下一批）：living 专项 py-spy profile、ref 通道退出 AEC 评估、floor 颤振抑制
+   （median/自适应 margin）；目标待机 <20%。
+3. B1/B2/B3（下一批）：ASR 热词/拼音二次匹配、话术三分、known-limitations。
+4. 0.8.8 的 `docs/standby-cpu-0.8.7.md` §1.1/§5.9/§7 已记录真实数字与调参口径。
+
+phase-close: task-8
+
 ## 2026-10-29 第二批（v0.8.7 候选，进行中）
 
 - 代码已提交并 push：`c3d6f15`（music 外部源钩子 `RUI_MUSIC_SOURCES` + `local.tell_joke`
