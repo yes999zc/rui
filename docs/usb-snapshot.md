@@ -88,13 +88,13 @@ Python 用 `command -v python3` 的结果；`/usr/bin/python3` 也可，脚本�
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/python3</string>
-    <string>/Users/&lt;you&gt;/AI_WorkSpace/01_Code/projects/house-ear/scripts/usb_snapshot_server.py</string>
+    <string>$HOME/AI_WorkSpace/01_Code/projects/house-ear/scripts/usb_snapshot_server.py</string>
     <string>--host</string><string>0.0.0.0</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/Users/&lt;you&gt;/Library/Logs/usb-snapshot.log</string>
-  <key>StandardErrorPath</key><string>/Users/&lt;you&gt;/Library/Logs/usb-snapshot.log</string>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/usb-snapshot.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/usb-snapshot.log</string>
 </dict>
 </plist>
 ```
@@ -122,8 +122,8 @@ vision:
 
 ```yaml
 vision:
-  # rui 跑在 NAS 容器里，Mac 的内网地址例如 192.168.5.10
-  usb_snapshot_url: "http://192.168.5.10:8766/snapshot.jpg"
+  # rui 跑在 NAS 容器里，Mac 的内网地址用 TEST-NET-1 占位（换成你自己的）
+  usb_snapshot_url: "http://192.0.2.10:8766/snapshot.jpg"
 ```
 
 服务本身无鉴权，URL 里**不要**带 token；需要鉴权请在反向代理层加。
