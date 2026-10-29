@@ -140,10 +140,16 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
 - 已看到：`/health` 200、**version=0.8.6**、devices=4、device_errors=0、warnings=[]、
   registered [dot2,lx06]；`/v2/channels` HTTP **200**；日志无 `got 16000` / `play ValueError` /
   `audio_config_mismatch`；四台平面 running=True、restarts=0。
-- **待收口**：`dot2`（儿童房）与 `dot2-b`（次卧）在 `/health` 仍显示 `speaker_connected=false`
-  （日志显示已 registered + data plane connected；0.8.4 期 dot2 曾 `token_missing`）。core 无 error、
-  不触发回滚；由 task-24 verifier 独立复核（含 `X-Auth-Token` 的设备 API、四台 say、控制器连接状态），
-  若确为设备侧 token/重连问题按「非本批代码路径」记录。
+- **D5 现状（需 9哥 知悉）**：`living`（客厅）与 `dot2-c`（主卧）`connected=true`；
+  `dot2`（儿童房）与 `dot2-b`（次卧）`connected=false`，`/api/v2/devices/<id>` 的
+  `status_reason.code=token_missing`（"no device token is configured"）。四台平面都 `running=true`、
+  `errors=0`、`restarts=0`；桥侧日志显示设备已 register、`X-EM-Token source: file`，
+  容器内 `secrets.resolve("RUI_DEVICE_TOKEN")=True`——即**核心侧 token 存在**，问题在设备回连时带的凭据
+  或设备端文件（0.8.4 D5 已记录 dot2 在部署前就是 `token_missing`；dot2-b 是本次重启后出现）。
+  本批代码路径不含设备 token/鉴权改动（core 差异只有 v2 web；桥差异只有计数日志），
+  **不触发回滚**；待 9哥 现场看两台设备 token/重连（或下一轮 verifier 用只读手段继续定位）。
+- **待收口**：task-24 verifier 全量/独立复验（tag/workflow 已绿；生产 D5 四台 say 需在两台
+  恢复连接后补做，或按「设备侧 token 非本批路径」记录）；task-25 HANDOFF 最终收口。
 - 待执行：task-24 独立 verifier 全量复验（含 tag/workflow/生产 D5 七项）；task-25 HANDOFF 最终收口。
 
 **按顺序执行（任务板 task-19…25）**
