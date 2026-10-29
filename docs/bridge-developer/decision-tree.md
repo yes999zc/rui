@@ -65,6 +65,10 @@ catalog picks it up as an operator root; `RUI_PLUGINS_DIR` is the same mechanism
 outside the image ([`src/rui/plugins/builtin.py:43-75`](../../src/rui/plugins/builtin.py#L43-L75)).
 See [`install-paths.md`](install-paths.md) for the trade-offs.
 
+Run the verification commands below **in the same shell** (or `export
+PYTHONPATH=/vol1/rui/plugins` again first): `rui plug-test` imports the bridge
+package, and a new shell without that `PYTHONPATH` will not find it.
+
 ### Verify
 
 1. Manifest + adapter contract:
@@ -141,7 +145,7 @@ my-device-plug/
 ([`src/rui/plugins/loader.py:205-244`](../../src/rui/plugins/loader.py#L205-L244)).
 There is no sidecar runner in the 0.8.x line: a `sidecar` runtime is reported as
 not implemented when the device is built
-([`src/rui/device/registry.py:289-312`](../../src/rui/device/registry.py#L286-L308)).
+([`src/rui/device/registry.py:286-310`](../../src/rui/device/registry.py#L286-L310)).
 The practical consequence: an in-process adapter is **your own audited code**;
 `trust: trusted` is a self-assertion, not an authorization check
 ([`compatibility.md`](compatibility.md)).

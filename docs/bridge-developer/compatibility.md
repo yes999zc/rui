@@ -147,7 +147,7 @@ Consequences for a bridge author:
   ([`src/rui/plugins/loader.py:231-236`](../../src/rui/plugins/loader.py#L231-L236));
   the 0.8.x line has no sidecar runner, so a third-party adapter is reported as
   not implemented rather than silently run
-  ([`src/rui/device/registry.py:286-312`](../../src/rui/device/registry.py#L286-L308)).
+  ([`src/rui/device/registry.py:286-310`](../../src/rui/device/registry.py#L286-L310)).
 - The env/entry-point channels are operator-only (`RUI_ADAPTER_PLUGINS`,
   `rui.adapters`). Never build these from console input, device reports or
   `devices[].params` ([`docs/socket-plug-v1.md` §4.4](../socket-plug-v1.md#L274)).

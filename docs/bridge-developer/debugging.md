@@ -7,7 +7,8 @@ this order — each step assumes the previous one passed:
 1. Did the adapter register?      → "adapter plugins: registered …" / "adapter plugin: …"
 2. Is the device described?       → /api/v2/devices/<id> (plug_unresolved, adapter_unavailable)
 3. Is the audio wire acceptable?  → audio_config_mismatch refusal / audio_wire
-4. Is there a live link?          → not_connected, token_missing, speaker_rejected
+4. Is there a live link?          → not_connected, token_missing
+                                     (speaker_rejected is a counter, not a status code)
 ```
 
 Where the logs are: the control process writes `<data_dir>/service.log` (0600,
@@ -271,11 +272,15 @@ but `connected` is false and `status_reason.code` is `not_connected`, or
 {"status_reason":{"code":"token_missing","message":"no device token is configured","hint":"Rotate a token on the device page, or set the token environment variable."}}
 ```
 
-How the status is built: the adapter/plane link report plus token configuration
-([`src/rui/web/api/app.py:2742-2766`](../../src/rui/web/api/app.py#L2742-L2766));
-`not_connected` requires a configured token and a running plane, so a wrong token
-shows up as `speaker_rejected` rather than "not connected"
-([`src/rui/web/api/app.py:2674-2686`](../../src/rui/web/api/app.py#L2674-L2686)).
+How the status is built: the adapter/plane link report plus whether a token is
+configured ([`src/rui/web/api/app.py:2742-2766`](../../src/rui/web/api/app.py#L2742-L2766)).
+`token_ok` means "a token is configured", not "the device presented a valid one", so
+a **wrong** token still reports `not_connected` — the device is simply never
+connected ([`src/rui/web/api/v2_api.py:1355-1384`](../../src/rui/web/api/v2_api.py#L1355-L1384)).
+`speaker_rejected` is a plane counter; the device test endpoint reads a non-zero
+count as its own `token_mismatch` check code, but neither is a device
+`status_reason` code ([`src/rui/audio/process.py:3601`](../../src/rui/audio/process.py#L3601),
+[`src/rui/web/api/app.py:2678-2688`](../../src/rui/web/api/app.py#L2678-L2688)).
 
 **What to check, in order:**
 

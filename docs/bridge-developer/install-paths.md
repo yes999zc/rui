@@ -119,7 +119,7 @@ Rules that matter for an install:
   [`src/rui/audio/process.py:3994-4000`](../../src/rui/audio/process.py#L3994-L4000)).
 - **Runtime defaults.** When the config omits `listen_port`/`token_env`, the
   manifest's `runtime.listen_port`/`runtime.token_env` fill them; an explicit
-  config value wins ([`src/rui/device/registry.py:245-284`](../../src/rui/device/registry.py#L254-L284),
+  config value wins ([`src/rui/device/registry.py:254-283`](../../src/rui/device/registry.py#L254-L283),
   [`src/rui/web/api/device_rules.py:51-101`](../../src/rui/web/api/device_rules.py#L51-L101)).
 
 **Use it when** the adapter is out-of-tree (a bridge repository), or when an
@@ -230,6 +230,6 @@ grep "adapter plugin:" /var/lib/rui/service.log
 ```
 
 The `/health` body exposes `adapter_plugins.registered`/`warnings` but not the
-warning text, by design ([`src/rui/web/api/app.py:4247-4251`](../../src/rui/web/api/app.py#L4247-L4251):
+warning text, by design ([`src/rui/device/loader.py:82`](../../src/rui/device/loader.py#L82):
 "the service only exposes names/counts, never tracebacks"). The browser console's
 log page reads `service.log`.

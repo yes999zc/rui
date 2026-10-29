@@ -50,7 +50,8 @@ $DATA_DIR/
   tone.wav                 # the demo signal, see step 3
 ```
 
-Create it, then save the three files below into `plugins/fake-device-plug/`:
+Create it, then save the three files below into `$DATA_DIR/plugs/fake-device-plug/`
+(the `$PLUG_DIR` used by the commands):
 
 ```bash
 WORK=/tmp/rui-bridge-demo
@@ -58,6 +59,10 @@ DATA_DIR="$WORK/data"
 PLUG_DIR="$DATA_DIR/plugs/fake-device-plug"
 mkdir -p "$PLUG_DIR/devices"
 ```
+
+The commands below assume this default `WORK`. If you change it, also update
+`system.data_dir` in the config (YAML does not expand shell variables) and the
+`tone.wav`/`--config` paths in the commands.
 
 `<data_dir>/plugs/<id>/plugin.yaml` is a **catalog** location: it is what the
 loader discovers ([`src/rui/plugins/loader.py:287`](../../src/rui/plugins/loader.py#L287))
@@ -339,8 +344,9 @@ audio:
   manifest `id`; for `RUI_ADAPTER_PLUGINS` it is the `name=` prefix. Both must
   agree with the config. See [`install-paths.md`](install-paths.md).
 
-Create a 0.5 s mono tone at the playback rate (the action endpoint only accepts
-files inside `data_dir`; [`src/rui/web/api/v2_api.py:2987-3005`](../../src/rui/web/api/v2_api.py#L2987-L3005)):
+Create a 0.5 s mono tone at the playback rate. The `audio.play` action only
+accepts files inside `data_dir` **or** `music.cache_dir` (default
+`/tmp/rui-music`) — [`src/rui/web/api/v2_api.py:2987-3005`](../../src/rui/web/api/v2_api.py#L2987-L3005):
 
 ```bash
 DATA_DIR=/tmp/rui-bridge-demo/data
