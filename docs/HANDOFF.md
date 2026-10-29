@@ -199,7 +199,10 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   `rui-adapter-check --adapter ../rui-plugin-template` 全 PASS、错实现明确 FAIL；三份指南互不矛盾且与
   contract.py / loader.py 逐条对得上；全量 pytest + ruff 绿。
 **边界**：不发版/不 tag/不 release（0.8.6 已发）；不改协议语义/rui_compat；不动生产。
-**状态**：0.8.6 部署验证（task-24/25）优先收口，然后执行本卡。
+**状态**：0.8.6 发布+部署已收口（VERIFIED-D5-EXCEPTION）；9哥 2026-10-29 10:30 确认开工本卡。
+执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
+→ task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
+边界不变：**不发版/不 tag/不 release/不动生产**；只 commit 到 main，等下次核心发版自然带上。
 
 ## 未完成 / 阻塞
 
