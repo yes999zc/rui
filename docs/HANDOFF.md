@@ -227,8 +227,20 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   （`fake device: capture frame #51 (20 ms, 320 samples)`）、**出声**（`audio.play` ok + 5×playback chunk + finished）、
   `/health` registered/audio_plane/speaker_connected 全绿；另实测 409 capability_unsupported、
   `audio_config_mismatch`、`plug_unresolved` 报错路径；进程已清理。文档断言→代码(file:line) 对照表见实现报告。
-- **A/B/C 三路全部 DONE**；`task-29`（reviewer-code 一致性评审）与 `task-31`（verifier-release 全量+CLI+
-  「外人 30 分钟上手」自测）**并行进行中**；通过后 task-30 收口。
+- **A/B/C 三路全部 DONE**；`task-29`（reviewer-code）与 `task-31`（verifier-release）并行验收。
+- **task-31 结果：FAILED(文档缺口)**（执行闸门全绿，但模板仓/quickstart 有实测阻断错）：
+  全量 `2004 passed / 6 skipped`、ruff 绿、CLI `22 PASS exit 0` / FAIL fixture `exit 1`、
+  模板契约测试 `1 passed` 均过；「外人 30 分钟上手」自测 **4.5 min 完成**（起服务→假设备→出声 16000B→收声 757 帧）。
+  需修（退回原实现者，verifier 只复跑受影响项）：
+  1) **G1（阻断）** 模板仓 `README.md:87/192` 与 `devices/example.yaml:5-6` 写 `devices[].adapter` 应等于 plugin id；
+     实测 `RUI_PLUGINS_DIR` 路线必须用**设备清单 id**（`example-speaker`），用 `example-plugin` 会
+     `unknown adapter`/`device_errors=1`。需改成「RUI_PLUGINS_DIR → device manifest id；RUI_ADAPTER_PLUGINS → name= 前缀」。
+  2) **G4（阻断）** 模板仓 `README.md` §4 config 片段不可启动（缺 `system.data_dir` / `web.host`，照抄即
+     `Permission denied /var/lib/rui` 或 0.0.0.0 无 token 拒绝）。需给完整最小 config 或链 quickstart §3/§4。
+  3) **G2/G3（轻微）** quickstart `:53` `plugins/fake-device-plug/` 应写 `$DATA_DIR/plugs/...`；
+     L299/L305 硬编码 `/tmp/rui-bridge-demo`，建议加「If you change `WORK`, update the two paths」。
+  修复后 verifier 复跑 G1 起服务变体 + G4 config + quickstart 核心流程即可。
+- 下一步：派 impl-obs 修模板仓 G1/G4、impl-devdocs 修 quickstart G2/G3 → verifier 复验 → task-30 收口。
 - 备注：`42ec7ba` 是 impl-ci 顺手写的 HANDOFF B 行（越界但内容属实，Lead 已接受）。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
