@@ -130,6 +130,25 @@ DEFAULTS: dict[str, str] = {
     "ha.scene_list": (
         "可用场景（离家/回家/关全屋灯这类组合动作优先用 service=scene.turn_on，"
         "entity_id 用下面这些 id；逐个实体是退路）：\n{list}"),
+    # --- camera (0.8.11 C block: local.look) --------------------------------
+    # One frame, described by the model. The label says which path the picture came
+    # from: the USB snapshot service captures now, HA's camera_proxy is the last frame
+    # it kept - claiming "now" for the latter would be a small lie every time.
+    "vision.label_live": "现在（实时）：{text}",
+    "vision.label_latest": "最近一次（HA 代理）：{text}",
+    # Nothing to describe: the fetch failed, the alias is unknown, or HA is not set up.
+    "vision.no_frame": "这台现在看不到画面。",
+    # The USB source is not configured at all - a deployment fact, not a failure.
+    "vision.no_usb": "书房那台摄像头还没接上。",
+    # The frame arrived, the vision round did not: never pretend the camera was dark.
+    "vision.describe_failed": "画面看到了，但没描述出来，等下再试。",
+    "vision.cooldown": "刚看过一次，等一下再看。",
+    # Prompt fragments (like the ha.* blocks they are console-editable, not spoken):
+    # the anti-invention rule is wording, so it lives here and not in the tool.
+    "vision.prompt": (
+        "只描述画面里确实能看到的东西，用一到两句话、不超过 80 个字；"
+        "看不清、全黑或者画面里没有人时就直说看不到，不要猜测，也不要编。"),
+    "vision.prompt_ask": "{prompt}另外回答这个问题：{question}",
 }
 
 # P6 rules (docs/phrasebook-editor.md §6). Speech keys are short by ear, prompt

@@ -114,6 +114,7 @@ from ...session.vendor import VendorWindow
 from ...tools import build_local_tools, build_scheduler
 from ...tools.contract import InteractionSpec, Permission, ToolResult, ToolSpec
 from ...tools.ha import HaBridge
+from ...tools.look import build_tools as build_look_tools
 from ...tools.mcp_manager import MCPManager, default_token_env
 from ...tools.mcp_manager import test_server as test_generic_mcp_server
 from ...tools.mcp_manifest import first_party_instances
@@ -851,7 +852,8 @@ def _build_panels(music_enabled: bool, music_source: str,
             ],
             "blocks": [
                 {"type": "config", "tab": "builtin", "tier": 4,
-                 "groups": ["tools.weather", "tools.news", "tools.search", "tools.joke"]},
+                 "groups": ["tools.weather", "tools.news", "tools.search", "tools.joke",
+                            "tools.vision"]},
                 {"type": "component", "tab": "mcp",
                  "component": "mcp-manager", "component_args": {}},
                 {"type": "component", "tab": "registry",
@@ -3292,6 +3294,11 @@ def create_app(
     # Memory is independent of the music layer: curated entries plus candidates.
     memory = MemoryStore(Path(cfg.system.data_dir) / "memory.json")
     local_tools = build_local_tools(cfg)
+    # `local.look` (0.8.11): the camera tool has no enable switch - with nothing
+    # configured it answers "not connected" instead of disappearing, and every
+    # `runner.set_tools(...)` path below reuses this one list, so it reaches the model
+    # wherever the other local tools do.
+    local_tools.extend(build_look_tools(cfg))
     for spec, _handler in local_tools:
         registry.register(spec)
     # Music: the tools exist only when the source is configured. The service sends
@@ -5408,16 +5415,31 @@ def create_app(
         The console's dry-run (docs/console.md mirror table) and the silent
         self-tests both need the exact path a model's call takes, minus the
         speaker: handler -> ToolResult -> InteractionSpec -> PhraseBook.
+
+        The name may be the registry name (`local.look`, `local.music_play`) or the
+        name the model calls (`look`, `music_play`). `runner._handlers` is keyed by
+        `spec.llm_name` (contract.py), so a registry name used to answer 404 for
+        exactly the tools whose prefix differs from the function name (0.8.10 gap,
+        fixed in 0.8.11). Rendering also needs the model name, hence `resolved`.
         """
         runner = app.state.runner
         name = str(patch.get("name") or "")
         args = patch.get("args") or {}
         handler = runner._handlers.get(name)
+        resolved = name
+        if handler is None:
+            for spec, _candidate in runner.tools:
+                if getattr(spec, "name", "") != name:
+                    continue
+                if spec.llm_name in runner._handlers:
+                    handler = runner._handlers[spec.llm_name]
+                    resolved = spec.llm_name
+                    break
         if handler is None:
             raise HTTPException(status_code=404, detail=f"no such tool: {name}")
         from ...tools.contract import ToolResult
         result = await handler(args if isinstance(args, dict) else {})
-        rendered = runner._render_tool_result(name, result) \
+        rendered = runner._render_tool_result(resolved, result) \
             if isinstance(result, ToolResult) else str(result)
         return {
             "name": name,

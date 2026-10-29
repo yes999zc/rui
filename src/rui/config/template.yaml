@@ -208,6 +208,24 @@ tools:
     # Per control call budget in seconds (2-60). Multi-entity calls go out serially in
     # batches of at most 8; after a timeout the state is read back before speaking.
     call_timeout_s: 10.0
+  # `local.look` (0.8.11): one camera frame, described in 1-2 sentences by the model.
+  # The frame is memory-only (never written to disk) and is sent as base64 to the
+  # configured LLM endpoint (every provider on the LLM chain sees it until one
+  # answers), so a look leaves this machine. 1 look per cooldown_s.
+  vision:
+    # The operator-run USB snapshot service on the Mac
+    # (scripts/usb_snapshot_server.py, default port 8766). Empty = no USB camera:
+    # the assistant says 「书房那台摄像头还没接上。」 instead of inventing a scene.
+    # For a container/cross-machine setup start the script with `--host 0.0.0.0` and
+    # point this at the Mac's LAN address; that endpoint has NO auth (see
+    # docs/local-look.md §5 for the exposure this implies).
+    usb_snapshot_url: ""       # e.g. http://<mac-lan-ip>:8766/snapshot.jpg
+    # Spoken alias -> Home Assistant camera entity id. The frame comes from HA's
+    # camera_proxy (the last frame it kept), so the reply says 「最近一次」.
+    # Empty by default: no alias resolves until a deployment writes its own map.
+    cameras: {}                # e.g. {"门口": "camera.example_door"}
+    timeout_s: 15.0            # 1-30 s for the WHOLE look: fetch + description share it
+    cooldown_s: 10.0           # 0-120 s between two looks (0 = no limit)
 music:
   # Off until a Navidrome/Subsonic server exists: the credentials file must be
   # provisioned first (url/user/password), never in this file.

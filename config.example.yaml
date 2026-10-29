@@ -277,6 +277,25 @@ tools:
     # Per control call budget (2-60 s). Multi-entity calls go out serially in batches of
     # at most 8, each with this budget; a timed-out batch is read back before speaking.
     call_timeout_s: 10.0
+  # `local.look` (0.8.11): 「看看书房」/「门口有人吗」 -> one camera frame, described in
+  # 1-2 sentences (<= 80 chars) by the configured LLM. Two sources:
+  #   * the USB camera through the operator-run snapshot service on the Mac
+  #     (scripts/usb_snapshot_server.py, default port 8766, GET /snapshot.jpg);
+  #   * a Home Assistant camera through GET <ha.base_url>/api/camera_proxy/<entity_id>
+  #     (the last frame HA kept - the reply says 「最近一次」, not 「现在」).
+  # Privacy: the frame is held in memory only (never written to <data_dir> or /tmp) and
+  # is sent as a base64 data URI to the LLM endpoint (api.deepseek.com by default; every
+  # provider on the configured LLM chain receives it until one answers), so a look does
+  # leave this machine. Defaults are inert: no URL = no USB camera, no alias = no HA
+  # camera, and the tool says 「这台现在看不到画面。」 instead of inventing a scene.
+  # A container/cross-machine snapshot service needs `--host 0.0.0.0` on the Mac and
+  # this URL pointing at its LAN address; that endpoint has no auth (docs/local-look.md §5).
+  vision:
+    usb_snapshot_url: ""       # e.g. http://<mac-lan-ip>:8766/snapshot.jpg; empty = no USB camera
+    cameras: {}                # spoken alias -> HA camera entity id
+                               # e.g. {"门口": "camera.example_door"} (no real ids here)
+    timeout_s: 15.0            # 1-30 s for the WHOLE look: fetch + description share it
+    cooldown_s: 10.0           # 0-120 s between two looks; process-wide, 0 = no limit
 music:
   # Off until a Navidrome/Subsonic server is provisioned: point secrets_path at a
   # json with url/user/password (never in this file), then set enabled: true.

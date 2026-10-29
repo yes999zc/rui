@@ -174,6 +174,13 @@ _GROUPS: dict[str, tuple[dict, int, int, str, dict]] = {
         "通用 MCP 服务器列表（HTTP / stdio），在 MCP 管理页维护；这里只读展示。",
         "Generic MCP server list (HTTP / stdio), maintained on the MCP page; "
         "read-only here.")),
+    "tools.vision": (_t("摄像头", "Cameras"), 4, 45, "save", _t(
+        "「看看书房」这类看画面（local.look）：USB 摄像头走本机快照服，其他房间走家庭助理"
+        "摄像头的最近一帧，画面会以 base64 发到配置的大模型（DeepSeek）。保存后下一次看就生效。",
+        "Looking at a camera (local.look): the USB camera goes through the local snapshot "
+        "service, other rooms use the last frame of a Home Assistant camera, and the "
+        "picture is sent as base64 to the configured LLM (DeepSeek). Saving applies to "
+        "the next look.")),
     "tools.exposure": (_t("工具暴露策略", "Tool exposure"), 4, 60, "restart", _t(
         "哪些工具让模型看见：domain = 按域模板（推荐）、whitelist = 只放白名单、all = 全放"
         "（工具太多会挤爆提示词）。改完需重启服务。",
@@ -1228,6 +1235,52 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "go out serially in batches of at most 8, each with this budget; after a "
                   "timeout the state is read back and a partial result is reported as partial."),
                unit=_t("秒", "s"), minimum=2, maximum=60),
+        _field("tools.vision.usb_snapshot_url", "tools.vision", "text",
+               _t("USB 快照服务地址", "USB snapshot URL"),
+               _t("书房那台 USB 摄像头（Mac 上的 scripts/usb_snapshot_server.py，默认端口 8766）"
+                  "的取图地址，形如 http://<mac-lan-ip>:8766/snapshot.jpg。留空 = 这台没有 USB "
+                  "摄像头，助手会说「摄像头还没接上」，而不是编一段画面描述。画面只放在内存里，"
+                  "不落盘；会以 base64 发给配置的大模型做描述。保存后下一次看就生效。",
+                  "The USB camera's snapshot endpoint (the operator-run "
+                  "scripts/usb_snapshot_server.py on the Mac, default port 8766), e.g. "
+                  "http://<mac-lan-ip>:8766/snapshot.jpg. Empty = this install has no USB "
+                  "camera and the assistant says so instead of inventing a description. "
+                  "The frame stays in memory (never written to disk) and is sent as base64 "
+                  "to the configured LLM for the description. Applies on the next look.")),
+        _field("tools.vision.cameras", "tools.vision", "list",
+               _t("摄像头别名", "Camera aliases"),
+               _t("「门口」这类说法 → 家庭助理摄像头实体 ID 的映射（显示为 别名=实体ID）。"
+                  "命中后走家庭助理的 camera_proxy，看到的是它保存的最近一帧，因此回复会带"
+                  "「最近一次」而不是「现在」。在这里只读：映射写在 config.yaml 的 "
+                  "tools.vision.cameras 里（部署时一次性录入，避免在控制台误改一台正在用的"
+                  "摄像头）。",
+                  "Spoken name -> Home Assistant camera entity id map (shown as "
+                  "alias=entity_id). A match goes through HA's camera_proxy, which returns "
+                  "the last frame HA kept - hence the reply says 'latest', not 'now'. "
+                  "Read-only here: the map lives in tools.vision.cameras in config.yaml "
+                  "(written once at deployment so a live camera cannot be retargeted by a "
+                  "stray console edit)."),
+               writable=False),
+        _field("tools.vision.timeout_s", "tools.vision", "number",
+               _t("一次看画面总预算", "Look budget"),
+               _t("一次「看画面」的总预算（1–30 秒，默认 15），取一帧图和视觉描述**共用**这"
+                  "一个上限，不是一个环节一份。用完就按「看不到」或「没描述出来」回话，不会"
+                  "拖住整轮对话（整轮工具超时是 20 秒）。保存后下一次看就生效。",
+                  "Total budget for one look (1-30 s, default 15): the frame fetch and the "
+                  "vision description SHARE it rather than getting one each. When it runs "
+                  "out the reply says it could not see/describe instead of stalling the turn "
+                  "(the turn's tool timeout is 20 s). Applies on the next look."),
+               unit=_t("秒", "s"), minimum=1, maximum=30),
+        _field("tools.vision.cooldown_s", "tools.vision", "number",
+               _t("看画面冷却", "Look cooldown"),
+               _t("两次看画面之间至少间隔多少秒（0–120，默认 10；0 = 不限）。全局生效，不分"
+                  "摄像头：摄像头对着的是私人空间，而且每看一次都要调一次云端视觉。"
+                  "冷却期内的请求会回「刚看过一次，等一下再看」。保存后立刻生效。",
+                  "Minimum seconds between two looks (0-120, default 10; 0 = no limit). "
+                  "Process-wide, not per camera: a camera watches a private room and every "
+                  "look costs a cloud vision call. A request inside the window answers "
+                  "'just looked, give it a moment'. Applies immediately."),
+               unit=_t("秒", "s"), minimum=0, maximum=120),
         _field("tools.mcp_servers", "tools.mcp", "list",
                _t("MCP 服务器列表", "MCP servers"),
                _t("通用 MCP 服务器列表（name/transport/url/command/enabled），每台的连接"
@@ -2158,6 +2211,12 @@ def values(cfg: Config) -> dict[str, Any]:
     out["audio.voice.keywords.threshold"] = settings["threshold"]
     out["audio.voice.keywords.boost"] = settings["boost"]
     out["music.has_credentials"] = has_music_credentials(cfg)
+    # `tools.vision.cameras` is a mapping, and the directory's `list` kind shows one
+    # item per line: render it as `alias=entity_id` (the same spelling the HA entity
+    # list uses) instead of letting the console stringify a dict into "[object Object]".
+    out["tools.vision.cameras"] = [
+        f"{alias}={entity}" for alias, entity in cfg.tools.vision.cameras.items()
+    ]
     return out
 
 

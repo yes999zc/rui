@@ -1295,6 +1295,39 @@ class SearchConfig(BaseModel):
     timeout_s: float = Field(default=12.0, ge=2.0, le=60.0)
 
 
+class VisionConfig(BaseModel):
+    """The camera path behind `local.look` (0.8.11 C block).
+
+    Two sources, both opt-in by configuration:
+
+    - `usb_snapshot_url`: the operator-run snapshot service that grabs one frame from
+      an attached USB camera (`scripts/usb_snapshot_server.py`, `GET /snapshot.jpg`).
+      Empty (the default) means this install has no USB camera - the tool says so
+      instead of failing silently. The public repository must not carry a home LAN
+      address as a default.
+    - `cameras`: spoken alias -> Home Assistant camera entity id, e.g.
+      `{"门口": "camera.example_door"}`. Empty by default, so no alias resolves
+      and the tool answers "can't see it" until the deployment writes its own map.
+      The frame comes from `GET <tools.ha.base_url>/api/camera_proxy/<entity_id>`
+      with the configured HA token: HA's **last** frame, not a live one.
+
+    The picture is never written to disk. It is memory-only, capped and sent as a
+    base64 data URI to the configured LLM endpoint, which is what `docs/local-look.md`
+    states to the operator.
+    """
+
+    usb_snapshot_url: str = ""
+    cameras: dict[str, str] = Field(default_factory=dict)
+    # The budget for ONE look as a whole: the frame fetch and the vision description
+    # share this deadline. The runner's tool timeout is 20 s, so two independent 15 s
+    # steps would be cut from the outside - and the failure would surface as the model
+    # saying "the tool timed out" instead of the tool's own sentence.
+    timeout_s: float = Field(default=15.0, ge=1.0, le=30.0)
+    # Process-wide cooldown between looks (0 = no limit). A camera looks at a private
+    # space and every look costs a cloud vision call, so one per 10 s is the default.
+    cooldown_s: float = Field(default=10.0, ge=0.0, le=120.0)
+
+
 class ToolsConfig(BaseModel):
     expose: ExposeMode = "domain"
     whitelist: list[str] = Field(default_factory=list)
@@ -1304,6 +1337,8 @@ class ToolsConfig(BaseModel):
     # the internet) cannot start one by accident; the console switch says so explicitly.
     mcp_allow_stdio: bool = False
     ha: HaConfig = Field(default_factory=HaConfig)
+    # `local.look` (0.8.11): the USB snapshot service and the alias -> HA camera map.
+    vision: VisionConfig = Field(default_factory=VisionConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)

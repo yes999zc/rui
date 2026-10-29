@@ -41,7 +41,7 @@ def _clean_book():
 # slot contract
 # ---------------------------------------------------------------------------
 def test_every_default_key_has_a_derived_slot_set() -> None:
-    assert len(phrases.DEFAULTS) == 64  # +1 device.bad_args (#34), +1 turn.not_heard (T5), +1 music.star_unsupported (T3), +1 device.partial, +1 ha.scene_list (B2)
+    assert len(phrases.DEFAULTS) == 72  # +1 device.bad_args (#34), +1 turn.not_heard (T5), +1 music.star_unsupported (T3), +1 device.partial, +1 ha.scene_list (B2), +8 vision.* (0.8.11 local.look)
     assert set(phrases.DEFAULT_SLOTS) == set(phrases.DEFAULTS)
     for key, template in phrases.DEFAULTS.items():
         slots, errors = phrases._checked_slots(template)
@@ -53,6 +53,34 @@ def test_every_default_key_has_a_derived_slot_set() -> None:
         assert parsed == set(phrases.DEFAULT_SLOTS[key]), key
     assert phrases.ADVANCED_KEYS == frozenset(
         key for key in phrases.DEFAULTS if key.startswith("ha."))
+
+
+def test_the_vision_keys_render_the_lines_the_camera_tool_speaks() -> None:
+    """0.8.11 `local.look`: four failure lines plus the two source labels.
+
+    The tool carries no wording of its own (docs/interaction.md §3), so the exact
+    sentences a look can produce are pinned here, at the book, not in the tool's test
+    alone. A rewording happens in this table and nowhere else.
+    """
+    for key in ("vision.no_frame", "vision.no_usb", "vision.describe_failed",
+                "vision.cooldown"):
+        assert key in phrases.DEFAULTS, key
+        assert phrases.DEFAULT_SLOTS[key] == frozenset(), key
+        assert phrases.book.render(key) == phrases.DEFAULTS[key]
+    assert phrases.book.render("vision.no_frame") == "这台现在看不到画面。"
+    assert phrases.book.render("vision.no_usb") == "书房那台摄像头还没接上。"
+    assert phrases.book.render("vision.describe_failed") == "画面看到了，但没描述出来，等下再试。"
+    assert phrases.book.render("vision.cooldown") == "刚看过一次，等一下再看。"
+    # USB = captured now; HA camera_proxy = the last frame it kept. Two labels on purpose.
+    assert phrases.book.render("vision.label_live", text="桌上有个杯子") == \
+        "现在（实时）：桌上有个杯子"
+    assert phrases.book.render("vision.label_latest", text="桌上有个杯子") == \
+        "最近一次（HA 代理）：桌上有个杯子"
+    # The prompt fragments are console-editable like the ha.* blocks; their slot
+    # contract is what the console enforces, so it is pinned here.
+    assert phrases.DEFAULT_SLOTS["vision.prompt"] == frozenset()
+    assert phrases.DEFAULT_SLOTS["vision.prompt_ask"] == frozenset({"prompt", "question"})
+    assert phrases.validate_override("vision.prompt", "只看画面，看不清就说看不到。") == []
 
 
 def test_validate_accepts_rewording_and_reordering() -> None:
@@ -239,7 +267,7 @@ def test_document_is_the_console_payload(tmp_path: Path) -> None:
     assert doc["effect"] == "next_phrase"
     assert doc["file_exists"] is True
     assert doc["overrides"] == {"music.stopped": "好，停。"}
-    assert len(doc["keys"]) == 64  # 60 + turn.not_heard (T5) + music.star_unsupported (T3) + device.partial + ha.scene_list (B2)
+    assert len(doc["keys"]) == 72  # 60 + turn.not_heard (T5) + music.star_unsupported (T3) + device.partial + ha.scene_list (B2) + 8 vision.* (0.8.11 local.look)
     by_key = {item["key"]: item for item in doc["keys"]}
     started = by_key["music.started"]
     assert started["slots"] == ["artist", "count", "title"]
