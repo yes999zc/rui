@@ -5,7 +5,10 @@ phase-close: task-9
 ## 版本与契约
 
 - 基线：tag `v0.8.9` → `a1d5afe`（已发布、**未部署**）；生产仍是 **0.8.8**（`2dac336`）。
-- 0.8.10 已 bump（`pyproject.toml` / `src/rui/__init__.py` / `uv.lock` 三处一致），待 tag + GitHub release + 镜像 digest 回填。
+- **0.8.10 已发布**：commit `9008643`，annotated tag `v0.8.10`（`6045ca5`），
+  GitHub release https://github.com/yes999zc/rui/releases/tag/v0.8.10 ；版本三处一致。
+- 镜像（tag 的 docker-publish 已绿）：index `sha256:30e8ed47…e1155`；
+  amd64 `sha256:9cb7c5d2…35ccf`；arm64 `sha256:5ce93e3d…0b71a30`。
 - `rui_compat` 不变（`>=0.8.1 <0.9.0`）；协议仅 additive（WakeIdle.barge、Metrics overdrive 三字段）；
   `rui-xiaoai-bridge`、`rui-dot2-bridge` 零改动。
 - **生产运行时不得改动**（部署验证按此核对）：capture 16k / 8ch / 6mic+2ref / `mic_shift=10` /
@@ -32,6 +35,8 @@ phase-close: task-9
 - **门禁**：T1b 提交后全量 `2217 passed, 6 skipped`（本批基线 HEAD `7c9d738` 为 2165/6）；
   `ruff check src tests` 全绿。6 个卡 commit：`3b359c4` T1、`dd2d752` T2、`651e89d` T4、`8e0ef50` T3、
   `1ff00cf` T5、`334751a` T1b。
+- **发布**：tag `v0.8.10` 的 CI 四绿（ci / security / secret-scan / docker-publish）；
+  issue #34 已回评修复说明并关闭。
 
 ## 下一步
 
