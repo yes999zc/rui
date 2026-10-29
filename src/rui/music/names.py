@@ -46,6 +46,11 @@ class AliasStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._aliases: dict[str, str] = {}
+        # Repair permissions BEFORE reading: a 000 file would otherwise load as empty
+        # (fnOS used to leave it 000 via ACL), and the next `remember` would write
+        # that empty table back, losing every learned nickname. Best-effort: a file
+        # we cannot chmod is still attempted, and failures only log.
+        self._ensure_permissions()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             self._aliases = {str(k): str(v) for k, v in (data or {}).items()}
@@ -73,12 +78,20 @@ class AliasStore:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self._aliases, ensure_ascii=False, indent=1),
                            encoding="utf-8")
-            os.chmod(tmp, 0o600)
+            os.chmod(tmp, 0o640)
             tmp.replace(self.path)
-            os.chmod(self.path, 0o600)
+            os.chmod(self.path, 0o640)
             log.info("music alias: %s -> %s", wrong, right)
         except OSError as exc:
             log.info("music alias write failed: %s", exc)
+
+    def _ensure_permissions(self) -> None:
+        """Bring an existing alias file to 0640; failures are informational only."""
+        try:
+            if self.path.is_file():
+                os.chmod(self.path, 0o640)
+        except OSError as exc:
+            log.info("music alias: cannot chmod %s to 0640: %s", self.path, exc)
 
     def get(self, name: str) -> str:
         return self._aliases.get(name, "")

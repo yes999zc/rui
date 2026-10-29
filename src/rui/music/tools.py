@@ -152,7 +152,9 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         )
 
     async def music_play(args: dict[str, Any]) -> ToolResult:
-        raw = str(args.get("query") or "")
+        # Nicknames are rewritten before intent planning, at this one shared entry
+        # point (the console's `/music/search` uses the same `service.rewrite`).
+        raw = service.rewrite(str(args.get("query") or ""))
         p = q.plan(raw)
         # None = this is a name/title/random ask; the literal search handles it.
         desc = semantic.plan(raw) if raw.strip() else None
@@ -217,19 +219,22 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         raw = str(args.get("query") or "").strip()
         if not raw:
             return ToolResult(status="empty", payload={"want": ""})
-        if semantic.plan(raw) is not None and not q.has_quoted_title(raw):
+        # Same shared nickname entry point as music_play / the console search.
+        query = service.rewrite(raw)
+        if semantic.plan(query) is not None and not q.has_quoted_title(query):
             # Not a name: point the model back at the tool that understands it
             # (the old build answered this instead of searching a language word
             # as if it were a title).
             return ToolResult(status="descriptive", payload={
-                "want": q.clean_query(raw) or raw, "suggest": "local.music_play"})
-        tracks = await _search(source, q.plan(raw), service.names)
+                "want": q.clean_query(query) or query,
+                "suggest": "local.music_play"})
+        tracks = await _search(source, q.plan(query), service.names)
         if not tracks:
-            return ToolResult(status="empty", payload={"want": raw})
+            return ToolResult(status="empty", payload={"want": query})
         candidates = [{"id": t.id, "title": t.title, "artist": t.artist}
                       for t in tracks[:8]]
         return ToolResult(status="ok", options=candidates, payload={
-            "want": raw, "count": len(tracks), "candidates": candidates})
+            "want": query, "count": len(tracks), "candidates": candidates})
 
 
     async def music_pause(_args: dict[str, Any]) -> ToolResult:

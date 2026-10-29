@@ -54,6 +54,20 @@ class MusicService:
         self._prefetch: asyncio.Task | None = None
 
     # ------------------------------------------------------------------ helpers
+    def rewrite(self, text: str) -> str:
+        """Apply learned nicknames before intent planning (music paths only).
+
+        The old build's rule: 「战车乐队」 is filed as Rammstein. `AliasStore.apply`
+        was dead code until 0.8.7 - it now runs at the single music entry point
+        (voice `music_play` and console `music_search`) before `q.plan()`, longest
+        key first, so a nested nickname is not half-replaced. Global text is never
+        rewritten: only the music path asks this question.
+        """
+        aliases = getattr(self.names, "aliases", None)
+        if aliases is None:
+            return text or ""
+        return aliases.apply(text or "")
+
     @property
     def current(self) -> Track | None:
         if 0 <= self.idx < len(self.queue):

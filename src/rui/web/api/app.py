@@ -3370,6 +3370,11 @@ def create_app(
             session=cfg.session,
             direct_hook=_direct_speech,
             play_file=_play_file,
+            # The music-request guard reads this to tell a short answer to the
+            # previous song from a repeated play call. Read-only and per call, so a
+            # runtime music enable/disable/source change is visible immediately.
+            media_context=lambda: str(
+                getattr(getattr(app.state, "music", None), "state", "")),
         )
         app.state.spoken = spoken
         # Render the spoken wake cue now, not on the wake: synthesising it inside the wake
@@ -5350,9 +5355,11 @@ def create_app(
             raise HTTPException(status_code=409, detail="music is not enabled")
         from ...music import query as mq
         from ...music.tools import _search
-        plan = mq.plan(q or "")
+        # Same shared entry point as the voice tool: nicknames are rewritten before
+        # planning, and the alias table is also passed to the search fallback.
+        plan = mq.plan(service.rewrite(q or ""))
         tracks = await service.source.random(20) if plan.random \
-            else await _search(service.source, plan)
+            else await _search(service.source, plan, service.names)
         return {"query": q, "tracks": [
             {"id": t.id, "title": t.title, "artist": t.artist, "duration": t.duration}
             for t in tracks[:20]]}

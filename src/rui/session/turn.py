@@ -58,6 +58,12 @@ def _sentence_gap(rate: int, ms: int = SENTENCE_GAP_MS) -> bytes:
 
 log = logging.getLogger(__name__)
 
+# A short answer to the previous music turn is performed by these registered tools:
+# the model's repeated music_play call is re-pointed at the matching transport, never
+# used to search the answer text for a song. "hold" needs no tool (already playing).
+MUSIC_ANSWER_TOOLS = {"resume": "music_resume", "next": "music_next",
+                      "stop": "music_stop"}
+
 
 # The prompt now lives in `session/prompts.py`, assembled per turn (it carries the length
 # bands and the "no tools this round" note). Kept here as an alias so old imports do not
@@ -371,6 +377,7 @@ class TurnRunner:
         idle: IdleWatch | None = None,
         direct_hook: DirectHook | None = None,
         play_file: Callable[[str], Awaitable[None]] | None = None,
+        media_context: Callable[[], str] | None = None,
     ) -> None:
         self.providers = providers
         # Built once, not per call. `asr_chain()` constructs the provider, and the local
@@ -436,6 +443,11 @@ class TurnRunner:
         # same PlayFile room routing music uses). None = always TTS, the pre-task
         # behaviour; it is never required for text-only direct speech.
         self.play_file = play_file
+        # Read-only view of the current media state ("playing"/"paused"/""), injected
+        # by the app so the music-request guard can tell a short answer to the
+        # previous song from a repeated/hallucinated play call without importing the
+        # control plane. None = no media context (tests, text-only callers).
+        self.media_context = media_context
         self._pending_direct: DirectSpeech | None = None
         # task-30: one entry per TTS request this turn (a "segment" on the wire). The
         # ledger is what the reply log and the turn trace read: before this, a short
@@ -702,6 +714,16 @@ class TurnRunner:
     def busy(self) -> bool:
         """True while a turn is running - the reminder layer waits for it."""
         return self._in_turn
+
+    def _media_state(self) -> str:
+        """The injected media state for the music guard; "" when there is none."""
+        if self.media_context is None:
+            return ""
+        try:
+            return str(self.media_context() or "")
+        except Exception as exc:  # noqa: BLE001 - a guard hint must never break a turn
+            log.info("media context failed: %s", exc)
+            return ""
 
     async def run(
         self,
@@ -1201,16 +1223,44 @@ class TurnRunner:
                 silent_calls = 0
                 for call in calls:
                     guard = self._interactions.get(call.get("name", ""))
-                    if (guard is not None and getattr(guard, "guard", "") == "music_request"
-                            and not rules.looks_like_music_request(self._transcript)):
-                        # Not a music ask: the model repeated an earlier call.
-                        log.info("tool %s refused: the user did not ask for music",
-                                 call.get("name", ""))
-                        messages.append({"role": "tool",
-                                         "tool_call_id": call.get("id", ""),
-                                         "content": "用户这句话里没有点歌动词，不要调用音乐工具，"
-                                                    "也不要说已经放了。问一句「要听哪首？说放一首歌名」。"})
-                        continue
+                    if guard is not None and getattr(guard, "guard", "") == "music_request":
+                        # A short answer to the previous media turn is checked FIRST:
+                        # 「放吧」「听吧」 are resume words that also contain a play verb,
+                        # so the looks-like test would let a paused song be replaced by
+                        # a random batch. With a song playing/paused these closed-set
+                        # answers move the player; with no media context, or for
+                        # anything outside the sets, the old rules apply below.
+                        media_state = self._media_state()
+                        action = rules.music_answer_action(self._transcript, media_state)
+                        target = MUSIC_ANSWER_TOOLS.get(action, "")
+                        if action == "hold" or (target and target not in self._handlers):
+                            log.info("tool %s skipped: short answer to the previous music "
+                                     "turn (state=%s)", call.get("name", ""), media_state)
+                            state_zh = "播放中" if media_state == "playing" else "暂停中"
+                            messages.append({"role": "tool",
+                                             "tool_call_id": call.get("id", ""),
+                                             "content": f"用户是在应答上一轮的音乐（当前{state_zh}），"
+                                                        "不是在点新歌。保持现状，用一句话确认即可，"
+                                                        "不要问「要听哪首」。"})
+                            continue
+                        if target:
+                            log.info("tool %s -> %s: short answer to the previous music "
+                                     "turn (state=%s)", call.get("name", ""), target,
+                                     media_state)
+                            call = {"id": call.get("id", ""), "name": target,
+                                    "arguments": "{}"}
+                            # The transport tools are not music_request-guarded, so the
+                            # query-replacement block below must not run for them.
+                            guard = self._interactions.get(target)
+                        elif not rules.looks_like_music_request(self._transcript):
+                            # Not a music ask: the model repeated an earlier call.
+                            log.info("tool %s refused: the user did not ask for music",
+                                     call.get("name", ""))
+                            messages.append({"role": "tool",
+                                             "tool_call_id": call.get("id", ""),
+                                             "content": "用户这句话里没有点歌动词，不要调用音乐工具，"
+                                                        "也不要说已经放了。问一句「要听哪首？说放一首歌名」。"})
+                            continue
                     # The music query is what the USER said, never what the model
                     # typed: measured twice in one hour - it sent {} (10:13:04, a
                     # random batch instead of the band) and the previous turn's

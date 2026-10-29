@@ -124,6 +124,41 @@ def music_transport(transcript: str) -> str:
     return ""
 
 
+# A short answer to the previous music turn, after barge-in. These are the words a
+# person says to *our* question/advertisement of a song (「行」「嗯」「好」), not a
+# request naming anything. Closed sets, max four characters, only consulted while
+# media is playing or paused: 「好的时光」 as a title must not be eaten, and with no
+# music context 「行」 must not start anything.
+MUSIC_ANSWER_RESUME = (
+    "行", "行吧", "嗯", "嗯嗯", "好", "好吧", "好的", "好呀", "好嘞",
+    "可以", "继续", "接着", "别停", "继续放", "接着放", "放吧", "听吧",
+)
+MUSIC_ANSWER_NEXT = ("换一首", "换一个", "换首", "下一首", "切歌", "换歌")
+MUSIC_ANSWER_STOP = ("停止", "停吧", "别放了", "关掉", "停下", "别唱了")
+
+
+def music_answer_action(transcript: str, media_state: str) -> str:
+    """How a short reply to the previous music turn should move the player.
+
+    Returns ``"resume"`` (paused -> continue), ``"hold"`` (already playing -> do
+    nothing), ``"next"``, ``"stop"``, or ``""`` when this is not an answer to a
+    media turn. Pure: the caller passes the current music state
+    (``"playing"``/``"paused"``/anything else); no speaker or service is touched.
+    """
+    if media_state not in ("playing", "paused"):
+        return ""
+    t = normalize(transcript)
+    if not t or len(t) > 4:
+        return ""
+    if t in MUSIC_ANSWER_STOP:
+        return "stop"
+    if t in MUSIC_ANSWER_NEXT:
+        return "next"
+    if t in MUSIC_ANSWER_RESUME:
+        return "hold" if media_state == "playing" else "resume"
+    return ""
+
+
 # 「放首歌」 style: the whole request is a random-play ask with nothing to parse.
 # Deterministic on purpose, like the transports: measured twice tonight (22:12,
 # 22:24), the model sometimes refused the exact same prompt out of context -
