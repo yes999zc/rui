@@ -115,6 +115,14 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   （`docker run --rm -v /vol1/rui:/mnt alpine:3.20`，已验证 WRITE_OK）；compose v2.40.3；GHCR 可访问。
 - 回滚锚（部署前）：override `.bak-20261028-220433`；本阶段会再备份 override/plugins/config。
 
+**Round 2 进度（2026-10-29 09:3x）**
+- task-23 首轮 **CHANGES**（唯一阻塞为文档现状陈述）：`docs/analysis/dot2-data-plane-1011.md` 仍写「桥未发版/仍是 1.3.4」。
+  已修 `b42f42e`：头部标「分析基线 1.3.4」、§10 标题与版本状态改为「随桥 1.3.5（tag `v1.3.5`）发布；
+  生产 NAS 部署前仍是 1.3.4，部署后线上才有新字段」；HANDOFF task-21 记录补 `e44d333`。
+- 待 reviewer-release 复评 PASS 后：打 tag `v0.8.6`（→ 当时 rui main HEAD）/ `v1.3.5`（→ 桥 `e44d333`）
+  + GitHub release → 等四 workflow 绿 → 执行 task-22 部署 → task-24 独立复验 → task-25 收口。
+- 其余非阻塞观察（service 503 措辞、errorText 标点）本批不改，已记录。
+
 **按顺序执行（任务板 task-19…25）**
 1. task-19 ✅ 修 3 项观察（rui `85c20f4`）：§10 示例行改为 §2.2 表 #12 单一真实事件
    （`close#12 interval=305.1s rx=9329320B tx=0B`，并加测试断言与表一致）；`v2.channels.saveFailed`
