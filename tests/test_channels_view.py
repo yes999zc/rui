@@ -33,6 +33,7 @@ ROUTER = ROOT / "web/src/v2/router.ts"
 APP = ROOT / "web/src/v2/App.vue"
 I18N = ROOT / "web/src/v2/i18n.ts"
 STYLE = ROOT / "web/src/v2/style.css"
+DOT2_DOC = ROOT / "docs/analysis/dot2-data-plane-1011.md"
 
 TOKEN = "test-token-fake"
 AUTH = {"X-Auth-Token": TOKEN}
@@ -142,12 +143,28 @@ def test_token_and_wechat_account_state_are_read_only() -> None:
     assert "v2.channels.weixin.noAccount" in view
 
 
-def test_error_copy_covers_503_422_token_and_network() -> None:
+def test_error_copy_splits_503_by_context_and_covers_422_and_network() -> None:
     view = _read(VIEW)
     i18n = _read(I18N)
 
-    assert "copy.status === 503" in view
-    assert "v2.channels.gateway.error503" in view
+    # 503 has two contexts: gateway actions say "not ready", channels load/save
+    # say "service unavailable". A single blanket 503 copy is the bug this guards.
+    assert "type ErrorScope = 'gateway' | 'service'" in view
+    assert "scope === 'gateway'" in view
+    assert "t('v2.channels.gateway.error503')" in view
+    assert "t('v2.channels.serviceUnavailable')" in view
+    assert "errorText(gatewayError, 'gateway')" in view
+    assert "errorText(loadErrorCopy, 'service')" in view
+    assert "errorText(copy, 'service')" in view
+    assert "if (copy.status === 503) return" not in view
+    assert "'v2.channels.serviceUnavailable': '服务暂不可用（503），请稍后重试。'" in i18n
+    assert (
+        "'v2.channels.serviceUnavailable': 'Service unavailable (503); try again later.'"
+        in i18n
+    )
+    # `saveFailed` was defined but unused; it is now the save-failure title.
+    assert "t('v2.channels.saveFailed')" in view
+
     assert "copy.status === 422" in view
     assert "v2.channels.error422" in view
     assert "{ detail: copy.detail || copy.title }" in view
@@ -156,7 +173,7 @@ def test_error_copy_covers_503_422_token_and_network() -> None:
     assert "describeError(" in view
     assert "'v2.error.network': '无法连接服务'" in i18n
     assert "'v2.error.network': 'Cannot reach the service'" in i18n
-    # 503 copy names the supervisor/gateway, not a generic failure.
+    # The gateway 503 copy names the supervisor/gateway, not a generic failure.
     assert "supervisor" in i18n
     assert "503" in i18n
 
@@ -201,6 +218,19 @@ def test_page_uses_v2_card_grid_style_not_a_new_design_system() -> None:
     phone = phone[:phone.index("}") + 1]
     assert ".v2-channels-grid" in phone
     assert "grid-template-columns: minmax(0, 1fr);" in phone
+
+
+def test_dot2_analysis_example_is_one_real_event_from_table_12() -> None:
+    """The §10 example must not splice rx/tx from one event with another's count."""
+    doc = _read(DOT2_DOC)
+
+    assert "| 12 | 12:16:08 | 300.0 | 9329320 | 0 | 305.1 |" in doc
+    assert "rx=9329320B tx=0B close#12 interval=305.1s dropped=0; data plane down" in doc
+    assert "数值取自 §2.2 表 **#12**" in doc
+    # The old example mixed §2.1 event #1's rx/tx with a different close count.
+    assert "rx=5597592B tx=356440B close#7" not in doc
+    # The field explanation (close#N = this process's N-th counted close) stayed.
+    assert "本进程启动以来第 N 次" in doc
 
 
 # — API behaviour (the fixture is the real app, no mocks) —————————

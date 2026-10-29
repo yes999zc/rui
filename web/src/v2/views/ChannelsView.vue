@@ -184,13 +184,26 @@ function matchesExpected(
   )
 }
 
-/** 503 / 422 are the two failure modes this page can explain precisely. */
-function errorText(copy: ErrorCopy): string {
-  if (copy.status === 503) return t('v2.channels.gateway.error503')
+type ErrorScope = 'gateway' | 'service'
+
+/**
+ * 503 / 422 are the two failure modes this page can explain precisely.
+ *
+ * The 503 copy depends on what failed: a gateway start/stop/restart means the
+ * channel supervisor is not ready, while loading or saving channels is a plain
+ * service outage. 422 always carries the backend's validation detail; network
+ * and unknown failures keep the shared translator's fallback.
+ */
+function errorText(copy: ErrorCopy, scope: ErrorScope = 'service'): string {
+  if (copy.status === 503) {
+    return scope === 'gateway'
+      ? t('v2.channels.gateway.error503')
+      : t('v2.channels.serviceUnavailable')
+  }
   if (copy.status === 422) {
     return t('v2.channels.error422', { detail: copy.detail || copy.title })
   }
-  return copy.detail ? `${copy.title}：${copy.detail}` : copy.title
+  return copy.detail ? `${copy.title}: ${copy.detail}` : copy.title
 }
 
 function feedbackFor(name: ChannelName): Feedback | null {
@@ -222,7 +235,7 @@ async function save(name: ChannelName): Promise<void> {
       const copy = describeError(loadError.value)
       feedback.value[name] = {
         kind: 'warn',
-        text: t('v2.channels.savedReadbackFailed', { message: errorText(copy) }),
+        text: t('v2.channels.savedReadbackFailed', { message: errorText(copy, 'service') }),
       }
       return
     }
@@ -234,7 +247,13 @@ async function save(name: ChannelName): Promise<void> {
       text: ok ? t('v2.channels.savedVerified') : t('v2.channels.savedMismatch'),
     }
   } catch (err) {
-    feedback.value[name] = { kind: 'fail', text: errorText(describeError(err)) }
+    // The page-level "保存失败" title plus the context-specific reason (503 is a
+    // service outage here, never "gateway not ready").
+    const copy = describeError(err)
+    feedback.value[name] = {
+      kind: 'fail',
+      text: `${t('v2.channels.saveFailed')}: ${errorText(copy, 'service')}`,
+    }
   } finally {
     saving.value = ''
   }
@@ -303,7 +322,7 @@ onMounted(() => {
       v-else-if="loadErrorCopy && !state"
       kind="error"
       :title="t('v2.channels.loadFailed')"
-      :detail="errorText(loadErrorCopy)"
+      :detail="errorText(loadErrorCopy, 'service')"
       :hint="loadErrorCopy.hint"
       :status="loadErrorCopy.status"
       :request-id="loadErrorCopy.requestId"
@@ -316,7 +335,7 @@ onMounted(() => {
         <AppIcon name="alert" :size="17" />
         <div class="v2-banner-body">
           <strong>{{ t('v2.channels.loadFailed') }}</strong>
-          <p class="note">{{ errorText(loadErrorCopy) }}</p>
+          <p class="note">{{ errorText(loadErrorCopy, 'service') }}</p>
         </div>
         <button type="button" class="btn btn-sm" @click="load()">
           {{ t('v2.common.retry') }}
@@ -622,7 +641,7 @@ onMounted(() => {
           <AppIcon name="alert" :size="17" />
           <div class="v2-banner-body">
             <strong>{{ t('v2.channels.gateway.actionFailed') }}</strong>
-            <p class="note">{{ errorText(gatewayError) }}</p>
+            <p class="note">{{ errorText(gatewayError, 'gateway') }}</p>
             <p v-if="gatewayError.hint" class="note">{{ gatewayError.hint }}</p>
           </div>
         </div>

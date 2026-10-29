@@ -338,10 +338,11 @@ ssh yes999zc@<NAS-LAN-IP> \
   判定、关闭码；也**没有**新增第二条同义日志，仍是原来那一条行（`quiet` 时 INFO，否则 WARNING），
   只在行尾追加字段。
 
-新格式（数值沿用 §2.1 同一条事件，便于对照）：
+新格式（数值取自 §2.2 表 **#12**：close 12:16:08 UTC，uptime 300 s，rx 9,329,320 B，
+tx 0 B，距上次关闭 305.1 s——单一事件，不与 §2.1 的事件 #1 混拼）：
 
 ```
-dot2 link: data plane closed (dot2) code=1011 dir=data rx=5597592B tx=356440B close#7 interval=305.1s dropped=0; data plane down
+dot2 link: data plane closed (dot2) code=1011 dir=data rx=9329320B tx=0B close#12 interval=305.1s dropped=0; data plane down
 ```
 
 | 字段 | 含义 | 判读 |
