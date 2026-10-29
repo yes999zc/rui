@@ -1,0 +1,18 @@
+# Fixture device for the "frames() returns the wrong type" failure: the method surface is
+# complete, so only capture.frames fails - which is exactly the check that must not be
+# satisfied by "it yields something".
+schema: rui-device/v1
+id: fail-bad-frames
+model: "FAIL-2"
+name: "Bad frames"
+vendor: "rui fixtures"
+class: A
+transport: inbound
+protocol: {kind: ws, version: "1"}
+capabilities: [playback]
+runtime:
+  mode: in-process
+  entrypoint: "fail_frames_adapter:build"
+  listen_port: 8875
+  token_env: RUI_DEVICE_TOKEN
+params: []

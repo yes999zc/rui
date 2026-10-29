@@ -36,6 +36,8 @@ rui = "rui.__main__:main"
 rui-channels = "rui.channels.cli:main"
 rui-healthcheck = "rui.healthcheck:main"
 rui-plug-test = "rui.plugins.contract:main"
+# Device-adapter conformance kit for third-party bridge authors (docs/bridge-developer/).
+rui-adapter-check = "rui.device.adapter_check:main"
 
 [build-system]
 requires = ["hatchling"]

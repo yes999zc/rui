@@ -1,0 +1,18 @@
+# Fixture device for the rui-adapter-check PASS case: inbound, in-process, one entry
+# point. capabilities stay on playback/volume/led so the fixture needs no device-side wake
+# engine; the kit's wake-payload check is exercised by its own reference MockAdapter.
+schema: rui-device/v1
+id: example-speaker
+model: "EXAMPLE-1"
+name: "Example Speaker"
+vendor: "rui fixtures"
+class: A
+transport: inbound
+protocol: {kind: ws, version: "1"}
+capabilities: [playback, volume, led]
+runtime:
+  mode: in-process
+  entrypoint: "pass_adapter:build"
+  listen_port: 8873
+  token_env: RUI_DEVICE_TOKEN
+params: []

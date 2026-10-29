@@ -1,0 +1,17 @@
+# Fixture device for the "missing play()" failure: everything else is valid, so the only
+# FAIL the kit reports is adapter.methods (plus the playback line that proves it).
+schema: rui-device/v1
+id: fail-missing-play
+model: "FAIL-1"
+name: "Missing play"
+vendor: "rui fixtures"
+class: A
+transport: inbound
+protocol: {kind: ws, version: "1"}
+capabilities: [playback, volume]
+runtime:
+  mode: in-process
+  entrypoint: "fail_adapter:build"
+  listen_port: 8874
+  token_env: RUI_DEVICE_TOKEN
+params: []

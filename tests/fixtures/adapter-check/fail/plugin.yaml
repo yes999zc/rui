@@ -1,0 +1,16 @@
+# Fixture: a plug whose adapters are deliberately wrong. Two devices so the tests can
+# pin both required failure modes with `--device-id` instead of duplicating a whole plug:
+#   fail-missing-play -> the adapter has no play() at all
+#   fail-bad-frames   -> frames() yields a dict instead of rui.device.contract.AudioFrame
+schema: rui-plugin/v0
+id: adapter-check-fail
+name: "Adapter check FAIL fixture"
+version: 1.0.0
+rui_compat: ">=0.8.0 <0.9.0"
+license: MIT
+maintainer: "rui maintainers"
+homepage: "https://example.invalid/adapter-check-fail"
+trust: trusted
+devices:
+  - devices/missing-play.yaml
+  - devices/bad-frames.yaml

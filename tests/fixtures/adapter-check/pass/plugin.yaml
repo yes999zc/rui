@@ -1,0 +1,17 @@
+# Fixture: the smallest plug whose adapter passes every rui-adapter-check line.
+#
+# The test fixture is also the reference shape a third-party bridge starts from: one
+# device manifest, one module implementing the DeviceAdapter surface, an in-process
+# runtime entry point. Keep it honest - the PASS assertions in
+# tests/test_adapter_check.py depend on this file staying valid against the real loader.
+schema: rui-plugin/v0
+id: adapter-check-pass
+name: "Adapter check PASS fixture"
+version: 1.0.0
+rui_compat: ">=0.8.0 <0.9.0"
+license: MIT
+maintainer: "rui maintainers"
+homepage: "https://example.invalid/adapter-check-pass"
+trust: trusted
+devices:
+  - devices/example.yaml
