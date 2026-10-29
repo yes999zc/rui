@@ -124,7 +124,7 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
 2. task-20 ✅ rui 0.8.6 release prep（`6b11b51`，已 push）：pyproject/`__init__`/uv.lock=0.8.6、
    CHANGELOG `[0.8.6] - 2026-10-29`、`docs/releases/v0.8.6.md`（含部署后四项验证口径）；
    全量 **1990 passed / 6 skipped**、ruff 绿、web typecheck+build 绿。**未打 tag/未 release**（等 review 后）。
-3. task-21 ✅ 桥 1.3.5 release prep（`d20a129`，已 push）：pyproject/plugin.yaml=1.3.5、CHANGELOG
+3. task-21 ✅ 桥 1.3.5 release prep（`d20a129` + 发布说明 `e44d333`，已 push）：pyproject/plugin.yaml=1.3.5、CHANGELOG
    `[1.3.5]`（计数日志/check.sh/README；1.3.4 内容正确落入新 `[1.3.4]` 段）、C-001 版本引用同步、
    `test_manifest.py` 版本断言同步；`rui_compat` 与 v1.3.4 **逐字相同**（`>=0.8.1 <0.9.0`）；
    `./scripts/check.sh --nodevice` EXIT=0（183 tests / lint / doctor 0 fail）。

@@ -1,7 +1,7 @@
 # dot2 数据面 1011 关闭诊断（0.8.5 / 儿童房）
 
 > 批次：0.8.5 攒批 §11-3 · 任务 D（纯诊断，**不改任何行为**）。
-> 桥仓：`rui-dot2-bridge`（1.3.4，`76b8947`）——本文件只读引用，未改动。
+> 桥仓：`rui-dot2-bridge`（**分析基线 1.3.4 `76b8947`**；计数日志随 **1.3.5** 发布）——本文件只读引用，未改动。
 > 取证：生产 NAS 持久化日志 `/vol1/rui/data/service.log`（**只读**：`grep`/`awk`/`docker logs`，未做任何写操作、未重启容器）。
 > 日志时区：**UTC**（容器时区）；本地中国时间 = UTC+8。HANDOFF 里的时间多为本地时间，对照时注意差 8 h。
 
@@ -318,9 +318,9 @@ ssh yes999zc@<NAS-LAN-IP> \
   说明设备那时根本没在正常上行；22:45 重启后的新窗口（约 20 min）尚无 1011，也不足以证明节拍消失。
 - **没有改任何东西**：本文件是诊断，0.8.5 不含行为改动；桥仓、`.github/`、`src/` 均未触碰。
 
-> 补充：桥仓后续（**未发版**）已加“关闭计数日志”，见 §10；§0–§9 的结论全部保留、口径不变。
+> 补充：桥仓后续已加「关闭计数日志」，随桥 **1.3.5**（tag `v1.3.5`）发布，见 §10；§0–§9 的结论全部保留、口径不变。
 
-## 10. 0.8.5 桥侧计数日志（已加，**未发版**）
+## 10. 桥侧计数日志（随桥 1.3.5 发布）
 
 §2 的 36 次样本是靠事后脚本（§8）从全文日志重算 uptime/gap 的；桥侧原日志只有单行
 `data plane closed (...) code=1011 ... rx=..B tx=..B`，**没有“第几次关闭 / 距上次多久 / 累计丢帧”**，
@@ -329,9 +329,9 @@ ssh yes999zc@<NAS-LAN-IP> \
 - 桥仓提交：`516c0e8`（`feat(link): count data-plane closes in the close log`，日志/统计）+
   `b6deb86`（`fix(check): use the renamed rui package in the config probe`，0.2.0 包重命名后
   遗留的 `house_ear.config` → `rui.config` 一行修复，与日志无关）。
-- 版本状态：**未发版、未打 tag**；`pyproject.toml`/`CHANGELOG.md` 仍是 **1.3.4**，
-  `rui_compat`/manifest 未动。生产 NAS 当前仍是 1.3.4——**线上日志暂时看不到新字段**，
-  要等下一次桥侧发版部署后才生效。
+- 版本状态：桥仓 **1.3.5**（tag `v1.3.5`，随 rui 0.8.6 批次发布）；`pyproject.toml`/`CHANGELOG.md`
+  已是 1.3.5，`rui_compat`/manifest 未动。**生产 NAS 在本次部署前仍是 1.3.4**，部署后线上日志
+  才会出现新字段；本文件 §0–§9 的取证与结论来自 1.3.4 线上日志，口径不变。
 - 改动位置：`src/rui_dot2_bridge/device_link.py` 的 `LinkStats` 与 `_lose_data()`；
   新增单测 `tests/test_link.py::AbnormalCloseResetTest::test_data_plane_close_counters_are_logged`。
 - **没有改**：keepalive 参数（`ping_interval=20.0` / `ping_timeout=40.0`）、任何 abort/丢弃/重连
