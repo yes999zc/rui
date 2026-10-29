@@ -25,6 +25,82 @@ Eight interleaved channels: `ch0..ch5` microphones, `ch6` and `ch7` the same
 playback-reference loopback. Reference travels **inside** the frame, which is why
 `AudioFrame` carries `reference_channels` instead of an `is_reference` flag.
 
+## wire 率：48 kHz 还是 16 kHz（0.8.9）
+
+**默认跟随设备 manifest 的原生率。** `rui setup` 的模板（`src/rui/config/template.yaml`）
+和 `config.example.yaml` 都不再写 `audio.capture.rate`：插件 manifest 的
+`audio_defaults.capture.rate` 声明硬件原生率（LX06 = 48000，Dot 2 = 16000），
+`effective_audio()` 直接采用。16 kHz 降为「想省带宽时显式写」的选项。
+
+### 带宽：PCM payload 768 KB/s
+
+桥收到的 `record` 是一条 **binary websocket 帧，帧内是 JSON**：PCM 放在 `bytes` 字段里，
+默认是 int 数组（`list(pcm)`，见 `rui-xiaoai-bridge/src/rui_xiaoai_bridge/protocol.py` 的
+`stream()` / `decode_stream()`），fork 也接受 base64。所以要把三个口径分开：
+
+| 口径 | 48 kHz × 8 ch | 16 kHz × 8 ch |
+|---|---|---|
+| PCM payload（int16，2 B/样本） | **768 KB/s**（≈6 Mbit/s） | **256 KB/s**（≈2 Mbit/s） |
+| WS 帧内 int 数组 JSON（约 4 B/PCM 字节） | ≈3 MB/s | ≈1 MB/s |
+| WS 帧内 base64（fork 支持） | ≈1 MB/s | ≈341 KB/s |
+
+旧注释里的「6 MB/s」是**32-bit 口径**：32-bit PCM 是 1.5 MB/s，再乘约 4× 的 JSON 编码
+开销 ≈ 6 MB/s（与 `docs/xiaoai-protocol.md` 的旧估算一致）。线上的 PCM 实际是 int16，
+对应的是 768 KB/s；上面第二行列出了 JSON 编码后的真实线上字节。规划带宽时看「PCM 多少」
+用第一行，看「socket 上多少」用后两行——别再拿 6 MB/s 当默认基准。
+
+### 显式 16 kHz 的代价（实测）
+
+`capture.rate: 16000` 是**协商**而不是硬件事实（见下）：显式值赢，设备端 open-xiaoai
+自己把 48k 重采样成 16k 再发。2026-10 生产 NAS 上的 8ch LX06 实测：
+
+- 语言带能量损失约 **15 dB**：`[seg] rms 0.006 / 0.008`（16 kHz wire）对
+  `0.035`（48 kHz wire，同一房间、同一音量）。
+- 后果是 **ASR 空转/超时**，而不是听不见：**唤醒照常成功**，所以「能不能唤醒」查不出这个问题。
+- 48 kHz wire 换回来的直接收益是 ASR 一次通过。
+
+### CPU：实测与口径边界
+
+生产 NAS（8ch LX06，容器内）：
+
+| 指标 | 16 kHz wire | 48 kHz wire |
+|---|---|---|
+| 进程 CPU（单核口径） | 27.9 % | **214 %** |
+| 容器 CPU | 68 % | **329 %** |
+| `asr_done` | 179 ms | **807 ms** |
+| load average | — | **4.67**（4 核） |
+
+离线 profile（`docs/analysis/decimate-profile-0.8.9.md`，M2 Ultra，10 s 8ch 音频）：
+`Decimator` 旧全速率约 **0.098 s** → 多相约 **0.027 s**（约 3.7×），生产实际取 7 列时约
+**0.035 s**（相对旧 8 列约 2.8×）；该 host 的 run-to-run 波动是几个百分点（旧 0.0934–0.0986 s、
+新 8 列 0.0255–0.0268 s、7 列 0.0333–0.0359 s，见剖面文档的 Setup 段，以当次运行为准）。
+48 kHz 路径上抽取器约占单核 0.3 %（旧约 1 %）。
+
+**口径边界（别过度宣称）：**多相化只解释了抽取器本身——离线实测整条 core 侧采集路径的
+48k−16k 差值只有约 0.036 s/10 s 音频，换算到 NAS 约 5–7 % 单核，**不可能解释 +186 个
+百分点**。剖面文档已把 ring/preroll 拷贝实测为 rate-invariant（两列均 0.0003 s）并排除；
+仍未证实的是：plug/adapter 与 wire decode（binary → PCM，另一个仓）、WS send/recv 线程
+与 3× payload 的拷贝、ASR/VAD worker 线程、设备侧采集负载。要在生产上确认只能用
+`py-spy` 在 NAS 上逐项 profile。不要把「多相抽取已落地」说成「生产 CPU 已解释/已解决」。
+
+### `AudioDefaults` 的 `capture.rate` 协商语义
+
+合并顺序是 `core default < 全局配置 < manifest audio_defaults < devices[].audio`，
+所有字段里**只有 `capture.rate` 是协商项**（其余 capture 字段是硬件事实，manifest 赢）：
+
+1. **配置没有写 `rate`**（key 不在 `model_fields_set`，值也等于 core default）→
+   manifest 的原生率生效，不产生任何 conflict。模板默认走这条。
+2. **配置显式写了 `rate`**（key 在 `model_fields_set`，或值 ≠ core default）→
+   显式值赢，`winner: global-config`、`kind: negotiated`，消息形如
+   `audio.capture.rate: global 16000 vs model 48000; using 16000 (explicit wire wins; the client resamples)`。
+   **重采样由客户端/设备负责**，服务端收到的已经是所请求的率。
+3. `devices[].audio.capture.rate` 是设备级的显式值，优先于全局与 manifest（同 0.8.8）。
+4. core default 仍是 **16000**，它只为**没有 manifest 的旧 plug**（解析不到
+   `audio_defaults`）兜底，不是「生产推荐值」。
+
+想给老 8ch 阵列省带宽就显式写 `rate: 16000`，并接受上面的 15 dB 与 ASR 风险；这属于
+operator 的选择，源码不再替任何部署默认做这个选择。
+
 ## The one number that matters
 
 Mic full scale is `2**23`, reference full scale is `2**28` — a factor of 32, five
@@ -134,5 +210,8 @@ number is a stage nobody has measured.
 - **Bit-depth** above. Silent failure mode: sounds fine, fails only with music.
 - **Clock drift.** Device clock and server clock diverge; the jitter buffer must
   adapt or the queue grows until latency is unusable.
-- **Decimation is not free.** 8 ch × 48 kHz × 32 bit ≈ 1.5 MB/s over the socket;
-  one bad WiFi hop shows up as a gap in `frames()`, not as an error.
+- **Decimation is not free.** 8 ch × 48 kHz of int16 PCM is ~768 KB/s of payload; the
+  bytes on the socket are higher because the frame body is JSON (int array ≈3 MB/s,
+  base64 ≈1 MB/s) — see the wire-rate section above. The old "1.5 MB/s / 6 MB/s" figures
+  were the 32-bit PCM rate and its JSON-expanded estimate. One bad WiFi hop shows up as a
+  gap in `frames()`, not as an error.

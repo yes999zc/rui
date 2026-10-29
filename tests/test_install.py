@@ -59,6 +59,16 @@ def test_setup_writes_the_production_template(tmp_path) -> None:
     assert cfg.audio.voice.kws_enabled is True
     assert cfg.audio.voice.vad_model_path == "/data/models/silero_vad.onnx"
     assert cfg.audio.playback.channels == 1
+    # 0.8.9: no `audio.capture.rate` in what setup leaves on disk. The token save that
+    # rewrites the file must not materialize the core default either - an absent key is
+    # what lets the plug manifest's native rate (LX06 48000) apply. The value still
+    # reads back as the core default 16000 when no manifest resolves.
+    from ruamel.yaml import YAML
+
+    on_disk = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+    assert "rate" not in on_disk["audio"]["capture"]
+    assert cfg.audio.capture.rate == 16000
+    assert "rate" not in cfg.audio.capture.model_fields_set
     assert cfg.music.enabled is False
 
 

@@ -5,6 +5,10 @@
 # them with its own audio_defaults), the provider chains are the order production uses (local
 # ASR first, 讯飞 TTS first with SiliconFlow behind it, DeepSeek for the LLM),
 # and the model directories are where `rui fetch-models` puts the files.
+# One field is deliberately absent: `audio.capture.rate`. Leaving it out lets each
+# plug's manifest declare its native wire rate (48 kHz for an 8 ch array speaker,
+# 16 kHz for a mono one). See the comment inside the capture block and
+# docs/audio-pipeline.md.
 # `{config_dir}` is replaced by setup with the directory the config lives in.
 #
 # The two things you still add by hand on a cold install:
@@ -46,7 +50,12 @@ audio:
   # Measured on the reference speaker (firmware 1.94.13). Do not copy these numbers
   # to another speaker; measure it.
   capture:
-    rate: 16000
+    # No `rate` on purpose: the device plug manifest's native rate wins.
+    # A `rate` written here is an operator wire negotiation and *beats* the manifest -
+    # the device then resamples for us. Write `rate: 16000` only to save bandwidth:
+    # it cuts the PCM payload to ~256 KB/s (on-wire bytes depend on the frame encoding)
+    # but the speaker's own 48k->16k resample measured ~15 dB down in the speech band
+    # and ASR stopped finishing (docs/audio-pipeline.md).
     channels: 8
     mic_channels: 6
     ref_channels: 2

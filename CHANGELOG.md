@@ -18,6 +18,39 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.9] - 2026-10-29
+
+**Theme: the 48 kHz capture path gets a polyphase decimator, and 8ch/48k devices now
+follow their manifest's native rate by default.** No protocol or `rui_compat` change.
+
+### Changed
+
+1. **多相抽取（Decimator，48k 路径）.** 48-tap FIR 按 `factor` 拆成相位，只对输出样本
+   做乘加，不再对每个输入样本卷积。语义与 0.8.8 逐样本一致（独立 oracle 覆盖
+   factor 2/3/4/5 × 1/2/7/8 ch × 多帧/非整除尾帧，worst `|diff|` **2.98e-7**）；
+   `factor == 1`（16k wire）不构造滤波器、`fir is None`，输出与 `astype(float32)`
+   逐样本相等，行为不变。
+   离线 10 s / 8 ch / 48 kHz（M2 Ultra，`time.process_time()`）：旧全速率约 **0.096 s**
+   → 多相 **0.0263 s**（8 ch，3.66×）/ **0.0352 s**（生产 7 列 = 6 mic + ref，2.74×）；
+   gate「10 s 音频 ≤ 0.2 s」PASS，`--seconds 30` 归一化 0.6 s 同样 PASS。
+   bench 与剖面见 `docs/analysis/decimate-profile-0.8.9.md`。
+2. **8ch/48k 默认跟随 manifest 原生率.** `src/rui/config/template.yaml` 与
+   `config.example.yaml` 不再写 `audio.capture.rate`，`effective_audio()` 直接采用插件
+   manifest 的 `audio_defaults.capture.rate`（LX06 = 48000）。显式 16k 仍可用，0.8.8
+   行为保持不变；但显式 16k 会让设备端自己做 48k→16k 重采样，语言带实测约 **−15 dB**，
+   后果是 ASR 空转/超时（唤醒照常成功，所以「能唤醒」查不出）。16k 因此降级为
+   「想省带宽时显式写」的选项。文档见 `docs/audio-pipeline.md` 的「wire 率」一节与
+   `docs/known-limitations.md` L27。
+
+### Notes
+
+- **无协议变更，`rui_compat` 不变**；`rui-xiaoai-bridge`、`rui-dot2-bridge` 零改动。
+- **CPU 口径**：多相化只解释抽取器本身（48 kHz 路径上约占单核 0.3%，旧约 1%）。生产
+  从 16k 换到 48k 多出来的 +2 核里，其余部分的归属**未**在离线证实——不要读成
+  「CPU 已解决」；剖面文档已写明这条边界。
+- 老部署若要吃到 48 kHz，需手动删掉配置里的 `audio.capture.rate`（或改成 48000）并重启
+  音频平面；0.8.9 不会自动改写现网配置。本 release 只发版本，部署由 9哥 单独决定。
+
 ## [0.8.8] - 2026-10-29
 
 **Hotfix: the standby KWS gate now learns the room floor, and `voice peak` only logs

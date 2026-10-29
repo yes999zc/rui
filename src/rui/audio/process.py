@@ -1303,12 +1303,21 @@ class AudioPlane:
             return b""
         samples = np.frombuffer(frame.pcm, dtype="<i2")
         usable = frame.frame_samples * frame.channels
+        # Only the columns the voice path reads are converted and decimated: the mic
+        # channels plus the one AEC reference at index `mic_channels`. The wire can be
+        # wider (an 8-column array speaker: 6 mics + 2 references); the spare columns are
+        # never read here, so the slice bounds the filter history to what this path
+        # consumes and keeps the measured shape at the production width. The slice is
+        # capped by `decimator.channels`, so a caller that sized the filter for the whole
+        # wire (e.g. `Decimator(channels=8)` in the tests) still sees every column and
+        # keeps its old behaviour.
+        used = min(decimator.channels, frame.channels)
         # Normalise before anything else: the decimator, the canceller and the KWS all
         # work in [-1, 1]. Feeding them int16 magnitudes and multiplying back at the end
         # clips every sample of the output - which sounds like noise to a wake word and
         # is invisible in a byte count.
         block = decimator.process(
-            samples[:usable].reshape(-1, frame.channels).astype(np.float32) / 32768.0
+            samples[:usable].reshape(-1, frame.channels)[:, :used].astype(np.float32) / 32768.0
         )
 
         raw_mic = block[:, : frame.mic_channels]
@@ -1381,9 +1390,13 @@ class AudioPlane:
         connected: asyncio.Event,
         writer: asyncio.StreamWriter,
     ) -> None:
+        # One filter per column the voice path actually consumes: mic_channels mics plus
+        # the single reference `_frame_to_voice` hands to the AEC. `info.channels` can be
+        # wider (8 = 6 mic + 2 ref on the production array speaker) and the extra column
+        # has no reader.
         decimator = Decimator(
             factor=max(1, info.sample_rate // self.cfg.audio.voice.rate),
-            channels=info.channels,
+            channels=info.mic_channels + (1 if info.ref_channels > 0 else 0),
         )
         last_ts: float | None = None
         async for frame in self.adapter.frames():

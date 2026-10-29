@@ -1,3 +1,55 @@
+# HANDOFF — rui 0.8.9（release 收口，待 commit/tag，未部署）
+
+phase-close: task-3
+
+## 版本与契约
+
+- **rui 0.8.9**：`pyproject.toml` / `src/rui/__init__.py` / `uv.lock` 三处一致；
+  tag `v0.8.9` → 本次 release commit（提交后 `git describe --tags` 可查）。CHANGELOG `[0.8.9] - 2026-10-29`，
+  release notes `docs/releases/v0.8.9.md`。
+- **无协议 / `rui_compat` 变更**（仍 `>=0.8.1 <0.9.0`）；插件不变（dot2 1.3.5 / xiaoai 0.2.3）；
+  `rui-xiaoai-bridge`（HEAD `7f8f8d8`）与 `rui-dot2-bridge`（HEAD `c0bd0de`）**零改动、工作区干净**。
+- **未部署**：生产仍是 **0.8.8**（`2dac336`，2026-10-29 15:00 部署）；living 当前按 48k wire 手工运行。
+  部署必须等 **9哥 单独点头**。
+- **部署前置（重要）**：现网 `/config/config.yaml` 若仍显式写着 `audio.capture.rate: 16000`，升级不会自动改；
+  要吃 48k 必须删除该键（或改成 48000）并重启音频平面。模板改动只影响新装/重装。
+- 回滚锚：v0.8.8 = `2dac336`；回滚只回退 rui 镜像/版本，桥仓无需动。
+
+## 已完成
+
+- **A 多相抽取（0.8.9）**：`src/rui/audio/decimate.py` 48-tap 按 factor 拆相位、只对将输出样本做乘加，
+  无全速率卷积、无 `(n,ch,taps)` 中间量；旧实现保留为 `_reference_decimate` 仅测试用；
+  `factor==1`（16k wire）不构造滤波器、不建历史、与 `astype(float32)` 逐样本相等。
+  `process.py:_frame_to_voice` 只转换/抽取 voice 实际读取的列（6 mic + 1 ref），AEC ref 索引与通道顺序不变。
+  证据：独立 HEAD oracle（factor 2/3/4/5/7 × ch 1/2/7/8 × 多帧/非整除尾帧）worst |diff| **2.98e-7**；
+  离线 10 s/8ch/48k `Decimator` **0.0965 s → 0.0263 s（8ch）/ 0.0352 s（生产 7 列）**，gate ≤0.2 s PASS；
+  `--seconds 30` 归一化门限 0.6 s PASS。剖面与 per-stage 表：`docs/analysis/decimate-profile-0.8.9.md`。
+- **B 默认率与文档（0.8.9）**：`src/rui/config/template.yaml` 与 `config.example.yaml` 不再写
+  `audio.capture.rate`，manifest 原生率生效（8ch/48k 设备 → 48000；Dot 2 → 16000；无 manifest 旧 plug 仍 core default 16000）；
+  显式 16k 仍赢并产生 negotiated conflict（0.8.8 行为保持），但会让设备端 48k→16k 重采样、语言带实测约 −15 dB、
+  ASR 空转/超时。文档：`docs/audio-pipeline.md`「wire 率」、`docs/known-limitations.md` **L27**；
+  wire 口径已按桥源码校正：PCM payload 768/256 KB/s，WS 帧内是 JSON（int 数组 ≈3 MB/s、base64 ≈1 MB/s），
+  旧「6 MB/s」为 32-bit PCM 1.5 MB/s × ~4× JSON 估算。
+- **门禁**：全量 `uv run pytest -o addopts="" -q` → **2165 passed, 6 skipped**（基线 HEAD 2136/6，净增 29 条）；
+  `uv run ruff check src tests` → All checks passed。task-1：reviewer-a **PASS**、verifier-a **VERIFIED**；
+  task-2：reviewer-b **PASS**、verifier-b **VERIFIED**（独立跑 `python -m rui setup` 验证落盘无 rate）。
+- **A4 口径边界（不许过度宣称）**：多相只解释抽取器本身；core 侧 48k−16k 全通路差约 **0.036 s/10 s**
+  （NAS 约 5–7% 单核），**不能解释生产 +186 个百分点**。剩余归属（plug/wire decode、WS 线程与 3× payload、
+  ASR/VAD worker、设备侧采集）**未在离线证实**；生产 py-spy 需 9哥 授权，本批未做。
+
+## 下一步
+
+1. **9哥 决定是否部署 0.8.9**：部署前备份 `config/config.yaml`、`plugins/`、override；删掉/改写
+   `audio.capture.rate` → `up -d`；按真机验收目标记录：living 平面 ≤0.6 核、容器 ≤130%、NAS load <3、
+   `asr_done` ≤250 ms、唤醒 admit ≤500 ms、播歌时 KWS 不回归。失败回滚 v0.8.8 `2dac336`。
+2. **若 CPU 未达预期**：按 `docs/analysis/decimate-profile-0.8.9.md` 的待测清单，在 9哥 授权后对 NAS 做
+   `py-spy`/perf 逐线程 profile（wire decode/plug、WS、ASR/VAD、设备侧），不要把多相化说成「CPU 已解决」。
+3. 文档小 nit（非阻塞）：`docs/audio-pipeline.md` 的「约 2.8×」可统一为 profile 的 2.74×；
+   ADR 0007 仍为历史叙述，ADR 0008 已加 superseded 标注。
+4. release 发布动作：commit + tag `v0.8.9` + push 到 GitHub（等用户确认 push）。
+
+---
+
 # HANDOFF — rui 阶段快照（v0.8.6 已部署生产）
 
 ## 版本与契约

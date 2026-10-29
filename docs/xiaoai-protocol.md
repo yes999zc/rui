@@ -48,10 +48,16 @@ The client serialises raw bytes as a JSON array of integers — roughly 4 bytes 
 on the wire. At 48 kHz × 8 ch × 20 ms that is 30,720 bytes of PCM behind a ~120 kB JSON
 message, fifty times a second: about 6 MB/s. At 16 kHz × 8 ch it is 1 MB/s.
 
+> **Updated 0.8.9**: those figures are the **32-bit** PCM estimate (1.5 MB/s of PCM × ~4×
+> JSON overhead). The wire PCM is int16 — 2 B/sample — so the payload is **768 KB/s** at
+> 48 kHz × 8 ch (256 KB/s at 16 kHz), and the JSON frame body adds the encoding on top
+> (int array ≈3 MB/s, base64 ≈1 MB/s). The capture rate is no longer a fixed 16 kHz
+> request: the template omits `capture.rate` and the plug manifest's native rate applies.
+> See `docs/audio-pipeline.md`, "wire 率：48 kHz 还是 16 kHz（0.8.9）".
+
 The speaker's ALSA device runs at 48 kHz, but `sample_rate` in `start_recording` asks the
-plug layer for whatever we want, and 16 kHz × 8 ch is what the old deployment ran in
-production. AEC, KWS and VAD all run at 16 kHz anyway, so `config.example.yaml` asks for
-16 kHz and `capture.rate: 48000` stays available for analysis runs.
+plug layer for whatever we want. AEC, KWS and VAD all run at 16 kHz regardless of the wire
+rate; `capture.rate: 16000` remains available as an explicit bandwidth-saving request.
 
 ## Measured on the speaker (2026-10-21, LX06 1.94.13)
 

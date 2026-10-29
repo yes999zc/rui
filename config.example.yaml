@@ -74,11 +74,21 @@ devices:
 audio:
   # Measured on LX06 1.94.13 - do not copy these numbers to another speaker, measure it.
   capture:
-    # The speaker's ALSA device runs 48000 Hz / S32_LE / 8 ch, but this number is what
-    # we *ask* the client to send. The client JSON-encodes raw bytes as an int array,
-    # so 48 kHz costs ~6 MB/s over wifi versus ~1 MB/s at 16 kHz. AEC/KWS/VAD run at
-    # 16 kHz anyway; set 48000 only for a full-rate analysis capture.
-    rate: 16000
+    # No `rate` here on purpose: the device plug manifest's native rate applies
+    # (LX06 48000, Dot 2 16000). The bridge receives `record` as a binary websocket
+    # frame whose JSON body carries the PCM in its `bytes` field: an int array (the
+    # fork also accepts base64). The PCM itself is int16, 2 B/sample, so the payload
+    # is 48 kHz x 8 ch = 768 KB/s (~6 Mbit/s) versus 256 KB/s (~2 Mbit/s) at 16 kHz;
+    # the bytes on the wire are higher by the JSON encoding (int array ~3 MB/s,
+    # base64 ~1 MB/s at 48 kHz). The old "6 MB/s" was the 32-bit figure: 1.5 MB/s of
+    # PCM x the same ~4x encoding overhead.
+    #
+    # Writing `rate: 16000` here is a negotiation, not a hardware fact: the explicit
+    # wire wins over the manifest and the speaker resamples 48k->16k itself. Measured
+    # on the LX06 that costs ~15 dB in the speech band (segment rms 0.006/0.008 vs
+    # 0.035 at 48 kHz) and leaves ASR idling or timing out. AEC/KWS/VAD still run at
+    # 16 kHz internally, so write 16 kHz only when wifi bandwidth matters more than
+    # ASR: it is the explicit option, never the default.
     channels: 8
     mic_channels: 6        # ch0..ch5
     ref_channels: 2        # ch6, ch7 (playback reference, needed for barge-in)

@@ -106,6 +106,44 @@ def test_shipped_example_config_parses() -> None:
     # real speaker. The schema default stays 60 on purpose, so a dot2 install that
     # omits `volume` keeps its old level. See docs/lx06-volume-default-0.8.5.md.
     assert cfg.devices[0].volume == 45
+    # 0.8.9: the example must not turn 16 kHz into every install's wire request. The
+    # value read back is the core default; it is not a choice, so the plug manifest's
+    # native rate (LX06 48000) wins. See the wire-rate section of docs/audio-pipeline.md.
+    assert cfg.audio.capture.rate == 16000
+    assert "rate" not in cfg.audio.capture.model_fields_set
+
+
+def test_the_shipped_template_leaves_capture_rate_to_the_manifest(tmp_path) -> None:
+    """0.8.9: `rui setup`'s template omits `audio.capture.rate` on purpose.
+
+    `capture.rate` is the one negotiated audio field: a value in the file is the
+    operator's wire request and beats the manifest, which makes the speaker resample
+    48k->16k itself (~15 dB lost in the speech band on the LX06, ASR idle). Leaving
+    the key out lets each plug declare its native rate; 16 kHz stays available by
+    writing the key explicitly. The core default (what a plugless config falls back
+    to) is still 16000 - see `test_defaults_are_sane`.
+    """
+    from ruamel.yaml import YAML
+
+    template = REPO / "src" / "rui/config/template.yaml"
+    raw = YAML(typ="safe").load(template.read_text(encoding="utf-8"))
+    assert "rate" not in raw["audio"]["capture"]
+    assert raw["audio"]["capture"]["channels"] == 8
+
+    # The same text `rui setup` writes: only `{config_dir}` is resolved.
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        template.read_text(encoding="utf-8").replace(
+            "{config_dir}", str(tmp_path)
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+    assert cfg.audio.capture.rate == 16000
+    assert "rate" not in cfg.audio.capture.model_fields_set
+    # The other capture fields are stated (they are the reference speaker's layout).
+    assert (cfg.audio.capture.channels, cfg.audio.capture.mic_channels,
+            cfg.audio.capture.ref_channels) == (8, 6, 2)
 
 
 V1_CONFIG = """\

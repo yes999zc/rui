@@ -10,8 +10,9 @@ Resolution matrix under test:
 
 * a model manifest's hardware facts win over an explicit global value, and the
   disagreement is reported (``audio.capture.channels: global 8 vs model 1; using 1``);
-* ``capture.rate`` is negotiated: the explicit wire wins and the client resamples
-  (the living LX06 must keep asking for 16 kHz);
+* ``capture.rate`` is negotiated: an explicit wire wins and the client resamples (a
+  config that states 16 kHz keeps it); with no stated rate the manifest's native rate
+  applies, which is what the shipped 0.8.9 template relies on (LX06 48 kHz);
 * ``devices[].audio`` still wins over everything (the permanent dot2-b declaration);
 * a missing/unloadable manifest is visible, never a silent core default;
 * a co-located manifest is in the catalog before the plane's first effective read
@@ -242,13 +243,18 @@ def test_lx06_declares_no_voice_defaults_so_the_global_timing_is_unchanged(
 
 
 def test_living_lx06_keeps_16k_8ch_and_its_1200ms_ack(tmp_path: Path) -> None:
+    """An *explicit* 16 kHz wire still wins, exactly as in 0.8.8.
+
+    This is the operator's bandwidth choice, not the shipped default: the template in
+    `test_the_shipped_template_takes_the_lx06_native_48k` states no rate at all.
+    """
     cfg = _load(tmp_path, [_device("living", adapter="lx06", plug_id=LX06_ID,
                                    room="客厅")])
     device = cfg.devices[0]
     eff = effective_device_audio(cfg, device)
 
-    # Production shape: the explicit global wire keeps asking the client for 16 kHz;
-    # every other field already equals the manifest, so nothing drifts.
+    # The explicit global wire keeps asking the client for 16 kHz; every other field
+    # already equals the manifest, so nothing drifts.
     assert (eff.capture.rate, eff.capture.channels) == (16000, 8)
     assert (eff.capture.mic_channels, eff.capture.ref_channels) == (6, 2)
     assert (eff.capture.bits, eff.capture.mic_shift, eff.capture.ref_shift) == (32, 12, 16)
@@ -256,12 +262,79 @@ def test_living_lx06_keeps_16k_8ch_and_its_1200ms_ack(tmp_path: Path) -> None:
     assert effective_device_ack_echo_ignore_ms(cfg, device) == 1200
 
     conflicts = device_audio_conflicts(cfg, device)
-    # The LX06 manifest declares 48 kHz native capture; the production wire is a
+    # The LX06 manifest declares 48 kHz native capture; the explicit wire is a
     # deliberate 16 kHz request (client resamples), reported as negotiated, not silent.
     assert [item.path for item in conflicts] == ["capture.rate"]
     assert conflicts[0].winner == "global-config"
     assert conflicts[0].kind == "negotiated"
     assert "global 16000 vs model 48000; using 16000" in conflicts[0].message
+
+
+#: The real install template, so the default path is pinned against the shipped file
+#: and not against a fixture that could drift from it.
+SHIPPED_TEMPLATE = (
+    Path(__file__).resolve().parents[1] / "src" / "rui" / "config" / "template.yaml"
+)
+
+
+def _load_shipped_template(tmp_path: Path, devices: list[str]) -> Config:
+    text = SHIPPED_TEMPLATE.read_text(encoding="utf-8")
+    text = text.replace("{config_dir}", str(tmp_path / "config"))
+    # The template's system.data_dir is the container path; keep the plug discovery
+    # under the test's tmp dir (the dot2 fixture is installed there).
+    text = text.replace("data_dir: /var/lib/rui", f"data_dir: {tmp_path / 'data'}")
+    text = text.replace("devices: []\n", "devices:\n" + "".join(devices))
+    path = tmp_path / "config.yaml"
+    path.write_text(text, encoding="utf-8")
+    from rui.config import load_config
+
+    return load_config(path)
+
+
+def test_the_shipped_template_takes_the_lx06_native_48k(tmp_path: Path) -> None:
+    """0.8.9: a fresh install must not ask an 8ch LX06 for 16 kHz.
+
+    With `capture.rate` absent the manifest's native 48 kHz wins and there is nothing
+    to negotiate - no conflict. The old template stated 16000, which won the merge and
+    made the speaker resample 48k->16k itself (~15 dB lost in the speech band, ASR
+    idle). See docs/audio-pipeline.md, "wire 率".
+    """
+    cfg = _load_shipped_template(
+        tmp_path, [_device("living", adapter="lx06", plug_id=LX06_ID, room="客厅")])
+    assert "rate" not in cfg.audio.capture.model_fields_set
+    device = cfg.devices[0]
+
+    eff = effective_device_audio(cfg, device)
+    assert (eff.capture.rate, eff.capture.channels) == (48000, 8)
+    assert (eff.capture.mic_channels, eff.capture.ref_channels) == (6, 2)
+    assert (eff.capture.bits, eff.capture.mic_shift, eff.capture.ref_shift) == (32, 12, 16)
+    # The template's own layout/ack numbers equal the manifest's, so a fresh install
+    # reports no disagreement at all.
+    assert device_audio_conflicts(cfg, device) == []
+
+
+def test_the_shipped_template_leaves_the_dot2_at_its_native_16k(tmp_path: Path) -> None:
+    """The other half: omitting the rate must not move a mono 16 kHz model.
+
+    Dot 2 declares `capture.rate: 16000` itself; the template's silence means that
+    native rate applies with no negotiated conflict (its layout/playback conflicts are
+    covered by `test_new_dot2_with_empty_audio_gets_the_models_hardware_facts`).
+    The 16 kHz / mono result alone would also match the core default, so this test
+    first proves the manifest really resolved and that a manifest-only field arrived.
+    """
+    _install_plug(tmp_path)
+    cfg = _load_shipped_template(
+        tmp_path, [_device("dot2", adapter="dot2", plug_id="dot2-echomuse")])
+    device = cfg.devices[0]
+
+    defaults = device_audio_defaults_info(device, cfg.system.data_dir)
+    assert (defaults.resolved, defaults.plug_id) == (True, "dot2-echomuse")
+
+    eff = effective_device_audio(cfg, device)
+    # Manifest-only proof: the template's playback wire is 16000, Dot 2's is 48000.
+    assert eff.playback.rate == 48000
+    assert (eff.capture.rate, eff.capture.channels) == (16000, 1)
+    assert "capture.rate" not in {item.path for item in device_audio_conflicts(cfg, device)}
 
 
 def test_a_dot2_device_override_still_beats_the_manifest(tmp_path: Path) -> None:

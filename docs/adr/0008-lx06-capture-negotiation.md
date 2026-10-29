@@ -1,5 +1,10 @@
 # 0008 — The LX06 manifest's 48 kHz capture rate stays a negotiated value
 
+> **Superseded by 0.8.9**: the install template no longer requests 16 kHz explicitly, so
+> the manifest's native rate applies; see the wire-rate section of `docs/audio-pipeline.md`.
+> The decision record below is kept as written (the negotiation semantics themselves are
+> unchanged - an explicit `capture.rate` still wins and the client resamples).
+
 - Status: accepted (0.8.1, 2026-10-28) — documentation record; no code or manifest change
 - Context: task-26 (`3d40266`), ADR 0007 (`docs/adr/0007-audio-facts-ownership.md`),
   production incident recorded in `docs/HANDOFF.md` (0.8.0 P0)
