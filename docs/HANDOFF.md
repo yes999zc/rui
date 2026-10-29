@@ -1,5 +1,26 @@
 # HANDOFF — rui 阶段快照（v0.8.6 已部署生产）
 
+## 2026-10-29 第二批（v0.8.7 候选，进行中）
+
+- 代码已提交并 push：`c3d6f15`（music 外部源钩子 `RUI_MUSIC_SOURCES` + `local.tell_joke`
+  （joke-svc / 20 条兜底 / 两段谜语 / `audio_url` 下载播放）+ P0 `voice peak` 日志 +
+  P1 待机 KWS 门控），main 触发 CI 四 workflow。
+- 门禁：task-1/2/3/4/5/6 全部独立 reviewer PASS（task-2/4 经多轮 CHANGES 收口），
+  fresh verifier **VERIFIED**（全量 2096 passed / 6 skipped、ruff 绿、web typecheck+build 绿、
+  wheel 含 `rui/data/jokes.fallback.json` 20 条）。
+- 进行中：task-7（A 卡：`AliasStore.apply` 接音乐主路径、控制台 `music_search` 传 names、
+  打断后短应答放行、别名文件 640）。
+- 待做：task-8 `[phase] v0.8.7 发布与部署`（版本 0.8.7、CHANGELOG/release notes、CI 四绿、
+  tag、`gh release`、生产部署 + D5 七项 + 待机 CPU/load + 回滚锚）。
+- 不在本批：B1/B2/B3（ASR 热词、话术三分、known-limitations）；P2（living 专项 profile /
+  ref 通道退出 AEC 评估）。
+- 已定口径：joke 服务（NAS `:18081`）、music 外部源（NAS `:18082`）；token
+  `JOKE_SERVICE_TOKEN` / `MUSIC_SERVICE_TOKEN` 走 secrets，不进 config；joke 只认
+  `audio_url`（rui 下载到 `<data_dir>/tmp`），不认跨机 `audio_path`；外部源 `duration_ms`
+  需 `/1000` 转 `Track.duration` 秒。
+- 注意：`config.example.yaml` 不写 RFC1918 地址（secret-scan soft 规则），示例用
+  `joke-svc.example.lan`；生产真实地址只写部署机 config/override。
+
 2026-10-29 · 本轮收口到 **task-5（第三方桥开发者入口包）** · 下一批从 **task-6「music 外部音源钩子」** 开始
 
 phase-close: task-11
