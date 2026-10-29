@@ -18,6 +18,105 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.11] - 2026-10-30
+
+**Theme: 身份、清单、画面都变成部署者能决定的事——但版本号不能。** 三块新能力：身份文案
+里可以写版本号（值只能来自代码）、HA 实体清单从「全量注入」变成四个配置项、新增
+`local.look` 让助手真的能看一眼摄像头。同批修掉 0.8.10 现场暴露的两件事：命名的场景
+（`scene.turn_on`）可以执行，不再是 scene 域一律拒绝；多实体批量控制分批 + **回查后**如实
+报「部分成功」，不再把 20+ 实体的失败说成「全都没关」。无协议破坏性变更，两个桥仓零改动。
+
+### Added
+
+1. **A — 身份占位符 `{version}` / `{config_version}`.** `assistant.persona` 与
+   `assistant.system_prompt` 的 format 占位符新增两项：`{version}` = `rui.__version__`、
+   `{config_version}` = 配置格式版本（`Config.version`）。`session/prompts.py` 的
+   `build()` 用**同一份**映射渲染模板与 persona，两处都能用；手写花括号的老配置仍走原
+   try/except 原样保留。热改动仍然生效：`PUT /api/v1/config {"assistant": {...}}` 换掉
+   `runner.assistant` 后下一轮重建 prompt 即用新文案。
+2. **B2 — `tools.ha.allowed_scenes`：命名场景白名单（默认空 = 仍然拒绝）.** 每项必须是
+   `scene.<lowercase_digits_underscore>` 形式的 entity_id（配置校验期报错，重复项去重），
+   匹配用 **entity_id 精确相等**——friendly name 只用于注入展示，改名不能把别的实体混进
+   白名单。`lock` / `alarm` / `valve` / `script` / `automation` / `shell_command` /
+   `python_script` / `hassio` 仍然一律拒绝，不因这个键放宽。白名单里的场景会在注入清单里
+   单独成段（「可用场景：离家场景[全屋灯闭]=scene.…」），**不受 `context_domains` 影响**，
+   名字过 `_clean_untrusted`、整段仍以「[不可信外部数据]」开头；白名单为空时不出现该段。
+3. **C — 新只读工具 `local.look`：看一眼摄像头.** 参数 `question`（可空：想问画面里的
+   什么）与 `camera`（可空 / `书房` / `这里` = 本机 USB；配置过的别名 = 对应的 HA 摄像头；
+   也接受 `camera.xxx` 形式的 entity_id）。取**一帧**：USB 走
+   `GET {vision.usb_snapshot_url}`（实时抓帧），HA 走
+   `GET {tools.ha.base_url}/api/camera_proxy/<entity_id>`（HA 保存的**最近一帧**）。
+   图在内存里转成 `data:image/jpeg;base64,` 交给**现有** LLM 链路（不新建 HTTP/供应商栈、
+   不改对话路径），要求 1–2 句中文、≤80 字，提示词写明「只描述看到的，看不到就说看不到，
+   不要编」。回复带标签区分实时与最近一帧（`vision.label_live` /
+   `vision.label_latest`）。**画面会以 base64 发到配置的大模型端点，默认
+   `api.deepseek.com`**；不落盘（不写 data 目录、不写 `/tmp`、不缓存）。
+4. **C2 — `scripts/usb_snapshot_server.py`：Mac 侧快照服务.** 单文件、只用标准库，
+   `ffmpeg -f avfoundation` 抓单帧走 stdout 管道（不落盘），
+   `GET /snapshot.jpg` → `200 image/jpeg`；抓帧失败/超时 → `503` + 一行原因；其它路径 404。
+   默认 `127.0.0.1:8766`（本机 8765 已被其它常驻服务占用），`--host --port --device --size
+   --ffmpeg --timeout` 可调；**没有鉴权**，所以要跨机就绑内网、不要暴露公网（见
+   `docs/usb-snapshot.md`）。
+
+### Changed
+
+1. **A — 默认 persona 与默认 system prompt 换了口径.** 默认 persona 现在逐字是
+   「你是家里的小助理，叫{name}，跑在 rui {version} 上（家里自建的语音服务，不是 Home
+   Assistant）。不知道就说不知道，别装懂。」默认 system prompt 追加一条歧义规则：用户问
+   你是谁 / 你是什么系统 / 版本是多少时，说的是**你自己**（rui 的版本），不是 Home
+   Assistant；提到 Home Assistant 的版本时必须明确说成它的版本。另加一句「你自己就是客厅
+   那台音箱，不要把你自己当可控制设备」（模型过去会答应「把音箱关掉」）。
+2. **B — HA 实体清单四个配置项，默认精简.** `tools.ha.context`（默认 `true`：是否注入）、
+   `context_domains`（默认 `["light","switch","cover"]`）、`entity_cap`（默认 `120`，
+   1–1000）、`context_exclude`（正则列表，默认空）。**默认去掉 `scene` / `script` 是有意的
+   默认行为变化**：`tools/ha.py` 的 `EXCLUDED_DOMAINS` 本来就拒绝对它们的调用（0.8.11 起
+   scene 只走白名单），列出来只会教模型去调一个必然失败的域。过滤顺序固定为「域 →
+   `context_exclude`（`re.search`，大小写不敏感，实体名或 entity_id 任一命中即排除）→
+   `entity_cap`」；取数预算按 cap 的 3 倍（200–1000）放宽，避免被排除项吃掉上限；注入文本
+   仍带「[不可信外部数据]」标记与 `_clean_untrusted` 清洗；每轮日志打印
+   `fetched N / injected M`；缓存带 domains 指纹，改配置立即生效（不用等 TTL）。
+   生产实测口径 75 条 / 4121 字 → 预期 ~43 条 / ~1796 字（按部署配置的 exclude）。
+3. **B2 — 批量控制 8 个一批、超时可配、回查后如实上报.** 多实体 `call_service` 改成每批
+   ≤8 个（`SERVICE_BATCH`）、**串行**发送，总预算 `call_timeout_s × 1.5`（新配置
+   `tools.ha.call_timeout_s`，默认 `10.0`，2–60），单批超时取「剩余预算」与
+   `call_timeout_s` 的较小值。批次失败后**先回查受影响实体的状态再说话**：全部生效 →
+   `ok`（话术不变）；部分生效 → 新状态 `partial`，payload 带 `ok_count` / `total` /
+   `failed`（≤2 个名字 + 「等」），话术 `device.partial`「只做成了一部分：{total} 个里有
+   {ok_count} 个照做了，{failed}没成功，别当成全好了。」；全部未生效 → `unreachable`
+   （现有话术）；**回查本身失败** → 保守报 `partial`，绝不报 `ok`，也绝不声称「全都没关」。
+   单实体路径行为不变。
+4. **小修 — `/api/v1/debug/tool` 现在按 `spec.name` 或 `llm_name` 解析.** `runner._handlers`
+   的键是 `spec.llm_name`（`local.look` → `look`），0.8.10 用注册名调用会被判
+   `404 no such tool`，正是本地自检与静音验收要用的那条路。现在两种名字都能解析到 handler
+   与渲染名，真不存在的名字仍 404。
+
+### Notes
+
+- **无协议破坏性变更**：新增的都是配置键、工具、短语与 `partial` 状态；`rui_compat` 不变
+  （`>=0.8.1 <0.9.0`）；插件不变（dot2 1.3.5 / xiaoai 0.2.3）；
+  `rui-xiaoai-bridge`、`rui-dot2-bridge` **零改动**。
+- **「版本号本身不可配置」是设计取舍，不是遗漏**：配置只能决定文案里**哪里**出现版本，
+  值只能来自 `rui.__version__`（`{config_version}` 同理来自配置格式版本）。要是版本能写进
+  配置，升级后就会漂移、手写错还能对着用户撒谎；现在问「版本是多少」得到的永远是这一份
+  代码的真实版本。
+- **隐私口径（必读）**：`local.look` 取的这一帧以 base64 发到配置的大模型端点，默认是
+  `api.deepseek.com`；`providers.llm.chain` 配了多级兜底时，**每一家**都会收到同一帧。
+  不想让画面出网，就把 LLM 链指向本机的 OpenAI 兼容视觉服务，链路不用改。工具自身日志只有
+  设备名 + 字节数 + 耗时（毫秒）；框架层既有的工具调用日志仍会记参数与渲染后的回复（全局
+  行为，按 logger `rui.tools.look` 可单独过滤）。细节见 `docs/local-look.md`。
+- **老配置兼容**：四个 `tools.ha.*` 新键与 `tools.vision.*`（`usb_snapshot_url` /
+  `cameras` / `timeout_s` / `cooldown_s`）都有默认值，不写也能跑；不写新键时唯一的实际
+  变化是清单默认不再列 `scene` / `script`（这是本版有意的默认变化）。`allowed_scenes` 默认
+  空 = 与 0.8.10 一样拒绝一切 scene 调用。
+- **`vision.timeout_s` 是一次 look 的总预算**（取一帧 + 视觉描述共用），不是每个环节一份；
+  整轮工具超时是 20 s，所以上限压在 30 s 也不会让回合卡死。
+- **未在真机验证**：本版发布时生产仍是 **0.8.10**；发声类验收（问版本/问身份/天奕门口
+  画面/书房 USB 画面/关全屋灯）留白天由 9哥 现场做，`docs/releases/v0.8.11.md` 与
+  `docs/HANDOFF.md` 写清了待验清单与回滚锚（0.8.10 index
+  `sha256:30e8ed47f2ae0ce4281752c4130bfa58e53f63095f128eae5330e5e5703e1155`）。
+- **门禁**：`uv run pytest -q` 与 `uv run ruff check src tests` 由独立 verifier 在代码冻结后
+  重跑并回填到 `docs/releases/v0.8.11.md`；本版不删不跳任何测试。
+
 ## [0.8.10] - 2026-10-29
 
 **Theme: every wake and every barge now gets an answer, and a failed request stops
