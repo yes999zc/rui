@@ -211,7 +211,17 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   `adapter.py`（八方法骨架 + TODO）、`tests/test_contract.py`（CLI 未合入时 skip+hint）、README 中英、LICENSE、.gitignore。
   验证：house-ear loader → `OK example-plugin 0.1.0`；`rui plug-test ../rui-plugin-template --adapter …:build`
   → **EXIT=0，pass=20 fail=0 warn=0 skip=1**；禁用内容 grep 0 命中、仓干净。`rui-adapter-check` 合入后由 verifier 补跑模板契约测试。
-- A（docs）、B（CLI）仍在进行中；下一步不变。
+- **B/task-26 ✅ DONE**：house `c431f70`（已 push main，未 tag）。`rui-adapter-check` conformance CLI：
+  `src/rui/device/adapter_check.py`（**import** `rui.device.contract` + `rui.device.mock`，复用 `rui.plugins.contract`
+  的 import/build/call/frame 原语，未复制实现）、`scripts/rui_adapter_check.py` 薄包装、`[project.scripts]` 加
+  `rui-adapter-check`、`tests/test_adapter_check.py`（12 例）+ `tests/fixtures/adapter-check/{pass,fail}`。
+  `--adapter` 支持插件目录 / plugin.yaml / `module:attr` / `file.py:attr`；每项 `PASS <check>` / `FAIL <check>: reason`，
+  汇总后任一 FAIL exit 1。真输出：PASS fixture **22 PASS / 0 FAIL** exit 0；fail fixture（缺 `play`）**2 FAIL**
+  exit 1；`--device-id fail-bad-frames`（frames 返回 dict）**1 FAIL** exit 1；`../rui-plugin-template`
+  **22 PASS exit 0**（本卡验收项）；`tests/fixtures/sample-plug` PASS + 1 WARN（未实现 `read_volume` 属可选面）；
+  新增 pytest **12 passed**、ruff 绿、`uv pip install -e .` 后控制台命令可用；CI `secret-scan` **success**
+  （ci/security/docker-publish 10:47 时仍在跑）。
+- A（docs）仍在进行中；B 已 DONE；下一步不变。
 执行顺序：task-28（A+D 文档/链接）→ task-26（B conformance CLI）→ task-27（C 模板仓）
 → task-29（fresh reviewer+verifier，含「外人 30 分钟上手」自测）→ task-30（收口）。
 边界不变：**不发版/不 tag/不 release/不动生产**；只 commit 到 main，等下次核心发版自然带上。
