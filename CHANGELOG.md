@@ -18,6 +18,67 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.6] - 2026-10-29
+
+**Theme: the channels page comes back to the v2 console, the landing pages stop
+tracking versions, and the dot2 1011 evidence is recorded as data.** The console
+page restores a capability removed with the legacy panel system in 0.8.0 (it is
+not a new protocol surface); no protocol or `rui_compat` change
+(`>=0.8.1 <0.9.0`). Plugins ship at **dot2 1.3.5** / **xiaoai 0.2.3**.
+
+### Added
+
+1. **v2 console `/channels` page.** Telegram and WeChat cards (enable switch,
+   `text`/`voice`/`both` reply mode, per-id allowlist add/remove with trimming),
+   the managed channel gateway's `start`/`stop`/`restart`, and read-only token /
+   login state (`token_configured`, `logged_in`/`account_id`/`user_id`). Saving
+   issues `PUT /api/v1/channels`, then re-reads with `GET` and reports whether the
+   read-back matches; 503 copy is split by context (gateway action vs. channels
+   load/save), 422 shows the backend detail, network failures keep the shared
+   fallback, and zh/en stay in sync. Reached from the Config sub-nav; no legacy
+   `/legacy` route is revived and no design system is added. Covered by
+   `tests/test_channels_view.py` (21 cases: source contract + real `TestClient`
+   read-back/422/503 behaviour, no mocked HTTP errors). *(D8)*
+2. **Version-agnostic landing pages.** The three repo READMEs (core + both
+   bridges) now describe the project instead of the version history: per-version
+   sections are gone and the only version pointer is "Latest release". The
+   one-command AI onboarding path stayed. *(D6)*
+3. **arm64 runtime verification.** The published 0.8.5 image was pulled and
+   checked on `linux/arm64`: `ffmpeg` runs, `rui` + `numpy` import, and the
+   service starts with `/health` returning 200 and `version=0.8.5`. Runtime layer
+   only — no ARM performance/stability claim. Evidence:
+   `docs/arm64-verification-0.8.5.md`. *(D7)*
+
+### Fixed
+
+1. **dot2 1011 bridge-side close counters documented (dot2 bridge 1.3.5).** The
+   bridge's single close line now carries `close#N interval=…s dropped=N` (pure
+   diagnostics; keepalive/abort/reconnect behaviour unchanged). §10 of
+   `docs/analysis/dot2-data-plane-1011.md` shows one real event (table #12:
+   `rx=9329320B tx=0B close#12 interval=305.1s`) instead of splicing two events,
+   and keeps the field-by-field reading guide. *(D4)*
+2. **Channel page 503 copy is contextual.** A failed gateway
+   `start`/`stop`/`restart` says the channel supervisor is not ready; a failed
+   channels load/save says the service is temporarily unavailable. 422 still
+   carries the validation detail and network errors keep the shared fallback.
+   `v2.channels.saveFailed` is now the save-failure title instead of dead copy.
+   *(task-19)*
+3. **Analysis example consistency.** The §10 sample line and its `close#N`
+   explanation now agree with the §2.2 table, so the documented log shape can be
+   re-checked against production output. *(task-19)*
+
+### Deployment and plugins
+
+- **0.8.6 is planned for production** (the first deploy since 0.8.4; 0.8.5 was
+  tag/release only). The tag/release performs no deployment itself: the rollout
+  follows the `docs/HANDOFF.md` checklist after 9哥's approval, with backup and
+  rollback anchors.
+- **Plugins**: dot2 bridge **1.3.5** (adds the 1011 close counters) / xiaoai bridge
+  **0.2.3**. `rui_compat` is unchanged (`>=0.8.1 <0.9.0`); xiaoai is README-only
+  in this batch. See `docs/releases/v0.8.6.md` for the deployment matrix.
+- **Not verified**: the channels page was not point-checked in a real browser
+  (typecheck/build + API tests are the evidence); D7 is runtime-only.
+
 ## [0.8.5] - 2026-10-28
 
 **Theme: the line at the time you asked for, the minute you actually said, and a CI
