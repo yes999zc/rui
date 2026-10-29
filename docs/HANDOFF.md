@@ -1,10 +1,12 @@
-# HANDOFF — rui 0.8.10（release 收口，部署待执行）
+# HANDOFF — rui 0.8.10（已发布并部署，真机验收待回填）
 
 phase-close: task-9
 
 ## 版本与契约
 
-- 基线：tag `v0.8.9` → `a1d5afe`（已发布、**未部署**）；生产仍是 **0.8.8**（`2dac336`）。
+- **生产：rui 0.8.10**（2026-10-29 23:19–23:22 由 bridge 在 NAS 部署，9哥 当场授权；
+  镜像 index `sha256:30e8ed47…e1155`）。上一代生产 0.8.8（`2dac336`）。
+- 基线：tag `v0.8.9` → `a1d5afe`（已随 0.8.10 一并上线）。
 - **0.8.10 已发布**：commit `9008643`，annotated tag `v0.8.10`（`6045ca5`），
   GitHub release https://github.com/yes999zc/rui/releases/tag/v0.8.10 ；版本三处一致。
 - 镜像（tag 的 docker-publish 已绿）：index `sha256:30e8ed47…e1155`；
@@ -19,11 +21,11 @@ phase-close: task-9
   `audio.capture.rate`）：**部署 0.8.10 即同时上线 0.8.9**。依据 **0.8.10 批次生产运行时
   基线（2026-10-29，9哥 任务书）**，现网显式 `audio.capture.rate: 16000`，显式 global 值赢
   （`kind: negotiated`），manifest 48k 不生效。
-- **部署前先看 `/api/v2/devices/living/audio` 的 `sources` 实测**：**16k 分支**（默认预期）→
-  `sources["capture.rate"] = "global-config"`、`effective.capture.rate = 16000`、decimator
-  `factor = 1`（不执行多相滤波）；**若现网实际为 48k**（`device-manifest` / global 48000）→
-  `effective = 48000`、`factor = 3`，验证按 48k 分支并照 `docs/known-limitations.md` L27
-  复核 CPU/ASR 与带宽取舍。
+- **部署后实测（2026-10-29 23:2x）**：`/api/v2/devices/living/audio` 的
+  `sources["capture.rate"] = "device-override"`（因为 `devices[living].audio.capture.rate: 16000`
+  显式存在，不是 `global-config`）；`effective.capture.rate = 16000`，manifest 48k 没赢；
+  wire = voice = 16000 ⇒ decimator `factor = 1`（不执行多相滤波）。**判读口径按三态**：
+  `global-config` / `device-override` / `device-manifest`，三者只要 effective=16000 都是安全的。
 
 ## 已完成
 
@@ -49,22 +51,32 @@ phase-close: task-9
 - **文档欠账（task-11，`[0.8.10]` 收尾）**：`docs/known-limitations.md` 新增 **L28** ——
   `audio.aec.who` 的 `none`/`both` 无独立实现（`_build_aec()` 只有 `who == "device"`
   一条提前返回，两者当前等同 `controller`），本批只登记、不改行为；release notes 补
-  「本版包含 0.8.9（已发布未部署）」段与部署后 `sources.capture.rate = global-config` +
+  「本版包含 0.8.9（已发布未部署）」段与部署后 `sources.capture.rate` +
   decimator `factor = 1` 的验证口径；CHANGELOG `[0.8.10]` Notes 同步一句。
+- **部署实测（0.8.10，bridge 执行，2026-10-29 23:19–23:22）**：
+  - 备份：`config/config.yaml.bak-20261029-231949`、`plugins.bak-20261029-231949`、
+    `rui-dot2-override.yml.bak-20261029-231949`、`image-prev-20261029-231949.txt`。
+  - override 镜像换 index `sha256:30e8ed47f2ae…e1155`；`DOT2_MIC_GAIN_DB` 18→12
+    （容器 env 已核对 =12）；`compose -f ×2 pull + up -d rui` 成功。
+  - `/health`：version **0.8.10**、config_version 3、devices 5、device_errors 0、
+    planes_running 5、warnings []；dot2-d 已连；living capture **16000 / 8ch / 6mic+2ref /
+    mic_shift=10 / ref_shift=16**（基线未漂移）。
+  - **口径偏差（下次改文档时带上，不用发版）**：release notes/HANDOFF 原写
+    `sources["capture.rate"]="global-config"`；实测是 **`device-override`**——因为
+    `devices[living].audio.capture.rate: 16000` 显式存在。生效值仍是 16000、manifest 48k
+    没赢，功能安全。判读口径应改为三态：`global-config` / `device-override` / `device-manifest`。
+  - **已知工具缺口（非本批引入）**：`POST /api/v1/debug/tool` 返回
+    `no such tool: local.music_play`——27 个 tool 都在 `/api/v1/tools`，但
+    `runner._handlers` 未注册；T2/T3/T4 只能真机验证。记一笔，另立卡处理。
 
 ## 下一步
 
-1. 收尾 task-11 文档欠账：commit + `git push` + `gh release edit v0.8.10` 把补充后的
-   release notes 正文同步到 GitHub release（tag 指向的 commit 不变）。
-2. 部署（9哥/bridge 确认后执行）：备份 config/plugins/override → override 加 `DOT2_MIC_GAIN_DB: "12"` →
-   `docker compose -f docker-compose.yml -f rui-dot2-override.yml pull && ... up -d rui` →
-   验证：`/api/v2/house` 的 `.version.rui=0.8.10`/`.multi_device.planes_running=4`/`.warnings=[]`；
-   `/api/v2/devices/living/audio` capture 仍 16k/8ch/mic_shift=10/ref_shift=16、
-   **`sources["capture.rate"]="global-config"`**（显式 16k 仍赢）、**decimator `factor=1`**（16k wire 不跑多相）→
-   即 0.8.9 并入后行为未漂移；T1 连续 3 次沉默唤醒 ≤2 s 可再唤醒；T2 debug/say 现场句
-   说出「曲库里没找到」；T3 在线曲「这个来源不支持收藏」；T4「现在都有哪个灯开着」正常；T5 barge 有提示音
-   + ≤1 s「没听清」、近讲 overdrive/clipped 正确、远场不触发。
-3. 回滚锚：0.8.8 = `2dac336`；0.8.9 = `a1d5afe`。
+1. 9哥/bridge 按 `docs/releases/v0.8.10.md` 的 1–7 项做真机听感与削波阈值验收，结果回填
+   `04_Docs/human-bridge/goal-0.8.10.md` 第十节（本仓 HANDOFF 只记结论）。
+2. 下次改文档时把 `sources.capture.rate` 判读改成三态（global-config / device-override /
+   device-manifest）；不为此单独发版。
+3. 另立卡：`/api/v1/debug/tool` 的 `runner._handlers` 未注册 `local.music_play` 等工具的问题。
+4. 回滚锚：0.8.8 = `2dac336`；0.8.9 = `a1d5afe`；部署前备份见上（`*.bak-20261029-231949`）。
 
 ---
 
