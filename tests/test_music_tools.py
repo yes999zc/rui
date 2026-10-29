@@ -61,12 +61,13 @@ class Recorder:
         self.sent.append(msg)
 
 
-def make(tmp_path: Path, cfg: Config | None = None, source: object | None = None):
+def make(tmp_path: Path, cfg: Config | None = None, source: object | None = None,
+         names: object | None = None):
     cfg = cfg or Config()
     cfg.music.enabled = True
     source = source or FlakySource()
     history = PlayHistory(tmp_path / "h.json", keep=10)
-    service = MusicService(source, history, Recorder(), cfg.music)
+    service = MusicService(source, history, Recorder(), cfg.music, names=names)  # type: ignore[arg-type]
     tools = dict((spec.llm_name, handler)
                  for spec, handler in build_music_tools(cfg, service))
     specs = dict((spec.llm_name, spec) for spec, _ in build_music_tools(cfg, service))
@@ -454,3 +455,170 @@ def test_an_exact_title_beats_a_longer_fuzzy_title(tmp_path: Path) -> None:
     assert out.status in ("ok", "ok_one")
     assert out.payload["title"] == "晴天"
     assert out.payload["artist"] == "周杰伦"
+
+
+# ---------------------------------------------------------------------------
+# T2: a failed play speaks and never reaches the player; silence is success only.
+
+class NoNames:
+    """NameResolver stand-in: no model call, so a failure stays a failure."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        from rui.music.names import AliasStore
+
+        self.aliases = AliasStore(tmp_path / "resolver_names.json")
+
+    async def candidates(self, name: str) -> list[str]:
+        return []
+
+
+class ModeSource(FlakySource):
+    """One switch per outcome: ok / not_found (wrong fuzzy hit) / unreachable /
+    unresolved."""
+
+    def __init__(self) -> None:
+        self.mode = "ok"
+
+    async def search(self, term: str, limit: int) -> list[Track]:
+        if self.mode == "unreachable":
+            raise SourceError("nas unreachable")
+        if self.mode == "not_found":
+            # Subsonic's answer to the artist half of 「叫紫色的雨夜航线第三号」.
+            return [Track(id="subsonic:x", title="云紫色", artist="云紫", duration=200)]
+        return [Track(id="subsonic:1", title="雨夜航线第三号的歌", artist="叫紫色",
+                      duration=200)]
+
+    async def random(self, limit: int) -> list[Track]:
+        if self.mode == "unreachable":
+            raise SourceError("nas unreachable")
+        return await super().random(limit)
+
+    async def resolve(self, track: Track) -> Path:
+        if self.mode == "unresolved":
+            raise SourceError("not one track could be fetched")
+        return Path("/tmp/music/x.pcm")
+
+
+def spy_play(service: MusicService) -> list[list[str]]:
+    """Record every call into the player, delegating to the real queue."""
+    played: list[list[str]] = []
+    original = service.play
+
+    async def play(tracks: list[Track], start: int = 0) -> Track | None:
+        played.append([t.id for t in tracks])
+        return await original(tracks, start=start)
+
+    service.play = play  # type: ignore[method-assign]
+    return played
+
+
+def test_a_failed_lookup_speaks_and_never_reaches_the_player(tmp_path: Path) -> None:
+    """The field case: a fuzzy hit for the artist half of the ask must not play.
+
+    「放一首叫紫色的雨夜航线第三号的歌」 split into artist 叫紫色 + title
+    雨夜航线第三号的歌; the artist pool answered 云紫色 and the old order played it
+    first. The title has to be accepted before `play()` is even considered.
+    """
+    async def run() -> None:
+        service, source, tools, specs = make(tmp_path, source=ModeSource(),
+                                             names=NoNames(tmp_path))
+        source.mode = "not_found"
+        played = spy_play(service)
+        result = await tools["music_play"](
+            {"query": "放一首叫紫色的雨夜航线第三号的歌"})
+        assert result.status == "empty", result.payload
+        assert played == [], "a failed lookup must not replace the queue"
+        assert service.state == "idle"
+        out = say(specs, "music_play", result)
+        assert "曲库里没找到" in out
+
+    asyncio.run(run())
+
+
+def test_an_unreachable_library_speaks_and_never_reaches_the_player(
+        tmp_path: Path) -> None:
+    async def run() -> None:
+        service, source, tools, specs = make(tmp_path, source=ModeSource(),
+                                             names=NoNames(tmp_path))
+        source.mode = "unreachable"
+        played = spy_play(service)
+        result = await tools["music_play"]({"query": "来点歌"})
+        assert result.status == "unreachable"
+        assert played == []
+        assert service.state == "idle"
+        assert "连不上" in say(specs, "music_play", result)
+
+    asyncio.run(run())
+
+
+def test_unresolved_tracks_report_before_anything_plays(tmp_path: Path) -> None:
+    """`unresolved` needs the play attempt (every fetch fails); the queue must be
+    empty afterwards, so no old song is left replaced by a failed request."""
+    async def run() -> None:
+        service, source, tools, specs = make(tmp_path, source=ModeSource(),
+                                             names=NoNames(tmp_path))
+        source.mode = "unresolved"
+        played = spy_play(service)
+        result = await tools["music_play"](
+            {"query": "放一首叫紫色的雨夜航线第三号的歌"})
+        assert result.status == "unresolved"
+        assert played, "the resolution failure is only knowable by trying"
+        assert service.state == "idle"
+        assert service.current is None
+        assert "取出来" in say(specs, "music_play", result)
+
+    asyncio.run(run())
+
+
+def test_a_started_song_reports_ok_one(tmp_path: Path) -> None:
+    """The status the silent rule keys on: ok/ok_one only after a real start."""
+    async def run() -> None:
+        service, _, tools, _specs = make(tmp_path, source=ModeSource(),
+                                         names=NoNames(tmp_path))
+        played = spy_play(service)
+        result = await tools["music_play"](
+            {"query": "放一首叫紫色的雨夜航线第三号的歌"})
+        assert result.status == "ok_one"
+        assert played == [["subsonic:1"]]
+        assert service.state == "playing"
+
+    asyncio.run(run())
+
+
+def test_favorites_failure_speaks_and_success_stays_playable(tmp_path: Path) -> None:
+    async def run() -> None:
+        class FavSource(ModeSource):
+            async def favorites(self) -> list[Track]:
+                if self.mode == "unreachable":
+                    raise SourceError("favorites down")
+                if self.mode == "no_favorites":
+                    return []
+                return [Track(id="subsonic:f1", title="收藏曲", artist="A",
+                              duration=200)]
+
+        service, source, tools, specs = make(tmp_path, source=FavSource(),
+                                             names=NoNames(tmp_path))
+        played = spy_play(service)
+
+        # empty: a phrase, and no player call
+        source.mode = "no_favorites"
+        empty = await tools["music_play_favorites"]({})
+        assert empty.status == "empty"
+        assert played == []
+        assert "还没有收藏" in say(specs, "music_play_favorites", empty)
+
+        # unreachable: still no player call
+        source.mode = "unreachable"
+        down = await tools["music_play_favorites"]({})
+        assert down.status == "unreachable"
+        assert played == []
+        assert "读不出来" in say(specs, "music_play_favorites", down)
+
+        # success: starts playing, status is a success one
+        source.mode = "ok"
+        ok = await tools["music_play_favorites"]({})
+        assert ok.status == "ok_one"
+        assert played == [["subsonic:f1"]]
+        assert service.state == "playing"
+
+    asyncio.run(run())

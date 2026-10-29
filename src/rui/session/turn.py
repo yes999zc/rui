@@ -64,6 +64,14 @@ log = logging.getLogger(__name__)
 MUSIC_ANSWER_TOOLS = {"resume": "music_resume", "next": "music_next",
                       "stop": "music_stop"}
 
+# `InteractionSpec.answer == "silent"` means "the action is the answer" only when the
+# action actually happened. `ok` / `ok_one` are the statuses a play handler returns
+# after the queue started; every failure (`empty`, `unreachable`, `unresolved`, a
+# timeout, a raised handler) must still be spoken. Counting silent calls by the spec
+# alone made a failed song lookup a silent turn: 2026-10-29 「放一首叫紫色的雨夜航线
+# 第三号的歌」 -> an unrelated cover started and 「曲库里没找到…」 was never read out.
+SILENT_SUCCESS_STATUSES = frozenset({"ok", "ok_one"})
+
 
 # The prompt now lives in `session/prompts.py`, assembled per turn (it carries the length
 # bands and the "no tools this round" note). Kept here as an alias so old imports do not
@@ -431,6 +439,12 @@ class TurnRunner:
         # The V-line rendering table: llm_name -> InteractionSpec (None = the
         # handler's own text; docs/interaction.md §3).
         self._interactions = {spec.llm_name: spec.interaction for spec, _ in self.tools}
+        # The status of the tool call that just finished (None when the handler
+        # answered with free text, timed out or raised). The silent rule needs the
+        # action's outcome, not the spec's declaration: `_call_tool` still returns
+        # the rendered string, so the status rides beside it instead of being
+        # reverse-parsed out of the phrase.
+        self._last_tool_status: str | None = None
         # The old build's INFO_TOOLS: a looked-up answer gets the longer budget; a weather
         # answer does not (it is short and the user is standing there).
         self.info_tool_names = {
@@ -1277,10 +1291,19 @@ class TurnRunner:
                         call = dict(call)
                         call["arguments"] = json.dumps(parsed, ensure_ascii=False)
                     output = await self._call_tool(call)
+                    status = self._last_tool_status
                     result.tools.append(call.get("name", ""))
                     spec = self._interactions.get(call.get("name", ""))
                     if spec is not None and getattr(spec, "answer", "text") == "silent":
-                        silent_calls += 1
+                        # Silent only when the action happened. A failed play has a
+                        # phrase (not_found / unreachable / unresolved) and the turn
+                        # must stay open so the model reads it out; otherwise the
+                        # listener hears nothing at all.
+                        if status in SILENT_SUCCESS_STATUSES:
+                            silent_calls += 1
+                        else:
+                            log.info("tool %s returned %s: the failure must be spoken",
+                                     call.get("name", ""), status)
                     log.info("tool %s(%s) -> %s", call.get("name", ""),
                              str(call.get("arguments") or "")[:120], output[:160])
                     if call.get("name") in self.info_tool_names:
@@ -1490,7 +1513,13 @@ class TurnRunner:
         A handler may return a structured ToolResult; its words then come from the
         PhraseBook via the tool's InteractionSpec (docs/interaction.md §3). A plain
         string still passes through unchanged - the migration is per-tool.
+
+        The rendered string is the return value (many callers and the model only
+        need that), while `self._last_tool_status` carries the structured status
+        alongside it. The silent rule reads the status; it must never guess the
+        outcome from the phrase's wording.
         """
+        self._last_tool_status = None
         name = call.get("name", "")
         handler = self._handlers.get(name)
         if handler is None:
@@ -1523,6 +1552,7 @@ class TurnRunner:
                 log.info("tool %s -> direct speech (%d chars)", name, len(direct.text))
                 return direct.notice
         if isinstance(output, ToolResult):
+            self._last_tool_status = output.status
             return self._render_tool_result(name, output)
         return str(output)
 

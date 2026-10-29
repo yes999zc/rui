@@ -95,7 +95,14 @@ async def _search(source: MusicSource, p: q.QueryPlan,
                 return _rank_hits(keep, p.title)
             pool = await source.search(p.artist, 25)
             if pool:
-                return _rank_hits(pool, p.title)
+                # The artist pool is ranked by title, never trusted blindly: Subsonic
+                # answered 「紫色…雨夜航线第三号」 with 云紫色 because the artist half
+                # of the split ("叫紫色") fuzzily matched, and the unfiltered pool
+                # played an unrelated cover. A hit has to contain the asked-for title
+                # to be a hit (same rule as every other branch here).
+                keep = [t for t in pool if q.accepts(t.label, p.title)]
+                if keep:
+                    return _rank_hits(keep, p.title)
             return _rank_hits([t for t in hits if q.accepts(t.label, p.title)], p.title)
         return _rank_hits(
             [t for t in await source.search(p.term, 25) if q.accepts(t.label, p.title)], p.title)
@@ -123,11 +130,6 @@ def _started(tracks: list[Track], started: Track | None) -> ToolResult:
     result.options = [{"id": t.id, "title": t.title, "artist": t.artist}
                       for t in tracks[:8]]
     return result
-
-
-def _started_or(tracks: list[Track], started: Track | None,
-                empty: ToolResult) -> ToolResult:
-    return _started(tracks, started) if tracks else empty
 
 
 def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec, Any]]:
@@ -202,9 +204,14 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         except SourceError as exc:
             log.info("music_play: %s", exc)
             return ToolResult(status="unreachable")
-        started = await service.play(tracks) if tracks else None
-        return _started_or(tracks, started,
-                           ToolResult(status="empty").slot(want=p.title or p.term))
+        # Judge before playing, never after: a lookup that found nothing must not
+        # reach the queue at all (the old order called play() first, so a failure
+        # could replace the song while the answer stayed silent). `unresolved` is
+        # the one status that needs the play attempt - it means every track failed
+        # to resolve - and `play()` leaves nothing behind when that happens.
+        if not tracks:
+            return ToolResult(status="empty").slot(want=p.title or p.term)
+        return _started(tracks, await service.play(tracks))
 
     async def music_search(args: dict[str, Any]) -> ToolResult:
         """Read-only look-up: the candidate list the model can actually see.
@@ -280,9 +287,10 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
             favs = await source.favorites()
         except SourceError:
             return ToolResult(status="unreachable")
+        if not favs:
+            return ToolResult(status="empty")
         random.shuffle(favs)
-        started = await service.play(favs) if favs else None
-        return _started_or(favs, started, ToolResult(status="empty"))
+        return _started(favs, await service.play(favs))
 
     async def music_taste(_args: dict[str, Any]) -> ToolResult:
         top = service.history.top(3)
