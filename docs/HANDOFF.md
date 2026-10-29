@@ -1,8 +1,9 @@
-# HANDOFF — rui 0.8.11（版本与文档已交付；**未部署**，生产仍是 0.8.10）
+# HANDOFF — rui 0.8.11（已发布并静音部署；生产 /health = 0.8.11）
 
-> 本节是 0.8.11 的交接块（发布部分）。部署与静音验收由 T6 执行后在本节下方补
-> 「部署清单 / 部署实测 / 待白天发声验收」；收口标记由 Lead 在 T6 `phase_close` 时追加，
-> 本节**不预写**。0.8.10 的历史交接块保留在本文下方，未改动。
+phase-close: task-6
+
+> 本节是 0.8.11 的交接块：发布、静音部署与静音验收已完成（2026-10-30 凌晨）；
+> 发声类验收留白天，清单见「待白天」。0.8.10 的历史交接块保留在本文下方，未改动。
 
 ## 版本与契约
 
@@ -10,8 +11,9 @@
   的 `__version__`、`uv.lock` 的 `[[package]] name = "rui"` version。
 - **`rui_compat` 不变**（`>=0.8.1 <0.9.0`），无协议破坏性变更；插件不变
   （dot2 1.3.5 / xiaoai 0.2.3）；`rui-xiaoai-bridge`、`rui-dot2-bridge` **零改动**。
-- **生产：仍是 rui 0.8.10**（`/health` = 0.8.10，config_version 3，0.8.10 于 2026-10-29
-  23:19–23:22 部署）。**0.8.11 尚未部署**，本文不写「已部署」。
+- **生产：rui 0.8.11**（2026-10-30 02:53 由本会话静音部署；`/health` version 0.8.11、
+  config_version 3、planes 5 running、warnings []、device_errors 0、容器 healthy）。
+  上一代生产 0.8.10（index `sha256:30e8ed47…e1155`）。
 - **回滚锚（当前生产）**：0.8.10 index digest
   `sha256:30e8ed47f2ae0ce4281752c4130bfa58e53f63095f128eae5330e5e5703e1155`
   （amd64 `sha256:9cb7c5d2…735ccf`、arm64 `sha256:5ce93e3d…0b71a30`）。
@@ -67,31 +69,89 @@
   **2308 passed, 6 skipped in 165.18s**（0.8.10 基线 2217 passed / 6 skipped，净增 91 条，
   0 删除 0 新增 skip）；`uv run ruff check src tests` → **All checks passed!**。
   已回填 `docs/releases/v0.8.11.md` 的 `<!-- gates -->`。
-- **部署与验收：还没做。** 0.8.11 未上生产，无部署实测、无真机听感证据。
+
+
+## 部署实测（0.8.11，本会话静音执行，2026-10-30 02:47–02:58）
+
+- **发布**：commit `eec6b7f`，annotated tag `v0.8.11`；CI：security ✓ / secret-scan ✓ /
+  docker-publish ✓（`ci` 在 main 同一 commit 绿）。镜像 index
+  `sha256:8965bd92febdca89dd3bb73be7db806946cd43b91ba243ceb1c6187bc7f7ccbe`；
+  amd64 `sha256:b7c6ebcf87e22f21b64f48aee3130e1bf8cd6b69b4eaaa87e66c08291353249f`；
+  arm64 `sha256:5d3ca8dd4386fff9f7219199f57b5a236966d0160f3196c15177968981085fb4`。
+- **备份（`20261030-023530`）**：`config/config.yaml.bak-20261030-023530`、
+  `rui-dot2-override.yml.bak-20261030-023530`、`plugins.bak-20261030-023530.tgz`、
+  `image-prev-20261030-023530.txt`。
+- **部署**：override 镜像换 index digest → `docker compose -f docker-compose.yml -f
+  rui-dot2-override.yml pull && up -d rui` → 容器 `Up (healthy)`。
+- **本机配置（写前已备份）**：persona 含 `{name}`/`{version}` + 只开/关 + 摄像机只答不动设置；
+  `tools.ha.context_domains=[light,switch,cover]`；
+  `context_exclude=[摄像机|Camera Control|摄像机控制, 音箱|Speaker|lx06|小爱]`；
+  `allowed_scenes` 5 个；`call_timeout_s=10.0`；
+  `tools.vision.cameras={"天奕门口":"camera.192_168_5_45"}`；`usb_snapshot_url=""`（Mac 快照服务未起）。
+- **静音验收（真实命令/输出）**：
+  1. `/health` → version **0.8.11**、config_version 3、devices 5、device_errors 0、
+     5 planes running、warnings []、audio_plane true、speaker_connected true。✓
+  2. 热生效：`PUT /api/v1/config {"assistant":{"persona":"【热生效探针】…{version}…"}}` →
+     `/api/v1/debug/prompt` 下一轮即含探针且渲染「rui 0.8.11」；随后 PUT 恢复正式 persona
+     （200，校验无探针、`{name}`/`{version}` 仍在）。✓（真机问法留白天）
+  3. 清单：`/api/v1/debug/prompt` **5007 → 3807 字**；日志
+     `ha: entity context 48 entities, 2670 chars (fetched 65)`；实体 48 条
+     （light 2 / switch 36 / cover 10），**无** camera 控制开关、**无** lx06 音箱实体、**无** script；
+     scene 只出现在白名单场景段（5 个）。✓
+  4. 老配置兼容：容器用旧 config + 新键正常启动；16 条单测覆盖默认/旧缓存。✓
+  5. 天奕门口（不经音箱）：`POST /api/v1/debug/tool {"name":"local.look",
+     "args":{"camera":"天奕门口","question":"画面里有什么"}}` →
+     「最近一次（HA 代理）：画面中看不到人。…7F 标识…」；日志
+     `device=camera.192_168_5_45 bytes=76233 elapsed_ms=131 live=False` +
+     `described via deepseek_llm in 1227 ms (63 chars)`；HA camera_proxy 裸取 **200 / 76233 B**。✓
+  6. 书房 USB（服务未起）：同路径 `{"camera":"书房"}` → 「书房那台摄像头还没接上。」✓
+  7. 失败/限频话术：未知相机 → 「这台现在看不到画面。」；10 s 内第二次 →
+     「刚看过一次，等一下再看。」✓
+  8. 音频基线未漂移：`/api/v2/devices/living/audio` → capture 16000 / 8ch / 6mic+2ref /
+     mic_shift 10 / ref_shift 16。✓
+  9. **夜间静音约束：本会话未触发任何音箱出声**（无 say / TTS / 唤醒 / debug-say；
+     全部走 debug/tool 与只读 HTTP）。
+
+## 待白天（发声类，9哥 或 bridge 执行）
+
+1. 问「版本是多少」→ 答 rui 0.8.11（不是 Home Assistant 的版本）。
+2. 问「你是谁」→ 小瑞 + 家里自建的语音服务。
+3. 「关闭所有灯」→ `scene.turn_on` 一次成功；「关书房灯」「关儿童房灯」→ 对应场景；
+   部分失败必须听到「只做成了一部分」。
+4. 「天奕门口现在什么画面」→ 1–2 句（标签「最近一次」）。
+5. 「我这里是什么画面」→ 书房 USB：需先在 Terminal 授权相机并常驻
+   `python3 scripts/usb_snapshot_server.py --host 0.0.0.0`，再写
+   `tools.vision.usb_snapshot_url: http://192.168.5.27:8766/snapshot.jpg`（本机 LAN IP）。
+6. 0.8.10 遗留：HA 灯批量读、barge 短提示、削波阈值。
+
+## 遗留 / 已知风险
+
+- **C 卡末轮独立评审未做**（末轮评审 agent 在收口阶段不可用，按 9哥 指示不新开 agent，
+  降级收口）：Lead 亲自读 `look.py` 预算链 + 两条关键测试，跑定向 77 passed + 全量 2308/6 + ruff 绿。
+- goal 写的配置路径是 `vision.*`，实现落在 **`tools.vision.*`**（与其它工具配置同层；
+  docs/catalog/template/example 全部按 `tools.vision` 写，部署值也按此写入）。
+- prompt 3807 字高于 goal 预估 ~2700：switch 实际 36 条（预估 31）+ 新增场景段。
+- `ha._fetch_entities` 在 MCP 不可用时仍以空列表写缓存（HEAD 既有，本批未改）。
+- 批量回查里 scene 域状态是激活时间戳，多场景失败回查可能误判 unreachable（单场景路径不受影响）。
+- `tools.ha.call_timeout_s` 上限 60 与 turn 的 20 s 工具超时不匹配；生产已设 10。
+- Mac USB 快照服务无鉴权；跨机必须只在可信网段（`docs/usb-snapshot.md` 已警告）。
+- `debug/tool` 的 `local.*` 解析已修（name 或 llm_name），0.8.10 的 `no such tool` 缺口关闭。
 
 ## 下一步
 
-1. **发布收尾（Lead）**：逐卡 commit（英文 conventional）→ `git push origin main` →
-   `git tag -a v0.8.11` + push tag → 等 tag 的四条 CI 全绿（ci / security / secret-scan /
-   docker-publish）→ 建 GitHub release（body 取 `docs/releases/v0.8.11.md`）→ 回填
-   index / amd64 / arm64 三份 digest 到 release notes 的 `<!-- digests -->` 与本节。
-2. **静音部署（T6）**：备份 `/vol1/rui/config/config.yaml`、`plugins/`、
-   `rui-dot2-override.yml`、当前镜像摘要（`*.bak-<ts>`）→ override 换 0.8.11 index digest →
-   查定时提醒队列 → `docker compose -f docker-compose.yml -f rui-dot2-override.yml pull &&
-   up -d rui` → 写本机配置（persona 含 `{name}`/`{version}`、`tools.ha.context_domains`、
-   `context_exclude`、`allowed_scenes` 五个场景、`vision.usb_snapshot_url`、
-   `vision.cameras: {"天奕门口": "camera.192_168_5_45"}`）→ 再 `up -d rui`。
-3. **部署后静音验收**（回填 `docs/releases/v0.8.11.md` 表 1–7）：`/health` version=0.8.11 /
-   planes_running=5 / warnings=[] / device_errors=0；只改 assistant 文案热生效；
-   `/api/v1/debug/prompt` 实体条数 75 → ~43 且无 scene/script/摄像机控制/音箱自身；
-   老配置兼容；容器内 `POST /api/v1/debug/tool {"name":"local.look","args":{"camera":"天奕门口"}}`
-   与 `{"camera":"书房"}` 拿文本（不经音箱）；全程静音声明。
-4. **待白天发声验收（9哥 在场）**：问版本（答 rui 0.8.11，不是 HA 版本）/ 问身份（小瑞，
-   家里自建服务）/ 「天奕门口现在什么画面」/「我这里是什么画面」（书房 USB）/「关闭所有灯」
-   （走白名单场景一次成功，或如实说只做成一部分）。
-5. **回滚**：任一红 → 0.8.10 index
-   `sha256:30e8ed47f2ae0ce4281752c4130bfa58e53f63095f128eae5330e5e5703e1155`，记录回滚证据，
-   T6 改 CHANGES。
+1. **白天发声验收**：按「待白天」1–6 逐条回填结果（9哥 或 bridge 执行；HANDOFF 只记结论，
+   细项回填 `04_Docs/human-bridge/goal-0.8.11.md`）。
+2. **书房 USB 接入**：9哥 在 Mac 终端首次授权相机 → `python3 scripts/usb_snapshot_server.py
+   --host 0.0.0.0` 常驻（或 launchd）→ 写 `tools.vision.usb_snapshot_url:
+   http://192.168.5.27:8766/snapshot.jpg` → 重启 rui（或控制台保存 vision 配置）→ 语音问「我这里」。
+3. **不单独发版的小项**（下次改文档时带上）：
+   - `_fetch_entities` 在 MCP 不可用时改返回 `None` 走缓存（HEAD 既有问题）；
+   - 批量回查对 scene 域视为「不可验证」（避免多场景误报 unreachable）；
+   - `call_timeout_s` 上限与 turn 工具超时的关系写进 schema hint；
+   - 控制台 `catalog.py` 里 0.8.10 的 scene/清单旧文案同步到 0.8.11 语义。
+4. **回滚锚**：0.8.11 → 0.8.10 index
+   `sha256:30e8ed47f2ae0ce4281752c4130bfa58e53f63095f128eae5330e5e5703e1155`
+   （备份见「部署实测」；回滚只换镜像，旧版会忽略 `tools.vision` 等新键）。
 
 ---
 
@@ -1768,3 +1828,17 @@ gh release view v0.7.1 --json tagName,url                                      #
   3. 选定语义：**有限 followup 窗口 N 秒**（不是无限监听）。`VoiceConfig` 新增 `followup_max_wait_ms`（默认 8000，0=立即关闭/不续听），plane 用 `min(session.timeout_s*1000, followup_max_wait_ms)` 作为 gate `max_wait_ms`；告别后的窗口因此 ≤8 s，20 s 后必须唤醒词。文档写清 N，known-limitations/backlog 各登记一条。
 - **必测（先红后绿）**：告别后 1 s 说话 → 固定为「接受（followup 窗口内）」；告别后 20 s 说话 → 无唤醒必须拒绝；`idle goodbye in inf s` 不再出现（日志断言/单测 `remaining()` 非活动时日志文案）。
 - **未做**：代码/测试/文档、验证、commit。工作区干净（本卡尚未动文件）。
+
+## Bridge 交接（2026-10-30 03:2x，压缩前写下；与开发会话收口内容冲突时以开发会话为准）
+
+- **生产**：0.8.10 已部署（2026-10-29 23:19），`/health` 0.8.10 / config 3 / 5 平面 / warnings [] / device_errors 0。
+  回滚锚：0.8.10 index `sha256:30e8ed47f2ae0ce4281752c4130bfa58e53f63095f128eae5330e5e5703e1155`。
+- **0.8.11 在收口中**：已提交 `6c0e14e`（身份配置 + HA 清单过滤 + USB 快照脚本）、`32ac605`（scene 白名单 + 批量部分成功）；
+  版本号已 bump 0.8.11；工作区仍有 T3（`local.look`）与 release 文档在改。
+- **发布/部署**：按「降本收口」执行 —— T3 只走 reviewer（不额外 verifier）、全量测试只跑 1 次、release 打 tag、
+  夜间静音部署（不触发 TTS/唤醒）；发声类验收留白天。
+- **部署时需写入的本机配置**（勿写死进代码）：`assistant.persona` 身份句、`tools.ha.context_domains=[light,switch,cover]`、
+  `tools.ha.context_exclude=['摄像机|Camera Control','音箱|Speaker|lx06|小爱']`、`tools.ha.allowed_scenes`（5 个场景）、
+  `vision.usb_snapshot_url`（Mac 侧 8766）。
+- **待白天验收**：问版本（应为 rui 0.8.11，不是 HA）、问身份、关全屋灯/关书房灯走 scene、天奕门口画面、
+  书房 USB 画面、HA 灯批量读（issue #34）、barge 短提示与削波。
