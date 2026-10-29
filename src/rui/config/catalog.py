@@ -159,6 +159,12 @@ _GROUPS: dict[str, tuple[dict, int, int, str, dict]] = {
         "联网搜索。关掉 = 不再实时查资料；改地址/密钥变量后下一次调用就用新值，无需重启。",
         "Web search. Off = no live lookups; endpoint/key-variable changes apply on the "
         "next call without a restart.")),
+    "tools.joke": (_t("笑话与谜语", "Jokes & riddles"), 4, 35, "restart", _t(
+        "本地笑话/谜语工具。填自建服务地址就走服务，留空或服务不可用就用内置的 20 条示例；"
+        "失败只会退回示例，不会中断对话。工具在启动时装配，改完需重启服务。",
+        "Local joke/riddle tool. A service URL is used when set; empty or unreachable "
+        "falls back to the 20 bundled samples without breaking the turn. Tools are "
+        "assembled at startup, so restart applies a change.")),
     "tools.ha": (_t("Home Assistant", "Home Assistant"), 4, 40, "save", _t(
         "Home Assistant（专用桥）。填地址并保存会立刻重连，不用重启；token 值在「密钥」页或"
         "家庭助理管理页填。",
@@ -694,6 +700,33 @@ def _audio_fields() -> list[dict]:
          "改完重启音频面。",
          "Silero VAD model file (fetch-models). Empty = no segmentation: a wake is never "
          "transcribed. Restart the audio plane.", None, True),
+        # task-6 (0.8.7): standby CPU. The spotter runs per frame today, which is the
+        # bulk of the plane's idle CPU on a device that keeps its uplink open. Cold
+        # means "below standby_kws_db for standby_kws_hold_ms, with no turn/playback";
+        # the first louder frame reopens it and the preroll ring restores the onset.
+        ("standby_kws_gate", "待机唤醒门控", "Standby KWS gate", "bool", None, None,
+         "待机（无唤醒词、无问答、无播放）时，麦克风电平持续低于阈值就暂停唤醒模型，"
+         "有声音立即恢复并回灌预录音频，唤醒词开头不丢。关掉 = 恢复常开（CPU 高）。"
+         "改完重启音频面。",
+         "Suspend the wake model while standby audio stays below the threshold; the first "
+         "louder frame resumes it and replays the preroll, so the wake word's onset is kept. "
+         "Off = always-on (higher idle CPU). Restart the audio plane.", None, True),
+        ("standby_kws_db", "待机门控阈值", "Standby gate threshold", "number", -90, -20,
+         "低于这个电平（dBFS）持续一段时间即暂停唤醒模型。默认 -60 远低于正常说话，"
+         "房间噪声大时可能一直不暂停（不省电也不退化）；想更省电可调到 -50 左右，"
+         "但不要高到接近唤醒词本身。改完重启音频面。",
+         "Audio below this level (dBFS) for the hold time suspends the wake model. The "
+         "default -60 is far below speech; a noisy room may never suspend (no saving, no "
+         "regression). -50 saves more but must stay below the wake word itself. Restart "
+         "the audio plane.", _t("dBFS", "dBFS"), True),
+        ("standby_kws_hold_ms", "待机门控保持", "Standby gate hold", "number", 0, 10000,
+         "连续安静多久才暂停唤醒模型（毫秒）。1000 ms 只是防句间停顿误暂停，不增加唤醒"
+         "延迟（有声音立刻恢复）；0 = 第一个安静帧就暂停，更省电但切换更频繁。"
+         "改完重启音频面。",
+         "Continuous quiet before the wake model is suspended (ms). 1000 ms only stops a "
+         "pause between words from suspending it; it does not add wake latency (speech "
+         "resumes on the first frame). 0 = suspend on the first quiet frame, more saving "
+         "and more churn. Restart the audio plane.", _t("ms", "ms"), True),
     ]
     for key, zh, en, kind, lo, hi, hzh, hen, unit, advanced in voice:
         fields.append(_field(f"audio.voice.{key}", "audio.voice", kind, _t(zh, en),
@@ -1092,6 +1125,24 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "Search timeout; past it the turn treats the search as unavailable so "
                   "the answer is not held hostage. Applies on the next call."),
                unit=_t("秒", "s"), minimum=2, maximum=60, advanced=True),
+        _field("tools.joke_service_url", "tools.joke", "text",
+               _t("笑话服务地址", "Joke service URL"),
+               _t("自建笑话服务的地址（只填到主机/端口，工具会请求 /v1/joke）。留空 = 不联网，"
+                  "只用内置的 20 条示例；地址填错、超时或服务挂了也只会退回示例，不会中断对话。"
+                  "工具在启动时装配，改完需要重启服务。",
+                  "Base URL of your own joke service (host/port only; the tool calls "
+                  "/v1/joke). Empty = never call out and only the 20 bundled samples are "
+                  "used; a wrong URL, a timeout or a dead service also just falls back to "
+                  "the samples instead of breaking the turn. Tools are assembled at "
+                  "startup, so restart to apply."),
+               effect="restart"),
+        _field("tools.joke_timeout_s", "tools.joke", "number",
+               _t("笑话服务超时", "Joke service timeout"),
+               _t("调用笑话服务的超时（秒，0.5–10）。超过就退回内置示例，不会拖住整轮对话。"
+                  "改完需要重启服务。",
+                  "Joke service timeout in seconds (0.5-10). Past it the bundled sample is "
+                  "served instead of stalling the turn. Restart to apply."),
+               effect="restart", unit=_t("秒", "s"), minimum=0.5, maximum=10),
         _field("tools.ha.base_url", "tools.ha", "text",
                _t("家庭助理地址", "Home Assistant address"),
                _t("家庭助理（Home Assistant）的地址（专用桥，不是通用 MCP）。填好保存会立刻重连并"
@@ -1149,13 +1200,27 @@ def _tool_fields(cfg: Config) -> list[dict]:
 
 
 def _music_source_registry() -> tuple[list[str], str, str]:
-    """The select options and bilingual one-line list, from the preset registry."""
+    """The select options and bilingual one-line list.
+
+    Built-in presets first, then the ids the operator registered through
+    `RUI_MUSIC_SOURCES` (sorted). A preset id always wins over an env entry of the
+    same name, so the list never contains a duplicate. The env is read here, not at
+    import time, so a container restart is the only thing needed to add one.
+    """
+    from ..music.sources.external import external_source_ids
     from ..music.sources.presets import PRESETS
 
     available = [preset for preset in PRESETS if preset.supported]
     ids = [preset.id for preset in available]
     zh = "、".join(f"{preset.name_zh}（{preset.id}）" for preset in available)
     en = ", ".join(f"{preset.name_en} ({preset.id})" for preset in available)
+    external = [ident for ident in external_source_ids() if ident not in ids]
+    if external:
+        ids.extend(external)
+        zh += "；外部源：" + "、".join(f"{ident}（RUI_MUSIC_SOURCES）"
+                                     for ident in external)
+        en += "; external: " + ", ".join(f"{ident} (RUI_MUSIC_SOURCES)"
+                                         for ident in external)
     return ids, zh, en
 
 
@@ -1816,11 +1881,24 @@ def migrate_legacy_music_credentials(cfg: Config) -> bool:
 
 
 def music_credentials_state(cfg: Config) -> dict[str, Any]:
-    """Presence-only view for the console: never a credential value."""
+    """Presence-only view for the console: never a credential value.
+
+    An external source registered through `RUI_MUSIC_SOURCES` reads its own
+    credentials from `music.secrets_path`; rui has no slots to check, so the state is
+    "ready" with an empty missing list instead of falsely demanding url/user/password.
+    """
+    from ..music.sources.external import is_external_source
     from ..music.sources.presets import get_preset, missing_credentials
 
     preset = get_preset(cfg.music.source)
     data = music_credentials(cfg)
+    if preset is None and is_external_source(cfg.music.source):
+        return {
+            "present": music_credentials_path(cfg).is_file(),
+            "ready": True,
+            "missing": [],
+            "fields": {},
+        }
     if preset is None:
         missing = ("url", "user", "password")
         keys = ("url", "user", "password", "token")

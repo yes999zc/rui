@@ -16,6 +16,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..config.schema import AssistantConfig, ProvidersConfig, SessionConfig
@@ -186,6 +187,10 @@ class DirectSpeech:
     text: str
     notice: str = ""
     history: list[dict[str, str]] | None = None
+    # A pre-rendered local file that is the answer itself (the joke service can ship
+    # audio beside its text). Played instead of TTS; the text still goes to history.
+    # Only a local path ever reaches this field - the tool rejects URLs first.
+    audio_path: str | None = None
 
 
 # `(tool name, user transcript, raw handler output) -> DirectSpeech | None`.
@@ -365,6 +370,7 @@ class TurnRunner:
         turn_timeout_s: float = 30.0,
         idle: IdleWatch | None = None,
         direct_hook: DirectHook | None = None,
+        play_file: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.providers = providers
         # Built once, not per call. `asr_chain()` constructs the provider, and the local
@@ -426,6 +432,10 @@ class TurnRunner:
         # Opt-in direct-speech channel (daily briefing today). None = the historical
         # behaviour, byte for byte: a tool result is rendered and the model answers it.
         self.direct_hook = direct_hook
+        # Where a DirectSpeech carrying `audio_path` sends the file (the app wires the
+        # same PlayFile room routing music uses). None = always TTS, the pre-task
+        # behaviour; it is never required for text-only direct speech.
+        self.play_file = play_file
         self._pending_direct: DirectSpeech | None = None
         # task-30: one entry per TTS request this turn (a "segment" on the wire). The
         # ledger is what the reply log and the turn trace read: before this, a short
@@ -1237,8 +1247,27 @@ class TurnRunner:
                     direct = self._pending_direct
                     self._pending_direct = None
                     log.info("direct speech: %d chars (model round skipped)", len(direct.text))
-                    for piece in speech_pieces(direct.text):
-                        await say(piece)
+                    played = False
+                    # A pre-rendered file is the answer when there is one (joke audio);
+                    # any problem with it (missing file, dead plane) is a spoken line,
+                    # never a silent turn - the text is still in `direct.text`.
+                    if direct.audio_path and self.play_file is not None:
+                        try:
+                            if not Path(direct.audio_path).is_file():
+                                raise FileNotFoundError(direct.audio_path)
+                            await self.play_file(direct.audio_path)
+                            played = True
+                            log.info("direct speech: played %s instead of TTS",
+                                     direct.audio_path)
+                        except Exception as exc:  # noqa: BLE001 - TTS is the fallback
+                            log.warning("direct speech: cannot play %s (%s: %s), using TTS",
+                                        direct.audio_path, type(exc).__name__, exc)
+                    elif direct.audio_path:
+                        log.warning("direct speech: %s was given but no play_file channel "
+                                    "exists, using TTS", direct.audio_path)
+                    if not played:
+                        for piece in speech_pieces(direct.text):
+                            await say(piece)
                     break
                 # Only when EVERY tool this round is silent is the action the whole
                 # answer: a hallucinated music_play beside a weather call must not

@@ -356,6 +356,21 @@ class VoiceConfig(BaseModel):
     # 2 threads on the N100 kept three ONNX workers at 100%; one is enough for KWS
     # and leaves the other cores to AEC/VAD/control.
     kws_num_threads: int = Field(default=1, ge=1, le=4)
+    # Standby KWS gate (task-6, docs/standby-cpu-0.8.7.md). In true standby - no wake,
+    # no turn, no playback - feed the streaming spotter only while the microphone is
+    # above the threshold; a silent room then costs no model inferences. On speech the
+    # gate reopens on the first frame at/above the threshold and replays the
+    # `wake_preroll_ms` ring into the spotter, so the wake word's onset is not lost.
+    # The default is well below speech (and below any wake word the spotter can hear):
+    # a noisy room simply never goes cold - the fail-open direction, no saving but no
+    # regression. 0 dBFS would be full scale; -100 dBFS is digital silence here.
+    standby_kws_gate: bool = True
+    standby_kws_db: float = Field(default=-60.0, ge=-90.0, le=-20.0)
+    # Continuous quiet needed before the spotter is suspended. One second does not add
+    # wake latency (the gate reopens on the first speech frame); it only stops a pause
+    # between words from suspending it. 0 suspends on the first quiet frame (more
+    # saving, more churn).
+    standby_kws_hold_ms: int = Field(default=1000, ge=0, le=10000)
     # Turn segmentation. Empty path disables it (wake fires, nothing is transcribed).
     vad_model_path: str = ""
     # Audio kept from *before* the KWS hit and replayed into the gate afterwards. The
@@ -1214,15 +1229,26 @@ class ToolsConfig(BaseModel):
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    # The joke tool always exists; this URL only decides whether it asks a self-hosted
+    # service first. Empty = never call out, still serve the 20 bundled samples - so an
+    # empty default is a working install, not a disabled tool.
+    joke_service_url: str = ""
+    # A voice turn dies at ~20 s; three seconds is enough for a LAN service and short
+    # enough that the fallback joke lands while the user is still listening.
+    joke_timeout_s: float = Field(default=3.0, ge=0.5, le=10.0)
 
 
 class MusicConfig(BaseModel):
     """The music layer. One enabled source at a time; the interface is the point.
 
-    The source id is a preset (`music/sources/presets.py`): Navidrome, Airsonic,
-    Gonic, Ampache and a custom Subsonic-compatible URL all share one adapter. The
-    preset decides the display name, defaults and which credential slots exist; the
-    values themselves never enter this file.
+    The source id is either a preset (`music/sources/presets.py`): Navidrome,
+    Airsonic, Gonic, Ampache and a custom Subsonic-compatible URL all share one
+    adapter; or an external id registered through the operator's
+    `RUI_MUSIC_SOURCES` environment variable (`music/sources/external.py`), which
+    must implement the same `MusicSource` interface. The preset decides the display
+    name, defaults and which credential slots exist; the values themselves never
+    enter this file. An external source declares none of that - it reads its own
+    credentials from `secrets_path`.
 
     `url`/`user`/`password`/`token` below are **legacy read-only migration fields**.
     Older configs kept the credentials inline; on startup `migrate_legacy_music_credentials`
@@ -1233,8 +1259,9 @@ class MusicConfig(BaseModel):
     # Off by default: without the NAS reachable the tools would only ever answer
     # 「曲库里没找到」, and a dead tool list is noise the model has to talk around.
     enabled: bool = False
-    # A preset id from the registry. Unknown ids are rejected by every write path;
-    # a hand-edited YAML still loads so the panel can explain why music is off.
+    # A built-in preset id, or an id registered through RUI_MUSIC_SOURCES. Unknown
+    # ids are rejected by every write path; a hand-edited YAML still loads so the
+    # panel can explain why music is off.
     source: str = "navidrome"
     # Credential keys are the preset's slots inside this json; values never enter the
     # config or the log. Empty = none provisioned: a production default must not

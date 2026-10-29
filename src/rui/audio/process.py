@@ -111,6 +111,16 @@ METRICS_EVERY_S = 2.0
 # called it log noise (P2). Keep the measurement (it is how a threshold change is judged)
 # but one line per 30 s: the console's log filter still keys on "voice peak".
 LEVEL_LOG_EVERY = 15
+# task-5: the aggregate's starting point. `0.0` dBFS is full scale, not "no
+# measurement": `_build_metrics` reports `voice_peak_db=None` for a window with no
+# audible samples, so the old initial value survived an idle window and passed the
+# `> -55` guard, logging a clipping-looking `0.0 dBFS` line every 30 s at standby.
+# The floor is -120 dBFS - one bit of a 16-bit sample, below any real microphone
+# noise - and the `had_voice` flag tracked beside it decides whether to log at all.
+LEVEL_FLOOR_DBFS = -120.0
+# Keep the old reporting threshold: real speech is well above it, and a window whose
+# only energy is the noise floor is not worth a line.
+LEVEL_LOG_MIN_DBFS = -55.0
 # Volume reconciliation tolerance, in low-level mixer steps (0-255, the unit of
 # `DeviceServices.set_volume`/`read_volume`). The vendor's read-back is quantised: a
 # 219 write can report back as 218/220, and the old exact comparison then rewrote the
@@ -347,6 +357,100 @@ def _dbfs(samples) -> float:
     return 20.0 * math.log10(max(peak, 1e-5))
 
 
+class StandbyKwsGate:
+    """task-6: run the streaming KWS only while there is something to hear.
+
+    `_capture_frames` used to feed every 20 ms block to the spotter - 50 inferences a
+    second even on a silent microphone. That per-frame model work is the bulk of the
+    plane's standby CPU on devices that keep their uplink open (2026-10-29: living 29 %,
+    dot2 11 %, dot2-c 10 %; the physically muted dot2-b, which sends no uplink, sat at
+    1 %). This gate watches the frame level `_frame_to_voice` has already computed (a
+    cheap RMS, not another model) and keeps the spotter cold while the block is below
+    `threshold_db`, after `hold_s` of continuous quiet.
+
+    Cold frames are counted and skipped. On the cold -> hot edge the caller resets the
+    spotter and replays the preroll ring, so a wake word's onset is processed exactly as
+    if the spotter had never stopped. The gate is deliberately fail-open: any activity
+    (`engaged` - a turn, playback, a cue, a follow-up window: the caller decides) keeps
+    it hot, and the first frame at or above the threshold resumes it. A noisy room
+    never goes cold (no saving, no regression). The cost is documented in
+    `docs/standby-cpu-0.8.7.md`: a wake word quieter than `threshold_db` for its whole
+    duration is not seen, so the default stays well below speech and the knob is
+    configurable (`audio.voice.standby_kws_*`).
+    """
+
+    PROCESS = "process"
+    SKIP = "skip"
+    RESUME = "resume"
+    RESTART = "restart"
+
+    def __init__(self, *, enabled: bool, threshold_db: float, hold_s: float) -> None:
+        self.enabled = bool(enabled)
+        self.threshold_db = float(threshold_db)
+        self.hold_s = max(0.0, float(hold_s))
+        self.hot = True
+        # Observability: `skipped` is the number of frames the spotter never saw,
+        # `suspends`/`resumes` count cold <-> hot edges (one log line each), and
+        # `quiet_peak_db` is the loudest quiet frame that led to a suspend - the number
+        # 9哥 needs to tune `threshold_db` on a real device.
+        self.skipped = 0
+        self.suspends = 0
+        self.resumes = 0
+        self.quiet_peak_db = -100.0
+        self._quiet_since: float | None = None
+
+    def observe(self, *, rms_db: float | None, engaged: bool, now: float) -> str:
+        """Decide what to do with one frame. Returns a `PROCESS`/`SKIP`/`RESUME`/`RESTART`."""
+        if not self.enabled:
+            return self.PROCESS
+        if engaged:
+            self._quiet_since = None
+            if self.hot:
+                return self.PROCESS
+            self.hot = True
+            self.resumes += 1
+            self.quiet_peak_db = -100.0
+            # Activity (not a speech onset): reset the spotter, but there is nothing
+            # particular to replay - the wake word that started this turn is already
+            # handled, and the ring holds the quiet audio in front of it.
+            return self.RESTART
+        if rms_db is None:
+            # No level is "unknown", not "silent": fail open rather than leave the
+            # spotter cold on a frame we cannot classify.
+            self._quiet_since = None
+            if self.hot:
+                return self.PROCESS
+            self.hot = True
+            self.resumes += 1
+            self.quiet_peak_db = -100.0
+            return self.RESTART
+        if rms_db >= self.threshold_db:
+            self._quiet_since = None
+            self.quiet_peak_db = -100.0
+            if self.hot:
+                return self.PROCESS
+            self.hot = True
+            self.resumes += 1
+            # Speech onset: the caller replays the preroll ring before this frame, so
+            # neither side of the threshold crossing loses samples.
+            return self.RESUME
+        # Quiet frame.
+        if not self.hot:
+            self.skipped += 1
+            return self.SKIP
+        if self._quiet_since is None:
+            self._quiet_since = now
+            self.quiet_peak_db = rms_db
+        else:
+            self.quiet_peak_db = max(self.quiet_peak_db, rms_db)
+        if now - self._quiet_since >= self.hold_s:
+            self.hot = False
+            self.suspends += 1
+            self.skipped += 1
+            return self.SKIP
+        return self.PROCESS
+
+
 @dataclass(frozen=True)
 class _VendorEvent:
     """One validated, bounded `drain_signals()` item.
@@ -489,6 +593,20 @@ class AudioPlane:
         self.probe_hits = 0
         self.kws_error = ""
         self.wake_count = 0
+        # task-6: the standby gate needs the preroll ring to restore a wake word's
+        # onset after a cold spell; with no ring there is nothing to replay, so the
+        # gate stays off and the spotter keeps the old always-on cadence.
+        voice_cfg = cfg.audio.voice
+        self.standby_kws = StandbyKwsGate(
+            enabled=bool(voice_cfg.standby_kws_gate) and voice_cfg.wake_preroll_ms > 0,
+            threshold_db=float(voice_cfg.standby_kws_db),
+            hold_s=voice_cfg.standby_kws_hold_ms / 1000.0,
+        )
+        if voice_cfg.standby_kws_gate and voice_cfg.wake_preroll_ms <= 0:
+            log.warning(
+                "standby kws gate off: audio.voice.wake_preroll_ms=0 leaves no onset "
+                "audio to replay"
+            )
         self.last_wake: Wake | None = None
         # Socket & Plug v1 (§4.3/§5). `device_wake_active` is resolved from
         # probe().capabilities + a real drain_wakes(); without both the plane is exactly
@@ -1251,16 +1369,8 @@ class AudioPlane:
                 # VAD/ASR would turn it into a request. Playback itself is over here, so
                 # barge (which needs the live mic) is unaffected.
                 continue
-            if self.probe is not None and pcm:
-                for _ in self.probe.accept(pcm, ts_ms=frame.ts_ms, rms_db=self.voice_rms_db):
-                    # Counted so the console can show "the probe heard it, production did
-                    # not" - that gap is what a threshold change fixes; both missing means
-                    # the audio never got there.
-                    self.probe_hits += 1
-            if self.wake is not None and pcm:
-                for hit in self.wake.accept(pcm, ts_ms=frame.ts_ms):
-                    self.wake_count += 1
-                    await self._on_wake(hit, writer, connected)
+            if pcm:
+                await self._run_spotter(pcm, frame.ts_ms, writer, connected)
             # v1 §4.3: vendor signals are read first, then device wakes, in the same
             # tick. A vendor wake this tick wins the conflict; the device event is
             # counted and dropped instead of producing a second turn.
@@ -1303,6 +1413,109 @@ class AudioPlane:
             elif not self.ring.push(frame.seq, now_ms(), pcm):
                 self.frames_dropped += 1
             self.cpu_s += time.perf_counter() - t0
+
+    async def _run_spotter(
+        self,
+        pcm: bytes,
+        ts_ms: float,
+        writer: asyncio.StreamWriter,
+        connected: asyncio.Event,
+    ) -> None:
+        """Feed one frame to the KWS/probe, honouring the standby gate (task-6).
+
+        The gate only drops frames below `audio.voice.standby_kws_db` for longer than
+        `standby_kws_hold_ms` and while nothing else is happening; earlier blocks are
+        already in the preroll ring (the caller keeps the current frame right after
+        this call, unchanged), so a resume replays the onset it skipped. A configured
+        KWS probe keeps the pre-0.8.7 always-on behaviour: it is a debugging tool, not
+        part of the production CPU path.
+        """
+        if not pcm or (self.wake is None and self.probe is None):
+            return
+        gate = self.standby_kws
+        if self.probe is not None:
+            action = StandbyKwsGate.PROCESS
+        else:
+            suspends = gate.suspends
+            action = gate.observe(
+                rms_db=self.voice_rms_db,
+                engaged=self._kws_activity(),
+                now=time.monotonic(),
+            )
+            if gate.suspends != suspends:
+                log.info(
+                    "kws standby: suspended after %.1f s at or below %.0f dBFS "
+                    "(quiet frames peaked at %.0f dBFS)",
+                    gate.hold_s, gate.threshold_db, gate.quiet_peak_db,
+                )
+            elif action == StandbyKwsGate.RESUME:
+                log.info("kws standby: resumed on speech")
+            elif action == StandbyKwsGate.RESTART:
+                log.info("kws standby: resumed for activity")
+        if action == StandbyKwsGate.SKIP:
+            return
+        if action == StandbyKwsGate.RESUME:
+            await self._reset_and_replay_spotter(writer, connected)
+        elif action == StandbyKwsGate.RESTART and self.wake is not None:
+            self.wake.reset()
+        if self.probe is not None:
+            for _ in self.probe.accept(pcm, ts_ms=ts_ms, rms_db=self.voice_rms_db):
+                # Counted so the console can show "the probe heard it, production did
+                # not" - that gap is what a threshold change fixes; both missing means
+                # the audio never got there.
+                self.probe_hits += 1
+        if self.wake is not None:
+            for hit in self.wake.accept(pcm, ts_ms=ts_ms):
+                self.wake_count += 1
+                await self._on_wake(hit, writer, connected)
+
+    async def _reset_and_replay_spotter(
+        self, writer: asyncio.StreamWriter, connected: asyncio.Event
+    ) -> None:
+        """Cold -> hot on a speech onset: restart the spotter and hand it the preroll.
+
+        The ring is not drained: `_begin_wake_turn` still selects from it by timestamp
+        for the VAD replay, and the KWS is the only consumer here. `list()` freezes the
+        window because a wake hit inside the replay can replay the ring itself.
+        """
+        if self.wake is None:
+            return
+        self.wake.reset()
+        for block_ts, block in list(self._preroll):
+            if not block:
+                continue
+            for hit in self.wake.accept(block, ts_ms=block_ts):
+                self.wake_count += 1
+                await self._on_wake(hit, writer, connected)
+
+    def _kws_activity(self) -> bool:
+        """True while something needs the spotter at full rate (task-6 standby gate).
+
+        The gate may only go cold in true standby: a turn (armed gate, pending
+        utterance, reply), any owner of the speaker (cue/dialogue/music), the
+        follow-up window, a device wake or a pause all keep it hot. Playback is
+        deliberately included: barge-in reads the same KWS stream and must not lose
+        the first syllable of a wake over our own voice.
+        """
+        if self.gate is not None and (self.gate.armed or self.gate.speaking):
+            return True
+        if self._turn_pending or self._reply_open or self._speak_queued_s > 0.0:
+            return True
+        if self._owner is not None or self._device_audio_pending:
+            return True
+        if self._playback_task is not None and not self._playback_task.done():
+            return True
+        if self._music_hold_until is not None:
+            return True
+        if time.monotonic() < self._wake_hold_until:
+            return True
+        if self._speech_paused or self._paused_explicit:
+            return True
+        if self._followup_capture:
+            return True
+        if self._stale_speech_blocked:
+            return True
+        return bool(self.device_wake_active)
 
     def _note_capture_frame(self) -> None:
         """A frame arrived: clear a previous capture-degraded state (and log recovery)."""
@@ -3715,7 +3928,9 @@ class AudioPlane:
 
     async def _metrics_loop(self, writer: asyncio.StreamWriter, connected: asyncio.Event) -> None:
         ticks = 0
-        level_peak = 0.0
+        level_peak = LEVEL_FLOOR_DBFS
+        had_voice = False
+        active_ticks = 0
         while not self._stop.is_set():
             await asyncio.sleep(METRICS_EVERY_S)
             ticks += 1
@@ -3732,11 +3947,21 @@ class AudioPlane:
                 # a full 30 s of speech, not one 2 s window.
                 if snapshot.voice_peak_db is not None:
                     level_peak = max(level_peak, snapshot.voice_peak_db)
+                    had_voice = True
+                    active_ticks += 1
                 if ticks % LEVEL_LOG_EVERY == 0:
-                    if level_peak > -55.0:
-                        log.info("[level] voice peak %.1f dBFS over %.0f s",
-                                 level_peak, METRICS_EVERY_S * LEVEL_LOG_EVERY)
-                    level_peak = 0.0
+                    # task-5: only a window that actually contained voice is
+                    # reported; an idle window is silent in the log too. "active"
+                    # is the speech-bearing part of the 30 s window (at most
+                    # METRICS_EVERY_S * LEVEL_LOG_EVERY), never the whole window -
+                    # a full-scale number is what made the old line look like
+                    # clipping at standby.
+                    if had_voice and level_peak > LEVEL_LOG_MIN_DBFS:
+                        log.info("[level] voice peak %.1f dBFS (active %.0f s)",
+                                 level_peak, METRICS_EVERY_S * active_ticks)
+                    level_peak = LEVEL_FLOOR_DBFS
+                    had_voice = False
+                    active_ticks = 0
                 writer.write(encode_json(snapshot))
                 await writer.drain()
             except (ConnectionResetError, BrokenPipeError):

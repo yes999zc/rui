@@ -357,7 +357,7 @@ def test_combined_pages_compose_existing_components() -> None:
     # embedded, and exposure gets its own tab (not a duplicate policy editor).
     integrations = found["integrations"]
     assert _config_groups(_tab_blocks(integrations, "builtin")) == {
-        "tools.weather", "tools.news", "tools.search"}
+        "tools.weather", "tools.news", "tools.search", "tools.joke"}
     assert _component_ids(_tab_blocks(integrations, "mcp")) == {"mcp-manager"}
     registry = _tab_blocks(integrations, "registry")
     assert _component_ids(registry) == {"tools-view"}

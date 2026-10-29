@@ -96,6 +96,15 @@ audio:
     kws_keywords_file: /config/keywords.txt
     kws_probe_file: ""
     kws_chunk: 8
+    # Standby KWS gate (0.8.7, docs/standby-cpu-0.8.7.md): while nothing is happening,
+    # a microphone below `standby_kws_db` for `standby_kws_hold_ms` stops feeding the
+    # wake model (the biggest per-frame cost when idle). The first louder frame resumes
+    # it and replays the preroll ring, so the wake word's onset is not lost. A noisy
+    # room never goes cold: no saving, but no regression either. Threshold too high =
+    # missed wakes; keep it well below speech. Restart the audio plane after edits.
+    standby_kws_gate: true
+    standby_kws_db: -60.0
+    standby_kws_hold_ms: 1000
     vad_min_speech_ms: 200
     vad_end_silence_ms: 600
     # Audio kept from before the KWS hit and replayed into the gate. The streaming KWS
@@ -217,6 +226,16 @@ tools:
     base_url: https://api.deepseek.com
     api_key_env: DEEPSEEK_API_KEY   # the key lives in env or secrets.yaml, never here
     count: 6
+  # Jokes and riddles. The tool always answers: with no URL (or an unreachable one, or a
+  # timeout) it serves the 20 bundled samples in src/rui/data/jokes.fallback.json.
+  # A configured service is called as GET <url>/v1/joke with X-Internal-Token taken
+  # from the JOKE_SERVICE_TOKEN secret (env or secrets.yaml; missing = no header).
+  # The response may carry `audio_url`: rui downloads that clip (WAV only, 10 s, 8 MB)
+  # into <data_dir>/tmp and plays it instead of TTS; a failed download uses the text.
+  # Reaching a service on 127.0.0.1 needs security.outbound.allow_loopback: true (the
+  # default is false); LAN/private addresses are allowed by default (allow_private).
+  joke_service_url: ""       # e.g. http://192.168.5.10:18081; empty = samples only
+  joke_timeout_s: 3.0        # 0.5-10 seconds; past it the sample is served
   mcp_servers: []
   ha:
     base_url: ""

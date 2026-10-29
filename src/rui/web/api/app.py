@@ -89,6 +89,7 @@ from ...healthcheck import evaluate as evaluate_healthcheck
 from ...log_setup import LOG_FILE_NAME, tail_lines
 from ...music import MusicService, PlayHistory, build_source, get_preset
 from ...music.names import AliasStore, NameResolver
+from ...music.sources.external import is_external_source
 from ...music.sources.presets import (
     missing_credentials,
     preset_document,
@@ -363,6 +364,31 @@ def _log_reply_segments(trace: object) -> None:
     )
 
 
+def _joke_direct_speech(output: ToolResult, transcript: str) -> DirectSpeech | None:
+    """A joke the service also rendered to audio: play the file, skip TTS (task-4).
+
+    The tool has already checked that the path is a local file (never a URL) and that
+    it exists; this hook only decides to use it. The spoken text still goes to history,
+    so 「刚才那个笑话再说一遍」 has something to read next turn.
+    """
+    payload = output.payload or {}
+    path = str(payload.get("audio_path") or "").strip()
+    if not path:
+        return None
+    text = str(payload.get("say") or "").strip()
+    history = (
+        [{"role": "user", "content": transcript},
+         {"role": "assistant", "content": text}]
+        if text else None
+    )
+    return DirectSpeech(
+        text=text,
+        notice="笑话音频已直接播放给用户，不要再复述。",
+        history=history,
+        audio_path=path,
+    )
+
+
 def _direct_speech(name: str, transcript: str, output: object) -> DirectSpeech | None:
     """Tool results that are read out verbatim instead of being re-answered (D1c ④).
 
@@ -370,7 +396,13 @@ def _direct_speech(name: str, transcript: str, output: object) -> DirectSpeech |
     the runner speaks `speech_text` and skips the second model round, and history
     gets the user line plus the script (old build `@@BRIEF`, docs/d1c-notes.md §7.2).
     The model only ever sees `model_notice()`, never the script.
+
+    Task-4 adds one narrow case: a `tell_joke` result that carries `audio_path`. The
+    runner plays that file instead of synthesising the text; without it the joke takes
+    the ordinary text path and nothing here changes.
     """
+    if name == "tell_joke" and isinstance(output, ToolResult):
+        return _joke_direct_speech(output, transcript)
     if not isinstance(output, Briefing):
         return None
     text = output.speech_text
@@ -500,19 +532,32 @@ def _outbound_policy(cfg: Config) -> OutboundPolicy:
     return OutboundPolicy.from_config(cfg.security)
 
 
-# Sources that actually have a runtime builder. The list lives in the preset registry
-# (`music/sources/presets.py`); `music.source` may still hold another name from a
+# Sources that actually have a runtime builder. Built-in presets live in
+# `music/sources/presets.py`; `RUI_MUSIC_SOURCES` adds operator-registered external
+# ids (`music/sources/external.py`). `music.source` may still hold another name from a
 # hand-edited YAML, but until an adapter exists the service cannot start and the panel
 # below must not claim otherwise (IA audit §2.1/§5 Phase 1 + Phase 3).
-# A change here is a change to the preset registry only.
 MUSIC_REBUILD_FIELDS = frozenset({
     "music.enabled", "music.source", "music.secrets_path", "music.cache_dir",
 })
 
 
 def _music_source_supported(source: str) -> bool:
+    """Whether this build can assemble `source`: a built-in preset or an external id.
+
+    The external side is registry-only: import/compat/factory failures surface when
+    the source is built (`_new_music_source` degrades to off with one warning), so
+    rendering the panel never executes third-party code.
+    """
     preset = get_preset(source)
-    return bool(preset is not None and preset.supported)
+    if preset is not None:
+        return preset.supported
+    return is_external_source(source)
+
+
+def _music_source_known(source: str) -> bool:
+    """Whether `source` is a built-in preset or a registered external id."""
+    return get_preset(source) is not None or is_external_source(source)
 
 
 def _music_runtime_key(cfg: Config) -> tuple[str, ...]:
@@ -525,30 +570,49 @@ def _music_runtime_key(cfg: Config) -> tuple[str, ...]:
     )
 
 
-def _new_music_source(cfg: Config, source_id: str | None = None):
-    """The runtime source for one preset in file mode (credentials read per call)."""
-    preset = get_preset(source_id or cfg.music.source)
-    if preset is None or not preset.supported:
+def _new_music_source(cfg: Config, source_id: str | None = None,
+                      errors: list[str] | None = None):
+    """The runtime source for one id in file mode (credentials read per call).
+
+    An external source that fails to import, misses the version contract, breaks in
+    its factory or lacks a protocol method is a `ValueError`; it is logged once and
+    the caller gets None, so startup and config saves degrade to "music off" instead
+    of taking rui down. `errors`, when given, receives the same sentence so the
+    caller can keep the console honest (`app.state.music_assembly_error`) instead of
+    showing a green panel for a source that never assembled.
+    """
+    source_id = source_id or cfg.music.source
+    if not _music_source_supported(source_id):
         return None
-    return build_source(
-        preset.id,
-        music_credentials_path(cfg),
-        Path(cfg.music.cache_dir), cfg.music.cache_tracks,
-        policy=_outbound_policy(cfg),
-    )
+    try:
+        return build_source(
+            source_id,
+            music_credentials_path(cfg),
+            Path(cfg.music.cache_dir), cfg.music.cache_tracks,
+            policy=_outbound_policy(cfg),
+        )
+    except ValueError as exc:
+        log.warning("music: source %r cannot be assembled; leaving music off: %s",
+                    source_id, exc)
+        if errors is not None:
+            errors.append(str(exc))
+        return None
 
 
-def _new_music_service(cfg: Config, sender: object) -> MusicService | None:
+def _new_music_service(cfg: Config, sender: object,
+                       errors: list[str] | None = None) -> MusicService | None:
     """Assemble the music service for the configured source.
 
     One place for both the startup path and a console `music.enabled` toggle: the
     service owns the source, history, aliases and name resolver, and registering the
-    nine tools is what makes the model able to play anything.
+    nine tools is what makes the model able to play anything. `errors` forwards an
+    external source's assembly failure to the caller (see `_new_music_source`).
     """
-    source = _new_music_source(cfg)
+    source = _new_music_source(cfg, errors=errors)
     if source is None:
-        log.warning("music: source %r has no runtime builder; leaving music off",
-                    cfg.music.source)
+        if not _music_source_supported(cfg.music.source):
+            log.warning("music: source %r has no runtime builder; leaving music off",
+                        cfg.music.source)
         return None
     history = PlayHistory(
         Path(cfg.system.data_dir) / "music_history.json", keep=cfg.music.history_max)
@@ -599,7 +663,8 @@ def _autofill_music_paths(merged: dict, source: str) -> bool:
     return True
 
 
-def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
+def _build_panels(music_enabled: bool, music_source: str,
+                  music_assembly_error: str = "") -> list[dict]:
     """The PanelSpec table (docs/console.md, docs/config-catalog-contract.md §2).
 
     Expressions are deliberately tiny: `$.path` lookups, `map` for enum wording,
@@ -611,18 +676,28 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
     Every kept panel carries `nav` ({section, order, hidden, icon}); Phase 4 makes it
     the single source of console navigation (docs/console-ia-audit.md §3/§5). `group`
     and `order` stay declared for compatibility with older control planes.
+
+    `music_assembly_error` is the runtime's last failure to build the configured
+    source (empty on success). A registered external id whose factory/import fails is
+    "supported" by the registry but never assembled, so the panel must be off and say
+    why; the page still opens, because that is where the operator fixes it.
     """
     # "Enabled" must mean "the service can actually be assembled": a hand-typed
     # source with no adapter used to leave the music panel green while the runtime
-    # refused to start (audit §2.1). The page still opens: it is where you fix it.
+    # refused to start (audit §2.1).
     music_source_ok = _music_source_supported(music_source)
-    music_panel_enabled = music_enabled and music_source_ok
+    assembly_failed = bool(music_enabled and music_source_ok and music_assembly_error)
+    music_panel_enabled = music_enabled and music_source_ok and not assembly_failed
     if not music_source_ok:
         # The invalid source is the actionable problem even when the feature is off:
         # the page must say so instead of only "enable music".
         available = ", ".join(item.id for item in music_presets() if item.supported)
         music_reason = (
             f"音乐源 {music_source!r} 不受支持：服务不会启动（可选：{available}）")
+    elif assembly_failed:
+        music_reason = (
+            f"音乐源 {music_source!r} 已注册但装配失败，服务未启动；查看日志 "
+            f"music: source {music_source!r} cannot be assembled（{music_assembly_error}）")
     elif not music_enabled:
         music_reason = f"music.enabled 未开启（配置的源：{music_source}）"
     else:
@@ -776,7 +851,7 @@ def _build_panels(music_enabled: bool, music_source: str) -> list[dict]:
             ],
             "blocks": [
                 {"type": "config", "tab": "builtin", "tier": 4,
-                 "groups": ["tools.weather", "tools.news", "tools.search"]},
+                 "groups": ["tools.weather", "tools.news", "tools.search", "tools.joke"]},
                 {"type": "component", "tab": "mcp",
                  "component": "mcp-manager", "component_args": {}},
                 {"type": "component", "tab": "registry",
@@ -3214,8 +3289,11 @@ def create_app(
     # sender must not capture the first one forever. Kept in a local until the app
     # object exists; `app.state.music` is set right after FastAPI() is built.
     music_service: MusicService | None = None
+    music_assembly_error = ""
     if cfg.music.enabled:
-        music_service = _new_music_service(cfg, _never_sender)
+        assembly_errors: list[str] = []
+        music_service = _new_music_service(cfg, _never_sender, assembly_errors)
+        music_assembly_error = assembly_errors[0] if assembly_errors else ""
         if music_service is not None:
             for spec, handler in build_music_tools(cfg, music_service):
                 registry.register(spec)
@@ -3273,6 +3351,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         spoken = rules.SpokenMemory()
+        # The same room routing music uses (turn room, output owner, PlayFile stop of
+        # the previous owner) - a joke with audio must not play into another room. It
+        # does not need the music service, so this works with music disabled.
+        music_sender = _music_sender(app)
+
+        async def _play_file(path: str) -> None:
+            await music_sender(PlayFile(path=path))
+
         runner = TurnRunner(
             cfg.providers,
             sample_rate=cfg.audio.voice.rate,
@@ -3283,6 +3369,7 @@ def create_app(
             spoken=spoken,
             session=cfg.session,
             direct_hook=_direct_speech,
+            play_file=_play_file,
         )
         app.state.spoken = spoken
         # Render the spoken wake cue now, not on the wake: synthesising it inside the wake
@@ -4196,9 +4283,14 @@ def create_app(
     else:
         app.state.music = None
         app.state.music_runtime = None
+    # Why the last assembly attempt left music off ("" when it succeeded or was not
+    # attempted). `/api/v1/panels` reads it so a registered-but-broken external source
+    # cannot display a green music panel.
+    app.state.music_assembly_error = music_assembly_error
     # The console registry (docs/console.md): panels are declared where their feature
     # is assembled, the frontend renders them and never asks "does this exist".
-    app.state.panels = _build_panels(cfg.music.enabled, cfg.music.source)
+    app.state.panels = _build_panels(cfg.music.enabled, cfg.music.source,
+                                     music_assembly_error=music_assembly_error)
     app.state.panels_revision = f"{__version__}-{int(time.time())}"
 
     _auth_failures: dict[str, list[float]] = {}
@@ -4470,11 +4562,16 @@ def create_app(
         return loaded
 
     def _refresh_panels() -> None:
-        """The music panel follows `music.enabled`; everything else is static."""
-        app.state.panels = _build_panels(cfg.music.enabled, cfg.music.source)
+        """The music panel follows `music.enabled` and the last assembly outcome."""
+        app.state.panels = _build_panels(
+            cfg.music.enabled, cfg.music.source,
+            music_assembly_error=getattr(app.state, "music_assembly_error", ""))
 
     async def _stop_music_service() -> None:
         """Stop and unregister the running music layer, if any."""
+        # A stopped layer has no assembly failure to report; a subsequent start
+        # records its own outcome.
+        app.state.music_assembly_error = ""
         service = getattr(app.state, "music", None)
         if service is None:
             return
@@ -4495,9 +4592,13 @@ def create_app(
 
     def _start_music_service(updated: Config) -> bool:
         """Build, bind and register the service for `updated`; False if unsupported."""
-        service = _new_music_service(updated, _music_sender(app))
+        errors: list[str] = []
+        service = _new_music_service(updated, _music_sender(app), errors)
         if service is None:
+            # Keep the console honest: the panel reads this and must not stay green.
+            app.state.music_assembly_error = errors[0] if errors else ""
             return False
+        app.state.music_assembly_error = ""
         app.state.music = service
         app.state.music_runtime = _music_runtime_key(updated)
         # Runtime enable must bind the natural-end callback that the startup path
@@ -4524,6 +4625,7 @@ def create_app(
         """
         service = getattr(app.state, "music", None)
         if not updated.music.enabled:
+            app.state.music_assembly_error = ""
             if service is not None:
                 await _stop_music_service()
                 log.info("music: disabled at runtime")
@@ -5137,7 +5239,7 @@ def create_app(
         state = music_credentials_state(cfg)
         return {
             "current": cfg.music.source,
-            "source_known": preset is not None,
+            "source_known": _music_source_known(cfg.music.source),
             "current_preset": preset_document(preset) if preset is not None else None,
             "sources": [preset_document(item) for item in music_presets()],
             "credentials": state,
@@ -5157,6 +5259,7 @@ def create_app(
         write-only through PUT /api/v1/music/credentials and never appear here.
         """
         preset = get_preset(cfg.music.source)
+        external = preset is None and is_external_source(cfg.music.source)
         state = music_credentials_state(cfg)
         service = getattr(app.state, "music", None)
         running = getattr(getattr(service, "source", None), "source_id", "")
@@ -5166,9 +5269,11 @@ def create_app(
             "credentials_ready": state["ready"],
             "credentials_missing": state["missing"],
             "source": cfg.music.source,
-            "source_known": preset is not None,
+            "source_known": _music_source_known(cfg.music.source),
             "source_name": ({"zh": preset.name_zh, "en": preset.name_en}
-                            if preset is not None else None),
+                            if preset is not None
+                            else ({"zh": "外部音源", "en": "External source"}
+                                  if external else None)),
             "running_source": running or "",
         }
         if service is None:
@@ -5257,12 +5362,14 @@ def create_app(
     async def music_credentials_update(payload: Annotated[dict, Body()]) -> dict:
         """Write the active source's credential slots to data_dir/lan_media.json.
 
-        The body may include `source` (a preset id) together with any of that preset's
-        credential slots. A source switch is validated against the registry and applied
-        at runtime; an unknown id is a 422, never a saved typo. Values are write-only:
-        the response lists which slots exist and never their content. An empty string
-        deletes that slot; when nothing remains the file is removed. The file is 0600
-        and atomic, and it is never part of config.yaml or the log.
+        The body may include `source` (a preset id, or a registered external id)
+        together with any of that preset's credential slots. A source switch is
+        validated against the registry and applied at runtime; an unknown id is a 422,
+        never a saved typo. An external source accepts only `source`: it reads its own
+        credentials file. Values are write-only: the response lists which slots exist
+        and never their content. An empty string deletes that slot; when nothing
+        remains the file is removed. The file is 0600 and atomic, and it is never part
+        of config.yaml or the log.
         """
         source_given = "source" in payload
         source_id = cfg.music.source
@@ -5272,38 +5379,54 @@ def create_app(
                 raise HTTPException(status_code=422, detail=[
                     {"loc": ["source"], "msg": "must be a string preset id"}])
             source_id = raw_source.strip()
-            if get_preset(source_id) is None:
+            if get_preset(source_id) is None and not is_external_source(source_id):
                 raise HTTPException(status_code=422, detail=[{
                     "loc": ["source"],
                     "msg": f"unknown music source {source_id!r}; choose one of "
                            f"{', '.join(preset_ids())}",
                 }])
         preset = get_preset(source_id)
-        if preset is None:
+        external = preset is None and is_external_source(source_id)
+        if preset is None and not external:
             raise HTTPException(status_code=422, detail=[{
                 "loc": ["source"],
                 "msg": f"configured music source {source_id!r} is unknown; choose one of "
                        f"{', '.join(preset_ids())}",
             }])
-        if not preset.supported:
-            raise HTTPException(status_code=422, detail=[{
-                "loc": ["source"],
-                "msg": f"music source {preset.id!r} has no runtime adapter yet",
-            }])
-        fields = {item.key: item for item in preset.credential_fields}
-        unknown = sorted(key for key in payload if key != "source" and key not in fields)
-        if unknown:
-            raise HTTPException(status_code=422, detail=[
-                {"loc": [key],
-                 "msg": f"unknown credential field for {preset.id}; expected "
-                        f"{', '.join(fields)}"}
-                for key in unknown
-            ])
-        if not source_given and not any(key in payload for key in fields):
-            raise HTTPException(status_code=422, detail=[{
-                "loc": ["values"],
-                "msg": f"provide source and/or one of: {', '.join(fields)}",
-            }])
+        if external:
+            # An external source reads its own credentials file (music.secrets_path);
+            # rui does not know or validate that format, so only the switch is accepted.
+            extra = sorted(key for key in payload if key != "source")
+            if extra:
+                raise HTTPException(status_code=422, detail=[
+                    {"loc": [key],
+                     "msg": f"music source {source_id!r} is external and reads its own "
+                            "credentials from music.secrets_path; only 'source' may be "
+                            "sent here"}
+                    for key in extra
+                ])
+            fields: dict = {}
+        else:
+            if not preset.supported:
+                raise HTTPException(status_code=422, detail=[{
+                    "loc": ["source"],
+                    "msg": f"music source {preset.id!r} has no runtime adapter yet",
+                }])
+            fields = {item.key: item for item in preset.credential_fields}
+            unknown = sorted(key for key in payload
+                             if key != "source" and key not in fields)
+            if unknown:
+                raise HTTPException(status_code=422, detail=[
+                    {"loc": [key],
+                     "msg": f"unknown credential field for {preset.id}; expected "
+                            f"{', '.join(fields)}"}
+                    for key in unknown
+                ])
+            if not source_given and not any(key in payload for key in fields):
+                raise HTTPException(status_code=422, detail=[{
+                    "loc": ["values"],
+                    "msg": f"provide source and/or one of: {', '.join(fields)}",
+                }])
         path = music_credentials_path(cfg)
         data = dict(music_credentials(cfg))
         errors: list[dict] = []
@@ -5328,47 +5451,52 @@ def create_app(
                 data.pop(key, None)
         if errors:
             raise HTTPException(status_code=422, detail=errors)
-        try:
-            if data:
-                write_music_credentials(path, data)
-            else:
-                path.unlink(missing_ok=True)
-        except OSError as exc:
-            # 409, not 500: the request is valid but the configured file cannot be
-            # written. The catalog's error already names `music.secrets_path`; the
-            # unlink branch (clearing the last slot) needs the same sentence here.
-            if isinstance(exc, MusicCredentialsWriteError):
-                detail = str(exc)
-            else:
-                reason = (getattr(exc, "strerror", None) or str(exc)
-                          or type(exc).__name__)
-                detail = (
-                    f"music credentials file is not writable: {path} ({reason}); "
-                    "fix the directory permissions or set music.secrets_path to a "
-                    "writable location (for example under system.data_dir)"
-                )
-            raise HTTPException(status_code=409, detail=detail) from exc
+        if not external:
+            try:
+                if data:
+                    write_music_credentials(path, data)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError as exc:
+                # 409, not 500: the request is valid but the configured file cannot be
+                # written. The catalog's error already names `music.secrets_path`; the
+                # unlink branch (clearing the last slot) needs the same sentence here.
+                if isinstance(exc, MusicCredentialsWriteError):
+                    detail = str(exc)
+                else:
+                    reason = (getattr(exc, "strerror", None) or str(exc)
+                              or type(exc).__name__)
+                    detail = (
+                        f"music credentials file is not writable: {path} ({reason}); "
+                        "fix the directory permissions or set music.secrets_path to a "
+                        "writable location (for example under system.data_dir)"
+                    )
+                raise HTTPException(status_code=409, detail=detail) from exc
         if source_given and source_id != cfg.music.source:
             current = (_read_config_or_409() if config_path is not None and
                        Path(config_path).exists() else cfg)
             merged = current.model_dump(mode="json")
-            merged.setdefault("music", {})["source"] = preset.id
-            _autofill_music_paths(merged, preset.id)
+            merged.setdefault("music", {})["source"] = source_id
+            _autofill_music_paths(merged, source_id)
             updated = Config.model_validate(merged)
             if config_path is not None:
                 save_config(Path(config_path), updated)
             _apply_config(updated)
-            _refresh_panels()
+            # Rebuild first, then refresh the panel: it reads the assembly outcome
+            # (`app.state.music_assembly_error`) set by that attempt.
             await _apply_music(updated)
-            log.info("music: source changed to %s from the console", preset.id)
+            _refresh_panels()
+            log.info("music: source changed to %s from the console", source_id)
         state = music_credentials_state(cfg)
         log.info("music credentials updated (source=%s fields=%s)",
                  cfg.music.source, sorted(data))
         return {
+            # An external source's state is "ready" by definition (rui has no slots to
+            # check); only the built-in slots below are reported as absent for it.
             "has_credentials": bool(state["ready"]),
-            "has_url": bool(data.get("url")),
-            "has_user": bool(data.get("user")),
-            "has_password": bool(data.get("password")),
+            "has_url": False if external else bool(data.get("url")),
+            "has_user": False if external else bool(data.get("user")),
+            "has_password": False if external else bool(data.get("password")),
         }
 
     @app.post("/api/v1/music/test", dependencies=[Depends(auth)])
@@ -5387,6 +5515,15 @@ def create_app(
                      else cfg.music.source)
         preset = get_preset(source_id)
         if preset is None:
+            if is_external_source(source_id):
+                # The MusicSource protocol has no ping (five methods only), so there is
+                # nothing honest to test here. 200 with ok=false, not a fake success and
+                # not a 422: the id is known, the console just cannot probe it.
+                return {
+                    "ok": False, "latency_ms": None, "source": source_id,
+                    "error": "外部音源不支持控制台测试连接：MusicSource 协议没有 ping；"
+                             "请查看服务日志确认外部源的加载与连接状态",
+                }
             raise HTTPException(status_code=422, detail=[{
                 "loc": ["source"],
                 "msg": f"unknown music source {source_id!r}; choose one of "

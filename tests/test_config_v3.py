@@ -473,6 +473,11 @@ _VOICE_GOLDEN = {
     "kws_probe_file": "",
     "post_playback_mute_ms": 0,
     "rate": 16000,
+    # task-6 (0.8.7): standby KWS gate defaults. The gate is new, so these are the
+    # schema defaults an existing config resolves to (no old value to preserve).
+    "standby_kws_db": -60.0,
+    "standby_kws_gate": True,
+    "standby_kws_hold_ms": 1000,
     "vad_end_silence_ms": 1000,
     "vad_min_speech_ms": 200,
     "vad_model_path": "",

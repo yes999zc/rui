@@ -26,7 +26,8 @@ __all__ = [
 
 
 def build_local_tools(cfg: Config) -> list[tuple[ToolSpec, Any]]:
-    """Every local tool this process exposes: information first, then reminders."""
+    """Every local tool this process exposes: information, jokes, then reminders."""
     from .info import build_tools as build_info_tools
+    from .joke import build_tools as build_joke_tools
 
-    return [*build_info_tools(cfg), *build_reminder_tools(cfg)]
+    return [*build_info_tools(cfg), *build_joke_tools(cfg), *build_reminder_tools(cfg)]

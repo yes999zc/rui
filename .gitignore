@@ -9,6 +9,11 @@ build/
 node_modules/
 web/dist/
 data/
+# ...but package data ships with the wheel: the joke tool's samples live under
+# src/rui/data/. `data/` above matches that directory too, and both a clean checkout
+# and hatchling obey this file, so it must be re-included explicitly (dir first).
+!src/rui/data/
+!src/rui/data/*.json
 *.log
 .DS_Store
 .env
