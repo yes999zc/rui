@@ -126,6 +126,26 @@ fresh reviewer-code **PASS**（A/B/C/E）+ reviewer-infra **PASS**（D/F/G）；
   → task-24 独立复验 → task-25 收口（顺手清历史段落的「生产插件仍 1.3.4」措辞）。
 - 其余非阻塞观察（service 503 措辞、errorText 标点）本批不改，已记录。
 
+**Round 3 进度（2026-10-29 09:33–09:42，已部署）**
+- tag/release：rui **`v0.8.6`** → commit `9610969`，release https://github.com/yes999zc/rui/releases/tag/v0.8.6 ；
+  桥 **`v1.3.5`** → `e44d333`，release https://github.com/yes999zc/rui-dot2-bridge/releases/tag/v1.3.5 。
+  四 workflow（ci / docker-publish / security / secret-scan）在 v0.8.6 commit 上**全绿**。
+- 镜像：index `sha256:430840eb…a879`；amd64 `sha256:9ad8e03f…6cbc`；arm64 `sha256:e18034e3…da9b`。
+- 备份（NAS `20261029-0933`）：`rui-dot2-override.yml.bak-20261029-0933`、
+  `plugins.bak-20261029-0933.tar.gz`、`config/config.yaml.bak-20261029-0933`。
+- 插件：`/vol1/rui/plugins/rui_dot2_bridge/` 与 `/vol1/rui/data/plugs/dot2-echomuse/`
+  均已替换为 **1.3.5**（tar sha256 `daaa2dcb…e5fd`，校验一致）；运行日志 `adapter plugins: registered dot2, lx06`。
+- 核心：override image 已改 `ghcr.io/yes999zc/rui@sha256:9ad8e03f…6cbc`，`docker compose … up -d`
+  重建并启动（09:40 左右）。
+- 已看到：`/health` 200、**version=0.8.6**、devices=4、device_errors=0、warnings=[]、
+  registered [dot2,lx06]；`/v2/channels` HTTP **200**；日志无 `got 16000` / `play ValueError` /
+  `audio_config_mismatch`；四台平面 running=True、restarts=0。
+- **待收口**：`dot2`（儿童房）与 `dot2-b`（次卧）在 `/health` 仍显示 `speaker_connected=false`
+  （日志显示已 registered + data plane connected；0.8.4 期 dot2 曾 `token_missing`）。core 无 error、
+  不触发回滚；由 task-24 verifier 独立复核（含 `X-Auth-Token` 的设备 API、四台 say、控制器连接状态），
+  若确为设备侧 token/重连问题按「非本批代码路径」记录。
+- 待执行：task-24 独立 verifier 全量复验（含 tag/workflow/生产 D5 七项）；task-25 HANDOFF 最终收口。
+
 **按顺序执行（任务板 task-19…25）**
 1. task-19 ✅ 修 3 项观察（rui `85c20f4`）：§10 示例行改为 §2.2 表 #12 单一真实事件
    （`close#12 interval=305.1s rx=9329320B tx=0B`，并加测试断言与表一致）；`v2.channels.saveFailed`
