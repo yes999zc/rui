@@ -1874,3 +1874,19 @@ gh release view v0.7.1 --json tagName,url                                      #
   - `设备下线了吗` → `False`（疑问句不受影响）；`你好小瑞下线` → `False`（唤醒词在头部，不在尾部剥离集里，可接受）。
 - **待进代码**（下一批）：`config/schema.py` 的 `end_words` 默认值加这两个词 + `rules` 侧表驱动测试
   （含"疑问句不触发"与"音乐播放时 media_stop"两条断言）；否则新装用户拿不到。
+
+### 2026-10-30 09:3x 三个现场修复已上线（bridge 直接改，未走 Gate）
+
+- **镜像**：`ghcr.io/yes999zc/rui@sha256:7dd7507d94fec85e0b2f1f03757bbdb8595f4be13cb9dff903c1f3e96b639a2e`
+  （commit `0bcb241`，由 main push 发布的 `:sha-0bcb241`；版本号仍是 0.8.11，未 bump）。
+  回滚锚：上一个 digest `sha256:8965bd92febdca89dd3bb73be7db806946cd43b91ba243ceb1c6187bc7f7ccbe`；
+  override 备份 `rui-dot2-override.yml.bak-*`。
+- **① dot2 回声门 2500 → 1200 ms**（配置层，4 台 dot2）：`ack_echo_ignore_ms`，与客厅 LX06 一致。
+  现场：唤醒后「你好小宝，现在几点」一口气说，命令落在 2.5 s 门里被吞（日志 `wake with no speech
+  after 3000/5020 ms`）。改后 5 台均 1200，`/api/v1/devices` 已核。
+- **② 空唤醒不再道别**（代码 `turn.py`）：`_had_speech` 在 `run()` 置真、`reset_history()` 清空；
+  `check_idle` 在会话从未说过话时静默关闭（日志 `silent close (no speech in this session)`）。
+  现场：说完「退下吧」→「好。」→ 12 s 后一条**空会话**又播「没事的话，我先下啦。」。
+- **③ 「下线」「下线吧」进默认结束词**（`schema.py`，21 → 23 条）：现场说「下线」被当闲聊，
+  音乐继续、会话不关。整句匹配语义不变，`设备下线了吗` 仍不触发。
+- **测试**：新增空唤醒静默关闭 / 说过话仍道别 / 下线三态断言；全量 **2311 passed / 6 skipped**，ruff 绿。
