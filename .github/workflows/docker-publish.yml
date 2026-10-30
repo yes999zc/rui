@@ -4,10 +4,35 @@ name: docker-publish
 # only built (`push: false`), which left install.sh pointing at a tag nobody wrote.
 #
 # Tags:
-#   main        -> :latest and :sha-<12 chars>     (rolling; what install.sh gets)
-#   v1.2.3      -> :1.2.3, :1.2, :latest and :sha-<12 chars>
-#   other refs  -> :edge and :sha-<12 chars>
+#   v1.2.3      -> :1.2.3, :1.2, :latest and :sha-<7 chars>    (the only way :latest moves)
+#   main        -> :edge and :sha-<7 chars>      (rolling; never :latest)
+#   other refs  -> :edge and :sha-<7 chars>
 # Roll back by deploying a previous tag or its digest; see docs/runbook.md.
+#
+# :latest is tag-only on purpose. It used to be `enable={{is_default_branch}}`, so any
+# commit on main republished :latest while the release tag :0.8.12 still pointed at a
+# different digest — 0.8.12 shipped, then a docs-only commit 42f663d moved :latest to a
+# second image (version=main, revision=42f663d). install.sh pulls :latest, so a
+# documentation fix silently changed what new installs ran, and pinning a digest from
+# the release note no longer described what :latest returned. main now rolls :edge
+# (and :sha-<7>), which nobody installs by accident; :latest only ever names a
+# released vX.Y.Z.
+#
+# Docs-only pushes do not build at all. The paths-ignore below skips `docs/**` and any
+# `**.md` change, which is where that docs-only push and five of the day's scan reds
+# came from. Trade-off, stated because it is real: README.md is COPY'd into the image
+# (Dockerfile line 166), so a README-only edit is picked up by the next code push
+# rather than published on its own — the file is metadata, not runtime behaviour, and a
+# rebuild costs ~40 min of FFmpeg compile on both architectures. Nothing under src/,
+# web/, deploy/, scripts/, pyproject.toml, uv.lock or the Dockerfile matches these
+# patterns, so a real code change still builds. Note that GitHub does not evaluate path
+# filters for tag pushes, so cutting a release tag always builds.
+#
+# The `test` job is a gate, not a formality: it refuses to publish when the tag name
+# disagrees with pyproject's version (release 0.8.13 off a 0.8.12 tree) and it re-runs
+# the secret scan, so a leak cannot be published while its own check is red — exactly
+# what happened on 0.8.12, where secret-scan failed on the same commit and the image
+# went out anyway.
 #
 # One job per architecture, each on a runner of that architecture. arm64 used to be
 # emulated on an x86 runner through setup-qemu; this Dockerfile compiles FFmpeg from
@@ -19,6 +44,11 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+    # Tag pushes ignore this list (GitHub does not evaluate path filters for tags), so
+    # releases always build. See the header for what this deliberately does not cover.
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
 
 concurrency:
@@ -43,6 +73,35 @@ jobs:
       - run: uv sync --extra dev
       - run: uv run ruff check src tests
       - run: uv run pytest
+      # Release-day drift: `git tag v0.8.13 && git push --tags` from a tree that still
+      # says 0.8.12 published an image whose :0.8.13 tag carried a 0.8.12 VERSION label
+      # and a 0.8.12 changelog. Nothing caught it before this step. Skipped for branch
+      # pushes, where main's version is legitimately ahead of or behind the last tag.
+      - name: Tag name matches the package version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -u
+          # v0.8.12 -> 0.8.12 (a tag without the v prefix is accepted too).
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(uv run python - <<'PY'
+          import tomllib
+          with open("pyproject.toml", "rb") as fh:
+              print(tomllib.load(fh)["project"]["version"])
+          PY
+          )
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match pyproject [project].version $version"
+            echo "tag:     $tag"
+            echo "version: $version"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches pyproject version $version"
+      # Same script secret-scan.yml runs, so the two cannot drift. Until now the scan was
+      # a sibling workflow: it went red five times on 0.8.12's commits and the image was
+      # published anyway, because nothing made publication wait for it.
+      - name: Secret scan (same rules as secret-scan.yml)
+        run: bash scripts/secret_scan.sh
 
   # Each leg pushes a single-platform image by digest; nothing is tagged yet, so a
   # half-finished matrix never publishes a tag that points at one architecture only.
@@ -133,11 +192,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # :latest is a release pointer, not a branch pointer: it must name the same
+          # digest as :X.Y.Z, so it is emitted only for v* tag builds. main rolls :edge
+          # (and :sha-<7>) instead, so an install that means "the released build"
+          # cannot accidentally get an unreleased main commit. Version tags
+          # (:X.Y.Z, :X.Y) are untouched: still semver-only, still tag-only.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=edge,enable=${{ github.ref_type == 'branch' && github.ref_name != github.event.repository.default_branch }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=edge,enable=${{ github.ref_type == 'branch' }}
             type=sha,prefix=sha-,format=short
           labels: |
             org.opencontainers.image.title=rui

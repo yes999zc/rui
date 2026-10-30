@@ -1,9 +1,11 @@
-# HANDOFF — rui 0.8.11（已发布并静音部署；生产 /health = 0.8.11）
+# HANDOFF — rui 0.8.12（已发布并部署；生产 /health = 0.8.12）
 
 phase-close: task-6
 
 > 本节是 0.8.11 的交接块：发布、静音部署与静音验收已完成（2026-10-30 凌晨）；
 > 发声类验收留白天，清单见「待白天」。0.8.10 的历史交接块保留在本文下方，未改动。
+> **当前发布的记录在文末**：「`### 2026-10-30 10:2x 0.8.12 发版并部署`」与
+> 「`### 2026-10-30 发版流程加固`」两段；H1 已按当前版本（0.8.12）更新，下方 0.8.11 块保留原文。
 
 ## 版本与契约
 
@@ -1907,6 +1909,30 @@ gh release view v0.7.1 --json tagName,url                                      #
   `/api/v1/music/search?q=平凡之路` 仍返回 20 条（私有源插件在新镜像下正常加载）。
 - **发版过程中被 CI 抓到的一处疏漏**：只 bump 了 `src/rui/__init__.py`，漏了 `pyproject.toml` 与 `uv.lock` 里的
   版本号，`tests/test_version.py` 断言两者相等 → tag 首次推送的 test 闸门红（1 failed / 2301 passed）；
-  补齐后全量 2311 passed / 6 skipped 再推，tag 已 `-f` 移动到 `22623a1`。
+  补齐后推送闸门转绿：**CI 2302 passed / 15 skipped**（本机 `.venv` 是 2311 passed / 6 skipped，
+  多跑的 9 条是 CI 缺 libspeexdsp / ffmpeg 而跳过的 aec 6 条 + audio-scale 2 条 + jellyfin 1 条）；
+  tag 已 `-f` 移动到 `22623a1`。
 - **设备现状**：9哥 静音了大部分音箱并说家里没人，`/api/v1/devices` 里 `dot2-d`（卫生间）`connected=false` 属预期，
   等设备上线再核一次。
+
+### 2026-10-30 发版流程加固
+
+0.8.12 的收口不只补了版本号，还把「发完就完了」这件事钉成流程。本节只记口径，CI 侧的实现细节
+（哪个 job、哪一行）以 `.github/workflows/` 为准，不在文档里写死。
+
+- **`:latest` 曾被一次 docs-only 提交带走**：0.8.12 发布后，一个只改文档的提交落在 `main` 上，
+  `:latest` 被重新指到第二份构建（label 是 `version=main`、`revision=<那个 docs 提交>`），而
+  `:0.8.12` 仍指向发布那一次的 index。`:latest` 已被 retag 回
+  `sha256:64a2c260dbf8373efefdebe06be3817ba555c874ce18a12a03e9a54424dfa33e`，现在
+  `:0.8.12` / `:0.8` / `:latest` / `:sha-22623a1` 四个 tag 同一个 digest（可用
+  `docker buildx imagetools inspect ghcr.io/yes999zc/rui:latest` 复核）。
+- **后续口径**：`latest` 只跟 tag。`main` 上的普通提交发 `:edge` / `:sha-<7>`，不动「已发布」所指；
+  发版时 tag 必须打在 `main` tip，打完不要再往 `main` 推会改变发布语义的东西。九步清单见
+  `docs/releases/README.md`。
+- **发布闸门增加两条**：tag 名必须与版本号一致（`v0.8.12` ↔ `0.8.12` 三处版本号），以及 secret-scan
+  前置——不再出现「扫描红着、镜像照样发出去」。
+- **文档侧同步**：`docs/releases/README.md` 的清单补齐 `uv.lock` 一步（**无测试保护**）、annotated
+  tag、tag 在 `main` tip、发布后 digest/label 回填；`docs/releases/v0.8.12.md` 的验收改为
+  「本机 2311 / 6 + CI 2302 / 15」两套数字并标明差异来源（CI 缺 libspeexdsp / ffmpeg 的 9 条）。
+- **发版文档里不要只写一个测试数字**：本机与 CI 的差距是环境差异，不是失败；只写一个会让下一个
+  人以为自己跑错了。

@@ -359,11 +359,22 @@ def test_secrets_temp_file_is_private_before_the_write(
 
 
 # ----------------------------------------------------- 5. secret-scan workflow
+#
+# The scan rules and exclude paths live in scripts/secret_scan.sh, which both
+# secret-scan.yml and docker-publish.yml run. Pin them there: asserting the
+# workflow would go green while the real rules rotted, and a workflow that stops
+# calling the script would leave the rules unenforced. Both facts are checked.
+SCAN_SCRIPT = Path("scripts") / "secret_scan.sh"
+SCAN_WORKFLOW = Path(".github") / "workflows" / "secret-scan.yml"
+# The publish workflow is the half that failed on 0.8.12: the scan went red on the
+# same commit and the image shipped anyway. It must run the script itself, hold
+# :latest to tags, and skip docs-only pushes (which is where the reds came from).
+PUBLISH_WORKFLOW = Path(".github") / "workflows" / "docker-publish.yml"
 
 
 def test_secret_scan_workflow_covers_the_agreed_patterns() -> None:
     root = Path(__file__).resolve().parents[1]
-    text = (root / ".github" / "workflows" / "secret-scan.yml").read_text(encoding="utf-8")
+    script = (root / SCAN_SCRIPT).read_text(encoding="utf-8")
     for needle in (
         "sk-[A-Za-z0-9]{16,}",
         "[/]Users[/]",
@@ -377,7 +388,33 @@ def test_secret_scan_workflow_covers_the_agreed_patterns() -> None:
         # Round-2 audits are excluded too (they quote reviewed evidence).
         "docs/*audit*",
         "tests/fixtures",
-        "pull_request",
-        "push:",
     ):
-        assert needle in text, f"secret-scan.yml is missing {needle!r}"
+        assert needle in script, f"{SCAN_SCRIPT} is missing {needle!r}"
+    # tests/ is exempt from the soft class only; the hard class must still scan it.
+    assert script.count("':(exclude)tests/*'") == 1, (
+        f"{SCAN_SCRIPT} must add tests/* to the soft class and to nothing else")
+
+    workflow = (root / SCAN_WORKFLOW).read_text(encoding="utf-8")
+    for trigger in ("push:", "pull_request"):
+        assert trigger in workflow, f"{SCAN_WORKFLOW} no longer runs on {trigger!r}"
+    # The rules must be executed, not merely stored: a workflow that dropped the
+    # script call would leave the scan silently unenforced.
+    for call in ("bash scripts/secret_scan.sh", "actions/checkout"):
+        assert call in workflow, f"{SCAN_WORKFLOW} never runs {call!r}"
+    # ...and must not carry a second, drifting copy of the rules inline.
+    assert "sk-[A-Za-z0-9]{16,}" not in workflow, (
+        f"{SCAN_WORKFLOW} duplicates the scan rules; edit {SCAN_SCRIPT} instead")
+
+    # The publish path, which is where the 0.8.12 regression actually bit: the scan
+    # ran as a sibling workflow, went red, and the image was published regardless.
+    # Pin the three facts that make "scan red, image green" impossible to reintroduce.
+    publish = (root / PUBLISH_WORKFLOW).read_text(encoding="utf-8")
+    assert "bash scripts/secret_scan.sh" in publish, (
+        f"{PUBLISH_WORKFLOW} no longer runs {SCAN_SCRIPT}; publication would go "
+        "green while the scan is red")
+    assert "enable=${{ startsWith(github.ref, 'refs/tags/') }}" in publish, (
+        f"{PUBLISH_WORKFLOW} no longer limits :latest to tag pushes; a docs-only "
+        "commit on main would republish :latest at a different digest")
+    assert "paths-ignore" in publish, (
+        f"{PUBLISH_WORKFLOW} builds on docs-only pushes again, which is where the "
+        "0.8.12 scan reds came from")
