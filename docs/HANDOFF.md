@@ -121,7 +121,7 @@ phase-close: task-6
 4. 「天奕门口现在什么画面」→ 1–2 句（标签「最近一次」）。
 5. 「我这里是什么画面」→ 书房 USB：需先在 Terminal 授权相机并常驻
    `python3 scripts/usb_snapshot_server.py --host 0.0.0.0`，再写
-   `tools.vision.usb_snapshot_url: http://192.168.5.27:8766/snapshot.jpg`（本机 LAN IP）。
+   `tools.vision.usb_snapshot_url: http://<mac-lan-ip>:8766/snapshot.jpg`（本机 LAN IP，文档里写占位符）。
 6. 0.8.10 遗留：HA 灯批量读、barge 短提示、削波阈值。
 
 ## 遗留 / 已知风险
@@ -143,7 +143,7 @@ phase-close: task-6
    细项回填 `04_Docs/human-bridge/goal-0.8.11.md`）。
 2. **书房 USB 接入**：9哥 在 Mac 终端首次授权相机 → `python3 scripts/usb_snapshot_server.py
    --host 0.0.0.0` 常驻（或 launchd）→ 写 `tools.vision.usb_snapshot_url:
-   http://192.168.5.27:8766/snapshot.jpg` → 重启 rui（或控制台保存 vision 配置）→ 语音问「我这里」。
+   http://<mac-lan-ip>:8766/snapshot.jpg` → 重启 rui（或控制台保存 vision 配置）→ 语音问「我这里」。
 3. **不单独发版的小项**（下次改文档时带上）：
    - `_fetch_entities` 在 MCP 不可用时改返回 `None` 走缓存（HEAD 既有问题）；
    - 批量回查对 scene 域视为「不可验证」（避免多场景误报 unreachable）；
