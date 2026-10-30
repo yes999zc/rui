@@ -1941,3 +1941,11 @@ gh release view v0.7.1 --json tagName,url                                      #
   发布闸门加「tag == pyproject 版本」与「secret-scan 前置」两道。落地后实测：`:latest` 仍是 `sha256:64a2c260…`（未被这次 main push 带走），
   `:edge` = `:sha-f34488e` = `sha256:f7b803a5…`，ci/security/secret-scan/docker-publish 四项全绿。
   本段提交（只改 docs）本身用于反证 paths-ignore：这一推应当**不触发** docker-publish。
+
+### 2026-10-30 13:xx 0.8.13 在飞状态（压缩/换会话后从这里接）
+
+- **本版范围**（9哥 授权，仅此一次改 rui 源码）：① 控制台「试一试」不再被算成「说过话」，且对房间会话零副作用（快照/恢复）；② 中文数字数量词（「播放三十首周杰伦」等同 30 首）；③ 空唤醒可观测计数 + `tools.ha.call_timeout_s` 上限与 turn 工具超时对齐。
+- **已完成**：①（`turn.py` 加 `SessionSnapshot`/`snapshot_session`/`restore_session`、`run(counts_as_speech=False)`；`app.py` 的 `_run_debug_say` 改成 finally 恢复；8 条新用例，两个变异都红，定向 51 passed）；② 已交回（未提交，见工作区 `music/` 相关文件）。③ 正在收尾（被 steer 去修它自己撞出的回归：`tests/test_followup_window.py` 的 `_real_gate()` 缺 `silent_wakes` 字段）。
+- **工作区**：16 文件改动、548 插入未提交；三份改动尚未合并审查。
+- **下一步**：合并 reviewer 一次看三份 diff → 我收口跑一次全量（2317+ 条）→ 按 `docs/releases/README.md` 九步发 0.8.13（三处版本 → release note → CHANGELOG → 本文件 H1 → annotated tag → 等 CI 出镜像 → 钉 digest 部署 → 容器内复验「点试一试 15 秒后不出声」）。
+- **流程**：本轮起按 bridge-dispatch 的「精简档」（定向测试、每卡最多 1 轮 CHANGES、verifier 只在发版）。
