@@ -1949,3 +1949,23 @@ gh release view v0.7.1 --json tagName,url                                      #
 - **工作区**：16 文件改动、548 插入未提交；三份改动尚未合并审查。
 - **下一步**：合并 reviewer 一次看三份 diff → 我收口跑一次全量（2317+ 条）→ 按 `docs/releases/README.md` 九步发 0.8.13（三处版本 → release note → CHANGELOG → 本文件 H1 → annotated tag → 等 CI 出镜像 → 钉 digest 部署 → 容器内复验「点试一试 15 秒后不出声」）。
 - **流程**：本轮起按 bridge-dispatch 的「精简档」（定向测试、每卡最多 1 轮 CHANGES、verifier 只在发版）。
+
+### 2026-10-30 14:0x 0.8.13 交接快照（压缩/换会话后从这一段接，按顺序）
+
+**状态**：三份改动已全部落地（未提交），合并 reviewer 在跑；主控正在跑收口全量（`/tmp/close0813.log` + `--junitxml`）。
+
+**改动清单（`git status` 应看到这 18 项左右）**
+- A 控制台不算说过话：`src/rui/session/turn.py`（`SessionSnapshot`/`snapshot_session`/`restore_session`/`run(counts_as_speech=False)`）、`src/rui/web/api/app.py`（`_run_debug_say` 改 finally 恢复）、`tests/test_session_timeout.py`、新 `tests/test_debug_say_not_speech.py`
+- B 数量词：`src/rui/music/{query,model,tools}.py`、`tests/test_music_query.py`、`tests/test_music_tools.py` —— 新增 `_COUNT`/`cn_number()`/`split_count()`/`QueryPlan.limit`，上限 50；同时修了 `放一?` 会吃掉「放一生中最爱」的「一」
+- C 可观测：`src/rui/audio/{vad,protocol,process}.py`（`silent_wakes` / `silent_wakes_session`，进 `Metrics` → `/api/v1/audio`）、`src/rui/config/schema.py`（`HA_CALL_TIMEOUT_MAX_S=20`）、`config.example.yaml`、`src/rui/config/template.yaml`、两条被改用例 `tests/test_followup_window.py`（`_real_gate` 补字段）、`tests/test_ha_scene_batch.py`（23→20）、新 `tests/test_wake_no_speech_count.py`、`tests/test_ha_call_timeout_cap.py`
+- 主控手改（两行元数据，已声明）：`src/rui/config/catalog.py:1232/1234/1237` —— 控制台上限 60→20 + 文案「2–20」
+
+**测试现状**：三份改动各自只跑定向（A 51 passed；B 281 passed 的 music 子集；C 387 passed 的 schema/wake 子集 + 两文件 55 passed + 112 passed 的音频子集），变异各 2–3 处全部能红；全量只在本段由主控跑一次（上一条快照里的 2317 是 0.8.12 的数字，0.8.13 收集数会增加到 ~2346）。
+
+**下一步（顺序）**
+1. 等合并 reviewer 结论（`deleg_bde0ffec`）；CHANGES 就回炉一次，PASS 才继续。
+2. 看收口全量结果：`python3 -c "import xml.etree.ElementTree as ET; r=ET.parse('/tmp/close0813.xml').getroot(); s=r if r.tag=='testsuite' else r[0]; print(s.get('tests'),s.get('failures'),s.get('errors'),s.get('skipped'))"` —— 必须 failures=0/errors=0。
+3. 按 `docs/releases/README.md` 九步发 0.8.13：三处版本（`src/rui/__init__.py`、`pyproject.toml`、`uv lock`）→ `docs/releases/v0.8.13.md` → CHANGELOG `## [0.8.13]` → 本文件 H1 → `git tag -a v0.8.13` 打在 main tip → push main + tag → 等 docker-publish 出 `:0.8.13` → `docker buildx imagetools inspect` 取 digest → 改 NAS `/vol1/rui/rui-dot2-override.yml` 的 digest 并 `compose up -d`（先备份 override）→ 容器内复验 `__version__`、`/health`、`GET /api/v1/audio` 里的 `gate_silent_wakes`。
+4. 真机复验（无需人说话也能做的部分）：控制台点一次「试一试」→ 等 15 s → 日志应出现 `silent close (no speech in this session)` 且**没有** TTS 道别；说「播放三十首周杰伦」应放 30 首。
+
+**回滚**：旧镜像 `sha256:64a2c260…`（0.8.12）；override 备份带时间戳。
