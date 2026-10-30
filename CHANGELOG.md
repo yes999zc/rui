@@ -38,7 +38,7 @@ dot2 四台的 2.5 秒回声门把「你好小宝，现在几点」的后半句�
 ### Changed
 
 1. **文档里不再出现真实内网地址**：`docs/HANDOFF.md` 的 `usb_snapshot_url` 示例改为
-   `http://<mac-lan-ip>:8766/snapshot.jpg`。`secret-scan` 的 hard 规则（密钥、`/Users/`、
+   `http://<mac-lan-ip>:8766/snapshot.jpg`。`secret-scan` 的 hard 规则（密钥、家目录绝对路径、
    口令字面量）与 soft 规则（私网地址）保持原样，不放宽、不加目录级豁免。
 
 ### Note
