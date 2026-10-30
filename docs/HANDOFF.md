@@ -1979,3 +1979,5 @@ gh release view v0.7.1 --json tagName,url                                      #
 - **容器内验收**：`__version__ = 0.8.13`；`/health` ok / devices 5 / device_errors 0 / speaker_connected true；`/api/v1/audio` 的 metrics 里已有 `gate_silent_wakes` 与 `gate_silent_wakes_session`（均 0，新计数接线是活的）；`dot2-d` 仍 disconnected（9哥 静音/没人，预期）。
 - **CI**：tag 闸门实测输出 `tag v0.8.13 matches pyproject version 0.8.13`；本机 2343/6、CI 2334/15；secret-scan 与 security 均绿。
 - **未做**：真机语音复验（点「试一试」后 15 s 应只有 `silent close` 日志、无道别；说「播放三十首周杰伦」应放 30 首）——需要有人在房间，留给 9哥 或白天。
+
+- **2026-10-30 14:0x 会话收口**：跨项目交接写在 `~/AI_Workspace/04_Docs/bridge-handoff-2026-10-30.md`（含待办分类、授权边界、重开后怎么接）。9哥 将 `/new`，新会话先从那份文件接。
