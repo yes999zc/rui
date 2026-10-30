@@ -1969,3 +1969,13 @@ gh release view v0.7.1 --json tagName,url                                      #
 4. 真机复验（无需人说话也能做的部分）：控制台点一次「试一试」→ 等 15 s → 日志应出现 `silent close (no speech in this session)` 且**没有** TTS 道别；说「播放三十首周杰伦」应放 30 首。
 
 **回滚**：旧镜像 `sha256:64a2c260…`（0.8.12）；override 备份带时间戳。
+
+### 2026-10-30 13:5x 0.8.13 发版并部署（bridge 直接执行）
+
+- **版本**：`__version__` / `pyproject` / `uv.lock` 三处 0.8.13；tag `v0.8.13`（annotated）→ commit `3e5022b`，main tip 与 tag 指向同一提交。
+- **镜像**：`ghcr.io/yes999zc/rui:0.8.13`，索引 digest `sha256:a951eeb68ebea13d5e84b3237f54cf2d0d68c92ba30cc5d9bf3a4a987830026c`；`:0.8`、`:latest`、`:sha-3e5022b` 同一 digest（`latest` 只跟 tag 的规则首次在真发版里生效：main push 没动它）。
+- **回滚锚**：`sha256:64a2c260…`（0.8.12）；override 备份 `rui-dot2-override.yml.bak-20261030-134431`。
+- **部署**：override 换 digest → `compose up -d` 重建 → 容器 healthy。
+- **容器内验收**：`__version__ = 0.8.13`；`/health` ok / devices 5 / device_errors 0 / speaker_connected true；`/api/v1/audio` 的 metrics 里已有 `gate_silent_wakes` 与 `gate_silent_wakes_session`（均 0，新计数接线是活的）；`dot2-d` 仍 disconnected（9哥 静音/没人，预期）。
+- **CI**：tag 闸门实测输出 `tag v0.8.13 matches pyproject version 0.8.13`；本机 2343/6、CI 2334/15；secret-scan 与 security 均绿。
+- **未做**：真机语音复验（点「试一试」后 15 s 应只有 `silent close` 日志、无道别；说「播放三十首周杰伦」应放 30 首）——需要有人在房间，留给 9哥 或白天。
