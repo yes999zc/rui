@@ -121,8 +121,12 @@ def test_only_two_pause_words_remain() -> None:
 
 
 def test_the_end_word_list_did_not_grow() -> None:
-    assert len(END_WORDS) == 21
+    # The set is closed on purpose: every extra word is a chance to dismiss a turn by
+    # accident. It grew by exactly two on 2026-10-30 (「下线」「下线吧」, 9哥 said goodnight
+    # and the session kept running), so the count moves with a named reason only.
+    assert len(END_WORDS) == 23
     assert "暂停" in END_WORDS and "停一下" in END_WORDS
+    assert "下线" in END_WORDS and "下线吧" in END_WORDS
 
 
 # ------------------------------------------------------ C3: pause with no music

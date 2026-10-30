@@ -333,3 +333,19 @@ def test_a_music_claim_without_a_tool_call_is_recognised() -> None:
         "周杰伦的。", "想听周杰伦哪首？说个歌名，我就给你放。")
     assert not rules.claims_music_success(
         "放首歌", "你想听什么？说一首，我就给你放。")
+
+
+def test_offline_words_end_the_session_and_stop_the_song() -> None:
+    """9哥 2026-10-30: 「下线」 was answered as chit-chat, the song kept playing, and the
+    session stayed open, because the whole-request match never saw the word."""
+    from rui.config.schema import SessionConfig
+    from rui.session import rules
+
+    words = SessionConfig().end_words
+    assert "下线" in words and "下线吧" in words
+    for said in ("下线", "下线吧", "下线。"):
+        assert rules.stop_intent(said, words) is True, said
+        assert rules.stop_scope(said, music_playing=True, words=words) == rules.MEDIA_STOP
+        assert rules.stop_scope(said, music_playing=False, words=words) == rules.BARE_STOP
+    # Questions must stay questions: the match is whole-request, never a substring.
+    assert rules.stop_intent("设备下线了吗", words) is False

@@ -1842,3 +1842,35 @@ gh release view v0.7.1 --json tagName,url                                      #
   `vision.usb_snapshot_url`（Mac 侧 8766）。
 - **待白天验收**：问版本（应为 rui 0.8.11，不是 HA）、问身份、关全屋灯/关书房灯走 scene、天奕门口画面、
   书房 USB 画面、HA 灯批量读（issue #34）、barge 短提示与削波。
+
+### 0.8.11 部署后修正（2026-10-30 03:0x，bridge 直接改生产配置）
+
+- **现象**：9哥 问「系统版本是多少」，rui 答对 0.8.11，但**多补一句「我不是 Home Assistant」**。
+- **根因（两处叠加，都在提示词里）**：
+  1. 代码默认提示词 `src/rui/session/prompts.py:53` —— 「…说的是你自己（rui {version}），**不是 Home Assistant**；
+     提到 Home Assistant 的版本时必须明确说成是它的版本…」，这条把"否认 HA"绑在"回答版本"上；
+  2. 部署时写进本机 `assistant.persona` 的文案 —— 「跑在 rui {version} 上（**家里自建的语音服务，不是 Home Assistant**）」。
+  `prompts.build()` 是 `template = system_prompt or DEFAULT_SYSTEM_PROMPT`，再把 persona 追加在后面，
+  所以两处都会进上下文 ⇒ 模型每轮被提示"我大概不是 HA"，于是主动澄清。
+- **已修（配置层热改，不重启容器）**：`PUT /api/v1/config`（从 NAS localhost 调，Mac 到 5.168:8080 无路由）——
+  - `assistant.system_prompt` = 默认提示词去掉那段 HA 否认，改为「用户没问 Home Assistant 的时候不要提它。」；
+  - `assistant.persona` = 去掉「（家里自建的语音服务，不是 Home Assistant）」。
+  - 校验：`GET /api/v1/debug/prompt` → 3747 字，`Home Assistant` 只出现 1 次且是抑制规则；占位符 `{name}{version}{max_chars}{long_chars}` 均在。
+- **待办（0.8.12）**：把 `prompts.py` 默认文案按同样口径改掉（不然每个新装用户都得自己覆盖 system_prompt），
+  并考虑把「用户问到 HA 时如何回答」写成条件规则，而不是默认否认。
+- **风险**：本机 `system_prompt` 现在是**非空覆盖**，以后改默认提示词不会自动生效到生产；升级时记得对照一次。
+
+### 「下线」作为结束词（2026-10-30 08:5x，bridge 直接改生产配置 + 待进代码）
+
+- **9哥 现场**：说「下线」→ 模型答了句「好，那我先歇着」但**音乐没停**，会话也没关。
+- **生产日志（00:48:42）**：`turn: transcript '下线。' reply '好，那我先歇着。' tools []` —— 走了普通 LLM 轮次，
+  因为「下线」不在 `session.end_words` 里，`rules.stop_intent` 不认；直到 00:49:17 他说「停止播放。」才
+  `stop intent -> media stopped, session closed`。
+- **已修（配置层热改，HTTP 200，无重启）**：`PUT /api/v1/config` 写 `session.end_words`，
+  加 `下线` / `下线吧`（顺手去掉了重复的 `退下吧`），现 23 条。
+- **语义已核**（`PYTHONPATH=src .venv/bin/python`，用同一份词表）：
+  - `下线` / `下线吧` / `下线。` → `stop_intent=True`，有音乐时 `stop_scope=media_stop`
+    ⇒ **停音乐 + 关会话**（正合 9哥 预期）；
+  - `设备下线了吗` → `False`（疑问句不受影响）；`你好小瑞下线` → `False`（唤醒词在头部，不在尾部剥离集里，可接受）。
+- **待进代码**（下一批）：`config/schema.py` 的 `end_words` 默认值加这两个词 + `rules` 侧表驱动测试
+  （含"疑问句不触发"与"音乐播放时 media_stop"两条断言）；否则新装用户拿不到。

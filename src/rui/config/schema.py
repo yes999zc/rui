@@ -1485,6 +1485,9 @@ class SessionConfig(BaseModel):
         "停止", "停下来", "停下", "停一下", "停掉", "别说了", "别放",
         "暂停", "别唱", "不听了", "退下吧", "退下", "不聊了", "够了",
         "退出", "结束", "再见", "拜拜", "睡了", "睡吧", "晚安",
+        # 9哥 2026-10-30: 「下线」「下线吧」 said goodnight but the session and the music
+        # kept running, because the whole-request match never saw the word.
+        "下线", "下线吧",
     ])
     # Whether a turn may see the earlier turns of this conversation. Off = every
     # turn stands alone (history cleared after each one). Editable from the

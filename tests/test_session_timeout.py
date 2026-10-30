@@ -214,6 +214,7 @@ def test_the_idle_timeout_says_goodbye_exactly_once(monkeypatch) -> None:
     tts = FakeTts()
     patch_chains(monkeypatch, asr=FakeAsr("在吗"), llms=[FakeLlm(["在。"])], ttss=[tts])
     runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner._had_speech = True   # a conversation happened; only its silence is under test
     runner.idle.start()
 
     clock.advance(14.0)
@@ -387,6 +388,7 @@ def test_a_long_news_read_is_not_an_idle_session(monkeypatch) -> None:
     tts = FakeTts()
     patch_chains(monkeypatch, asr=FakeAsr("在吗"), llms=[FakeLlm(["在。"])], ttss=[tts])
     runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner._had_speech = True   # the news read is speech that happened
     runner.idle.start()
 
     playing = True
@@ -410,3 +412,41 @@ def test_a_long_news_read_is_not_an_idle_session(monkeypatch) -> None:
     assert asyncio.run(
         runner.check_idle(_discard, TurnTrace(device_id="living"), busy=lambda: playing)
     ) == "没事的话，我先下啦。"
+
+
+def test_an_empty_wake_closes_silently_instead_of_saying_goodbye(monkeypatch) -> None:
+    """9哥 2026-10-30: 「退下吧」 -> 「好。」, then a later empty wake still said
+    「没事的话，我先下啦。」. A session that never heard a word must not talk."""
+    clock = FakeClock(500.0)
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("在吗"), llms=[FakeLlm(["在。"])], ttss=[tts])
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    # A wake arrives and is never followed by speech: the session exists, the clock runs.
+    runner.reset_history()
+    runner.idle.start()
+
+    clock.advance(15.0)
+    assert asyncio.run(runner.check_idle(_discard, TurnTrace(device_id="living"))) == ""
+    assert tts.texts == [], "an empty wake must not speak"
+    assert not runner.idle.active
+
+    clock.advance(60.0)
+    assert asyncio.run(runner.check_idle(_discard, TurnTrace(device_id="living"))) == ""
+    assert tts.texts == []
+
+
+def test_a_session_that_heard_speech_still_says_goodbye(monkeypatch) -> None:
+    """The rule keeps working where it was asked for: a real conversation gets a goodbye."""
+    clock = FakeClock(900.0)
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("现在几点"), llms=[FakeLlm(["一点了。"])],
+                 ttss=[tts])
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner.reset_history()
+    runner.idle.start()
+
+    asyncio.run(runner.run(b"\x00\x00" * 800, _discard, TurnTrace(device_id="living")))
+
+    clock.advance(15.0)
+    said = asyncio.run(runner.check_idle(_discard, TurnTrace(device_id="living")))
+    assert said == "没事的话，我先下啦。"

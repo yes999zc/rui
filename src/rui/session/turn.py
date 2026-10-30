@@ -421,6 +421,11 @@ class TurnRunner:
         # A turn is not an idle session, however long it takes: a 20 s tool lookup must not
         # get a goodbye at 15 s. `check_idle` is a poller and may run while `run()` is open.
         self._in_turn = False
+        # Did this session ever hear a word? A wake that hears nothing still opens a session
+        # (the idle clock starts on it), but it must not talk: 9哥 2026-10-30 heard the short
+        # 「好。」 after 「退下吧」 and then got 「没事的话，我先下啦。」 from a later empty wake.
+        # The goodbye belongs to a conversation that actually happened.
+        self._had_speech = False
         self._hint = ""
         self.sample_rate = sample_rate
         self.history_turns = history_turns
@@ -533,6 +538,11 @@ class TurnRunner:
         curated store injected through `extra_context` - not this list.
         """
         self.history.clear()
+        # A new wake is a new session, so it starts out unheard until a turn proves
+        # otherwise. Cleared here rather than in `idle.start()` because every wake path
+        # already calls this, and the idle clock alone cannot tell a silent wake apart
+        # from a late one.
+        self._had_speech = False
 
     def abort(self) -> None:
         """Stop speaking the current answer (barge-in).
@@ -790,6 +800,9 @@ class TurnRunner:
         touch_idle: bool = True,
     ) -> TurnResult:
         self._begin_tts_ledger(trace)
+        # Reaching here means a real utterance: this session heard speech, so it earns the
+        # goodbye when it later goes quiet (see `_had_speech` in `__init__`).
+        self._had_speech = True
         try:
             self._abort.clear()
             self._in_turn = True
@@ -1511,6 +1524,15 @@ class TurnRunner:
                 self.idle.touch()
             return ""
         if not self.idle.tick(now=now):
+            return ""
+        if not self._had_speech:
+            # A wake that never heard a word still opened a session, and the idle clock is
+            # the only thing left running for it. Close it silently: the goodbye is for a
+            # conversation that happened, not for a stray wake (9哥 2026-10-30: 「退下吧」
+            # -> 「好。」, then 「没事的话，我先下啦。」 from a later empty wake).
+            log.info("session idle for %.1f s: silent close (no speech in this session)",
+                     self.idle.timeout_s)
+            self.idle.stop()
             return ""
         log.info("session idle for %.1f s: farewell", self.idle.timeout_s)
         return await self.farewell(speak, trace)
