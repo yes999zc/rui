@@ -1890,3 +1890,23 @@ gh release view v0.7.1 --json tagName,url                                      #
 - **③ 「下线」「下线吧」进默认结束词**（`schema.py`，21 → 23 条）：现场说「下线」被当闲聊，
   音乐继续、会话不关。整句匹配语义不变，`设备下线了吗` 仍不触发。
 - **测试**：新增空唤醒静默关闭 / 说过话仍道别 / 下线三态断言；全量 **2311 passed / 6 skipped**，ruff 绿。
+
+### 2026-10-30 10:2x 0.8.12 发版并部署（bridge 直接执行）
+
+- **为什么发**：0.8.11 上线当天的三个现场问题要有个版本号可回看；顺带把 `secret-scan` 三次连红的两处真实
+  内网地址换掉（`docs/HANDOFF.md` 的 `usb_snapshot_url` 示例 → `http://<mac-lan-ip>:8766/snapshot.jpg`）。
+- **镜像**：`ghcr.io/yes999zc/rui:0.8.12`，多架构 index digest
+  `sha256:64a2c260dbf8373efefdebe06be3817ba555c874ce18a12a03e9a54424dfa33e`
+  （commit `22623a1`，tag `v0.8.12`；同时发布 `:0.8`、`:latest`、`:sha-22623a1`）。
+- **回滚锚**：`sha256:7dd7507d94fec85e0b2f1f03757bbdb8595f4be13cb9dff903c1f3e96b639a2e`（0.8.11 + 三修复那版）；
+  override 备份 `rui-dot2-override.yml.bak-20261030-102144`。回滚 = 把 override 的 digest 换回上面那串 + `compose up -d`。
+- **部署**：`/vol1/rui/rui-dot2-override.yml` 钉 digest → `docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d`；
+  容器重建，镜像从 GHCR 拉取成功。
+- **验收（容器内实测）**：`rui.__version__ = 0.8.12`；`/health` ok / devices 5 / device_errors 0 / speaker_connected true；
+  默认 `session.end_words` 23 条且含「下线」；`TurnRunner.check_idle` 含 `silent close` 分支；
+  `/api/v1/music/search?q=平凡之路` 仍返回 20 条（私有源插件在新镜像下正常加载）。
+- **发版过程中被 CI 抓到的一处疏漏**：只 bump 了 `src/rui/__init__.py`，漏了 `pyproject.toml` 与 `uv.lock` 里的
+  版本号，`tests/test_version.py` 断言两者相等 → tag 首次推送的 test 闸门红（1 failed / 2301 passed）；
+  补齐后全量 2311 passed / 6 skipped 再推，tag 已 `-f` 移动到 `22623a1`。
+- **设备现状**：9哥 静音了大部分音箱并说家里没人，`/api/v1/devices` 里 `dot2-d`（卫生间）`connected=false` 属预期，
+  等设备上线再核一次。
