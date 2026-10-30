@@ -61,3 +61,65 @@ def test_language_asks_map_to_genre_tags() -> None:
     assert q.language_genres("放几首日文歌") == ["J-Pop", "JPop", "Japanese"]
     assert q.language_genres("来点韩语歌")[0] == "K-Pop"
     assert q.language_genres("播放周杰伦的歌") == []
+
+
+def test_chinese_numerals_are_numbers() -> None:
+    """「三十首」 is a count, not a title. Measured 2026-10-30: 「播放三十首周杰伦。」
+    planned the title 「三十首周杰伦」 and searched for it - 0 hits, every time."""
+    assert q.cn_number("一") == 1
+    assert q.cn_number("五") == 5
+    assert q.cn_number("十") == 10
+    assert q.cn_number("十一") == 11
+    assert q.cn_number("十九") == 19
+    assert q.cn_number("二十") == 20
+    assert q.cn_number("三十") == 30
+    assert q.cn_number("四十") == 40
+    assert q.cn_number("五十") == 50
+    assert q.cn_number("一百") == 100
+    assert q.cn_number("20") == 20
+    # Not a number: a name's own digits must stay a name.
+    assert q.cn_number("二三") is None
+    assert q.cn_number("生") is None
+    assert q.cn_number("") is None
+
+
+def test_the_count_is_stripped_and_the_rest_is_the_search_term() -> None:
+    """The four spoken shapes, both scripts, one rule: count off, name stays."""
+    # 「播放三十首周杰伦」 - the count leads the artist ask.
+    p = q.plan("播放三十首周杰伦。")
+    assert (p.limit, p.term) == (30, "周杰伦")
+    assert p.random is False
+    # 「放20首周杰伦的歌」 - digits, and the generic tail keeps the artist pool.
+    p = q.plan("放20首周杰伦的歌。")
+    assert (p.limit, p.artist, p.title) == (20, "周杰伦", "")
+    # 「来二十首歌」 - nothing left but the song word: a random ask of 20.
+    p = q.plan("来二十首歌")
+    assert (p.limit, p.random) == (20, True)
+    # 「听五首」 - a bare count is a random ask of that many.
+    p = q.plan("听五首")
+    assert (p.limit, p.random) == (5, True)
+    assert q.plan("放五首").limit == 5
+    assert q.plan("放十五首周杰伦").limit == 15
+    assert q.plan("放三十首周杰伦的歌").artist == "周杰伦"
+
+
+def test_a_huge_count_is_clamped_not_refused() -> None:
+    """「一百首」 means "lots": the answer is the queue cap (schema.py:1395), never
+    a crash and never 100 tracks."""
+    assert q.MAX_TRACKS == 50
+    assert q.plan("放一百首周杰伦").limit == 50
+    assert q.plan("放99首周杰伦").limit == 50
+
+
+def test_titles_that_contain_numerals_are_not_counts() -> None:
+    """The guard the digits path relied on - 首 has to follow the numeral - is the
+    same for both scripts."""
+    assert q.split_count("一生中最爱") == (None, "一生中最爱")
+    assert q.plan("放一生中最爱").limit is None
+    # The wrapper no longer eats the 一 of a title: 放 + 一 + 生 is not 放一首.
+    assert q.plan("放一生中最爱").term == "一生中最爱"
+    assert q.plan("放三套车").limit is None
+    assert q.plan("放三套车").term == "三套车"
+    # A quoted name wins outright: 《三首歌》 is the song, not an order for three.
+    assert q.plan("放《三首歌》").limit is None
+    assert q.plan("帮我放首晴天吧").limit is None

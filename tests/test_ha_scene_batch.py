@@ -394,15 +394,21 @@ def test_seventeen_entities_go_out_in_three_serial_batches(tmp_path: Path) -> No
 
 
 def test_call_timeout_s_reaches_the_wire(tmp_path: Path) -> None:
+    """The configured budget is the wire timeout, not the old fixed 8 s.
+
+    20.0 is the top of the range the schema allows since 0.8.13 (the turn cancels a tool
+    at 20 s, so a larger value could never be spent); anything above it is not a value
+    this test could legitimately build.
+    """
     async def run() -> None:
         client = FakeClient()
         ha = bridge(tmp_path, HaConfig(base_url="http://ha.local",
                                        token_env="NO_TOKEN",
-                                       call_timeout_s=23.0), client)
+                                       call_timeout_s=20.0), client)
 
         await handler(ha)({"service": "light.turn_on", "entity_id": "light.kids"})
 
-        assert client.timeouts[-1] == 23.0
+        assert client.timeouts[-1] == 20.0
 
     asyncio.run(run())
 

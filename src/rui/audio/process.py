@@ -989,8 +989,9 @@ class AudioPlane:
             self.vad_error = "vad_model_path is empty: wake fires but nothing is transcribed"
             log.warning("vad off: %s", self.vad_error)
             return
+        previous = self.gate
         try:
-            self.gate = UtteranceGate(
+            gate = UtteranceGate(
                 GateConfig(
                     rate=voice.rate,
                     min_speech_ms=voice.vad_min_speech_ms,
@@ -1002,7 +1003,38 @@ class AudioPlane:
             )
         except VadUnavailable as exc:
             self.vad_error = str(exc)
-            log.warning("vad off: %s", exc)
+            log.warning("vad off: %s", self.vad_error)
+            return
+        if previous is not None:
+            # This build is a new *session*, not a new process (see `_capture`, which
+            # resets the session count right after calling this): the gate object is
+            # rebound per control-plane connection, so the since-plane-start tally has
+            # to be carried over explicitly or every reconnect silently restarts the
+            # number the metric exists to measure.
+            gate.silent_wakes = int(getattr(previous, "silent_wakes", 0))
+        self.gate = gate
+
+    def _reset_gate_session(self) -> None:
+        """A new control plane connected: restart the per-session silent-wake count.
+
+        Called from `_capture` *after* `_build_vad()`, which is the only place a gate is
+        created. The call used to sit in `handle()`, before `_capture` had started: at
+        that moment `self.gate` is None on the first connection, so the `getattr` found
+        nothing and `silent_wakes_session` never restarted - dead wiring that read as
+        done (reviewer, with a real `handle()` over the socket: "gate present when
+        handle() ran reset_session: None").
+
+        `silent_wakes` (since plane start) is deliberately left alone; `_build_vad`
+        carries it across the per-connection rebuild. A plane with VAD off has no gate
+        and no session count, which is the only honest reading of zero there.
+        """
+        gate = self.gate
+        reset_session = getattr(gate, "reset_session", None)
+        if callable(reset_session):
+            reset_session()
+            return
+        if gate is None:
+            log.debug("no vad gate for this session: no session counters to reset")
 
     # ------------------------------------------------------------- audio facts
     def _log_audio_resolution(self, when: str) -> None:
@@ -1453,6 +1485,7 @@ class AudioPlane:
         self._build_aec(info.mic_channels, info.ref_channels)
         self._build_kws()
         self._build_vad()
+        self._reset_gate_session()
         self._configure_device_wake(info)
         while not self._stop.is_set():
             try:
@@ -3982,6 +4015,14 @@ class AudioPlane:
             gate_speaking=bool(self.gate.speaking) if self.gate is not None else False,
             gate_discarded=self.gate.discarded if self.gate is not None else 0,
             gate_interrupted=self.gate.interrupted if self.gate is not None else 0,
+            # "wake formed a turn, then heard nothing": the empty-wake rate, per
+            # session and since the plane started (see the gate's counters). getattr:
+            # a test/older gate stub without them reads as zero, not a crash.
+            gate_silent_wakes=(
+                getattr(self.gate, "silent_wakes", 0) if self.gate is not None else 0),
+            gate_silent_wakes_session=(
+                getattr(self.gate, "silent_wakes_session", 0)
+                if self.gate is not None else 0),
             speaker_connected=bool(health.get("connected")),
             speaker_rejected=int(health.get("rejected") or 0),
             # Physical mute (task-18): the key's state, or the adapter's report
@@ -4231,6 +4272,9 @@ class AudioPlane:
             await writer.drain()
             connected.set()
             self._ctl_writer, self._ctl_connected = writer, connected
+            # A new control plane is a new "session" for the per-session counters. The
+            # reset lives in `_capture`, after the gate is built (it does not exist yet
+            # here) - see `_reset_gate_session`.
             capture = asyncio.create_task(
                 self._capture(connected, writer, info), name="capture"
             )

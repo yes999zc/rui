@@ -450,3 +450,174 @@ def test_a_session_that_heard_speech_still_says_goodbye(monkeypatch) -> None:
     clock.advance(15.0)
     said = asyncio.run(runner.check_idle(_discard, TurnTrace(device_id="living")))
     assert said == "没事的话，我先下啦。"
+
+
+def test_a_console_try_is_not_speech_and_the_room_closes_silently(
+        monkeypatch, caplog) -> None:
+    """0.8.13: the console's 试一试 ran through `run()`, which marked the session as
+    having heard a word - so 15 s after someone clicked it the speaker in that room
+    said 「没事的话，我先下啦。」 to nobody. A typed try answers; it is not the room
+    speaking."""
+    import logging
+
+    clock = FakeClock(2400.0)
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("现在几点"), llms=[FakeLlm(["一点了。"])],
+                 ttss=[tts])
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner.reset_history()
+    runner.idle.start()
+
+    result = asyncio.run(runner.run(b"", _discard, TurnTrace(device_id="debug"),
+                                    transcript="现在几点", counts_as_speech=False))
+
+    # The try itself is unchanged: it answers, and the answer is spoken in the room.
+    assert result.reply == "一点了。"
+    assert tts.texts == ["一点了。"]
+    assert runner._had_speech is False, "a console try was counted as the room speaking"
+    # Still activity for the idle clock: the session exists, it just closes quietly.
+    assert runner.idle.active
+
+    tts.texts.clear()
+    clock.advance(15.0)
+    with caplog.at_level(logging.INFO, logger="rui.session.turn"):
+        said = asyncio.run(runner.check_idle(_discard, TurnTrace(device_id="living")))
+    assert said == ""
+    assert tts.texts == [], "the room said goodbye to nobody"
+    assert not runner.idle.active
+    assert "silent close" in caplog.text
+
+
+def test_the_speech_flag_is_opt_out_only(monkeypatch) -> None:
+    """The default is what keeps every voice path intact; only a caller that knows
+    nobody is in the room may turn it off."""
+    import inspect
+
+    param = inspect.signature(TurnRunner.run).parameters["counts_as_speech"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is True
+
+    clock = FakeClock(4200.0)
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("现在几点"), llms=[FakeLlm(["一点了。"])],
+                 ttss=[tts])
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner.reset_history()
+    runner.idle.start()
+
+    asyncio.run(runner.run(b"\x00\x00" * 800, _discard, TurnTrace(device_id="living")))
+
+    assert runner._had_speech is True, "a spoken turn must still earn the goodbye"
+    clock.advance(15.0)
+    assert asyncio.run(
+        runner.check_idle(_discard, TurnTrace(device_id="living"))
+    ) == "没事的话，我先下啦。"
+
+
+def test_a_console_try_does_not_clear_the_previous_evening(monkeypatch) -> None:
+    """`counts_as_speech=False` governs one thing only: it neither sets the flag nor
+    resets it - `reset_history()` (every wake) stays the sole owner of clearing."""
+    clock = FakeClock(6000.0)
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("现在几点"), llms=[FakeLlm(["一点了。"])],
+                 ttss=[tts])
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner.reset_history()
+    runner._had_speech = True   # a conversation already happened in this session
+    runner.idle.start()
+
+    asyncio.run(runner.run(b"", _discard, TurnTrace(device_id="debug"),
+                           transcript="现在几点", counts_as_speech=False))
+
+    assert runner._had_speech is True, "a console try must not erase a real conversation"
+    clock.advance(15.0)
+    assert asyncio.run(
+        runner.check_idle(_discard, TurnTrace(device_id="living"))
+    ) == "没事的话，我先下啦。"
+
+
+def test_a_snapshot_gives_the_conversation_back_in_place(monkeypatch) -> None:
+    """The console's try must hand the room back byte for byte - same list object.
+
+    A try clears the context for its own answer (a fresh utterance, as on the
+    speaker). `snapshot_session`/`restore_session` are how the app puts the live
+    conversation back afterwards; channel turns hold their own reference to the list,
+    so a restore that rebinds the attribute would desync them.
+    """
+    clock = FakeClock(7800.0)
+    tts = FakeTts()
+    patch_chains(monkeypatch, asr=FakeAsr("现在几点"), llms=[FakeLlm(["一点了。"])],
+                 ttss=[tts])
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=clock))
+    runner.reset_history()
+    runner.idle.start()
+
+    asyncio.run(runner.run(b"\x00\x00" * 800, _discard, TurnTrace(device_id="living")))
+    before = [dict(row) for row in runner.history]
+    assert len(before) == 2, before   # the question and the answer
+    assert runner._had_speech is True
+    history_object = id(runner.history)
+
+    snapshot = runner.snapshot_session()
+    asyncio.run(runner.run(b"", _discard, TurnTrace(device_id="debug"),
+                           transcript="今天几号", counts_as_speech=False))
+    # The try really did clear the context for its own answer ...
+    assert runner.history != before
+
+    runner.restore_session(snapshot)
+
+    assert runner.history == before
+    assert id(runner.history) == history_object, "history was rebound, not restored"
+    assert runner._had_speech is True
+    # ... and the room's conversation still ends with its goodbye.
+    clock.advance(15.0)
+    assert asyncio.run(
+        runner.check_idle(_discard, TurnTrace(device_id="living"))
+    ) == "没事的话，我先下啦。"
+
+
+def test_a_snapshot_never_alias_the_live_list(monkeypatch) -> None:
+    """A snapshot is a copy: later turns must not edit the state already handed out."""
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=FakeClock()))
+    runner.reset_history()
+    runner.history.append({"role": "user", "content": "在吗"})
+    snapshot = runner.snapshot_session()
+
+    runner.history.append({"role": "assistant", "content": "在。"})
+    runner.reset_history()
+
+    assert snapshot.history == [{"role": "user", "content": "在吗"}]
+    runner.restore_session(snapshot)
+    assert runner.history == [{"role": "user", "content": "在吗"}]
+
+
+def test_a_restore_never_writes_into_a_list_the_room_no_longer_holds() -> None:
+    """The console try holds no `chat_lock`; a channel turn can rebind the list.
+
+    The channel endpoint swaps `runner.history` for its own per-session list under
+    `chat_lock`; the try takes its snapshot and restores it without ever holding that
+    lock. The narrow window between the two is enough: restoring into "whatever list is
+    current now" would paste the living room's conversation into another session's list
+    (and into a turn that is still running). The snapshot carries the list object it
+    came from, so the restore can tell it was overtaken and do nothing.
+    """
+    runner = TurnRunner(Config().providers, idle=IdleWatch(15.0, clock=FakeClock()))
+    runner.reset_history()
+    runner.history.append({"role": "user", "content": "在吗"})
+    original = runner.history
+    snapshot = runner.snapshot_session()
+
+    # Mid-try: the channel endpoint rebinds, then keeps talking in its own list.
+    channel_history: list[dict] = [{"role": "user", "content": "别的会话"}]
+    runner.history = channel_history
+    runner.history.append({"role": "assistant", "content": "在。"})
+
+    runner.restore_session(snapshot)
+
+    assert runner.history is channel_history, "the restore rebound the attribute"
+    assert channel_history == [
+        {"role": "user", "content": "别的会话"},
+        {"role": "assistant", "content": "在。"},
+    ], "the console try wrote the living room's rows into another session's list"
+    assert original == [{"role": "user", "content": "在吗"}], (
+        "the restore edited the room's own list behind its back")

@@ -238,6 +238,10 @@ def _real_gate(vad: object | None = None) -> object:
     gate.turns = 0
     gate.discarded = 0
     gate.idle_events = 0
+    # The empty-wake counters (0.8.13) live in `__init__`; this hand-built gate has to
+    # carry them too, or the silent-timeout path raises AttributeError.
+    gate.silent_wakes = 0
+    gate.silent_wakes_session = 0
     gate._vad = vad if vad is not None else _SilentVad()
     gate._cue_lag_ms = 0.0
     gate._cue_lag_seen = False

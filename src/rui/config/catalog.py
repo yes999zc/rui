@@ -1229,12 +1229,12 @@ def _tool_fields(cfg: Config) -> list[dict]:
                   "on the next injection.")),
         _field("tools.ha.call_timeout_s", "tools.ha", "number",
                _t("单次调用超时", "Per-call timeout"),
-               _t("一次 control 调用的等待上限（2–60 秒，默认 10）。多实体控制按每批最多 8 个"
+               _t("一次 control 调用的等待上限（2–20 秒，默认 10；超过 turn 的工具超时无意义）。多实体控制按每批最多 8 个"
                   "串行发送，每批都用这个上限；超时后会回查设备状态再回话，部分成功就如实说部分成功。",
-                  "How long one control call may take (2-60 s, default 10). Multi-entity calls "
+                  "How long one control call may take (2-20 s, default 10; longer than the turn's tool timeout is meaningless). Multi-entity calls "
                   "go out serially in batches of at most 8, each with this budget; after a "
                   "timeout the state is read back and a partial result is reported as partial."),
-               unit=_t("秒", "s"), minimum=2, maximum=60),
+               unit=_t("秒", "s"), minimum=2, maximum=20),
         _field("tools.vision.usb_snapshot_url", "tools.vision", "text",
                _t("USB 快照服务地址", "USB snapshot URL"),
                _t("书房那台 USB 摄像头（Mac 上的 scripts/usb_snapshot_server.py，默认端口 8766）"

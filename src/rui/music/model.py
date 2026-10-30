@@ -56,4 +56,7 @@ class QueryPlan:
     term: str = ""          # the cleaned search term for a source
     random: bool = False
     favorites: bool = False
+    # How many tracks the user asked for (「三十首」). None = no count was spoken
+    # and the queue batch decides; already clamped by `query.split_count`.
+    limit: int | None = None
     notes: list[str] = field(default_factory=list)

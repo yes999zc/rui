@@ -167,6 +167,15 @@ class UtteranceGate:
         # Counts silent wakes across arms: disarm() resets the per-arm state, and the
         # plane compares this counter before/after each block to send WakeIdle.
         self.idle_events = 0
+        # Why the wake ended: "no speech inside max_wait_ms". `idle_events` above is the
+        # input-side event (any disarm without a turn); these are the diagnosis of it,
+        # so its frequency is a number instead of something only the log line knows
+        # (production: 20 of these in one afternoon of logs, 2026-10-30).
+        # Two levels on purpose: `silent_wakes` never resets (the plane process), while
+        # `silent_wakes_session` is cleared by `reset_session()` when a new control
+        # plane connects, i.e. per run of the room. Both ship in `Metrics`.
+        self.silent_wakes = 0
+        self.silent_wakes_session = 0
 
     def _reset_state(self) -> None:
         self._skipping = 0
@@ -252,6 +261,15 @@ class UtteranceGate:
         self.armed = False
         self._vad.reset()
         self._reset_state()
+
+    def reset_session(self) -> None:
+        """A new control plane connected: restart the per-session silent-wake count.
+
+        Only the session number. `silent_wakes` is the process's own history and must
+        survive a reconnecting console, or a flapping socket erases the measurement the
+        counter exists for.
+        """
+        self.silent_wakes_session = 0
 
     def hold(self, ms: float, skip_ms: float = 0.0) -> None:
         """The speaker is still sounding: listen, but do not open a turn yet.
@@ -556,9 +574,19 @@ class UtteranceGate:
             if not speaking:
                 self._waited_ms += block_ms
                 if self._waited_ms >= self._max_wait_ms:
-                    log.info("wake with no speech after %.0f ms; disarming (cue=%s)",
-                             self._waited_ms,
-                             "excised" if self._cue_excised else "none")
+                    # Both numbers in the line so a log alone answers "how often?": the
+                    # session one is the interesting rate (a restarted process would
+                    # otherwise hide yesterday's empty wakes behind a fresh zero).
+                    self.silent_wakes += 1
+                    self.silent_wakes_session += 1
+                    log.info(
+                        "wake with no speech after %.0f ms; disarming "
+                        "(cue=%s, silent #%d this session, #%d since plane start)",
+                        self._waited_ms,
+                        "excised" if self._cue_excised else "none",
+                        self.silent_wakes_session,
+                        self.silent_wakes,
+                    )
                     self.discarded += 1
                     # A cue that was excised is our own voice, not an utterance: the
                     # wake still heard nothing, so it must report the silent timeout

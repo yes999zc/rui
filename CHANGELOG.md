@@ -18,6 +18,34 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.13] - 2026-10-30
+
+**Theme: 听见的和说出来的对齐。** 控制台「试一试」不再冒充房间说过话（也不再把正在进行的对话抹掉）、
+数量词终于会被解析（中文与阿拉伯数字都算）、空唤醒第一次有可统计计数、`tools.ha.call_timeout_s`
+上限收回到与工具超时一致的 20 秒。0.8.12 之后第一次把 CI/发布加固与运行时改动一起发版。
+
+### Fixed
+
+1. **控制台「试一试」不算「说过话」，且对房间会话零副作用**（`session/turn.py`、`web/api/app.py`）：
+   `run(..., counts_as_speech=False)` 只影响「是否置 `_had_speech`」；`_run_debug_say` 改成
+   快照 → 执行 → `finally` 恢复（覆盖 409、提前返回、异常）。现场：0.8.12 修好空唤醒道别之后，
+   从电脑点试一试，15 秒后音箱仍会自己道别。
+2. **数量词解析**（`music/query.py`、`model.py`、`tools.py`）：新增 `_COUNT` / `cn_number()` /
+   `split_count()` / `QueryPlan.limit`，中文与阿拉伯数字都识别，上限 50（对齐 `queue_batch`），
+   搜索深度随 limit 提高；顺带修掉 `放一?` 吃掉「放一生中最爱」里「一」的正则 bug。
+3. **空唤醒计数**（`audio/vad.py`、`protocol.py`、`process.py`）：`silent_wakes` /
+   `silent_wakes_session` 进 `Metrics`（`/api/v1/audio` 可见），日志带两个计数；重连时进程级计数
+   carry-over、会话级归零。行为不变（仍 disarm、阈值未动）。
+4. **恢复会话时的竞态守卫**（`session/turn.py`）：快照记录列表对象本身，恢复前 identity 不符就跳过，
+   不把行写进通道重绑后的新列表。
+5. **`tools.ha.call_timeout_s` 上限 60 → 20**（`config/schema.py` + example/template/catalog）：
+   超过 turn 工具超时的值会被 turn 先取消，回查与「部分成功」回话永远跑不到。
+
+### Note
+
+- 只解析句首数量；倒装（「周杰伦三十首」）与字面歌名（`放《三首歌》`）按原样处理。
+- `call_timeout_s=20` 时批预算 `×1.5` 会超过 turn 取消点：20 是硬顶，10 是推荐值。
+
 ## [0.8.12] - 2026-10-30
 
 **Theme: 现场三连修，外加一条把家里的地址从公开文档里撤下来。** 0.8.11 上线当天 9哥 在真机上

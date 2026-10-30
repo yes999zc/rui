@@ -205,8 +205,10 @@ tools:
     # is refused, i.e. the 0.8.10 behaviour. lock/alarm/valve/script/automation/
     # shell_command/python_script/hassio stay refused whatever is listed here.
     allowed_scenes: []         # e.g. [scene.example_scene, scene.example_away]
-    # Per control call budget in seconds (2-60). Multi-entity calls go out serially in
-    # batches of at most 8; after a timeout the state is read back before speaking.
+    # Per control call budget in seconds (2-20, default 10). Multi-entity calls go out
+    # serially in batches of at most 8; after a timeout the state is read back before
+    # speaking. 20 is the turn's tool timeout: anything larger is cancelled by the turn
+    # first, so the schema rejects it instead of silently cutting it down.
     call_timeout_s: 10.0
   # `local.look` (0.8.11): one camera frame, described in 1-2 sentences by the model.
   # The frame is memory-only (never written to disk) and is sent as base64 to the

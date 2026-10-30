@@ -86,13 +86,17 @@ def _rank_hits(tracks: list[Track], want: str) -> list[Track]:
 async def _search(source: MusicSource, p: q.QueryPlan,
                   names: NameResolver | None = None) -> list[Track]:
     """Where a second source will plug in: today only the NAS library."""
+    # A spoken count can be deeper than the default search depth (「三十首周杰伦」):
+    # ask for at least that many, or the queue is silently short of the ask.
+    wide = max(25, p.limit or 0)
+    deep = max(40, p.limit or 0)
     try:
         if p.artist and not p.title:
             # An artist-only ask: search the artist, then keep only that artist.
             # Subsonic's fuzzy search answered 「周杰伦」 with 陈奕迅《十年》 first
             # (measured 09:45) - playing a different artist is worse than saying
             # nothing was found.
-            hits = await source.search(p.artist, 40)
+            hits = await source.search(p.artist, deep)
             keep = [t for t in hits if q.accepts(t.artist, p.artist)
                     or q.accepts(t.label, p.artist)]
             if keep or names is None:
@@ -100,7 +104,7 @@ async def _search(source: MusicSource, p: q.QueryPlan,
             # Nothing under that name: it may be a nickname (「战车乐队」 is filed
             # as Rammstein). The model translates, the library still decides.
             for alt in await names.candidates(p.artist):
-                alt_hits = await source.search(alt, 40)
+                alt_hits = await source.search(alt, deep)
                 matched = [t for t in alt_hits if q.accepts(t.artist, alt)
                            or q.accepts(t.label, alt)]
                 if matched:
@@ -108,11 +112,11 @@ async def _search(source: MusicSource, p: q.QueryPlan,
                     return matched
             return []
         if p.artist:
-            hits = await source.search(p.title, 25)
+            hits = await source.search(p.title, wide)
             keep = [t for t in hits if q.accepts(t.artist, p.artist)]
             if keep:
                 return _rank_hits(keep, p.title)
-            pool = await source.search(p.artist, 25)
+            pool = await source.search(p.artist, wide)
             if pool:
                 # The artist pool is ranked by title, never trusted blindly: Subsonic
                 # answered 「紫色…雨夜航线第三号」 with 云紫色 because the artist half
@@ -124,7 +128,8 @@ async def _search(source: MusicSource, p: q.QueryPlan,
                     return _rank_hits(keep, p.title)
             return _rank_hits([t for t in hits if q.accepts(t.label, p.title)], p.title)
         return _rank_hits(
-            [t for t in await source.search(p.term, 25) if q.accepts(t.label, p.title)], p.title)
+            [t for t in await source.search(p.term, wide) if q.accepts(t.label, p.title)],
+            p.title)
     except SourceError as exc:
         log.info("music search failed: %s", exc)
         return []
@@ -177,13 +182,17 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         # point (the console's `/music/search` uses the same `service.rewrite`).
         raw = service.rewrite(str(args.get("query") or ""))
         p = q.plan(raw)
+        # A spoken count is how many tracks the user wants (「三十首周杰伦」); the
+        # batch is only the default for a count nobody said.
+        want = p.limit or batch
         # None = this is a name/title/random ask; the literal search handles it.
-        desc = semantic.plan(raw) if raw.strip() else None
+        spoken = q.count_removed(raw) if p.limit is not None else raw
+        desc = semantic.plan(spoken) if spoken.strip() else None
         try:
             if p.favorites:
                 tracks = await source.favorites()
             elif p.random:
-                tracks = await source.random(batch)
+                tracks = await source.random(want)
             else:
                 tracks: list[Track] = []
                 if q.has_quoted_title(raw):
@@ -205,7 +214,7 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
                         # set, not an if-chain; the index answers it without a
                         # literal search (docs/library-index.md).
                         await index.ensure()
-                        tracks = await semantic.pool(desc, source, index, limit=batch)
+                        tracks = await semantic.pool(desc, source, index, limit=want)
                 if not tracks:
                     # The old genre-pool fallback, kept for a not-yet-built index
                     # and for language words the planner does not know.
@@ -213,7 +222,7 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
                     by_genre = getattr(source, "by_genre", None)
                     if genres and by_genre is not None:
                         for genre in genres:
-                            tracks = await by_genre(genre, limit=batch)
+                            tracks = await by_genre(genre, limit=want)
                             if tracks:
                                 log.info("music: %r -> genre %s (%d tracks)",
                                          p.raw, genre, len(tracks))
@@ -230,6 +239,10 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         # to resolve - and `play()` leaves nothing behind when that happens.
         if not tracks:
             return ToolResult(status="empty").slot(want=p.title or p.term)
+        if p.limit:
+            # The count is a ceiling as well as a request: 「听五首」 must not queue
+            # the twenty a random draw returns.
+            tracks = tracks[:p.limit]
         return _started(tracks, await service.play(tracks))
 
     async def music_search(args: dict[str, Any]) -> ToolResult:

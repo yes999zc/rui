@@ -199,6 +199,14 @@ class Metrics(BaseModel):
     gate_speaking: bool = False
     gate_discarded: int = 0
     gate_interrupted: int = 0
+    # Of those discards, the ones that were a wake forming a turn and then hearing
+    # nothing at all inside `max_wait_ms` ("wake with no speech"). Counted here so the
+    # rate is greppable and chartable without parsing the log: `gate_silent_wakes` is
+    # the plane process's total, `gate_silent_wakes_session` restarts when a new control
+    # plane connects. Additive with a default: an older plane sends zero and an older
+    # control plane ignores them.
+    gate_silent_wakes: int = 0
+    gate_silent_wakes_session: int = 0
     playback_s: float = 0.0
     # How far ahead of real time the speaker's buffer is being fed. Zero (or a number
     # that collapses) is what an underrun looks like from here; the speak loop aims for

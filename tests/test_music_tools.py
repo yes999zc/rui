@@ -705,3 +705,51 @@ def test_favorites_failure_speaks_and_success_stays_playable(tmp_path: Path) -> 
         assert service.state == "playing"
 
     asyncio.run(run())
+
+
+class BigSource(FlakySource):
+    """A library that has as many 周杰伦 tracks as anyone could ask for."""
+
+    def __init__(self) -> None:
+        self.asked: list[int] = []
+
+    async def search(self, term: str, limit: int) -> list[Track]:
+        if self.down:
+            raise SourceError("nas unreachable")
+        if "周杰伦" not in term:
+            return []
+        self.asked.append(limit)
+        return [Track(id=f"subsonic:j{i}", title=f"歌{i}", artist="周杰伦", duration=200)
+                for i in range(max(limit, 1))]
+
+
+def test_a_spoken_chinese_count_sets_the_queue_length(tmp_path: Path) -> None:
+    """Measured 2026-10-30: 「播放三十首周杰伦。」 searched the title 「三十首周杰伦」
+    and found nothing, while 「放20首周杰伦的歌。」 worked by luck. Both scripts are
+    a count now, and the count is what the queue gets."""
+    async def run() -> None:
+        source = BigSource()
+        service, _, tools, specs = make(tmp_path, source=source)
+        out = say(specs, "music_play", await tools["music_play"]({"query": "播放三十首周杰伦。"}))
+        assert out == phrases.book.render(
+            "music.started", title="歌0", artist="周杰伦", count=30)
+        assert len(service.queue) == 30
+        # The search went deeper than the default 40? 30 fits, but the ask must
+        # never be silently short: every search was at least the spoken count.
+        assert all(n >= 30 for n in source.asked)
+
+    asyncio.run(run())
+
+
+def test_a_bare_count_is_a_random_ask_of_that_many(tmp_path: Path) -> None:
+    async def run() -> None:
+        _, source, tools, specs = make(tmp_path)
+        out = say(specs, "music_play", await tools["music_play"]({"query": "来二十首歌"}))
+        assert out == phrases.book.render(
+            "music.started", title="R0", artist="A", count=20)
+        # 「听五首」 asks a random draw for 5, not the batch of 20.
+        out2 = say(specs, "music_play", await tools["music_play"]({"query": "听五首"}))
+        assert out2 == phrases.book.render(
+            "music.started", title="R0", artist="A", count=5)
+
+    asyncio.run(run())

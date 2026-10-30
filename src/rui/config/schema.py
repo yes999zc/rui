@@ -24,6 +24,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 CONFIG_VERSION = 3
 
+# Ceiling for `tools.ha.call_timeout_s`. A tool call runs inside a turn, and the turn
+# cancels every handler at TurnRunner's `tool_timeout_s` (src/rui/session/turn.py, 20 s):
+# a per-call budget above that can never be spent, it only makes the console accept a
+# value the runtime truncates. Kept here (not imported from the turn module) because the
+# config layer must not import the session layer; `tests/test_ha_call_timeout_cap.py`
+# imports both and fails if the two numbers ever drift apart.
+HA_CALL_TIMEOUT_MAX_S = 20.0
+
 log = logging.getLogger(__name__)
 
 ExposeMode = Literal["domain", "whitelist", "all"]
@@ -1221,7 +1229,14 @@ class HaConfig(BaseModel):
     # Per-call budget for one `call_service` wire call (the multi-entity path sends
     # serial batches of at most 8). The old build's timeout was a fixed 8 s inside
     # MCPClient.call; a slow-but-working HA needs the operator to be able to say 20.
-    call_timeout_s: float = Field(default=10.0, ge=2.0, le=60.0)
+    # 20 IS THE CEILING, not a tuning choice: every tool call runs inside one turn and
+    # TurnRunner cancels the handler at `tool_timeout_s` (src/rui/session/turn.py, 20 s).
+    # A bigger budget can never be spent - the turn kills the call first, so the
+    # read-back and the "only part of it worked" reply that the batch path depends on
+    # never run, and the console would accept a number the runtime silently truncates.
+    # 10 stays the default because above ~13 s even the batch budget
+    # (`call_timeout_s * SERVICE_BUDGET_FACTOR`, 1.5x) is already past that cancel.
+    call_timeout_s: float = Field(default=10.0, ge=2.0, le=HA_CALL_TIMEOUT_MAX_S)
 
     @field_validator("allowed_scenes")
     @classmethod

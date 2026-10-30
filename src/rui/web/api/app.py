@@ -4976,7 +4976,35 @@ def create_app(
         return {"playing": path}
 
     async def _run_debug_say(text: str, device_id: str = "") -> dict:
-        """One fresh text turn. Shared by ``/debug/say`` and the wizard's try step.
+        """One text turn from the console: same turn, no trace left in the room.
+
+        Shared by ``/debug/say`` and the wizard's try step. Two rules make it safe to
+        press 试一试 while people are in the house:
+
+        - The room's conversation is a snapshot the whole way round. The try clears
+          the context to answer as a fresh utterance (a wake does the same), then
+          puts `history` and `_had_speech` back - on the error path too - so a console
+          click can never end a real conversation or forget what was said.
+        - The try is not speech by anyone in the room (`counts_as_speech=False`).
+          Counting it as speech earned the room a 「没事的话，我先下啦。」 15 s later,
+          spoken to no one (0.8.13). The idle watch still runs: the session just
+          closes silently.
+
+        Nothing else is touched: playback, the trace, the reply record and the room
+        routing are exactly the ones a spoken turn uses.
+        """
+        runner = getattr(app.state, "runner", None)
+        # Taken before any work so the `finally` can restore even a 409 that changed
+        # nothing (a restore of unchanged state is a no-op, not a risk).
+        session = runner.snapshot_session() if runner is not None else None
+        try:
+            return await _debug_say_fresh_turn(text, device_id)
+        finally:
+            if runner is not None and session is not None:
+                runner.restore_session(session)
+
+    async def _debug_say_fresh_turn(text: str, device_id: str = "") -> dict:
+        """The body of one console try. Call it only through ``_run_debug_say``.
 
         ``device_id`` selects the room the try belongs to; without it the no-source
         room rule applies (`multi_device.default_output`). A try from the wizard or the
@@ -5019,7 +5047,10 @@ def create_app(
                         app.state.last_turn["tools"], "stages": {}, "audio_bytes":
                         app.state.last_turn["audio_bytes"],
                 }
-        result = await runner.run(b"", _speaking(app, client), trace, transcript=text)
+        # A console try is not speech in that room: the turn answers, but it must not
+        # earn the room a farewell 15 s later (0.8.13).
+        result = await runner.run(b"", _speaking(app, client), trace, transcript=text,
+                                 counts_as_speech=False)
         await client.reply_finished(hold_music_s=_turn_hold(result))
         _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
                            _turn_light(result), live=client)

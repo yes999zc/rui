@@ -274,8 +274,11 @@ tools:
     # lock/alarm/valve/script/automation/shell_command/python_script/hassio are never
     # relaxed by this list.
     allowed_scenes: []         # e.g. [scene.example_scene, scene.example_away]
-    # Per control call budget (2-60 s). Multi-entity calls go out serially in batches of
-    # at most 8, each with this budget; a timed-out batch is read back before speaking.
+    # Per control call budget (2-20 s, default 10). Multi-entity calls go out serially
+    # in batches of at most 8, each with this budget; a timed-out batch is read back
+    # before speaking. The 20 s ceiling is the turn's own tool timeout: a larger value
+    # would be cancelled by the turn before the read-back could happen, so it is
+    # rejected instead of silently truncated.
     call_timeout_s: 10.0
   # `local.look` (0.8.11): 「看看书房」/「门口有人吗」 -> one camera frame, described in
   # 1-2 sentences (<= 80 chars) by the configured LLM. Two sources:

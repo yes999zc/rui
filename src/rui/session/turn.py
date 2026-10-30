@@ -366,6 +366,28 @@ async def open_stream_stage(
     raise StageFailure(stage, attempts)
 
 
+@dataclass
+class SessionSnapshot:
+    """The conversation state of one room, copied so a caller can put it back.
+
+    One console 试一试 must not be able to end a real conversation: the try clears the
+    context for its own answer (a fresh utterance, as on the speaker) and then has to
+    hand the room back exactly as it found it - history and the "did this session hear
+    a word?" flag together, because a half-restored session either forgets what was
+    said or says goodbye to a room that never spoke (`check_idle`).
+
+    `origin` is the list object the rows were copied from, not another copy: the console
+    try does not hold `chat_lock`, while a channel turn takes that lock to *rebind*
+    `runner.history` to its own per-session list. Writing the rows into whatever list is
+    current at restore time would then drop the living room's conversation into someone
+    else's session, so the restore checks identity first and skips when the room moved.
+    """
+
+    history: list[dict]
+    had_speech: bool
+    origin: list[dict]
+
+
 class TurnRunner:
     def __init__(
         self,
@@ -543,6 +565,47 @@ class TurnRunner:
         # already calls this, and the idle clock alone cannot tell a silent wake apart
         # from a late one.
         self._had_speech = False
+
+    def snapshot_session(self) -> SessionSnapshot:
+        """Copy the conversation state for a caller that must not keep its changes.
+
+        The console's 试一试 is such a caller: it clears the context to answer as a
+        fresh utterance, exactly like the speaker, and then gives the room back
+        untouched. Pair with `restore_session` in a ``finally`` - the restore has to
+        run on the error path too, or a failed try still ends the conversation.
+
+        The *list object itself* is kept beside the copied rows: it is how the restore
+        knows the room has not been handed to someone else meanwhile (see
+        `SessionSnapshot.origin`).
+        """
+        return SessionSnapshot(
+            history=list(self.history),
+            had_speech=self._had_speech,
+            origin=self.history,
+        )
+
+    def restore_session(self, snapshot: SessionSnapshot) -> None:
+        """Put the conversation back as `snapshot_session` found it.
+
+        Written in place (`self.history[:] = ...`), never by rebinding: a channel turn
+        hands the runner a different list object per session and keeps its own
+        reference, so replacing the attribute would silently desync the two.
+
+        The console try that takes these snapshots does not hold `chat_lock`, while the
+        channel endpoint rebinds `runner.history` under it. If the list changed hands in
+        between, this snapshot belongs to a room that is no longer current: restoring it
+        would write one conversation's rows into another session's list (or resurrect a
+        session the channel turn just ended). Skip instead, and say so at DEBUG - the
+        console's own answer is unaffected, only its restore is.
+        """
+        if self.history is not snapshot.origin:
+            log.debug(
+                "session restore skipped: history was rebound while the snapshot was "
+                "open, so the rows belong to a room this runner no longer holds"
+            )
+            return
+        self.history[:] = snapshot.history
+        self._had_speech = snapshot.had_speech
 
     def abort(self) -> None:
         """Stop speaking the current answer (barge-in).
@@ -767,6 +830,7 @@ class TurnRunner:
         hint: str = "",
         audio: bool = True,
         touch_idle: bool = True,
+        counts_as_speech: bool = True,
         tool_context: ToolContext | None = None,
     ) -> TurnResult:
         """One turn, with a hard ceiling.
@@ -781,11 +845,21 @@ class TurnRunner:
         every room, and a ContextVar copy per task keeps a 客厅 turn from seeing a
         次卧 tool call. A channel/console turn passes nothing and tools see an empty
         context, exactly as before.
+
+        ``counts_as_speech`` answers one question and only that one: does this turn
+        prove the room spoke? A spoken utterance does, so the default is True and
+        every voice path keeps its behaviour. A turn the console typed
+        (`/debug/say`, the wizard's 试一试) does not - nobody is standing there, and
+        counting it made the speaker say 「没事的话，我先下啦。」 to an empty room 15 s
+        later. It governs nothing else: `reset_history()` still clears `_had_speech`
+        on every wake, playback and the trace are untouched, and the turn's own
+        answer is spoken exactly as before.
         """
         with use_tool_context(tool_context or ToolContext()):
             return await self._run_turn(
                 pcm, speak, trace,
                 transcript=transcript, hint=hint, audio=audio, touch_idle=touch_idle,
+                counts_as_speech=counts_as_speech,
             )
 
     async def _run_turn(
@@ -798,11 +872,15 @@ class TurnRunner:
         hint: str = "",
         audio: bool = True,
         touch_idle: bool = True,
+        counts_as_speech: bool = True,
     ) -> TurnResult:
         self._begin_tts_ledger(trace)
         # Reaching here means a real utterance: this session heard speech, so it earns the
         # goodbye when it later goes quiet (see `_had_speech` in `__init__`).
-        self._had_speech = True
+        # A console try (`counts_as_speech=False`) is not an utterance by a person in the
+        # room, so it leaves the flag alone: the session stays unheard and closes silently.
+        if counts_as_speech:
+            self._had_speech = True
         try:
             self._abort.clear()
             self._in_turn = True
