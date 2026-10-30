@@ -1936,3 +1936,8 @@ gh release view v0.7.1 --json tagName,url                                      #
   「本机 2311 / 6 + CI 2302 / 15」两套数字并标明差异来源（CI 缺 libspeexdsp / ffmpeg 的 9 条）。
 - **发版文档里不要只写一个测试数字**：本机与 CI 的差距是环境差异，不是失败；只写一个会让下一个
   人以为自己跑错了。
+
+- **2026-10-30 11:5x 加固已落地（`f34488e`）**：`:latest` 只跟 tag（main 只滚 `:edge`/`:sha-<7>`）；docs-only push 不再构建；
+  发布闸门加「tag == pyproject 版本」与「secret-scan 前置」两道。落地后实测：`:latest` 仍是 `sha256:64a2c260…`（未被这次 main push 带走），
+  `:edge` = `:sha-f34488e` = `sha256:f7b803a5…`，ci/security/secret-scan/docker-publish 四项全绿。
+  本段提交（只改 docs）本身用于反证 paths-ignore：这一推应当**不触发** docker-publish。
