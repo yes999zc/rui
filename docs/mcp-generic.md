@@ -4,6 +4,9 @@
 > `generic_wired: false`，真正接线的只有 Home Assistant 的 `HaBridge`。本文件说明现在
 > 的通用实现：配置怎么写、工具叫什么名字、怎么热更新、以及**为什么加一个 stdio 服务器
 > 等于允许它在本机执行代码**。
+>
+> 自己在写 MCP server、想知道「Rui 对我的返回值和性能有什么要求」，看
+> `docs/mcp-server-authoring.md`（服务端作者清单：文本上限、超时、清洗规则、命名）。
 
 ## 1. 它是什么
 

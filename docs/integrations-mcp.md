@@ -3,6 +3,7 @@
 > 适用版本：RUI 0.3.4+ · 控制台「工具与集成 → 家庭助理（独立第一方桥）/ MCP 服务器」
 > 相关：`docs/mcp-generic.md`（运行时/隔离）、`docs/security.md`（出站 SSRF）、
 > `src/rui/tools/mcp_manifest.py`（第一方实例清单）
+> **自己写一个 MCP server 给 Rui 用**：先读 `docs/mcp-server-authoring.md`（服务端约束清单）。
 
 MCP 标签页里有两类东西，**不要混用**：
 
