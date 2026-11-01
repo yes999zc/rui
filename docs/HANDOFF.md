@@ -2283,3 +2283,21 @@ $ uptime                              → up 4 days, 1:02
    以 `aec_erle_db` 前后对比为准；当前生产只有线性段。
 2. mic/ref 电平匹配做成不变量（现在 `mic_shift` 是个到处被改的数字，`ref_shift` 固定 16）。
 3. 生产验证用：说一句 → `GET /api/v1/traces` 读 `aec_erle_db`（现在 `turns: []`，还没有对照）。
+
+### 2026-11-01 22:3x 当夜第二批：`ref_shift` 16 → 15（+5 dB ERLE，已上生产）
+
+9哥 指示不要等明天。扫参（`01_Code/experiments/erle-bench/erle_bench.py`，同段真机录音，
+阵列 mix，speexdsp 同款几何 128/4096）：
+
+| mic/ref | 线性 ERLE | +preprocess |
+|---|---|---|
+| 12/16 | 13.1 dB | 16.4 dB |
+| **12/15（已上生产）** | **18.0 dB** | **21.8 dB** |
+| 11/15 | 18.5 dB | 22.4 dB |
+
+- mic 11 vs 12：只差 0.6 dB 但削波余量少 6 dB ⇒ 定 **12/15**。
+- 生产：`ref_shift: 15`（备份 `config.yaml.bak-20261101-2229-bridge-refshift-living16-to15`），
+  容器 14:23:24Z 重启，`/api/v2/devices/living/audio` 确认 `mic_shift 12 / ref_shift 15`。
+- 回滚：备份 cp 回 + 重启；`mic_shift` 回滚同理（`…140754…` 那个备份）。
+- 待办卡不变：① `aec.py` 接 `speex_preprocess_run`（bench 目标 ≥21 dB）；
+  ② mic/ref 电平差做成启动自检（±6 dB 外 WARNING）。真机 `aec_erle_db` 对照仍缺一轮语音。
