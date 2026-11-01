@@ -2087,3 +2087,94 @@ gh release view v0.7.1 --json tagName,url                                      #
      → 「选曲前过滤非 private:」在插件侧做不到，真正的修点在 house-ear。
 - 因此范围需要 3 张卡（插件文档 + 插件侧 resolve/清洗/话术 + house-ear 索引前缀修复），
   比"每批 ≤2 卡"多一张；等 9哥 在会话里选（会话已用 ask_user_question 提问）。
+
+### 2026-11-01 22:0x 音乐批收口（3 卡已上线；本会话到此为止）
+
+**卡按此更正**：9哥 已选「3 卡」（上一条记的"等选"已闭）。范围：卡 1 插件文档/纳管、
+卡 2 插件侧修复、卡 3 house-ear 索引前缀 + 两条话术。卡 3 严格收窄为三条（①②③），未越界。
+
+#### 两条现场前提也要更正（我自己写卡时也按错的假设走过一段）
+
+1. **生产是 0.8.13，不是 0.8.11**（`/health` 实测 `"version":"0.8.13"`；9哥 自己发的）。
+   本批上线的是同版本 main 的 `:sha-dfc8c7e`，**没有 bump 版本号**。
+2. **客厅"吞字"不是回声门吃掉开头**：是**麦克风削波 + 自激**（停原厂音频引擎后
+   `overdrive_ratio` 22–26%，恢复后归零）。→ **"门长按 cue 自适应"那张卡不要按错误假设开工**；
+   片段卡（ASR 只抓到句尾）留待另开会话，且**不要与本批共用工作树**
+   （它要动 `audio/process.py`、`rules.py`、`schema.py`、`catalog.py`、`config.example.yaml`）。
+
+#### 插件新位置（卡 1 结论：目录名保留 `rui-private-source/`，不叫 `rui-plugin/`）
+
+- `rui-personal-services/rui-private-source/rui_private_music/`（5 个 `.py` 早已 tracked；
+  本批只补文档 + 复核一致）。提交：`108e1eb`（docs/纳管）、`a21d44b`（插件侧修复 + C-001）。
+- sha256 本机 vs NAS 现网 **5/5 全等**（部署后复测）：
+  `__init__ 3fb0138f…` / `errors f7264afc…` / `navidrome de9aaaa6…` / `source af2853e1…`（新版） / `star 4be979e0…`
+- 跨仓契约：`rui-personal-services/docs/contracts/C-001-music-source-prefix-and-stats.md`
+  （`track_prefix` / `library_prefix` / `last_stats{filtered_short,dropped_foreign,returned,query}`；
+  rui 侧说明在 `docs/music-sources.md` §3.2「曲目 id」段 :91-97 —— 该文**尚未反向引用 C-001**，下一步补）。
+
+#### 三条改动的真实现状（都不是"原假设"那样的修法）
+
+1. **索引前缀**（卡 3 ①）：`library_index.to_tracks` 改为 `getattr(source,"track_prefix","")`，
+   缺省仍 `subsonic:`；已带命名空间的行不二次加前缀。→ 根因在 house-ear，不在插件。
+2. **换 source 失效**（卡 3 ②）：索引 JSON 新增 `source_name`；异源/无该字段 → 不可用并 WARNING；
+   `ensure()` 构建失败时同源保留旧缓存、异源清空并打
+   `cannot paginate … descriptive asks fall back to by_genre/search`。
+3. **插件侧**（卡 2）：来源白名单（只认 `private:`/`private-lib:`，`resolve()` 校验**未放宽**）+
+   `clean_term()`（位置敏感剥填充词，**不再串中替换**——曾把《你好吗》洗成"你"）+ `by_genre()`
+   + 删掉"重发同一 q"的无效兜底。**加载顺序无要求，但两张卡缺一不可**。
+
+#### 真机验收证据（2026-11-01 21:55 前后，`living` = LX06，音量 30% = 77/255；容器日志是 UTC，+8 才是本地）
+
+```
+# ① 放点轻音乐 → 出声，且不再有成排 skip
+semantic: '放点轻音乐' -> lang=[] genre=['轻音乐', 'Light Music', 'Classical'] … | 54 tracks
+playback requested: /var/lib/rui/music_cache/private-music/030c2c57dc25649b.wav loop=False gain=1.00
+grep -c "not a private track" → 0
+
+# ② 口语填充与清洗后同查询
+search q='周杰伦那个' -> '周杰伦'
+search q='周杰伦'     -> '周杰伦'          ← 同一清洗后查询、同一批候选
+playback requested: /var/lib/rui/music_cache/private-music/970f385f7891817e.wav
+
+# ③ 两条失败话术（区分成功）
+tool music_play -> phrase music.filtered (filtered)   # 周杰伦那个：搜到但被时长过滤
+  tool 文本「有是有，但版本不合适，换一首？」（模型念时会自己改写，语义不变）
+tool music_play -> phrase music.not_found (empty)     # 桩返回空 + 本地库 0 命中
+  tool 文本「没搜到，换个说法或者报歌名给我？」
+```
+
+- 「搜到但被过滤」是**自然触发**的（`search/library: skipped_short=1` 后候选为空）。
+- 「真没搜到」无法自然触发（music-svc 对任意串都返回模糊命中），故用**临时桩**构造：
+  host 网络起 `127.0.0.1:18099` 返回 `{"results":[]}`，override 临时加
+  `PRIVATE_MUSIC_BASE_URL`，验完**已删桩、已还原 override**（现 `base_url=18082`、probe 双侧 up）。
+- 已知毛刺：**部署后第一次**描述式点歌会走 `by_genre` 冷启动（3 个 genre × 在线+本地库 + 首次转码），
+  实测撞过 20 s 工具超时，第二次 3.3 s 正常出声。要不要预热/加超时余量 → 见「下一步」。
+
+#### 部署与回滚（照此抄）
+
+```bash
+# 镜像：ghcr.io/yes999zc/rui@sha256:fbaea513c41a47797a98b516d11e3648166b97223cded8657b6cefa318215998
+#       （commit dfc8c7e；版本仍是 0.8.13；CI test(3.11)/test(3.12)/image 全绿）
+# override 备份：/vol1/rui/rui-dot2-override.yml.bak-20261101-215148
+# 插件备份：  /vol1/rui/plugins/rui_private_music.bak-20261101-214625
+cd /vol1/rui && docker compose -f docker-compose.yml -f rui-dot2-override.yml up -d
+# 回滚（顺序不能反）：override 换回 a951eeb… → up -d → rm /var/lib/rui/library_index.json
+#   （宿主机 /vol1/rui/data/library_index.json）→ docker restart rui → 插件目录换回 .bak
+```
+
+#### 「来源过滤要不要做成配置项」——结论：不做
+
+前缀不匹配就是"插件不该接的 id"，没有"有时接有时不接"的合理场景；做成配置项只会让
+同一台设备出现两种真相、且掩盖 rui 侧索引前缀的真实 bug（本批正是把它当根因修掉的）。
+真要放宽，应该是 rui 侧修索引前缀（C-001 §1），而不是给插件加开关。已写进 C-001 §4。
+
+#### 已知限制 / 下一步（按顺序，另开会话做）
+
+1. **片段卡**（ASR 只抓句尾 + 「对一下吧」误命中别名）：单独会话，别和本批共用工作树；
+   先按"麦克风削波/自激"这条正解重查，**不要**按"门长吃掉开头"开工。
+2. `last_stats` 可能是**上一次调用**的（插件 `favorites()` 不刷新 stats）：源出错或空收藏时
+   有概率把「连不上」说成「版本不合适」。修法：插件在 `favorites()` 里也刷新 stats，
+   或 rui 侧只在 `search/by_genre/random` 路径读 stats。
+3. 冷启动超时：`by_genre` 3 个 genre 串行 + 首曲转码，首次易撞 20 s；考虑预热或缩到 1–2 个 genre。
+4. `docs/music-sources.md` 反向引用 C-001 一行；插件仓补 `ruff.toml`（`src=["."]`）固定 I001 口径。
+5. `docs/phrasebook-editor.md:265` 仍写 `music.not_found {want}`（该 key 已无槽位）。
