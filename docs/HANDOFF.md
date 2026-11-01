@@ -2411,3 +2411,31 @@ playback requested: /var/lib/rui/music_cache/private-music/26e8e2f055ec39a2.wav 
    （env 路径被 `_env_int` 兜住，实测 inf/nan/1e400 → 128）。
 5. 质量口径：输出仍是 16 kHz 单声道，128 kbps 源在 8 kHz 带宽内有余量；若 9哥 听出差异，
    改 `PRIVATE_MUSIC_MAX_SOURCE_BR=192` 即可，不需要改代码。
+
+### 2026-11-01 23:2x 静音原厂助手：试了四步都失败，已全部回退（推翻上一节）
+
+上一节说"停掉 `mico_aivs_lab` 就解决"是**错的**，9哥 实测四次仍会听到「网络服务遇到问题」。完整记录：
+
+**根因知识（这次学到，值得留）**
+- 原厂唤醒词「小爱同学」的 **KWS 就在 `mipns-xiaomi` 里**：
+  `/usr/share/xiaomi/xaudio_engine.conf` → `[wakeup opt] model_path=wakeup_model.bin; kws_s12a_1.1.7`。
+- 唤醒相似度门限在 **`/data/mipns/mds.conf`**（可写）：
+  `wakeup.common.algorithm.cos_score_thres = 0.665`，另有 `pre_decision_switch`、`mic_gain` 等。
+- 占用声卡的只有三个进程：我们的 `aplay`、我们的 `arecord`、`mipns-xiaomi`（pns 同时持有 capture 与 playback）。
+
+**试过并失败的四步**
+1. `stop mico_aivs_lab`（对话侧）→ 仍被唤醒，播「网络服务遇到问题」
+2. 再 `stop mibrain_service`（唤醒识别侧）→ 同样的提示
+3. `ubus call pnshelper event_notify '{"src":1,"event":1}'` → 返回 `code 0`，无效
+4. `mds.conf` 的 `cos_score_thres` 0.665 → **0.95** + `pns restart` → 仍是同一条提示
+
+**结论**：这条「网络服务遇到问题」**不是被唤醒后的答话，而是语音服务缺失时的固定播报**（把上面两个服务停掉后才出现）；
+抬门限也没用，因为它跟唤醒判定无关。⇒ **不动原厂栈是最优解**；原厂「小爱同学」被房间对话误触发的行为，设备侧没有安全的关闭方式
+（App 侧 9哥 关不掉），要彻底解决只能走换固件那条线。
+
+**已全部回退（23:26，逐项验证）**
+- `mds.conf` 从备份恢复，`cos_score_thres` = 0.665
+- `pns restart`；`mico_aivs_lab start`；`mibrain_service start`
+- 进程：pns 376 / mico_aivs_lab 574 / mibrain_service 593
+- `/health` = 0.8.13、devices 5、device_errors 0、planes 5、speaker True、living `overdrive 0 / restarts 0`；`amixer numid=177` 可读
+- 备份留着：`/data/mipns/mds.conf.bak-20261101-2327-bridge-wake-thres`（不需要可删）
