@@ -2591,3 +2591,75 @@ curl -s "<rui>/api/v2/devices/living/audio" | jq '.effective.capture'
 - 片段卡（ASR 只抓句尾）：另开会话，别与本批共用工作树。
 - 观测项（不用动手）：`docker logs rui | grep -E "cleaned_orphan_audio|cooling down"` —— 前者应偶发出现，
   后者若 300 s 内反复刷屏说明阈值定得太小。
+
+### 2026-11-02 00:5x 0.8.15 发版并部署：AEC 残差抑制 + 唤醒窗口 + `ref_shift 14`（A 路线第一刀）
+
+phase-close: task-3
+
+**发布身份（实测，非转述）**：
+- commit `4438cee`（`feat(aec): attach speex residual echo suppression with wake hold`），tag `v0.8.15` 指向同一 commit。
+- 镜像：OCI index `ghcr.io/yes999zc/rui@sha256:7c1a3aa72fea8155cf9e36ddc8f3ddc9708186f101c942cbd616d7b62ca8202b`；
+  **linux/amd64 摘要 `sha256:4a4c2db421367ee5c110d97d8ac5a984f4702fa6f854fde12f1a087723cd948d`**（部署确定性 pin 用这个）；
+  arm64 `sha256:8698fdb0…`。容器内 `rui.__version__ == 0.8.15`，`SPEEX_PREPROCESS_SET_ECHO_STATE == 24`（`docker exec rui python -c …`）。
+- CI：**同一 commit 上四类全绿** —— `ci`（main，`41326664670`：test 3.11 / test 3.12 / image）、`secret-scan`、`security`、`docker-publish`。
+  **注意口径**：`ci.yml` 只挂 `push:branches[main]`，tag 不触发 `ci`；tag `v0.8.15` 上只有 3 条 run（secret-scan / security / docker-publish）。别再写「tag 上四条」。
+- 回滚锚：0.8.14 = `sha256:c5dcfdc03b38b91e7aa982623099d4b9d2aa2ce65814392f6ebf856e13c5b967`；
+  override 备份 `/vol1/rui/rui-dot2-override.yml.bak-20261102-003628-bridge-0.8.15`；
+  配置备份 `/vol1/rui/config/config.yaml.bak-20261102-001608-bridge-refshift15-to14`。
+- 部署：NAS `rui` 容器 StartedAt `2026-11-01T16:38:24.965501693Z`，RestartCount 0。
+  override 里 pin 的是 **index digest**：本次 NAS docker 正常 pull 并落到 amd64（本机按 amd64 摘要 pull 得到同一 image ID `sha256:82ba71ac…`、Arch=amd64）
+  ⇒ **HANDOFF 旧记录的「NAS docker 不认 attestation index」本次未复现**；但确定性 pin 仍建议用 amd64 摘要。
+
+**这批到底改了什么**（`src/rui/audio/aec.py` / `process.py` / `config/schema.py` + `tests/test_aec_residual.py` 6 例）：
+1. `EchoCanceller._frame()` 在线性 `speex_echo_cancellation` 之后跑 `speex_preprocess_run`，用 `SPEEX_PREPROCESS_SET_ECHO_STATE` 串同一份 echo state。
+2. `AecChain.hold_for()` / `wake_hold_ms`（默认 1500，0–5000）：唤醒 admit 后**只关残差级**，线性段照跑 —— 保护「压着音乐说的那句命令」。
+3. `AecConfig.residual` 默认 **True**（回滚键 `audio.aec.residual: false`），运行时 `source=core-default` 已实测。
+   **这推翻了本文件 0.8.14 段「默认关」的提议**：A 路线就是要把这一级打开；口径以本节为准。
+
+**评审抓出的三条（下次动手前先读，省一天）**：
+1. `SPEEX_PREPROCESS_SET_ECHO_STATE` 是 **24**，**14 是 `SET_PROB_START`**（`speex_preprocess.h:159`）。写 14 时 echo state 从未挂上。
+2. `speex_preprocess_ctl(SET_ECHO_STATE, ptr)` 的 C 实现是 `st->echo_state = (SpeexEchoState*)ptr`（`preprocess.c:1164`）：
+   **必须直接传 `c_void_p(handle)`**；用 `byref(handle)` 会把栈地址存进去，第一次 `run` 就解引用悬垂指针。
+   测试用 `GET_ECHO_STATE`(25) 回读指针 `== canceller.handle` 守住这条。
+3. **`denoise_enabled` 是整个谱增益（含回声抑制）的总闸**（`preprocess.c:933-937` 把 `gain2` 置 1）：
+   `SET_DENOISE=0` 会让残差级变成 pass-through（实测 Δ0.00 dB）。speexdsp **没有**「只压回声不压噪声」的模式
+   （`SET_NOISE_SUPPRESS=0` 实测仅 −0.7 dB）⇒ 这一级的代价是默认谱抑制：噪声 ≤−15 dB、回声 ≤−40 dB，
+   近端说话时回声那档被 `echo_suppress_active` 夹到 −15 dB。代码只额外关 AGC/VAD。
+4. **旧的离线 bench `+preprocess` 数字全部作废**（`18.5→22.4`、`18.0→21.8`、`14/15 18.5→20.0 vs 22.4→23.6`）：
+   `01_Code/experiments/erle-bench/erle_bench.py` 也把 echo-state 槽写成 14，echo state 从没挂上，那几组测的是「线性 + 谱降噪」。
+   脚本另行修（backlog）。树内合成 bench：`linear 14.72 dB → 残差级 19.62 dB`（Δ+4.9）。
+
+**验收（2026-11-02 00:38–00:52，全部实测）**：
+| 项 | 结果 |
+|---|---|
+| /health | ok **0.8.15**、devices 5、device_errors 0、planes 5（5 台 running） |
+| living overdrive / restarts | **0 / 0**（测量 8 次采样全程 0，`voice_peak_db` −32.7…−51.7 未削波） |
+| effective.capture | **mic_shift 11 / ref_shift 14**（device-override，落盘 config 仅 `ref_shift 15→14` 一行差） |
+| keywords.txt | 两行，均 `:4.00 #0.07`，`@你好小宝` + `@你好小宝儿`（未被重写） |
+| 线上 `aec_erle_db`（20% 音量、受噪声底限制） | 0.8.14 基线（线性，mic 11/ref 15）：11.3/12.9/15.2/20.6/19.3/20.9/23.0/21.5（稳态 **19.3–23.0**）；0.8.15（mic 11/ref 14）：9.2/15.1/30.2/31.8/27.9/27.4/28.3/27.5（稳态 **27.4–31.8**）⇒ **稳态 +7~9 dB** |
+| 残差绝对电平 | **未做成受控对比**：同音量但曲目不同（基线「赛跑」/ 本轮「说走就走」），本轮 `ref_rms_db` 高约 11–20 dB，绝对残差电平反而更高。可比的只有 ERLE。下次量请固定同一曲目或固定 `ref_rms` 区间 |
+| AEC 日志 | `Traceback/ERROR/CRITICAL` = 0；命中的 `aec_hw_ref` 是 dot2 能力串（假阳性） |
+
+**本批留档（会重复踩的）**：
+- `POST /api/v2/house/audio/restart`（fleet 级）会按 `config.devices.<id>.volume` **重置运行时音量**：实测 living 77 → **204**（80%）。
+  以后测音量口径必须「先读 config，再读运行时，测完写回」。
+- `PATCH /api/v2/devices/{id}/audio` 的响应**不回显** `effective.capture`（`{ok:null,capture:null}`），必须后续 GET 复核。
+
+**待 9 哥 白天验收（本批明确没测、不许写成已验证）**：
+1. 双讲（放歌中说「下一首」）；
+2. 唤醒率（含新词「你好小宝儿」）；
+3. 真机整句识别质量。
+夜间只做了上面那一轮 15 秒 ERLE 测量，没有做唤醒/TTS/整句测试。
+
+### 下一步（下个会话从这里接）
+
+1. **白天真机验收三项**（上面那三条），重点看 `wake with no speech` 比例与「放歌中命令词是否被压」。
+   观察命令：`curl -s -H "X-Auth-Token: …" localhost:8080/api/v1/audio` 的 `aec_erle_db` / `wake_rejected` / `overdrive_count`。
+2. **backlog（另开卡，不插队）**：
+   - `01_Code/experiments/erle-bench/erle_bench.py`：`SET_ECHO_STATE = 14` → **24**，并改 `c_void_p(handle)` 直接传；
+     修完用一段真机 `raw8ch.i4` 重扫 `mic/ref`（现在 bench 目录里**没有采样文件**）。
+   - ERLE 测量协议：固定曲目或固定 `ref_rms` 区间，否则跨轮不可比。
+   - hold 只从唤醒 admit 计时、且只在 admit 触发：命令 >1.5 s 时残差级会中途重新介入（最多 −15 dB）。
+     若要更稳，考虑「hold 跟随 VAD 语音结束」而不是固定时长。
+   - `AecChain` 的两条 "never make it worse" 保护只防「输出能量高于输入」，对「压掉人声」完全免疫；人声保护实际只靠 hold 时间窗。
+3. 待观察：`docker logs rui | grep -E "cleaned_orphan_audio|cooling down"`（0.8.14 起的两个观测项）。
