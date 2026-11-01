@@ -2314,3 +2314,20 @@ $ uptime                              → up 4 days, 1:02
   削波余量（比 10 +6 dB）、ERLE 最高档三者折中。
 - 回滚锚：`config.yaml.bak-20261101-2255-bridge-micshift12-to11`（→12）、
   `…140754…`（→10）、`…2229…`（ref →16）。备份均可 `cp -a` 回 + fleet restart。
+
+### 2026-11-01 23:12 客厅唤醒词加第二个：`你好小宝儿`
+
+- 9哥 要求「你好小宝，你好小宝儿，都设置成唤醒词」。走**正规 API**（不是手改文件）：
+  `POST /api/v1/setup/wake {"wake_words":["你好小宝","你好小宝儿"]}` —— 该端点改写
+  `devices[0].wake_words`、用 `_write_keywords_preserving` **保留门限**重生成 keywords.txt、重启音频面。
+- 生成结果（`/vol1/rui/config/keywords.txt`，仍是一词一行、`@` 后只是显示文本）：
+  ```
+  n ǐ h ǎo x iǎo b ǎo :4.00 #0.07 @你好小宝
+  n ǐ h ǎo x iǎo b ǎo ér :4.00 #0.07 @你好小宝儿
+  ```
+  `ér` 在模型词表里**存在**（早前 grep 用空格分隔漏判，实为 tab 分隔），TTS 实测可命中。
+- 验证：`plane_error: ''`、`/health` 0.8.13 / 5 台 / 0 错误 / 5 平面全 running、
+  `living wake_words` 两项、日志无 kws 报错。
+- 备份：`config.yaml.bak-20261101-2312-bridge-wakewords-add-xiaobaor`；回滚 = cp 回 + 重启音频面。
+- 注意：keywords.txt 是**全设备并集**（`_write_keywords_preserving` 收集所有 devices 的 wake_words），
+  所以其余 4 台也会响应「你好小宝儿」。若只想客厅响应，需要 per-device keywords 文件（当前不支持）。
