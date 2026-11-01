@@ -2670,7 +2670,13 @@ phase-close: task-3
 ### 2026-11-02 01:5x 0.8.15 之后的生产配置（bridge 夜间改动，0.8.16 开工前必读）
 
 **当前生产**：0.8.15、5 台、`device_errors 0`；`capture = mic_shift 10 / ref_shift 14`；
-`ack.mode = tts(在呢)`、`ack.echo_ignore_ms = 700`；运行时音量 **76/255**（config `devices[0].volume = 30`）。
+`ack.mode = tts(在呢)`；运行时音量 **76/255**（config 文件 `devices[0].volume = 30`）。
+**口径更正（01:55 复核）**：全局 `ack.echo_ignore_ms = 700` **不生效** —— living 的机型事实声明 1200，
+按 `schema.py:866` 的三层取值，机型尾巴赢（`GET /api/v2/devices/living/audio` 的 `conflicts` 原话：
+`global 700 vs manifest 1200; using 1200 (model measured tail)`，winner `device-manifest`）。
+有效值是 **1200**，要改必须写 `devices[].audio.voice.ack_echo_ignore_ms`（`schema.py:221`；改全局是空转）。
+音量也别只信 `GET /api/v1/config`：它当时仍返回 20，而文件是 30、音频面 01:42:47 已
+`volume: reconciled to 76 (config 30%)` ⇒ 以「文件 + `/api/v1/device/volume` 运行时值」为准。
 
 **夜里动过三处**（都有备份，回滚 = `cp -a` 回 + 重启）：
 1. 01:35 `mic_shift` 11 → **10**（PATCH + fleet restart）。依据：同窗口 3 米轻声唤醒 mic11 只 3 次、
@@ -2687,9 +2693,19 @@ phase-close: task-3
 - `[level] voice peak`：ack 30% 音量时 **0.0 dBFS（削波，是提示音自己的回声）**；ack 关掉后 −18.5/−25.6；
   ack 20% 时 −12.5/−17.3/−19.6 ⇒ 20% 不削波。
 
-**挡音窗算术（关键）**：`process.py:1304` —— tts 模式总挡 = cue 600 + `ACK_PLAYOUT_LEAD_MS` 850
-+ `echo_ignore_ms` 700 = **2150 ms**；`mode: none` 只剩 `ACK_TAIL_MS` **250 ms**。相差约 9 倍，
-这就是"一开提示音就喊不动"的直接原因：命令整句落在聋区里被丢。
+**挡音窗算术（01:55 按代码 + 日志复核，取代原先的「2150 / mode none 250」说法）**：
+- 总窗 = cue + `ACK_PLAYOUT_LEAD_MS` 850 + **有效** tail（`process.py:1307`）。tts 下 tail=1200（见上），
+  故现网总窗 = 600+850+1200 = **2650 ms**，与日志 `cue_gate: … kept=[1380,2650]ms` 一致。
+- **2650 不是"全聋"**：`vad.py hold()` 只硬丢前 850 ms；后 1800 ms 先进缓冲，hold 结束时用回声匹配
+  定位 cue，丢掉 `[0, cue_end+40]`（`CUE_REVERB_GUARD_MS=40`），cue 之后的人声会被**重放**给 VAD。
+  实测 4 次唤醒：`cue=[620..800, 1220..1400]`、`dropped=[0,1260..1440]`、`kept=[…,2650]`，`lag_hint 700–758`。
+  ⇒ **真正的聋区 = 0～(cue_end+40) ≈ 1380 ms，其中 600 ms 就是提示音本身，保护余量只有 40 ms**。
+- `ack.mode: none` 时 `audio.size == 0`，`hold()` 根本没被调用 ⇒ 聋区 **0 ms**（250 ms 是 tone 模式的尾巴，
+  不是 none 的；none 下没有 hold 窗口，也就不存在这 250）。
+- 因此"命令被吃"最可能的是**与提示音重叠的那 ~600 ms**（一次呼吸喊完「你好小宝几点了」），
+  而不是"固定聋 2.65 s"。**这条目前是推断，不是实测**：01:36–37 那 5 次唤醒 `0 次 [seg]`，
+  日志无法区分「没说话」和「说了但被和 cue 一起切掉」——负样本根本不留痕，这正是 0.8.16 卡 1 要补的。
 
-**待开批（0.8.16）**：① `wake_miss` 负样本日志（给唤醒率一个分母）；② 挡音窗从固定时长改成回声驱动。
+**待开批（0.8.16，已按上面更正重写）**：① `wake_miss` 负样本日志（给唤醒率/命令捕获率一个分母，**先做**）；
+② 提示音三档 A/B（none / chime 320 / tts 600，先零代码量数据）再决定要不要改切除策略。
 `mic_shift` 不动；唤醒词/门限不动。
