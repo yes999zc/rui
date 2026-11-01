@@ -30,6 +30,10 @@ class FlakySource:
     no_refill = False   # deterministic transport tests: the queue stays what it was
     # What `star` answers: bool (old protocol) or StarStatus (new). Tests flip it.
     star_result: object = True
+    # Optional read-only source contract: what the last search dropped and why.
+    # None = a source that does not publish it (the built-in adapters), the
+    # honest "nothing was filtered" reading.
+    last_stats: object = None
 
     async def search(self, term: str, limit: int) -> list[Track]:
         if self.down:
@@ -613,7 +617,34 @@ def test_a_failed_lookup_speaks_and_never_reaches_the_player(tmp_path: Path) -> 
         assert played == [], "a failed lookup must not replace the queue"
         assert service.state == "idle"
         out = say(specs, "music_play", result)
-        assert "曲库里没找到" in out
+        assert "没搜到" in out
+
+    asyncio.run(run())
+
+
+def test_play_says_filtered_when_the_source_dropped_real_hits(tmp_path: Path) -> None:
+    """「有是有，但版本不合适」: the library had hits and filtered every one.
+
+    A short clip or an id owned by another backend is not "the song is not in the
+    library" - the source's read-only `last_stats` says so, and the sentence has
+    to differ from a lookup that simply found nothing.
+    """
+    async def run() -> None:
+        _, source, tools, specs = make(tmp_path)
+        source.last_stats = {"filtered_short": 1, "dropped_foreign": 2,
+                             "returned": 0, "query": "轻音乐"}
+        result = await tools["music_play"]({"query": "从未收录"})
+        assert result.status == "filtered", result.payload
+        assert say(specs, "music_play", result) == phrases.book.render("music.filtered")
+        # Zero drops -> the plain "not found" line, never a version excuse.
+        source.last_stats = {"filtered_short": 0, "dropped_foreign": 0,
+                             "returned": 0, "query": "从未收录"}
+        plain = await tools["music_play"]({"query": "从未收录"})
+        assert plain.status == "empty"
+        assert say(specs, "music_play", plain) == phrases.book.render("music.not_found")
+        # A source that publishes no stats at all (the built-in adapters) is empty.
+        source.last_stats = None
+        assert (await tools["music_play"]({"query": "从未收录"})).status == "empty"
 
     asyncio.run(run())
 

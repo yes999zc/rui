@@ -41,7 +41,7 @@ def _clean_book():
 # slot contract
 # ---------------------------------------------------------------------------
 def test_every_default_key_has_a_derived_slot_set() -> None:
-    assert len(phrases.DEFAULTS) == 72  # +1 device.bad_args (#34), +1 turn.not_heard (T5), +1 music.star_unsupported (T3), +1 device.partial, +1 ha.scene_list (B2), +8 vision.* (0.8.11 local.look)
+    assert len(phrases.DEFAULTS) == 73  # +1 device.bad_args (#34), +1 turn.not_heard (T5), +1 music.star_unsupported (T3), +1 music.filtered, +1 device.partial, +1 ha.scene_list (B2), +8 vision.* (0.8.11 local.look)
     assert set(phrases.DEFAULT_SLOTS) == set(phrases.DEFAULTS)
     for key, template in phrases.DEFAULTS.items():
         slots, errors = phrases._checked_slots(template)
@@ -53,6 +53,20 @@ def test_every_default_key_has_a_derived_slot_set() -> None:
         assert parsed == set(phrases.DEFAULT_SLOTS[key]), key
     assert phrases.ADVANCED_KEYS == frozenset(
         key for key in phrases.DEFAULTS if key.startswith("ha."))
+
+
+def test_the_two_music_failure_lines_are_distinct() -> None:
+    """「没搜到」 and 「有是有，但版本不合适」 are different failures, different keys.
+
+    The old single line said 曲库里没找到 for both, so a song dropped by the
+    45-second floor / a foreign id came out as "this library does not have it".
+    """
+    assert phrases.book.render("music.not_found") == "没搜到，换个说法或者报歌名给我？"
+    assert phrases.book.render("music.filtered") == "有是有，但版本不合适，换一首？"
+    # Neither line carries a slot any more: the ask is repeated back by the tool's
+    # own payload only when a template wants it.
+    assert phrases.DEFAULT_SLOTS["music.not_found"] == frozenset()
+    assert phrases.DEFAULT_SLOTS["music.filtered"] == frozenset()
 
 
 def test_the_vision_keys_render_the_lines_the_camera_tool_speaks() -> None:
@@ -267,7 +281,7 @@ def test_document_is_the_console_payload(tmp_path: Path) -> None:
     assert doc["effect"] == "next_phrase"
     assert doc["file_exists"] is True
     assert doc["overrides"] == {"music.stopped": "好，停。"}
-    assert len(doc["keys"]) == 72  # 60 + turn.not_heard (T5) + music.star_unsupported (T3) + device.partial + ha.scene_list (B2) + 8 vision.* (0.8.11 local.look)
+    assert len(doc["keys"]) == 73  # 60 + turn.not_heard (T5) + music.star_unsupported (T3) + music.filtered + device.partial + ha.scene_list (B2) + 8 vision.* (0.8.11 local.look)
     by_key = {item["key"]: item for item in doc["keys"]}
     started = by_key["music.started"]
     assert started["slots"] == ["artist", "count", "title"]

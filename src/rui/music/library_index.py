@@ -268,14 +268,46 @@ class LibraryIndex:
         self.overrides = dict(ARTIST_OVERRIDES if overrides is None else overrides)
         self._data: dict[str, Any] | None = None
         self._lock = None   # created lazily: an asyncio.Lock at import ties us to one loop
+        self._mismatch_warned: str | None = None
 
     # ------------------------------------------------------------------ storage
-    def _read(self) -> dict[str, Any] | None:
+    def source_name(self) -> str:
+        """The source we are wired to now; "" when the caller has no source."""
+        return str(getattr(self.source, "name", "") or "")
+
+    def _read_json(self) -> dict[str, Any] | None:
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+        return raw if isinstance(raw, dict) else None
+
+    def _matches_source(self, raw: dict[str, Any] | None) -> bool:
+        """Does this cache belong to the source we are wired to now?
+
+        A cache written before the `source_name` contract landed, or by a different
+        adapter, cannot prove it belongs here (its rows carry the *old* source's id
+        namespace), so it must not answer: switching `music.source` rebuilds.
+        A caller with no source (a read-only stats/pick) has nothing to compare and
+        keeps serving whatever is on disk.
+        """
+        if raw is None:
+            return False
+        current = self.source_name()
+        if not current:
+            return True
+        return str(raw.get("source_name") or "") == current
+
+    def _read(self) -> dict[str, Any] | None:
+        raw = self._read_json()
         if not isinstance(raw, dict) or not isinstance(raw.get("songs"), list):
+            return None
+        if not self._matches_source(raw):
+            recorded = str(raw.get("source_name") or "")
+            if self._mismatch_warned != recorded:
+                log.warning("library index was built by source %r, current is %r "
+                            "- rebuilding", recorded or None, self.source_name())
+                self._mismatch_warned = recorded
             return None
         return raw
 
@@ -326,19 +358,29 @@ class LibraryIndex:
         return self._lock
 
     async def ensure(self, force: bool = False) -> bool:
-        """Build when the cache is missing or older than the TTL. Never raises.
+        """Build when the cache is missing, older than the TTL, or from another source.
 
-        A failed rebuild keeps serving the old cache: the NAS being slow is not a
-        reason to answer 「曲库里没找到」.
+        Never raises. A failed rebuild keeps serving a cache built by *this* source
+        (the NAS being slow is not a reason to answer 「曲库里没找到」), but a cache
+        built by a different source is never reused: its row ids belong to the old
+        backend (`subsonic:` rows answered by a `private` plugin resolve to nothing),
+        so the honest answer is an empty index and a warning naming the failure.
         """
-        if not force and self.is_fresh():
+        if not force and self.is_fresh() and self._matches_source(self._read_json()):
             return True
         try:
             await self.build(force=force)
             return True
         except (SourceError, OSError, ValueError) as exc:
             log.info("library index: build failed (%s: %s)", type(exc).__name__, exc)
-            return self.available()
+            if self._matches_source(self._read_json()):
+                return self.available()
+            self._data = None
+            log.warning(
+                "library index unavailable: source %r cannot paginate (%s) - "
+                "descriptive asks fall back to by_genre/search",
+                self.source_name() or None, exc)
+            return False
 
     async def build(self, force: bool = False) -> dict[str, Any]:
         """(Re)build the cache. Returns the index dict; TTL reuse unless force."""
@@ -366,6 +408,7 @@ class LibraryIndex:
                 "built_ts": int(time.time()),
                 "build_seconds": round(time.time() - started, 2),
                 "source": how,
+                "source_name": self.source_name(),
                 "count": len(rows),
                 "artist_overrides": dict(self.overrides),
                 "en_genres": list(EN_GENRES),
@@ -539,16 +582,31 @@ class LibraryIndex:
         return [_public(r) for r in matched[:limit]]
 
     # ------------------------------------------------------------------ helpers
-    def to_tracks(self, rows: list[dict[str, Any]],
-                  limit: int | None = None) -> list[Track]:
-        """Public index rows -> playable Tracks, ids prefixed like the source's."""
+    def to_tracks(self, rows: list[dict[str, Any]], limit: int | None = None,
+                  track_prefix: str | None = None) -> list[Track]:
+        """Public index rows -> playable Tracks, ids prefixed like the source's.
+
+        `track_prefix` is the id namespace the *current* source resolves
+        (`private:` for the private plugin; the built-in Subsonic / Jellyfin /
+        Emby adapters publish none). It defaults to `getattr(source,
+        "track_prefix", "")`, so a source that declares the attribute is followed
+        without changing any caller, and a source that does not keeps the
+        historical `subsonic:` prefix. A row id that already carries a namespace
+        (`subsonic:`, `private:`, `private-lib:` - a non-numeric head before the
+        colon) is kept verbatim and never prefixed twice.
+        """
+        prefix = (track_prefix if track_prefix is not None
+                  else str(getattr(self.source, "track_prefix", "") or ""))
+        if prefix and not prefix.endswith(":"):
+            prefix += ":"
+        prefix = prefix or "subsonic:"
         tracks: list[Track] = []
         for row in rows:
             sid = str(row.get("id") or "")
             if not sid:
                 continue
             tracks.append(Track(
-                id=sid if sid.startswith("subsonic:") else f"subsonic:{sid}",
+                id=sid if _has_prefix(sid) else f"{prefix}{sid}",
                 title=str(row.get("title") or ""),
                 artist=str(row.get("artist") or ""),
                 duration=_int(row.get("duration")),
@@ -661,6 +719,17 @@ def _match_row(row: dict[str, Any], active: dict[str, Any]) -> bool:
         if not isinstance(year, int) or not (int(years[0]) <= year <= int(years[1])):
             return False
     return True
+
+
+def _has_prefix(sid: str) -> bool:
+    """True when a row id is already namespaced (`subsonic:1`, `private:x`).
+
+    A raw server id is numeric or an opaque token with no colon; a `head:rest`
+    shape whose head does not start with a digit was written by a source and must
+    not be prefixed a second time (`subsonic:private:1`).
+    """
+    head, sep, _rest = sid.partition(":")
+    return bool(sep) and not head[:1].isdigit()
 
 
 def _public(row: dict[str, Any]) -> dict[str, Any]:

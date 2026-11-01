@@ -36,7 +36,10 @@ DEFAULTS: dict[str, str] = {
     # --- music (V1's migration set) -----------------------------------------
     "music.started": "好，放《{title}》-{artist}，共 {count} 首。",
     "music.started_one": "好，放《{title}》-{artist}。",
-    "music.not_found": "曲库里没找到「{want}」。",
+    "music.not_found": "没搜到，换个说法或者报歌名给我？",
+    # The library had answers and dropped every one (a short clip, an id from
+    # another backend): a different sentence from "never had the song".
+    "music.filtered": "有是有，但版本不合适，换一首？",
     "music.empty": "曲库里现在没有能放的。",
     "music.unreachable": "曲库这会儿连不上，过一会儿再让我放。",
     "music.unresolved": "歌都在，但一首也没取出来，过会儿再试一次吧。",

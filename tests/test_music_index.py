@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,19 @@ class FakeLibrary:
             if album.get("id") == album_id:
                 return list(album.get("songs") or [])
         return []
+
+
+class PrivateLibrary(FakeLibrary):
+    """The private plugin's shape: it declares its own id namespace."""
+
+    name = "private"
+    track_prefix = "private:"
+
+
+class PageLessSource:
+    """A source that can search but cannot page the whole library (the plugin)."""
+
+    name = "private"
 
 
 def song(sid: str, title: str, artist: str = "", album: str = "",
@@ -330,6 +344,61 @@ def test_to_tracks_prefixes_ids_and_drops_clips(tmp_path: Path) -> None:
     # if every row is short, keep them rather than answer nothing
     only_clips = idx.to_tracks([song("c", "Clip", duration=3)])
     assert [t.id for t in only_clips] == ["subsonic:c"]
+
+
+def test_to_tracks_follows_the_source_track_prefix(tmp_path: Path) -> None:
+    rows = [song("a", "Long", duration=200)]
+    # A source that publishes `track_prefix` owns the row namespace: the plugin
+    # resolves `private:` ids, so a `subsonic:` row would be skipped as foreign.
+    idx = LibraryIndex(tmp_path / "i.json", PrivateLibrary([]))
+    assert [t.id for t in idx.to_tracks(rows)] == ["private:a"]
+    # The built-in adapters publish none and keep the historical prefix.
+    plain = index_at(tmp_path)
+    assert [t.id for t in plain.to_tracks(rows)] == ["subsonic:a"]
+    # The parameter wins when a caller knows better (no class surgery needed).
+    assert [t.id for t in plain.to_tracks(rows, track_prefix="private")] == ["private:a"]
+    # An id that already carries a namespace is never prefixed twice.
+    for sid in ("private:a", "private-lib:a", "subsonic:a"):
+        got = [t.id for t in idx.to_tracks([song(sid, "Song", duration=200)])]
+        assert got == [sid]
+
+
+def test_a_cache_from_another_source_is_unusable(tmp_path: Path,
+                                                caplog: pytest.LogCaptureFixture) -> None:
+    """Switching `music.source` must not serve rows with the old id namespace."""
+    build(tmp_path, sample_songs())                     # written by source "fake"
+    other = LibraryIndex(tmp_path / "library_index.json", PrivateLibrary([]))
+    with caplog.at_level(logging.WARNING, logger="rui.music.library_index"):
+        assert other.available() is False
+    assert "was built by source 'fake', current is 'private' - rebuilding" in caplog.text
+
+
+def test_ensure_without_pagination_from_another_source_returns_empty(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """No paging + a cache built elsewhere: warn and answer nothing, not old rows.
+
+    The cache is *fresh* (default TTL): the source check alone has to beat the
+    TTL, otherwise a fresh cache from the old backend would answer forever.
+    """
+    build(tmp_path, sample_songs())                     # source "fake"
+    idx = LibraryIndex(tmp_path / "library_index.json", PageLessSource())
+    with caplog.at_level(logging.WARNING, logger="rui.music.library_index"):
+        assert asyncio.run(idx.ensure()) is False
+    assert "cannot paginate" in caplog.text
+    assert idx.available() is False
+    assert idx.load(required=False)["songs"] == []
+
+
+def test_a_failed_rebuild_keeps_the_cache_only_from_the_same_source(
+        tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A slow NAS keeps answering; a swapped source does not reuse the old rows."""
+    build(tmp_path, sample_songs())                     # source "fake"
+    same = LibraryIndex(tmp_path / "library_index.json", FakeLibrary([], fail=True),
+                        ttl_s=0)
+    with caplog.at_level(logging.WARNING, logger="rui.music.library_index"):
+        assert asyncio.run(same.ensure()) is True
+        assert same.pick(language="ja", limit=3)
+    assert "cannot paginate" not in caplog.text
 
 
 def test_stats_come_from_the_cache(tmp_path: Path) -> None:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +36,32 @@ from .source import MusicSource, SourceError, StarStatus
 log = logging.getLogger(__name__)
 
 PLAY_MAP = {"ok": "music.started", "ok_one": "music.started_one",
-            "empty": "music.not_found", "unreachable": "music.unreachable",
+            "empty": "music.not_found", "filtered": "music.filtered",
+            "unreachable": "music.unreachable",
             "unresolved": "music.unresolved"}
+
+
+def _stat(stats: object, key: str) -> int:
+    """One counter out of a source's optional `last_stats` (mapping or object)."""
+    value = stats.get(key) if isinstance(stats, Mapping) else getattr(stats, key, None)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _filtered_out(source: MusicSource) -> int:
+    """How many real hits the source dropped on its last search.
+
+    `last_stats` is a read-only contract a source may publish (`filtered_short`:
+    hits under the duration floor, `dropped_foreign`: hits belonging to another
+    backend). A source without one answers 0, which is the honest reading: the
+    lookup found nothing, nothing was thrown away.
+    """
+    stats = getattr(source, "last_stats", None)
+    if stats is None:
+        return 0
+    return _stat(stats, "filtered_short") + _stat(stats, "dropped_foreign")
 
 
 def _star_outcome(answer: object) -> StarStatus:
@@ -238,7 +263,12 @@ def build_music_tools(cfg: Config, service: MusicService) -> list[tuple[ToolSpec
         # the one status that needs the play attempt - it means every track failed
         # to resolve - and `play()` leaves nothing behind when that happens.
         if not tracks:
-            return ToolResult(status="empty").slot(want=p.title or p.term)
+            # Two different failures, two different sentences: the library had
+            # matches and dropped them (a short clip, an id from another backend)
+            # is not the same as never having the song. The source's own counters
+            # decide; a source that publishes none stays `empty`.
+            status = "filtered" if _filtered_out(source) > 0 else "empty"
+            return ToolResult(status=status).slot(want=p.title or p.term)
         if p.limit:
             # The count is a ceiling as well as a request: 「听五首」 must not queue
             # the twenty a random draw returns.

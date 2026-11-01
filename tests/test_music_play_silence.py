@@ -159,11 +159,11 @@ def test_not_found_is_spoken_and_nothing_is_played(tmp_path: Path, monkeypatch) 
 
     spoken = "".join(tts.texts)
     assert spoken, "a failed song lookup must not be a silent turn"
-    assert "曲库里没找到" in spoken
-    assert "曲库里没找到" in result.reply, result.reply
+    assert "没搜到" in spoken
+    assert "没搜到" in result.reply, result.reply
     # The sentence the model was given is the phrase, not the tool's own wording.
     tool_messages = [m for m in llm.seen[1] if m.get("role") == "tool"]
-    assert tool_messages and "曲库里没找到" in tool_messages[-1]["content"]
+    assert tool_messages and "没搜到" in tool_messages[-1]["content"]
     assert played == [], "a failed lookup must not reach the player"
     assert service.state == "idle"
     assert service.current is None

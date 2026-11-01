@@ -88,8 +88,10 @@ Jellyfin 从 Emby 3.5 分叉，两者仍是同一套 MediaBrowser HTTP API；差
 - 布局/长度过滤与 Subsonic 相同：<45 s 过滤，过滤后为空则保留原列表。
 
 **曲目 id**：`jellyfin:<server-id>` / `emby:<server-id>`。全库索引
-（`library_index.py`）会给行加 `subsonic:` 前缀，`resolve`/`star` 因此按「最后一个冒号
-之后」取服务器 id，换源后旧队列、旧索引条目仍能播放，不需要重建缓存。
+（`library_index.py`）给行加来源自己的前缀：来源可实现可选属性 `track_prefix`
+（插件侧如 `"private:"`），缺省为内置源的 `subsonic:`；已带前缀的行原样保留。
+`resolve`/`star` 因此按「最后一个冒号之后」取服务器 id；索引记录构建它的来源名，
+换 `music.source` 后旧缓存作废并重建，不再跨来源沿用旧行。
 
 **取流与缓存**：整首先下载 `/Audio/{id}/stream?static=true`，本地 ffmpeg 转 16 kHz mono
 s16 WAV，按 hash 文件名做 PCM LRU 缓存。缓存名里带预设 id：Emby 的 id 是小整数，而
