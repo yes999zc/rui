@@ -2439,3 +2439,83 @@ playback requested: /var/lib/rui/music_cache/private-music/26e8e2f055ec39a2.wav 
 - 进程：pns 376 / mico_aivs_lab 574 / mibrain_service 593
 - `/health` = 0.8.13、devices 5、device_errors 0、planes 5、speaker True、living `overdrive 0 / restarts 0`；`amixer numid=177` 可读
 - 备份留着：`/data/mipns/mds.conf.bak-20261101-2327-bridge-wake-thres`（不需要可删）
+
+### 2026-11-01 23:3x 0.8.14 口径定稿：客厅 `mic_shift 11 / ref_shift 15` 是折中，不是回退 bug
+
+> 本节只固化「事实 + 判断 + 当晚改动顺序」，**无代码改动**（0.8.14 只动文档与版本号）。
+> 扫参过程见上文 `### 2026-11-01 22:3x` 与 `### 2026-11-01 22:5x`；**以本节为最终口径**，
+> 两节的结论若与本节冲突，按本节。
+
+**生产最终值**：`living.audio.capture.mic_shift = 11`、`ref_shift = 15`。
+设备 manifest 的默认 **12 / 16 是硬件几何**；生产上的 11 / 15 是**有意偏离**，不是配置漂移。
+
+核实只认这一条（别只看 `/config/config.yaml`）：
+
+```bash
+curl -s "<rui>/api/v2/devices/living/audio" | jq '.effective.capture'
+# 期望 mic_shift: 11, ref_shift: 15（rate/channels/bits 按协商结果）
+```
+
+**为什么偏离**（不写清，下次会被当回退 bug 重查）：
+
+- `ref_shift 16 → 15` 是 ERLE 的**大头**（≈ **+5 dB**），各 mic 档都受益。
+- `mic_shift` **不能回 12**：10-29 为修「AEC 后电平低 → VAD 失聪」**刻意** 12 → 10；而 10 会削波
+  （shift=10 饱和阈 raw **−36 dBFS**，实测放歌夹话 raw **−44.6 dBFS** → S16 占满 **37.7%**），
+  那次 overdrive 就是这么来的。12 比 11 少 **6 dB 响度**。
+- 11 对 12 只差 **0.6 dB ERLE**，换来比 12 响 6 dB（保 VAD）、比 10 多 6 dB 削波余量。
+  **11/15 是折中，不是扫参最优**：12/15 的 18.0 dB 与 11/15 的 18.5 dB 相差极小，选 11 是响度取舍。
+
+**扫参表**（同一段真机 8 通道录音、speexdsp 同款几何 128 帧 / 4096 taps、阵列 mix；
+单位 dB，`mic/ref`，数字为「线性 / 接 preprocess」）：
+
+| mic/ref | 线性 | +preprocess |
+|---|---|---|
+| 10/16 | 3.3 | — |
+| 12/16 | 13.1 | 16.4 |
+| 12/15 | 18.0 | 21.8 |
+| **11/15（生产现值）** | **18.5** | **22.4** |
+| 13/15 | 17.2 | — |
+| 14/15 | 16.3 | — |
+| 14/16 | 11.1 | — |
+
+基准脚本：`01_Code/experiments/erle-bench/erle_bench.py <raw8ch.i4> [mic_shift] [ref_shift] [--pp]`
+
+**当晚生产改动顺序**（bridge 执行，均已生效；备份目录 `/vol1/rui/config/`，文件名照抄）：
+
+| 时间 | 改动 | 方式 | 备份 |
+|---|---|---|---|
+| 22:08 | `living.audio.capture.mic_shift` 10 → 12 | 容器重启 | `config.yaml.bak-20261101-140754-bridge-mic-shift-living10-to12` |
+| 22:29 | `living.audio.capture.ref_shift` 未设(默认16) → 15 | 容器重启 | `config.yaml.bak-20261101-2229-bridge-refshift-living16-to15` |
+| 22:55 | `mic_shift` 12 → 11 | `PATCH /api/v2/devices/living/audio` + `POST /api/v2/house/audio/restart`（11.8 s，**非**容器重启） | `config.yaml.bak-20261101-2255-bridge-micshift12-to11` |
+| 23:12 | 唤醒词加第二项 `{"wake_words":["你好小宝","你好小宝儿"]}`（保留门限 `:4.00 #0.07`） | `POST /api/v1/setup/wake` | `config.yaml.bak-20261101-2312-bridge-wakewords-add-xiaobaor` |
+
+**回滚** = `cp -a` 备份回去 + 重启（前三个回滚需重启容器；第四个回单唤醒词即可）。
+
+**唤醒词与门限的边界**（细节登记在 `docs/known-limitations.md` **L30**）：
+
+- `keywords.txt` 是**全设备 `wake_words` 的并集**（`_write_keywords_preserving`，`src/rui/web/api/app.py`），
+  所以客厅加了「你好小宝儿」之后**其余 4 台也能被它唤醒**；当前**不支持** per-device 独立词表。
+  这是已知限制，不是 bug。
+- 门限行 `:4.00 #0.07`（boost 4.0 / 阈值 0.07）是 §31 定论值，**不要动**；手改会被 setup 端点覆盖。
+  `keywords.txt` 当前两行，每行 `拼音 :4.00 #0.07 @中文`（`@你好小宝`、`@你好小宝儿`）。
+
+**与 0.8.10 冻结条款的关系（必须一起读）**：`docs/releases/v0.8.10.md` 曾写 `mic_shift=10` /
+`ref_shift=16`「本批不得改动」。0.8.14 **解除该冻结**，依据就是上面三条：`ref_shift` 才是大头（+5 dB）
+＋ 10 会削波/12 掉 6 dB 响度 → 定 11/15。不写这段等于违反既有发布纪律；以后再动这两个值，
+同样要写「为什么」，不能只改数字。
+
+**两条必须标注「提议、未验证」（不得写成已实现/已实测）**：
+
+1. **mic/ref 电平差 ±6 dB 启动自检**：目前**只是提议**（本文件 22:3x 段 bridge 提的启动自检阈值），
+   **没有实测依据**，也**没有记录目标电平** ⇒ 文档一律写「**提议值，未实测**」（`known-limitations` L32）。
+2. **`aec.py` 只跑线性段**：`_frame()` 只调 `speex_echo_cancellation`，**未接** `speex_preprocess_run`
+   （读代码得出，全仓无该符号）；「接上残差抑制 21.8 dB」是**离线 bench 预期**，真机 `aec_erle_db`
+   至今**零对照**（`GET /api/v1/traces` 返回 `turns: []`）⇒ 见 `known-limitations` **L31**。
+
+**下一步（backlog，本批不实现）**
+
+1. 孤儿 `.audio`：插件 `_evict` 只 glob `*.wav`，超时取消会留 **21.3 MB** `.audio`（另一张卡在修）。
+2. gdstudio 熔断：连续失败冷却，避免「慢死」时 3 档 × 35 s（另一张卡在修）。
+3. `aec.py` 接 `speex_preprocess_run`（**卡 2**，未做）：需先抓 raw8ch 采样做 bench 基线，
+   且属音频链路，需独立验证。
+4. ERLE 电平不变量启动自检（**提议，未实测**，见上）。

@@ -18,6 +18,40 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.14] - 2026-11-01
+
+**Theme: 把「故意改的」和「还没做的」写清楚。** 纯文档与版本号发版，**零代码改动**：客厅 LX06 的
+`mic_shift 11 / ref_shift 15` 从「当夜三次临场修正」固化成有依据的口径（扫参表 + 为什么不能回 12 +
+为什么不是扫参最优），并把唤醒词并集、`aec.py` 只跑线性段、两条「提议、未实测」登记进
+`docs/known-limitations.md`（L29–L32）。目的只有一个：下次看到 11/15 不要当回退 bug 重查。
+
+### Changed
+
+1. **`docs/known-limitations.md` 新增 L29–L32。** L29 = 客厅生产 11/15 是**有意偏离** manifest 几何
+   12/16（`ref_shift 16→15` 是 ERLE 大头 +5 dB；`mic_shift 10` 会削波、`12` 少 6 dB 响度；
+   **11/15 是折中，不是扫参最优**——12/15 18.0 dB 与 11/15 18.5 dB 相差极小）；L30 = `keywords.txt`
+   是**全设备 `wake_words` 并集**（客厅加「你好小宝儿」后其余 4 台也会被它唤醒，**不支持**
+   per-device 词表），门限行 `:4.00 #0.07` 是 §31 定论值、不要手改（会被 setup 端点覆盖）；
+   L31 = `aec.py` 的 `_frame` **只调 `speex_echo_cancellation`**，未接 `speex_preprocess_run`，
+   `+preprocess` 的 21.8 dB 是**离线 bench 预期**，真机 `aec_erle_db` 至今**零对照**
+   （`/api/v1/traces` 返回 `turns: []`）；L32 = 「mic/ref 电平差 ±6 dB 启动自检」是**提议、未实测**。
+2. **`config.example.yaml` 只加注释，默认值不变。** 模板仍是 `mic_shift: 12` / `ref_shift: 16`
+   （硬件几何，模板要发给别的设备）；注释说明 LX06 实测建议 11/15、生产偏离时不要当回退 bug 重查。
+3. **`docs/HANDOFF.md` 追加 0.8.14 定稿节**：生产最终值、核实命令
+   （`GET /api/v2/devices/living/audio` → `effective.capture`）、扫参表、当晚四次改动与备份文件名、
+   唤醒词与门限边界、下一步 backlog（孤儿 `.audio`、gdstudio 熔断、`speex_preprocess_run`、电平自检）。
+
+### Note
+
+- **解除 0.8.10 的冻结条款（有意，非疏漏）**：`docs/releases/v0.8.10.md` 曾写 `mic_shift=10` /
+  `ref_shift=16`「本批不得改动」。0.8.14 改为 **11/15** 的依据是当夜真机扫参：`ref_shift` 才是
+  ERLE 大头（16→15 ≈ +5 dB，各 mic 档都受益），而 10 会削波（shift=10 饱和阈 raw −36 dBFS，
+  实测放歌夹话 raw −44.6 dBFS → S16 占满 37.7%）、12 比 11 少 6 dB 响度。以后再动这两个值，
+  同样要写清「为什么」，不能只改数字。
+- **两条不得写成「已实现 / 已实测」**：`aec.py` 的残差抑制（`speex_preprocess_run`）**未接**，
+  21.8 dB 是离线 bench 预期；「±6 dB 电平自检」是**提议值、未实测**（也没有记录目标电平）。
+- 本版不动 `rui_compat`（仍 `>=0.8.1 <0.9.0`），两个桥仓零改动，生产配置零改动。
+
 ## [0.8.13] - 2026-10-30
 
 **Theme: 听见的和说出来的对齐。** 控制台「试一试」不再冒充房间说过话（也不再把正在进行的对话抹掉）、

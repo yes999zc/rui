@@ -93,6 +93,9 @@ audio:
     mic_channels: 6        # ch0..ch5
     ref_channels: 2        # ch6, ch7 (playback reference, needed for barge-in)
     bits: 32               # hardware bit depth; the client converts to 16 bit on the wire
+    # LX06 measured: mic_shift 11 / ref_shift 15 is what production runs (see
+    # docs/known-limitations.md L29). 12/16 below is the hardware geometry; a
+    # deployment that deviates is a deliberate compromise, not a regression.
     mic_shift: 12          # sent to the device; 8 clips loud speech, 12 leaves 4 bits
     ref_shift: 16          # reference is 2**28: >>13 is level-matched, 16 adds headroom
   voice:
