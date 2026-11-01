@@ -2561,3 +2561,6 @@ curl -s "<rui>/api/v2/devices/living/audio" | jq '.effective.capture'
   `/api/v1/music` 仍是 `state: playing`，队列到边界会自己续播（今天就踩了这个坑）。
 - 同理：`playback requested` / `resolve …` 这类日志行出现即代表"正在放"，测试报告里若出现
   这些行，必须在同一条命令里带上停播与 `state=idle` 校验。
+- **GitHub Release**：`v0.8.14` 已建并标记 Latest（https://github.com/yes999zc/rui/releases/tag/v0.8.14），
+  说明照 0.8.13 的格式写在 release body（**不含内网地址/密钥**，仓库是 public）。0.8.12/0.8.13 那次
+  漏建 Release 对象导致 "Latest" 停了两个版本，本版已补上。
