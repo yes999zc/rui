@@ -2055,3 +2055,20 @@ gh release view v0.7.1 --json tagName,url                                      #
   open-xiaoai。代价：`小爱同学` 唤醒与原厂技能全部失效，设备变成纯 rui 终端。收益：少一个抢占者、
   唤醒一致性更好。open-xiaoai 文档只讲刷机与 SSH，没有现成的"关原厂语音"步骤，需要先在设备上确认
   服务名与自启方式（`/etc/init.d`、`/data/init.sh`），并在停止后观察 24h 唤醒命中率。
+
+### 2026-11-01 21:2x 实验结论：停原厂语音引擎有效，选 A（保持停用）
+
+- 现场操作：`/etc/init.d/pns stop` 停掉 `mipns-xiaomi`；麦克风由 `mipns-xiaomi + arecord` 变成
+  **只剩 arecord（open-xiaoai 独占）**；rui 侧 living 仍 `connected=True/ready`。
+  回滚：`/etc/init.d/pns start`。
+- 实测对照（同一台、同一晚）：
+  | 指标 | 停前 90 分钟 | 停后 25 分钟 |
+  |---|---|---|
+  | 唤醒被接受 | 20 | 12（含 5 次空唤醒） |
+  | `lost_same_word` 拒绝 | **4** | **0** |
+  | admitted 延迟 | 402–407 ms | 402–407 ms |
+- **9哥 拍板：保持停用（A）**，牺牲「小爱同学」与原厂技能换独占与稳定；明早再评估。
+- **仍未解决（下一张卡）**：ASR 只抓到句子尾巴 → 「据。」（"现在几点"）、「这一下吧。」；
+  以及「对一下吧。」命中别名（→退下吧）**提前关会话**。怀疑主因是 `ack_echo_ignore_ms=1200`
+  把命令开头吃掉（cue 实测约 600 ms，门却是 1200 ms）。修法：门长按 cue 实际播放时长 +150 ms 自适应，
+  并给"门内被截断的片段"加 stop-intent 守卫。
