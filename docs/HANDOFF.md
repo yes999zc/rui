@@ -1981,3 +1981,22 @@ gh release view v0.7.1 --json tagName,url                                      #
 - **未做**：真机语音复验（点「试一试」后 15 s 应只有 `silent close` 日志、无道别；说「播放三十首周杰伦」应放 30 首）——需要有人在房间，留给 9哥 或白天。
 
 - **2026-10-30 14:0x 会话收口**：跨项目交接写在 `~/AI_Workspace/04_Docs/bridge-handoff-2026-10-30.md`（含待办分类、授权边界、重开后怎么接）。9哥 将 `/new`，新会话先从那份文件接。
+
+### 2026-11-01 21:0x 客厅（小爱 LX06）现场：放歌失败 + 空唤醒修复已验证
+
+- **已验证生效**（10-30 那三个修复在线上跑 2 天）：
+  - `session idle for 15.0 s: silent close (no speech in this session)` —— 空唤醒不再道别 ✅
+  - `stop intent: '停止播放。' -> media stopped, session closed` ✅
+  - 未再出现「退下吧后又来一句我先下啦」。
+- **新问题：放歌取不到曲**（9哥 报「小爱」）：
+  1. 「放点轻音乐。」→ `music: skip ... (not a private track: 'subsonic:...')` ×8 → `music.unresolved`
+     → 回「歌都在，但一首也没取出来」。**random/library 把 subsonic 源的曲子选了出来，
+     private-music 插件以"不是私有曲目"拒掉**，一次都没播。
+     随后 12:57:42 又起了一次 `random/library` 并 `playback requested ... 4a2996639a1240a4.wav`（这次成功），
+     说明是"选曲来源混了"，不是没有歌。
+  2. 「放首周杰伦那个。」→ `search/online: skipped_short=1 (min_duration_s=45)` → `music.not_found`
+     → 回「曲库里没找到周杰伦的歌」。**查询词里带口语填充"那个"，在线搜索命中一条却因时长 <45 s 被丢**。
+- **待办（下一张卡）**：① random/library 选曲时先过滤掉非 private 来源，避免 unresolved 空转；
+  ② 在线搜索前剥离口语填充（那个/这首歌/一下）；③ 未命中时如实说"没搜到合适的版本"而不是"曲库里没有"。
+- 设备侧 ssh 已不可用（`no matching host key type ... offer ssh-rsa`，且 root 需密码）→ 目前只能看
+  rui 侧 `plane:` 镜像日志；要看设备 `/tmp/client.log` 需先解决凭据/算法（记一条环境债）。
