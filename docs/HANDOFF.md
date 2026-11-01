@@ -2709,3 +2709,29 @@ phase-close: task-3
 **待开批（0.8.16，已按上面更正重写）**：① `wake_miss` 负样本日志（给唤醒率/命令捕获率一个分母，**先做**）；
 ② 提示音三档 A/B（none / chime 320 / tts 600，先零代码量数据）再决定要不要改切除策略。
 `mic_shift` 不动；唤醒词/门限不动。
+
+### 2026-11-02 02:0x 配置已恢复到 0.8.15 出厂口径（9哥：「改回正常」）
+
+**做法**：用 01:25 的备份 `config.yaml.bak-20261102-0125-bridge-ack-none-vol30`（= 0.8.15 发布时的生产配置）
+整份覆盖回 `config.yaml`，再 `docker restart rui` 生效（改文件不会自动热载；上次 01:42 的重载是重启触发的）。
+本次改动前的状态另存为 `config.yaml.bak-20261102-0205-bridge-restore-to-release`（要回测试态用它）。
+
+**恢复的三处（全是夜里为测试改的，整份差异只有这三行）**：
+
+| 键 | 测试值 | 恢复为（出厂） |
+|---|---|---|
+| `devices[living].volume` | 30 | **80** |
+| `devices[living].audio.capture.mic_shift` | 10 | **11** |
+| `ack.echo_ignore_ms` | 700 | **1200** |
+
+`ref_shift 14` 本来就是 0.8.15 出厂值，未动；`keywords.txt` 两行与 device `wake_words` 两条也未动。
+
+**恢复后实测（02:05–02:07）**：/health `0.8.15`、devices 5、`device_errors 0`、planes 5；
+`effective.capture = mic_shift 11 / ref_shift 14`；`ack = tts(在呢) + echo_ignore_ms 1200`，
+`GET /api/v2/devices/living/audio` 的 `conflicts = []`（全局与机型事实一致，夜里那条 700 vs 1200 的告警消失）；
+运行时音量 **204/255（80%）**（日志 `volume: reconciled to 204 (config 80%)`）。
+
+**两个已知取舍（9哥 知情，未改）**：
+1. `mic_shift 11` 是出厂口径，但 01:36 的同窗口对比是 **10 更好**（3 米轻声：mic11 只 3 次唤醒、mic10 有 5 次）。
+   明天测试要不要换回 10，等 9哥 一句话。
+2. 80% 音量会让「在呢」变响（9哥 之前抱怨过）；cue 没有独立音量，只能压总音量或 `ack.mode: none`。
