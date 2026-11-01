@@ -2346,3 +2346,68 @@ $ uptime                              → up 4 days, 1:02
   持久化只能写 `/data/init.sh`（可写，且已放过 /tmp 守护），形如
   `( sleep 20; /etc/init.d/mico_aivs_lab stop ) &`；`/data/init.sh` 里目前**没有**任何 mico_aivs/mibrain 逻辑。
 - 待 9哥 真机确认：说「小爱同学」不应答 + 说「你好小宝」正常应答后，再决定是否写 init.sh 持久化。
+
+### 2026-11-01 23:2x 首曲冷启动根治：源码率协商（C-002）
+
+**结论先行**：客厅首问「放点轻音乐」从 **12.3 s → 2.9–3.2 s**，不再有撞 20 s 工具超时的「音乐库没响应」。
+改动全在 `rui-personal-services`（服务 + 插件），house-ear **零改动**。
+
+#### 根因（我此前那条记录是错的，一并更正）
+
+- ❌ 我 22:0x 写的是「`by_genre` 3 个 genre 串行 + 首曲转码」。实测检索段只占 **1.7 s**，不是主因。
+- ✅ 真因：`music_acq.resolve.Resolver` 把码率**写死 999（无损优先，再退 320）**，meting 分支固定
+  `br=999`。而插件最终产出的是 **16 kHz 单声道 WAV（等效 256 kbps）**——为了它先搬一首
+  **~700 kbps 的 FLAC**，5.5 倍带宽白花；首曲又是随机抽的，抽到 6 分钟曲就要 8–15 s，
+  再叠 TTS/LLM 就撞上 `music_play` 的 20 s（`TurnRunner.tool_timeout_s=20.0`，全局参数）。
+- 同曲实测（id=524543708）：`br=999` → **11.7 MB**（`fLaC` 魔数）、`br=320` → 8.0 MB、`br=128` → **3.2 MB**。
+- 分段实测（经服务代理）：`/v1/search` 0.3 s、`/v1/stream` 下载 2.7–5.6 s（1.2–4.4 MB/s）、转码 0.2–0.4 s。
+
+#### 改了什么（契约 `rui-personal-services/docs/contracts/C-002-source-bitrate-negotiation.md`）
+
+| 层 | 改动 |
+|---|---|
+| `music_acq.resolve` | `br_plan(max_br)`：无上限 → `(999, 320)` **逐字节不变**；有上限 → `(min(max_br,999), 320, 999)`，只向上退、**绝不返回空**；`requested_br` 记真实档位 |
+| `music-svc` | `/v1/stream`、`/v1/resolve` 接受 `max_br`（64..999，非法 422），透传给 resolver；`requested_br` 进响应；鉴权/预算/并发锁零改动。镜像 **0.1.4 → 0.1.5** |
+| 插件 | `PRIVATE_MUSIC_MAX_SOURCE_BR`（默认 **128**，空/0 = 不限制）→ `?max_br=`；**双侧夹到 64..999**（未夹的 9999 会变 422，而 4xx 被判永久错误 → **整库点不了**）；启动横幅打 `src_br=<=128` |
+| 插件 | `resolve <曲> - <歌手>: fetch=…ms transcode=…ms tries=…ms total=…ms`（成功 INFO / 失败 WARNING），**每次尝试都入账**，`total` 是整次墙钟（含退避） |
+
+#### 上线证据（2026-11-01 23:23–23:24，living，音量 30%）
+
+```
+# 修复前（22:58）：semantic 14:58:23.468 → playback requested 14:58:35.789 = 12.3 s，整轮 14.87 s
+# 修复后（三连测，均为**未缓存**的曲子）：
+semantic '放点钢琴曲' 15:23:42.107 → playback 15:23:45.264 = 3.16 s（整轮 6.13 s）
+  resolve 鸟之诗 钢琴 - abc: fetch=2779ms transcode=374ms tries=1 total=3155ms
+semantic '放点爵士乐' → playback = 3.05 s（整轮 4.14 s）
+  resolve 乐 - 卦者灵风: fetch=2686ms transcode=360ms tries=1 total=3047ms
+semantic '放点轻音乐' 15:24:20.469 → playback 15:24:23.382 = 2.91 s（整轮 5.09 s）
+  resolve Silent Bloom - Aquilegia: fetch=2675ms transcode=233ms tries=1 total=2910ms
+# 播放行（出声）：
+playback requested: /var/lib/rui/music_cache/private-music/26e8e2f055ec39a2.wav loop=False gain=1.00
+# 全程无 "skip (not a private track)"；/health ok 0.8.13 devices 5 errors 0 planes 5
+```
+
+#### 部署与回滚
+
+```bash
+# 服务：镜像 rui-personal-services-music-svc:0.1.5（Mac 上 DOCKER_DEFAULT_PLATFORM=linux/amd64
+#   docker build -f music-svc/Dockerfile -t …:0.1.5 .  → docker save | ssh nas 'docker load'）
+# compose 备份：/vol1/selfuse/docker-compose.yml.bak-20261101-232246（0.1.4 → 0.1.5）
+# 插件备份：  /vol1/rui/plugins/rui_private_music.bak-20261101-232304
+# 顺序：先服务（兼容，旧插件不认 max_br 也不会 422），后插件 + docker restart rui
+# 插件侧回滚（最快）：override 里加 PRIVATE_MUSIC_MAX_SOURCE_BR=0 或留空 → docker restart rui，服务不必回滚
+# 服务侧回滚：compose 换回 0.1.4 → docker compose up -d music-svc
+```
+
+#### 新增的残留风险 / 下一步（按顺序）
+
+1. **gdstudio 从容器里不可达**（`ConnectError [Errno 101] Network is unreachable`），实际全走 meting。
+   而 `br_plan(128)` 现在是 **3 档**（原 2 档），`_curl_json` 单次超时 35 s —— 一旦 gdstudio 从
+   "立刻失败" 变成 "慢死"，一次 resolve 最坏会多耗 ~45 s（远超工具超时）。建议给 gdstudio 单档
+   单次短超时，或加熔断（失败后 5 分钟不再试）。
+2. 失败路径的退避对**最后一次**也 `sleep(0.3)`（既有逻辑），全失败 = 3×300 ms；无伤但可省。
+3. 非 `(SourceError, OSError, SubprocessError)` 的异常逃逸时不会打 timing 行（既有行为）。
+4. `_clamp_source_br` 只捕 `TypeError/ValueError`，显式传 `float("inf")` 会 `OverflowError`
+   （env 路径被 `_env_int` 兜住，实测 inf/nan/1e400 → 128）。
+5. 质量口径：输出仍是 16 kHz 单声道，128 kbps 源在 8 kHz 带宽内有余量；若 9哥 听出差异，
+   改 `PRIVATE_MUSIC_MAX_SOURCE_BR=192` 即可，不需要改代码。
