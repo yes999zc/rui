@@ -2564,3 +2564,30 @@ curl -s "<rui>/api/v2/devices/living/audio" | jq '.effective.capture'
 - **GitHub Release**：`v0.8.14` 已建并标记 Latest（https://github.com/yes999zc/rui/releases/tag/v0.8.14），
   说明照 0.8.13 的格式写在 release body（**不含内网地址/密钥**，仓库是 public）。0.8.12/0.8.13 那次
   漏建 Release 对象导致 "Latest" 停了两个版本，本版已补上。
+
+### 下一步（下个会话从这里接；本批到此为止，不再动生产）
+
+**先纠正一处会误导的旧结论**：`:2298` 当年 22:29 的中间结论写「定 **12/15**」；22:55 起生产是
+**11/15**，以 `:2466` 与新节为准（11/15 是折中：0.6 dB ERLE 换 6 dB 响度）。
+
+**收口清单里的三条，两条已在 0.8.14 同批做完并上线**（不要再做一遍）：
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 孤儿 `.audio` 清理 | ✅ 已实现并部署 | 插件仓 `1c7c6d5`；`_evict` 顺带删 mtime>1 h 的 `*.audio`，打 `cleaned_orphan_audio=N`；NAS `source.py` = `a845099b…` |
+| gdstudio 熔断 | ✅ 已实现并部署 | 同 commit；**music-svc 已升 0.1.6**（熔断代码在 `music-acq/`，打在服务镜像里，不升等于空转）；连续 2 次失败冷却 300 s |
+| audio 链路待验 | ⬜ **唯一真·未做** | `aec.py` 未接 `speex_preprocess_run`；`01_Code/experiments/erle-bench/` 里**没有任何 `.i4` 采样** |
+
+**唯一待开的新批（audio 链路，属风险卡，需 verifier）**：
+1. 真机抓 4 s 8 通道采样（`arecord -D noop`，放歌中抓，ch6 = 参考），落进 `erle-bench/`；
+2. `erle_bench.py <raw8ch.i4> 11 15` 得到**当前基线**（离线预期 18.5 / 接 preprocess 22.4 dB）；
+3. 再改 `aec.py` 接 `SPEEX_PREPROCESS_SET_ECHO_STATE` + `speex_preprocess_run`，键名建议
+   `audio.aec.residual`（**默认关**，与既有 `aec.enabled` 分开），bench 对比 + 真机
+   `GET /api/v1/traces` 的 `aec_erle_db` 前后各一轮（注意现在 `turns: []`，要先有 trace 才能对照）；
+4. 附带：ERLE 电平不变量自检仍是**提议**（±6 dB 无实测依据），要做先补测量。
+
+**其它遗留（都不阻塞，按需）**：
+- 0.8.10–0.8.13 没有 `docs/releases/*.md`；0.8.14 的说明落在 `CHANGELOG.md` + GitHub Release。
+- 片段卡（ASR 只抓句尾）：另开会话，别与本批共用工作树。
+- 观测项（不用动手）：`docker logs rui | grep -E "cleaned_orphan_audio|cooling down"` —— 前者应偶发出现，
+  后者若 300 s 内反复刷屏说明阈值定得太小。
