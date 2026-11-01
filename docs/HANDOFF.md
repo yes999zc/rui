@@ -2331,3 +2331,18 @@ $ uptime                              → up 4 days, 1:02
 - 备份：`config.yaml.bak-20261101-2312-bridge-wakewords-add-xiaobaor`；回滚 = cp 回 + 重启音频面。
 - 注意：keywords.txt 是**全设备并集**（`_write_keywords_preserving` 收集所有 devices 的 wake_words），
   所以其余 4 台也会响应「你好小宝儿」。若只想客厅响应，需要 per-device keywords 文件（当前不支持）。
+
+### 2026-11-01 23:2x 停掉原厂语音助手（它自己插话）：`mico_aivs_lab`
+
+- **现象**：23:15:11 客厅音箱自己说话，无人喊小爱。设备侧日志坐实是原厂：
+  `/tmp/mico_aivs_lab/event.log` → `Wakeup {type: wakeup_real, vendor: xiaomi, word: 小爱同学}`，
+  随后它的 ASR 把房间里的真实对话听成「估计拿过来我看看还还剩」，走自己的 NLP+TTS 回了一句
+  「我没太明白你说的意思…」。我们这边只做了 `vendor wake ..., we yield`（LED 灭、让路）。
+- **处置**：`/etc/init.d/mico_aivs_lab stop` —— 只停**对话/助手侧**，`mipns-xiaomi`（AEC/AGC，必须留）与
+  `mibrain_service` 均未动；`amixer`（mysoftvol）读取正常，我们的采集/播放链路不受影响。
+  验证：进程数 0，procd 未拉回，pns pid 1483 仍在。
+- **恢复**：`/etc/init.d/mico_aivs_lab start`。
+- **重启存活问题**：`/` 是 squashfs 只读，`/etc/rc.d/S85mico_aivs_lab` 改不了 ⇒ 重启会自己回来。
+  持久化只能写 `/data/init.sh`（可写，且已放过 /tmp 守护），形如
+  `( sleep 20; /etc/init.d/mico_aivs_lab stop ) &`；`/data/init.sh` 里目前**没有**任何 mico_aivs/mibrain 逻辑。
+- 待 9哥 真机确认：说「小爱同学」不应答 + 说「你好小宝」正常应答后，再决定是否写 init.sh 持久化。
