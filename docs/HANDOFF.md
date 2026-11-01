@@ -2666,3 +2666,30 @@ phase-close: task-3
      若要更稳，考虑「hold 跟随 VAD 语音结束」而不是固定时长。
    - `AecChain` 的两条 "never make it worse" 保护只防「输出能量高于输入」，对「压掉人声」完全免疫；人声保护实际只靠 hold 时间窗。
 3. 待观察：`docker logs rui | grep -E "cleaned_orphan_audio|cooling down"`（0.8.14 起的两个观测项）。
+
+### 2026-11-02 01:5x 0.8.15 之后的生产配置（bridge 夜间改动，0.8.16 开工前必读）
+
+**当前生产**：0.8.15、5 台、`device_errors 0`；`capture = mic_shift 10 / ref_shift 14`；
+`ack.mode = tts(在呢)`、`ack.echo_ignore_ms = 700`；运行时音量 **76/255**（config `devices[0].volume = 30`）。
+
+**夜里动过三处**（都有备份，回滚 = `cp -a` 回 + 重启）：
+1. 01:35 `mic_shift` 11 → **10**（PATCH + fleet restart）。依据：同窗口 3 米轻声唤醒 mic11 只 3 次、
+   mic10 有 5 次；10 是 10-29 为 VAD 响度定的基线，11 是我 22:55 为 AEC 匹配压下去的（−6 dB）。
+2. 01:35 `ack.mode` none → **tts**，`echo_ignore_ms` 1200 → **700**（**必须重启容器才生效**，
+   `POST /api/v2/house/audio/restart` 不重载控制面配置）。
+3. `devices[0].volume` 80 → 20（测试）→ **30**（已恢复）。
+
+**夜里测到的（都带分母）**：
+- 01:15，`ack=none`，3 米轻声：喊 **6 次 → 命中 5 次（83%）**，admit 403–410 ms，其中一次识别成「你好小宝儿」。
+- 01:32–01:33，`ack=tts` + mic11：3 次唤醒，**2 次命令完整**（transcript「几点了？」「几点了。」回答正确），
+  `[seg] rms 0.0052/0.0054`（比 22:43 的 0.035 低 16 dB —— 远场电平本就低）。
+- 01:36–01:37，`ack=tts` + mic10：**5 次唤醒、0 次 `[seg]`**，全部 `cue=excised`。
+- `[level] voice peak`：ack 30% 音量时 **0.0 dBFS（削波，是提示音自己的回声）**；ack 关掉后 −18.5/−25.6；
+  ack 20% 时 −12.5/−17.3/−19.6 ⇒ 20% 不削波。
+
+**挡音窗算术（关键）**：`process.py:1304` —— tts 模式总挡 = cue 600 + `ACK_PLAYOUT_LEAD_MS` 850
++ `echo_ignore_ms` 700 = **2150 ms**；`mode: none` 只剩 `ACK_TAIL_MS` **250 ms**。相差约 9 倍，
+这就是"一开提示音就喊不动"的直接原因：命令整句落在聋区里被丢。
+
+**待开批（0.8.16）**：① `wake_miss` 负样本日志（给唤醒率一个分母）；② 挡音窗从固定时长改成回声驱动。
+`mic_shift` 不动；唤醒词/门限不动。
