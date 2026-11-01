@@ -2192,3 +2192,31 @@ cd /vol1/rui && docker compose -f docker-compose.yml -f rui-dot2-override.yml up
   误加过的 `audio.capture_segments` 已移除（rui 没有这个功能）。
 - **待办**：① 音乐批（3 卡）验收收口；② 「门长按 cue 实际长度 +150 ms」的卡待发；
   ③ 生产单操作者规则待写进 operating.md。
+
+### 2026-11-01 22:1x 归因更正：overdrive 不是在"停原厂引擎"时才有
+
+压缩后复核生产（0.8.13，容器 13:55:11Z 起）得到的反证：
+
+```
+# pns 一直在跑，没停
+$ ps w | grep -E "mipns|miio"        → 1483 root 266m /usr/bin/mipns-xiaomi -c .../xaudio_engine.conf
+$ uptime                              → up 4 days, 1:02
+
+# 但 living 仍有 overdrive，且两次 burst 都贴着播放
+13:55:56 playback requested: .../030c2c57dc25649b.wav gain=1.00
+13:56:03 WARNING overdrive: device=living clipped=5.9%  peak=1.000
+13:56:36 WARNING overdrive: device=living clipped=25.2% peak=1.000
+/health → living overdrive_count=23 overdrive_ratio_max=0.8297 last=…11.878
+```
+
+- ⇒ 「停 pns → overdrive，恢复 pns → 归零」这条因果**被污染**：那次实验期间我还重启了容器、
+  且大概率在放歌。现在 pns 在跑、overdrive 照样出现。**"不要停 pns"这个结论仍然成立**
+  （它是 AEC/AGC 引擎，停了会自激），但不能再拿 overdrive 当它的证据。
+- ⇒ 真正的相关项更像 **播放泄漏 / 近讲增益**：overdrive 的检测点是**后 AEC、进 ASR 的 mono 流**
+  （`src/rui/audio/process.py:1425 _observe_overdrive`，`OVERDRIVE_SAMPLE=0.97`，`FRAME_RATIO=1%`，
+  `FRAMES=5`），量的是"到达 ASR 的样本打满"，不是 ADC 打满。
+- ⇒ **本文档 22:0x 那条「cue 门长 1200 → cue+150 ms」的卡作废，不要发**。片段问题按上面
+  「下一步 #1」开工：先查削波/播放泄漏（播放中 ratio 83% 就是现成线索），再谈门长。
+
+待办收口：`overdrive` 应该在 **播放期间**单独打标（当前计数混了对话和放歌两种场景），
+否则下一次还会归因错；这条留给片段批一起做。
