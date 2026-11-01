@@ -2220,3 +2220,25 @@ $ uptime                              → up 4 days, 1:02
 
 待办收口：`overdrive` 应该在 **播放期间**单独打标（当前计数混了对话和放歌两种场景），
 否则下一次还会归因错；这条留给片段批一起做。
+
+### 2026-11-01 22:08 生产改动：living `capture.mic_shift` 10 → 12（降 12 dB 麦增益）
+
+- **依据**：见本文档 22:1x 归因更正 + `04_Docs/human-bridge/research/self-build-voice-terminal.md` §7。
+  shift=10 的 S16 饱和阈是 raw −36 dBFS，而"放歌时人在音乐里说话"实测 raw −44.6 dBFS（S16 占满 37.7%），
+  近讲很容易过线 ⇒ 削波是**增益**问题，与厂商引擎无关。
+- **改法**（已执行，9哥 22:08 批）：
+  ```bash
+  cd /vol1/rui/config
+  cp -a config.yaml config.yaml.bak-20261101-140754-bridge-mic-shift-living10-to12   # 第 61 行
+  sed -i '61s/mic_shift: 10/mic_shift: 12/' config.yaml
+  python3 -c "import yaml;…"        # yaml ok, devices 5, living mic_shift = 12
+  cd /vol1/rui && docker compose -f docker-compose.yml -f rui-dot2-override.yml restart rui
+  ```
+- **回滚**：`cp -a config.yaml.bak-20261101-140754-bridge-mic-shift-living10-to12 config.yaml`
+  → 再 `docker compose … restart rui`。
+- **验证**：`/health` 0.8.13 / devices 5 / device_errors 0 / speaker True；overdrive 计数归零后待复测。
+- **已知小瑕疵**：改完之后值等于 manifest 默认（12），`/api/v1/devices/living` 的 `capture` 里
+  不再显示 `mic_shift`（等于默认就不展示），但 `audio.overrides` 仍列着 `capture.mic_shift`
+  —— 只是个标注，功能无误。想彻底干净就把该行写成空值，需要再重启一次，没做。
+- **待复测**（9哥）：放歌中近讲「你好小宝，现在几点」，看 ① `overdrive_count` 是否还涨
+  ② 转写是否还只剩句尾。
