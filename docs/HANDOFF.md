@@ -1124,6 +1124,7 @@ max_planes=5、`/health` 已确认，2 台 plane running）。验收可按 **3 �
 | 生产 | NAS 168 跑上面 amd64 摘要；`ver 0.7.8 / dev 1 / err 0 / console v2 / speaker True / planes[卧室 dot2 running]` |
 
 > **NAS 上的坑**：老版 docker 不支持 OCI index 里的 attestation manifest（`unsupported media type application/vnd.oci.empty.v1+json`），所以**按索引摘要 pull 会失败**；要用 **amd64 平台摘要**（`1f074bb3…`）或 tag `0.7.8`（同样会解析到索引，仍可能失败）。已在 override 里 pin amd64 摘要。
+> **2026-11-02 更正**：这条坑在 0.8.15 部署时**没有复现** —— 同一台 NAS 按 index 摘要 `sha256:7c1a3aa7…` 直接 `docker compose up -d` 正常 pull 并落到 amd64（image ID 与按 amd64 摘要 pull 的完全一致、Arch=amd64）。推断是 NAS 上的 docker 已升级。**结论不变**：部署仍优先 pin **amd64 平台摘要**（确定性），index 现在也能用。
 
 ## 0.7.8 生产验收（2026-10-27 08:20，真实部署）
 
@@ -2639,6 +2640,8 @@ phase-close: task-3
 | 线上 `aec_erle_db`（20% 音量、受噪声底限制） | 0.8.14 基线（线性，mic 11/ref 15）：11.3/12.9/15.2/20.6/19.3/20.9/23.0/21.5（稳态 **19.3–23.0**）；0.8.15（mic 11/ref 14）：9.2/15.1/30.2/31.8/27.9/27.4/28.3/27.5（稳态 **27.4–31.8**）⇒ **稳态 +7~9 dB** |
 | 残差绝对电平 | **未做成受控对比**：同音量但曲目不同（基线「赛跑」/ 本轮「说走就走」），本轮 `ref_rms_db` 高约 11–20 dB，绝对残差电平反而更高。可比的只有 ERLE。下次量请固定同一曲目或固定 `ref_rms` 区间 |
 | AEC 日志 | `Traceback/ERROR/CRITICAL` = 0；命中的 `aec_hw_ref` 是 dot2 能力串（假阳性） |
+
+**ERLE 证据的时效性（必须一起记）**：`aec_erle_db` 是 AEC 在 ref 有活动期间的实时窗口统计量，播放一停 `ref_active=false` 就回落 `null`（静默态终检实测 `aec_erle_db=null`、`ref_rms_db=-100.0`）。所以上面那组 27.4–31.8 dB 是**当场一次性证据**，事后无法再读、也不能在不重新出声的前提下复核；引用时必须连采样条件（0.8.15 + mic 11/ref 14 + 20% 音量 + 8 次采样 ref_active 全 true + 同曲目约束）一起写。
 
 **本批留档（会重复踩的）**：
 - `POST /api/v2/house/audio/restart`（fleet 级）会按 `config.devices.<id>.volume` **重置运行时音量**：实测 living 77 → **204**（80%）。
