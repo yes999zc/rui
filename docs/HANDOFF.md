@@ -2019,3 +2019,20 @@ gh release view v0.7.1 --json tagName,url                                      #
   2. 「放首周杰伦那个」走 `search/online`，带口语填充 → 命中偏门条目，再被 `min_duration_s=45` 过滤 → `not_found`。
 - 修法：① 选曲/随机前过滤掉非 `private:` 来源；② 搜索前剥离口语填充（那个/这首歌/一下/点儿）；
   ③ 未命中话术改为「没搜到合适的版本」。
+
+### 2026-11-01 21:2x 客厅 LX06：设备访问恢复 + 设备日志体检
+
+- **设备 ssh 恢复**：dropbear 只给 `ssh-rsa` 主机密钥、root 需密码。密码在
+  `~/.hermes/.secrets/lan_media.json` → `voice.device_ssh`（**不落任何仓库/文档**）。
+  已建本地 wrapper `~/.esp32-voice/lx06.sh`（0700，运行时读 secret），用法：
+  `~/.esp32-voice/lx06.sh 'tail -20 /tmp/client.log'`。
+- **设备体检**（`/tmp/client.log`，15768 行）：`/tmp` 占用 **3%**（不再是满盘）；错误仅 2 条
+  `[aplay] write error: Broken pipe`；其余 **15293 行（97%）是 rui 每 ~16 s 一次的
+  `amixer -c 0 cget numid=177` 音量轮询**（`process.py:4163` `ticks % 8 == 1`）。
+  这是设计如此（厂家会自己改音量，读回是唯一的真相），不是跑飞的 bug，但每 16 s 在弱设备上
+  fork 一次 shell，属于可优化的热点（记录，不在本批改）。
+- **插件没有仓库**：`/vol1/rui/plugins/rui_private_music`（`source.py`/`navidrome.py`/`star.py`/`errors.py`）
+  是直接部署在 NAS 上、**没有 git**，版本靠 `*.bak-时间戳` 目录。任何修复要么就地改（先备份），
+  要么先把它纳入仓库再改——否则改动不可追溯。
+- 音乐修复卡（待开）：① 选曲/随机前过滤非 `private:` 来源；② 搜索前剥离口语填充；
+  ③ 未命中话术改「没搜到合适的版本」。证据见上一节。
