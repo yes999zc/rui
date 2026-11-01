@@ -18,6 +18,50 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.15] - 2026-11-02
+
+**Theme: AEC grows the vendor's second stage, and the wake window protects the command.**
+The linear MDF was only half of the chain the vendor runs; residual echo suppression is now
+attached behind it, and it is paused for the wake window so a command spoken over music is
+not suppressed along with the playback.
+
+### Added
+
+1. **Residual echo suppression (`audio.aec.residual`, default `true`).** `EchoCanceller` now
+   attaches its `SpeexEchoState` to `speex_preprocess_state_init` and calls
+   `speex_preprocess_run` on every frame right after `speex_echo_cancellation` — the same
+   second stage the vendor's `AECProcess` runs, which removes the echo tail the linear filter
+   cannot model. Denoise stays at its speexdsp default because it gates the whole spectral
+   gain (including echo suppression): switching it off turns the stage into a pass-through,
+   and speexdsp has no echo-only mode. The price is its default noise suppression, up to
+   -15 dB on noise, next to up to -40 dB on echo while only the far end talks; once near-end
+   speech is detected the echo floor is clamped to -15 dB (`echo_suppress_active`), and the
+   wake hold below closes the whole stage for 1.5 s. AGC and VAD are off.
+   `residual: false` restores the 0.8.14 linear-only behaviour. On the in-tree synthetic
+   bench the stage is worth ~+4.9 dB ERLE; the device's own number is the one that counts
+   (`GET /api/v1/audio` → `metrics.aec_erle_db`).
+2. **Wake hold (`audio.aec.wake_hold_ms`, default 1500, range 0–5000).** An admitted wake
+   candidate calls `AecChain.hold_for()`, which pauses only the residual stage for the wake
+   window; linear cancellation keeps running. `0` disables the hold. Tested with a near-end
+   burst over playback: inside the hold it matches the linear output (0.0 dB), without it the
+   running suppressor costs ~8.6 dB.
+
+### Fixed
+
+1. **The preprocessor's echo state was never attached properly.** `SPEEX_PREPROCESS_SET_ECHO_STATE`
+   was written as 14 (that id is `SET_PROB_START`; the correct one is 24), and the state
+   pointer was passed by reference, which makes speexdsp store a stack address in
+   `st->echo_state`. Both are corrected — id 24, and the echo handle itself is passed — and a
+   regression test reads the pointer back with `SPEEX_PREPROCESS_GET_ECHO_STATE` and asserts
+   it equals the canceller's handle.
+2. **The old `+preprocess` bench numbers are void.** The offline bench
+   (`01_Code/experiments/erle-bench/erle_bench.py`) also wrote the echo-state id as 14
+   (`SET_PROB_START`), so its echo state was never attached either: those figures measured
+   linear cancellation plus plain spectral denoise, not residual echo suppression. The bench
+   script needs its own fix (not this change). The number to trust is the device's own,
+   `GET /api/v1/audio` → `metrics.aec_erle_db` (0.8.14 baseline at 20% volume, steady
+   playback: 19.3–23.0 dB).
+
 ## [0.8.14] - 2026-11-01
 
 **Theme: 把「故意改的」和「还没做的」写清楚。** 纯文档与版本号发版，**零代码改动**：客厅 LX06 的

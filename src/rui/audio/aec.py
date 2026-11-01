@@ -20,6 +20,7 @@ The reference channel is the speaker's own loopback (ch6/ch7), so alignment is a
 from __future__ import annotations
 
 import ctypes
+import time
 
 import numpy as np
 
@@ -28,6 +29,23 @@ from .frontend import ChannelMixer
 
 SPEEX_ECHO_SET_SAMPLING_RATE = 24
 SPEEX_FRAME = 128  # speex only speaks in 128-sample frames
+# Attaching the echo state to the preprocessor is what turns the linear MDF into the
+# vendor's chain: its `AECProcess` (libxaudio_engine.so @0x29714) calls
+# `speex_echo_cancellation` and then `speex_preprocess_run` on the same block, and the
+# second call is where residual echo suppression lives.
+#
+# The old "linear 18.0-20.0 dB vs +preprocess 21.8-23.7 dB" bench numbers are void: that
+# script (01_Code/experiments/erle-bench/erle_bench.py) wrote the echo-state slot as 14
+# (= SET_PROB_START), so the echo state was never attached and it measured linear + plain
+# spectral denoise, not residual echo suppression. The script needs its own fix (not this
+# card). On the in-tree synthetic bench (tests/test_aec_residual.py) the second stage is
+# worth ~+5 dB; the only real number is the device's, from `GET /api/v1/audio`
+# `metrics.aec_erle_db` (0.8.14 baseline, 20% volume, steady playback: 19.3-23.0 dB).
+# Values from speex_preprocess.h: the echo-state slot is 24 (14 is SET_PROB_START).
+SPEEX_PREPROCESS_SET_ECHO_STATE = 24
+SPEEX_PREPROCESS_GET_ECHO_STATE = 25
+SPEEX_PREPROCESS_SET_AGC = 2
+SPEEX_PREPROCESS_SET_VAD = 4
 
 _LIB_CANDIDATES = (
     env_get("RUI_SPEEXDSP", ""),
@@ -68,6 +86,18 @@ def load_speexdsp() -> ctypes.CDLL:
         lib.speex_echo_state_reset.argtypes = [ctypes.c_void_p]
         lib.speex_echo_state_destroy.restype = None
         lib.speex_echo_state_destroy.argtypes = [ctypes.c_void_p]
+        # Residual echo suppression is optional on purpose: a libspeexdsp build without
+        # the preprocessor must still cancel linearly rather than go silent.
+        lib.has_preprocess = hasattr(lib, "speex_preprocess_state_init")
+        if lib.has_preprocess:
+            lib.speex_preprocess_state_init.restype = ctypes.c_void_p
+            lib.speex_preprocess_state_init.argtypes = [ctypes.c_int, ctypes.c_int]
+            lib.speex_preprocess_run.restype = ctypes.c_int
+            lib.speex_preprocess_run.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            lib.speex_preprocess_ctl.restype = ctypes.c_int
+            lib.speex_preprocess_ctl.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+            lib.speex_preprocess_state_destroy.restype = None
+            lib.speex_preprocess_state_destroy.argtypes = [ctypes.c_void_p]
         return lib
     raise AecUnavailable(f"libspeexdsp not found ({last})")
 
@@ -126,7 +156,7 @@ class HighPass:
 class EchoCanceller:
     """One MDF filter (speexdsp), fed arbitrary block sizes."""
 
-    def __init__(self, taps: int = 4096, rate: int = 16000) -> None:
+    def __init__(self, taps: int = 4096, rate: int = 16000, residual: bool = True) -> None:
         self.lib = load_speexdsp()
         self.taps = taps
         self.rate = rate
@@ -135,6 +165,39 @@ class EchoCanceller:
             raise AecUnavailable("speex_echo_state_init failed")
         sr = ctypes.c_int(rate)
         self.lib.speex_echo_ctl(self.handle, SPEEX_ECHO_SET_SAMPLING_RATE, ctypes.byref(sr))
+        # Residual echo suppression: the same second stage the vendor runs. Without it the
+        # canceller leaves the late/echo-tail energy the linear filter cannot model, which
+        # is what the wake path then transcribes as noise. `hold` switches it off for the
+        # frames right after a wake: the preprocessor's suppressor is tuned to remove
+        # anything that correlates with playback, and the first command word does too.
+        self.pp = None
+        if residual and getattr(self.lib, "has_preprocess", False):
+            self.pp = self.lib.speex_preprocess_state_init(SPEEX_FRAME, rate)
+            if self.pp:
+                # preprocess.c does `case SET_ECHO_STATE: st->echo_state = ptr`, so the
+                # pointer handed to speex_preprocess_ctl *is* the echo state: pass the
+                # handle itself. byref() would store the address of a stack temporary and
+                # the first `run` would dereference a dangling pointer.
+                self.lib.speex_preprocess_ctl(
+                    self.pp, SPEEX_PREPROCESS_SET_ECHO_STATE, ctypes.c_void_p(self.handle)
+                )
+                # Denoise stays at its default (on) on purpose. It is *not* just noise
+                # suppression: preprocess.c gates the whole spectral gain on it
+                # (`if (!st->denoise_enabled) gain2[i] = Q15_ONE`) and the echo suppressor
+                # is applied through that same gain2, so SET_DENOISE=0 silently turns the
+                # residual stage into a pass-through. speexdsp has no echo-only mode -
+                # setting noise_suppress to 0 measures ~0.7 dB of suppression - so the
+                # price of this stage is its default noise suppression: up to -15 dB on
+                # noise, alongside up to -40 dB on echo that is clamped to -15 dB
+                # (echo_suppress_active) once near-end speech is detected. AGC and VAD are
+                # off; they are not part of the cancellation, and AGC would move levels.
+                for ctl, value in (
+                    (SPEEX_PREPROCESS_SET_AGC, 0),
+                    (SPEEX_PREPROCESS_SET_VAD, 0),
+                ):
+                    flag = ctypes.c_int(value)
+                    self.lib.speex_preprocess_ctl(self.pp, ctl, ctypes.byref(flag))
+        self.hold = False
         self._mic = np.zeros(0, dtype=np.float32)
         self._ref = np.zeros(0, dtype=np.float32)
         self._out = np.zeros(0, dtype=np.float32)
@@ -147,6 +210,8 @@ class EchoCanceller:
             ref16.ctypes.data_as(ctypes.c_void_p),
             out.ctypes.data_as(ctypes.c_void_p),
         )
+        if self.pp is not None and not self.hold:
+            self.lib.speex_preprocess_run(self.pp, out.ctypes.data_as(ctypes.c_void_p))
         return out.astype(np.float32) / 32768.0
 
     def process(self, mic: np.ndarray, ref: np.ndarray) -> np.ndarray:
@@ -197,6 +262,9 @@ class EchoCanceller:
         if self.handle:
             self.lib.speex_echo_state_destroy(self.handle)
             self.handle = None
+        if self.pp:
+            self.lib.speex_preprocess_state_destroy(self.pp)
+            self.pp = None
 
 
 def _rms(x: np.ndarray) -> float:
@@ -221,6 +289,8 @@ class AecChain:
         hp_hz: float = 90.0,
         hysteresis_db: float = 6.0,
         cancel: str = "mix",
+        residual: bool = True,
+        wake_hold_ms: int = 1500,
     ) -> None:
         if channels < 1:
             raise ValueError("channels must be >= 1")
@@ -234,11 +304,16 @@ class AecChain:
         # against a noisier single microphone. Kept as an option because the per-channel
         # residuals are what the diagnostic ERLE per channel needs.
         self.cancel = cancel
+        self.residual = residual
+        self.wake_hold_ms = wake_hold_ms
         self.cancellers = (
-            [EchoCanceller(taps=taps, rate=rate) for _ in range(channels)]
+            [EchoCanceller(taps=taps, rate=rate, residual=residual) for _ in range(channels)]
             if cancel == "per_channel" else []
         )
-        self.mix_canceller = EchoCanceller(taps=taps, rate=rate) if cancel == "mix" else None
+        self.mix_canceller = (
+            EchoCanceller(taps=taps, rate=rate, residual=residual) if cancel == "mix" else None
+        )
+        self._hold_until = 0.0
         self.mic_hp = [HighPass(hp_hz, rate) for _ in range(channels)]
         self.ref_hp = HighPass(hp_hz, rate)
         self.mixer = ChannelMixer(channels)
@@ -252,11 +327,34 @@ class AecChain:
     # reference is "active" above about -80 dBFS; below it ERLE is meaningless
     REF_ACTIVE_RMS = 1e-4
 
+    def hold_for(self, seconds: float | None = None) -> None:
+        """Pause residual suppression for the wake window.
+
+        The preprocessor removes whatever correlates with the playback reference, and the
+        first words spoken over music correlate too - so it eats precisely the sentence
+        the wake just announced. The vendor solves this from the AEC side with
+        `xaudio_wakeup_get_wakeup_flag_4_aec`; we drop only the suppressor for the wake
+        window, so linear cancellation keeps running and the near-end speech survives.
+        """
+        if self.wake_hold_ms <= 0 and seconds is None:
+            return
+        span = self.wake_hold_ms / 1000.0 if seconds is None else max(0.0, seconds)
+        self._hold_until = max(self._hold_until, time.monotonic() + span)
+
+    def _apply_hold(self) -> None:
+        held = time.monotonic() < self._hold_until
+        if self.mix_canceller is not None:
+            self.mix_canceller.hold = held
+        for canceller in self.cancellers:
+            canceller.hold = held
+
     def process(self, mic: np.ndarray, ref: np.ndarray) -> np.ndarray:
         if mic.ndim != 2 or mic.shape[1] != self.channels:
             raise ValueError(f"expected (n, {self.channels}) microphone block, got {mic.shape}")
         if mic.shape[0] == 0:
             return np.zeros(0, dtype=np.float32)
+
+        self._apply_hold()
 
         ref_hp = self.ref_hp.process(ref)
         self.ref_active = _rms(ref) > self.REF_ACTIVE_RMS
@@ -324,6 +422,7 @@ class AecChain:
         self.mixer.reset()
         self._power = np.zeros(self.channels)
         self._mic_power = self._res_power = 0.0
+        self._hold_until = 0.0
 
     def close(self) -> None:
         for canceller in self.cancellers:
@@ -334,5 +433,7 @@ class AecChain:
     # ------------------------------------------------------------------ factory
     @classmethod
     def from_config(cls, channels: int, rate: int, taps: int,
-                    cancel: str = "mix") -> AecChain:
-        return cls(channels=channels, rate=rate, taps=taps, cancel=cancel)
+                    cancel: str = "mix", residual: bool = True,
+                    wake_hold_ms: int = 1500) -> AecChain:
+        return cls(channels=channels, rate=rate, taps=taps, cancel=cancel,
+                   residual=residual, wake_hold_ms=wake_hold_ms)

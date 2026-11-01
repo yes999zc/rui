@@ -455,6 +455,19 @@ class AecConfig(BaseModel):
     # RUI must not run a second one. "none" is ASR-only (no barge), "both" is an
     # experiment. `effective_audio()` below resolves a per-device override.
     who: AecWho = "controller"
+    # Residual echo suppression, the second half of the vendor's chain: after the linear
+    # MDF, speexdsp's preprocessor (with the echo state attached) removes the tail the
+    # filter cannot model. The old offline bench numbers for it are void
+    # (01_Code/experiments/erle-bench/erle_bench.py wrote the echo-state slot as 14 =
+    # SET_PROB_START, so no echo state was ever attached and it measured linear + plain
+    # spectral denoise). On the in-tree synthetic bench this stage is worth ~+4.9 dB; the
+    # only number that counts is the device's, from `GET /api/v1/audio` ->
+    # `metrics.aec_erle_db`. Off = the linear-only behaviour of 0.8.13/0.8.14.
+    residual: bool = True
+    # How long after an admitted wake the preprocessor stays off. The suppressor removes
+    # whatever correlates with playback - including the command word spoken over music -
+    # so the first ~1.5 s of near-end speech is protected instead. 0 disables the hold.
+    wake_hold_ms: int = Field(default=1500, ge=0, le=5000)
 
 
 class AckConfig(BaseModel):

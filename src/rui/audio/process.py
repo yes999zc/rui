@@ -948,6 +948,8 @@ class AudioPlane:
                 rate=self.effective.voice.rate,
                 taps=aec.filter_len,
                 cancel=aec.cancel,
+                residual=aec.residual,
+                wake_hold_ms=aec.wake_hold_ms,
             )
         except AecUnavailable as exc:
             self.aec_error = str(exc)
@@ -1368,6 +1370,12 @@ class AudioPlane:
             if admitted:
                 self.wake_admitted += 1
                 self._active_wake_id = wake_id
+                # Protect the sentence the wake just announced: the residual suppressor
+                # eats whatever correlates with playback, and a command spoken over music
+                # correlates. The vendor does the same from its wake flag
+                # (`xaudio_wakeup_set_wakeup_flag_4_aec`).
+                if self.aec is not None:
+                    self.aec.hold_for()
                 log.info("wake candidate %s admitted after %.0f ms",
                          wake_id, self.wake_admit_latency_ms)
             else:

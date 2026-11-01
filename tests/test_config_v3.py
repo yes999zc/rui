@@ -485,7 +485,14 @@ _VOICE_GOLDEN = {
     "wake_preroll_ms": 500,
     "wake_skip_ms": 300,
 }
-_AEC_GOLDEN = {"cancel": "mix", "enabled": True, "filter_len": 4096, "who": "controller"}
+_AEC_GOLDEN = {
+    "cancel": "mix",
+    "enabled": True,
+    "filter_len": 4096,
+    "residual": True,
+    "wake_hold_ms": 1500,
+    "who": "controller",
+}
 _PLAYBACK_GOLDEN = {
     "channels": 1,
     "credit_window": 8,
