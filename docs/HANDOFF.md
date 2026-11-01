@@ -2242,3 +2242,44 @@ $ uptime                              → up 4 days, 1:02
   —— 只是个标注，功能无误。想彻底干净就把该行写成空值，需要再重启一次，没做。
 - **待复测**（9哥）：放歌中近讲「你好小宝，现在几点」，看 ① `overdrive_count` 是否还涨
   ② 转写是否还只剩句尾。
+
+### 2026-11-01 22:2x 追问两件事：mic 增益的历史，和 AEC 到底拿到没有
+
+**mic_shift 的历史（9哥 说"感觉一直在改"，对）**
+
+| 阶段 | 值 | 出处 |
+|---|---|---|
+| 老项目（xiaoai-voice-entry）生产值 | **12** | `docs/archive/HANDOFF-history-to-2026-10-24.md:57` |
+| rui 安装器写出的默认 | **12** | `a41b94a` `feat(install): setup writes a runnable config` |
+| 0.8.10 起的生产基线 | **10** | `docs/releases/v0.8.10.md:46,111,120`（"按批次基线，本批不得改动"） |
+| 今天 22:08 | **12** | `d6a98b2`，我从削波角度改的 |
+
+教训：我拿"削波"当理由是不够的 —— 我自己抓的那段 raw 最高只到 −44.6 dBFS，
+**根本没到 shift=10 的饱和阈（−36 dBFS）**，唯一硬证据是 `overdrive` 报过 `peak=1.000`。
+而且 `docs/plan/speaker-tuning.md:154` 当年明确建议"给 LX06 提高上行增益换灵敏度"，方向和我相反。
+**但下面这条测量说明 12 仍然是对的，只是理由换成了 AEC，不是削波。**
+
+**AEC 到底拿到没有（实测，不是看配置）**
+
+```
+容器内: /usr/lib/x86_64-linux-gnu/libspeexdsp.so.1.5.2   ✅
+配置:   aec{enabled: true, who: "controller"}            ✅  启动后 `aec off` 日志 0 条 ✅
+代码:   aec.py:_frame 只调 speex_echo_cancellation        ❌  没有 speex_preprocess_run
+```
+
+同段真机录音（放歌中 4 s，ch6 = 参考）离线跑生产同款几何，只改 `mic_shift`：
+
+| mic_shift | 阵列 mix ERLE | 进 AEC 的 mic 电平 |
+|---|---|---|
+| 10（原生产值） | **3.3 dB** | −22.4 dBFS |
+| 12（现值） | **13.1 dB** | −34.5 dBFS |
+| 14 | 11.1 dB | −46.5 dBFS |
+
+⇒ 生产原来那套是"名义有 AEC，实际只消 3 dB"；改成 12 后到约 13 dB（离线复算）。
+⇒ 与文档里"旧部署实测 24–30 dB"的差距，一半是**没接残差回声抑制**，一半是**电平没匹配**。
+
+**待办（另开批次，都在这两个文件里）**
+1. `aec.py` 串上 `speex_preprocess_run`（`SPEEX_PREPROCESS_SET_ECHO_STATE`），
+   以 `aec_erle_db` 前后对比为准；当前生产只有线性段。
+2. mic/ref 电平匹配做成不变量（现在 `mic_shift` 是个到处被改的数字，`ref_shift` 固定 16）。
+3. 生产验证用：说一句 → `GET /api/v1/traces` 读 `aec_erle_db`（现在 `turns: []`，还没有对照）。
