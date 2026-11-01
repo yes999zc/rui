@@ -2549,3 +2549,15 @@ curl -s "<rui>/api/v2/devices/living/audio" | jq '.effective.capture'
      （`erle-bench/` 里目前**没有采样文件**），且属音频链路，应当独立一批 + verifier。
   2. ERLE 电平不变量启动自检（±6 dB 目前只是提议）。
   3. 0.8.10–0.8.13 没有 `docs/releases/*.md`；0.8.14 的说明落在 `CHANGELOG.md`，如需补齐另行处理。
+
+#### 真机出声测试的收尾纪律（2026-11-01 23:5x，9哥 当场纠正）
+
+- **任何会让设备出声的测试（debug/say、debug/play、点歌）做完必须立刻停播**，不能等下一轮：
+  ```
+  POST /api/v1/debug/say {"text": "停止", "device": "<room>"}   # 走 music_stop，清队列
+  GET  /api/v1/music | jq .state                                  # 必须是 "idle"
+  ```
+- **不要用 `POST /api/v1/debug/play {"stop": true}` 当作停播**：实测它只停音频面，
+  `/api/v1/music` 仍是 `state: playing`，队列到边界会自己续播（今天就踩了这个坑）。
+- 同理：`playback requested` / `resolve …` 这类日志行出现即代表"正在放"，测试报告里若出现
+  这些行，必须在同一条命令里带上停播与 `state=idle` 校验。
