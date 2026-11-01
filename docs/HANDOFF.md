@@ -2178,3 +2178,17 @@ cd /vol1/rui && docker compose -f docker-compose.yml -f rui-dot2-override.yml up
 3. 冷启动超时：`by_genre` 3 个 genre 串行 + 首曲转码，首次易撞 20 s；考虑预热或缩到 1–2 个 genre。
 4. `docs/music-sources.md` 反向引用 C-001 一行；插件仓补 `ruff.toml`（`src=["."]`）固定 I001 口径。
 5. `docs/phrasebook-editor.md:265` 仍写 `music.not_found {want}`（该 key 已无槽位）。
+
+### 2026-11-01 22:0x 状态交接（压缩前）
+
+- **生产**：0.8.13，镜像 `sha256:fbaea513c41a47797a98b516d11e3648166b97223cded8657b6cefa318215998`
+  （= `dfc8c7e` 音乐索引修复），5 台设备在线、`device_errors 0`。
+- **原厂引擎已恢复**：`/etc/init.d/pns start`（`mipns-xiaomi` pid 1483）。恢复后 `overdrive` 归零、
+  `barge` 归零。**结论：它是 AEC/AGC 引擎，不要停。**（撤回 21:2x 那条"保持停用"的决策）
+- **cue 实测**：`/var/lib/rui/ack.wav` = 16000 Hz / 8800 采样 / 550 ms（有效语音 530 ms，峰值 0.750）。
+  与门长 1200 ms 相比**多挡约 670 ms**，可解释「只收到句子尾巴」。
+- **配置现状（逐项核过，完好）**：`assistant.name=小宝`、persona 占位符在、`system_prompt` 603 字、
+  `session.end_words` 23 条含「下线」、dot2 四台 `ack_echo_ignore_ms=1200`、living `mic_shift=10`。
+  误加过的 `audio.capture_segments` 已移除（rui 没有这个功能）。
+- **待办**：① 音乐批（3 卡）验收收口；② 「门长按 cue 实际长度 +150 ms」的卡待发；
+  ③ 生产单操作者规则待写进 operating.md。
