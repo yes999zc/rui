@@ -2301,3 +2301,16 @@ $ uptime                              → up 4 days, 1:02
 - 回滚：备份 cp 回 + 重启；`mic_shift` 回滚同理（`…140754…` 那个备份）。
 - 待办卡不变：① `aec.py` 接 `speex_preprocess_run`（bench 目标 ≥21 dB）；
   ② mic/ref 电平差做成启动自检（±6 dB 外 WARNING）。真机 `aec_erle_db` 对照仍缺一轮语音。
+
+### 2026-11-01 22:5x 第三次修正：mic_shift 11 / ref_shift 15（补读 10-29 前科后）
+
+- 漏掉了 advisor-state §26–§31：`mic_shift 12→10` 是 10-29 为修「AEC 后电平低 → VAD 失聪」**刻意**做的
+  （8 会削波，10 是验证值），§31 定论 `16k + mic 10 + keywords :4.00 #0.07`。今晚改回 12 有把老问题改回去的风险。
+- **机制修正**：ERLE 扫参里 `ref_shift` 才是大头（15 vs 16 ≈ +5 dB，各 mic 档都受益）；
+  mic 档 11–14 仅差 ~2 dB（rs15 档：11→18.5、12→18.0、13→17.2、14→16.3 dB）。
+  22:2x 那条"mic≈ref 电平匹配"的解释以本表为准，不作数。
+- **现生产**：`mic_shift 11 / ref_shift 15`（PATCH `/api/v2/devices/living/audio` +
+  `POST /api/v2/house/audio/restart`，11.8 s，不整容器重启）。取 11 = VAD 响度（比 12 +6 dB）、
+  削波余量（比 10 +6 dB）、ERLE 最高档三者折中。
+- 回滚锚：`config.yaml.bak-20261101-2255-bridge-micshift12-to11`（→12）、
+  `…140754…`（→10）、`…2229…`（ref →16）。备份均可 `cp -a` 回 + fleet restart。
