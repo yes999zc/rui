@@ -2519,3 +2519,33 @@ curl -s "<rui>/api/v2/devices/living/audio" | jq '.effective.capture'
 3. `aec.py` 接 `speex_preprocess_run`（**卡 2**，未做）：需先抓 raw8ch 采样做 bench 基线，
    且属音频链路，需独立验证。
 4. ERLE 电平不变量启动自检（**提议，未实测**，见上）。
+
+#### 0.8.14 已发版并部署（2026-11-01 23:4x，本会话）
+
+- **镜像**：`ghcr.io/yes999zc/rui@sha256:c5dcfdc03b38b91e7aa982623099d4b9d2aa2ce65814392f6ebf856e13c5b967`
+  （tag `v0.8.14`；CI 四条全绿：`ci` / `secret-scan` / `security` / `docker-publish`）。
+  镜像内 `rui.__version__ == 0.8.14`（实测）。**没有 .py 逻辑改动**，只是文档 + 版本号。
+- **回滚锚**：上一个 digest `sha256:fbaea513c41a47797a98b516d11e3648166b97223cded8657b6cefa318215998`（0.8.13）；
+  override 备份 `/vol1/rui/rui-dot2-override.yml.bak-20261101-234833`。
+- **music-svc 同批升到 0.1.6**（熔断代码在 `music-acq/`，会被打进服务镜像；不升等于熔断空转）：
+  镜像 `rui-personal-services-music-svc:0.1.6`，compose 备份
+  `/vol1/selfuse/docker-compose.yml.bak-<时间戳>`，插件备份
+  `/vol1/rui/plugins/rui_private_music.bak-20261101-2348xx`，插件 source.py 与 NAS 逐字节一致。
+- **部署后验收（全部实测）**：
+  ```
+  /health              ok 0.8.14 devices 5 device_errors 0 planes 5
+  living effective.capture  mic_shift 11  ref_shift 15     ← 没有被 manifest 12/16 覆盖
+  config.yaml:27-29    wake_words = 你好小宝, 你好小宝儿
+  /vol1/rui/config/keywords.txt  两行，均 :4.00 #0.07 @中文
+  插件横幅             … min=45s max=600s limit<=30 prefer_library=yes src_br=<=128
+  冒烟                 放点轻音乐 → http 200, 2.98 s, playback requested: …/dfe0b84eba2c5eb6.wav
+  ```
+- **同批进仓的两件事**（插件仓 `1c7c6d5`）：① gdstudio 熔断（连续 2 次失败冷却 300 s，
+  `MUSIC_GDSTUDIO_*` 可调）—— 因为 gdstudio 从容器里不可达，而 `br_plan` 已有 3 档、
+  `_curl_json` 单次 35 s，"慢死"时一次 resolve 最坏 +45 s；② 孤儿 `*.audio` 清理
+  （`_evict` 顺带删 mtime>1 h 的临时文件，打 `cleaned_orphan_audio=N`）。
+- **仍未做（本批显式排除，别当遗漏）**：
+  1. `aec.py` 接 `speex_preprocess_run`：需要先在真机抓一段 `raw8ch.i4` 做 bench 基线
+     （`erle-bench/` 里目前**没有采样文件**），且属音频链路，应当独立一批 + verifier。
+  2. ERLE 电平不变量启动自检（±6 dB 目前只是提议）。
+  3. 0.8.10–0.8.13 没有 `docs/releases/*.md`；0.8.14 的说明落在 `CHANGELOG.md`，如需补齐另行处理。
