@@ -2000,3 +2000,22 @@ gh release view v0.7.1 --json tagName,url                                      #
   ② 在线搜索前剥离口语填充（那个/这首歌/一下）；③ 未命中时如实说"没搜到合适的版本"而不是"曲库里没有"。
 - 设备侧 ssh 已不可用（`no matching host key type ... offer ssh-rsa`，且 root 需密码）→ 目前只能看
   rui 侧 `plane:` 镜像日志；要看设备 `/tmp/client.log` 需先解决凭据/算法（记一条环境债）。
+
+### 2026-11-01 21:1x 放歌问题定位修正（自有音乐服务是健康的）
+
+- **自有服务**：`rui-personal-services-music-svc:0.1.4`，host 网络，**端口 18082**，
+  `/v1/search`、`/v1/resolve`、`/v1/stream/{id}`；`/health` ok，resolver=`gdstudio+meting`。
+  鉴权头 `X-Internal-Token`（值在容器 env `INTERNAL_TOKEN`）。
+  rui 侧接线：`rui-dot2-override.yml:10 RUI_MUSIC_SOURCES: private=rui_private_music:make`，
+  插件的 online 半边走它（`plugins/rui_private_music/source.py:11`，返回 id 前缀 `private:`）。
+- **实测（curl 18082）**：
+  - `q=周杰伦` → 想你就写信(Live)/屋顶/布拉格广场，时长 238/319/294 s —— **服务正常**。
+  - `q=周杰伦那个` → 首条「你还是那个周杰伦吗 / 赛博蝉鸣声乐团」257 s（**口语填充把查询弄坏**）。
+  - `q=放点轻音乐` → 三条 139/150/77 s，均 >45 s 下限。
+- **结论（两条失败原因都不是自有服务挂了）**：
+  1. 「放点轻音乐」走的是 `random/library`，选出来的是 `subsonic:<hash>` 的曲子，
+     而插件自己的校验只认 `private:` 前缀 → 8 条全 `skip (not a private track)` → `music.unresolved`。
+     **插件内部两个库源（Navidrome/subsonic vs 自有服务 private）混用**，是插件 bug。
+  2. 「放首周杰伦那个」走 `search/online`，带口语填充 → 命中偏门条目，再被 `min_duration_s=45` 过滤 → `not_found`。
+- 修法：① 选曲/随机前过滤掉非 `private:` 来源；② 搜索前剥离口语填充（那个/这首歌/一下/点儿）；
+  ③ 未命中话术改为「没搜到合适的版本」。
