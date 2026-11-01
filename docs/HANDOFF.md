@@ -2036,3 +2036,22 @@ gh release view v0.7.1 --json tagName,url                                      #
   要么先把它纳入仓库再改——否则改动不可追溯。
 - 音乐修复卡（待开）：① 选曲/随机前过滤非 `private:` 来源；② 搜索前剥离口语填充；
   ③ 未命中话术改「没搜到合适的版本」。证据见上一节。
+
+### 2026-11-01 21:2x 「久置后唤醒困难，要先喊小爱同学」——找到机制证据
+
+- **不是错觉**：设备上**两个语音引擎同时开着同一个麦克风**：
+  ```
+  /dev/snd/pcmC0D3c（录音）: 1278 mipns-xiaomi  +  2282 arecord（open-xiaoai）
+  /dev/snd/pcmC0D0p（播放）: 1278 mipns-xiaomi  +  423 aplay
+  ```
+  `mipns-xiaomi` 是**供应商自己的语音引擎（小爱同学唤醒）**，一直持有捕获设备；
+  open-xiaoai 的 `arecord` 也在同一 PCM 上。说「小爱同学」之所以"激活"，正是把这个引擎叫醒。
+- 旁证：设备负载 **load 1.71–1.94**（4 核 24–56%），供应商栈仍在跑
+  （`miio_client/miio_agent/miio_helper/mibt_mesh/mico-helper/miio_mpkg/mico_ai_crontab`），
+  供应商 cron 每分钟 `network_probe.sh`、每 10 分钟 `check_mediaplayer_status`、3:00 `ota silent`。
+  `[aplay] slow write` 共 **274 次**（81–111 ms/3200 B）说明播放线程常被抢占。
+- 已排除：Wi-Fi 省电（`Power save: off`）、链路抖动（重连仅 8 次）、`/tmp` 满盘（3%）。
+- **下一步（需要决策）**：要不要停掉供应商语音引擎（`mipns-xiaomi` / mico 服务），把麦克风独占给
+  open-xiaoai。代价：`小爱同学` 唤醒与原厂技能全部失效，设备变成纯 rui 终端。收益：少一个抢占者、
+  唤醒一致性更好。open-xiaoai 文档只讲刷机与 SSH，没有现成的"关原厂语音"步骤，需要先在设备上确认
+  服务名与自启方式（`/etc/init.d`、`/data/init.sh`），并在停止后观察 24h 唤醒命中率。
