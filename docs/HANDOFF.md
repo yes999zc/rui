@@ -2072,3 +2072,18 @@ gh release view v0.7.1 --json tagName,url                                      #
   以及「对一下吧。」命中别名（→退下吧）**提前关会话**。怀疑主因是 `ack_echo_ignore_ms=1200`
   把命令开头吃掉（cue 实测约 600 ms，门却是 1200 ms）。修法：门长按 cue 实际播放时长 +150 ms 自适应，
   并给"门内被截断的片段"加 stop-intent 守卫。
+
+### 2026-11-01 21:3x 修正：音乐插件早已纳管；subsonic 前缀 bug 在 house-ear
+
+- 开发会话的调查员实测推翻了音乐卡的两条前提（我写卡时判断错了，先记下来免得再走弯路）：
+  1. **插件早就在 git 里**：`rui-personal-services/rui-private-source/rui_private_music/`，
+     5 个 `.py` 已 tracked，sha256 与 NAS 上逐个相同，README 107 行已写部署/前缀/Token。
+     → 「纳管」卡收缩为补文档 + 复核一致。
+  2. **`subsonic:` 前缀不是插件造的**：来自 house-ear 主仓
+     `src/rui/music/library_index.py:551` —— `to_tracks` **无条件**加 `subsonic:` 前缀；
+     换 source 后旧索引既不失效、也重建不了（插件没实现 `songs_page`/`albums_page`，
+     `library_index.py:398-401` 抛错后被 `return self.available()` 吞掉，保留旧缓存）。
+     插件的 `random()`/`search()` 只产 `private:`/`private-lib:`。
+     → 「选曲前过滤非 private:」在插件侧做不到，真正的修点在 house-ear。
+- 因此范围需要 3 张卡（插件文档 + 插件侧 resolve/清洗/话术 + house-ear 索引前缀修复），
+  比"每批 ≤2 卡"多一张；等 9哥 在会话里选（会话已用 ask_user_question 提问）。
