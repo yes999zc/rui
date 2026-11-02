@@ -3381,3 +3381,39 @@ if self._extractor is None or (pcm.size == 0 if isinstance(pcm, np.ndarray) else
 - 声纹门控能区分家人与媒体（爸爸 0.62–0.77、孩子 0.66–0.69，best 从不串台）；
 - 但**放歌双讲**（「下一首」→「下一周」）仍是 DTD/AEC3 级问题，0.8.16 只做了旁路，未根治；
 - 外部媒体（电视/视频）没有参考通道，只能靠声纹拦，音频本身消不掉。
+
+### 2026-11-02 15:12 声纹门控已关闭（9哥 决定，临时）+ 两台设备离线
+
+**为什么关**：15:06–15:10 儿童房 `dot2-d` 连续 7 次「你好小宝」，**6 次被声纹拒**
+（分数 0.57 / 0.50 / 0.35 / 0.00 / 0.04 / 0.02）。根因不是门限值，而是
+`dot2-d 没有自己的档案`：`SpeakerGate._match_device()` 在「本设备无档案」时走
+`matching all devices`，拿客厅档案跨设备比；1 米近场 + 设备侧 AEC 的域差把分数打到近 0
+（与手机录音失败同一个根因）。⇒ 儿童房实际上叫不醒。
+
+**为什么不能只关这一台**：`DeviceVoiceOverride` 里没有 `speaker_gate` 字段，
+`/api/v1/config/catalog` 也没有暴露 `audio.voice.speaker_gate.*`（0.8.16 新字段未进 catalog，
+`PUT /api/v1/config/values` 报 `unknown path`）。⇒ 只能全局关，且只能改 config.yaml + 重启。
+
+**做法（可回滚）**：
+- 备份 `/vol1/rui/config/config.yaml.bak-20251102-151226-gate-off`；
+- 容器内 ruamel round-trip 把 `audio.voice.speaker_gate.enabled` 改 `false`（`diff` 只有这一行）；
+- `docker restart rui` → `health ok / 0.8.16 / 5 台 / 0 错误`；
+- 生效复核：`living / dot2-d / dot2-b` 三台 `effective.voice.speaker_gate.enabled = false`；
+  `dot2-d` 15:13:14 重新注册并 `ready`；音量仍 230（config `devices[living].volume = 90`）。
+- **阈值 0.55 / mode any_enrolled / 库内爸爸+孩子全部保留**，只关开关 ⇒ 恢复 = 改回 `true` + 重启。
+
+**同时实测到的两台离线设备**（9哥 决定今天不弄）：
+`dot2（书房）` 15:02:22 连上后掉线；`dot2-c（主卧）` 自 14:57 重启后**从未注册**。
+API 报的 `token_missing` 是次要码（`token_managed_by_adapter` 要求 link 活着），真因是设备没上线。
+⇒ 主卧三人档案与主卧验收（E）全部阻塞，等设备回网。
+
+**新工具** `scripts/enroll_speaker.py`（已 scp 到 NAS `/vol1/rui/bin/enroll_speaker.py`）：
+把今天试错 4 次的流程固化 —— arm 10 s + 滴滴 → 1.7 s 压音量 → 抓 wav → 裁滴滴与首尾静音
+（相对底噪阈值，静音必须被拒）→ 覆盖 sidecar（`ms = speech_ms`）→ `commit` → 重启 → 恢复音量。
+支持 `--device dot2-d`、`--dry-run`（只录不提交）、`--no-restart`。已在真实采集样本上验证裁剪
+（10.0 s → 3.57 s 语音；纯静音 → 0.00 s 拒绝）。
+
+**恢复门控的顺序**（不要先开门控再录）：
+1. `dot2-d` 录孩子：`python3 /vol1/rui/bin/enroll_speaker.py --name 孩子 --device dot2-d`，3 米验证；
+2. 客厅补妈妈（爸爸/孩子现有档案继续有效）；
+3. 全部录完再把 `audio.voice.speaker_gate.enabled` 改回 `true` + 重启。
