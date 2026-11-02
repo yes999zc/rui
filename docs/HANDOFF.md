@@ -3590,3 +3590,19 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 `test_setup::test_probe_reports_an_unreachable_host_instead_of_raising`：
 本机 DNS 把 `no-such-host.invalid` 解析到 `198.18.0.188`（代理/catch-all），端口"能连上"，
 与本次改动无关（`git stash` 后同样失败）。
+
+### 2026-11-02 16:45 0.8.15 与「0.8.17」（仓库 main）到底差什么
+
+**注意**：0.8.17 还没有发版 —— 它目前只是 main 上的 `b1cdd9d`（默认值回滚）+ 0.8.16 的代码。
+按 `git diff v0.8.15..HEAD` 逐项看，**行为差异只剩两条**：
+
+| 项 | 0.8.15 | main（0.8.17 候选） | 对本机的影响 |
+|---|---|---|---|
+| `vad_max_speech_ms` | 无 | **8000**（默认生效） | 有用：超长段按块切，媒体长段不会整段进 ASR |
+| `wake_hold_ms` | 1500 | **15000** | **无**（只在服务器 AEC 开启时生效，Dot 是设备侧 AEC） |
+| `gain_db` / `wake_skip_ms` / `empty_wake_cooldown_s` / `keep_overlapping_speech` | — | 已回滚到 0.8.15 行为（`b1cdd9d`） | 无差异 |
+| per-device `kws_threshold` / `kws_boost` | 无 | 有（默认 None = 继承） | 可选能力，不配置就等于没有 |
+| 声纹门控 / 段级门控 / 媒体门控 / enroll API | 无 | 有（默认关闭） | 不建档就等于没有 |
+
+**结论**：0.8.17 按默认值跑，行为 ≈ 0.8.15 + 一条长段切块；真正的增量是「可选能力」。
+要不要发这一版，取决于以后是否需要按房间调 KWS 门限。
