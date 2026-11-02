@@ -3718,3 +3718,31 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 - 日志：`docker logs rui --since 10m`、`/api/v1/logs?lines=N`（`X-Auth-Token`）
 - 关键日志行：`wake:`、`cue: NN ms of audio handed over`、`cue_gate:`、`[seg]`、`turn: {'transcript':…}`、
   `noise, no turn`、`own voice heard back`、`wake without speech`
+
+### 2026-11-02 17:10 私有仓库 `rui-local` 已建（生产不再跟主仓库）
+
+**仓库**：`https://github.com/yes999zc/rui-local`（**private**），本地 `01_Code/projects/rui-local`。
+基线 = 主仓库 `v0.8.15`；**不放源码**，只放「NAS 上正在跑什么」。
+
+**分支命名（9哥 问的，已写进仓库 README §1）**：
+- 常驻只有 `main` = 生产态；**不为生产单开分支**（一开就得分叉、挑拣，一人仓库没这预算）。
+- 短命分支只有两种前缀：`try/<一句话>`（试新版/新参数，验完 squash 进 main 后删）、`fix/<一句话>`（已部署配置写错了）。
+- **版本与日期归 tag**：每次真部署打 `deploy-YYYYMMDD-HHMM`，回滚 `git checkout <tag>`；
+  另有基线 tag `base-v0.8.15`。分支名里不写日期/版本/环境/人名，全小写 kebab-case。
+- 首个 tag：`deploy-20261102-1706`（= 0.8.15 / 4 台 dot2 / 小爱 living 禁用 / ack 1200 / wake_skip 300）。
+
+**内容**：`config/config.yaml`（`web.auth_token` 换成 `__WEB_AUTH_TOKEN__` 占位符）+ `config/keywords.txt` +
+`deploy/{docker-compose.yml,rui-dot2-override.yml,push-to-nas.sh,pull-from-nas.sh,health.sh}` +
+`scripts/{enroll_speaker.py,private-scan.sh}` + `.githooks/pre-commit` +
+`docs/{versions.md,rollback.md,troubleshooting.md,acceptance-0.8.15.md}` + README。
+
+**验证**（都实测过）：
+- `./deploy/push-to-nas.sh`（dry-run）= 渲染模板 → 注入 NAS 上的 token → 与 `/vol1/rui/config/config.yaml` **diff 为空**，
+  说明仓库快照与生产逐字节一致；
+- `./deploy/health.sh` = `ghcr.io/yes999zc/rui:0.8.15` / healthy / devices 4 enabled 4 errors 0；
+- `./scripts/private-scan.sh` clean（硬密钥、私钥、`/Users/` 路径、明文 auth_token 全拦），已设为 pre-commit。
+
+**约定**：在 NAS 上直接改过配置后跑 `./deploy/pull-from-nas.sh` 拉回（自动脱敏），别让仓库和机器分叉；
+部署用 `push-to-nas.sh --apply`（先备份 `config.yaml.bak-<stamp>` 再重启）。
+
+**主仓库**：不动，也不写「停止维护」（9哥 要求只做不说）。私有仓库需要基线时从主仓库 tag 取。
