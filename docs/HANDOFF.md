@@ -3633,3 +3633,21 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 
 **部署**：本机生产**仍是 0.8.15，未升级**。NAS 侧 GHCR 16:2x 起不可达，要升级得等网络恢复后
 `docker pull ghcr.io/yes999zc/rui@sha256:5020f064…`（或先在一台网络正常的机器 `docker save` 再导入）。
+
+### 2026-11-02 16:58 `security` 红的原因：一个新 CVE（不是本次改动引起的）
+
+- 报告：`security` 的 Trivy 镜像扫描（v0.76.1，DB 2026-10-24，`python:3.12-slim-bookworm` Debian 12.15）
+  在已有 16 条豁免之外，新报 **1 条未豁免 HIGH**：
+
+  | 字段 | 值 |
+  |---|---|
+  | CVE | **CVE-2026-119373** |
+  | 包 | `libsqlite3-0` |
+  | 已装 | `3.40.1-2+deb12u2` |
+  | 修复版本 | **无**（Debian 12 未修） |
+  | 严重度 | HIGH |
+
+- 判定：**不可达** —— 代码里没有任何 SQLite 调用（`grep -rn sqlite src/` 为空），该库是基础镜像带的。
+- 处理：按 `security/trivy-ignore.yaml` 的规则加一条带 statement 的豁免（到位日 2027-01-23，
+  ≤90 天），并更新 `docs/security-scanning.md` 的 SQLite 分组与计数说明；提交 `489d4e1`。
+- 结论：**与 0.8.17 的代码/默认值无关**，也**不阻塞镜像发布**（publish 只依赖 test 门）。
