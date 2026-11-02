@@ -3038,3 +3038,133 @@ dot2-d 1 次（09:09:45），全部 `wake with no speech`、`[seg]` 0、轮次 0
   （`speaker_gate.enabled=false` 时零变化）。
 
 **下一步**：发版卡（版本号 0.8.16、CHANGELOG、D8 → D8′ 文档、CI 四绿口径、amd64 digest、HANDOFF 回填）。
+
+# 0.8.16 发布收口（2026-11-02）
+
+phase-close: task-5
+
+## 版本与契约
+
+- **版本**：`0.8.16`（`pyproject.toml`、`rui.__version__`、`CHANGELOG.md`、`docs/releases/v0.8.16.md` 四处一致）。
+- **代码**：`main` = `6e0f374`（tag `v0.8.16` 指向同一 commit）。
+  提交链：`5430923` 批次 1 → `0389622` 批次 2 → `0e4fd77` 批次 3 → `eb45d40` 发版元数据 → `6e0f374` CI 测试修复。
+- **镜像（GHCR）**：
+  - OCI index `ghcr.io/yes999zc/rui@sha256:164ddb38eb7c33c26eedc5eca1809e051d44e65b56bf5f4f51ba76de0eb9f7da`
+  - **linux/amd64 `sha256:9d28f00d30192becf0be6bb08ada3cba06c6d4bfa3add207e5eee9eb366ca11e`**（部署确定性 pin 用这个）
+  - linux/arm64 `sha256:1322169dff166951f7ddfb10f508bdc205c51dcad25fe45f047aa6985d644ea8`
+  - tags：`0.8.16` / `0.8` / `latest` / `sha-6e0f374`（tag 构建）；`edge` / `sha-6e0f374`（main 构建）。
+- **CI 四绿口径（同一 commit `6e0f374`）**：
+  | 工作流 | main 推送 | tag `v0.8.16` |
+  |---|---|---|
+  | `ci`（test 3.11 / test 3.12 / image） | ✅ run `41384438874`（3 jobs 全 success） | —（`ci.yml` 只挂 `push:branches[main]`，tag 不触发，与 0.8.15 同口径） |
+  | `secret-scan` | ✅ `41384438836` | ✅ `41384454776` |
+  | `security` | ✅ `41384438836`… 见 run 列表 | ✅ `41384454664` |
+  | `docker-publish` | ✅ `41384438935` | ✅ `41384454666`（test / build arm64 / build amd64 / merge 全 success） |
+  > 首次推送（`eb45d40`）的 `ci` 与 `docker-publish` **红过一次**：`tests/test_voice_gain.py::test_aec_release_ends_the_hold_immediately`
+  > 在无 `libspeexdsp` 的 CI 上构造 `AecChain` 抛 `AecUnavailable`。已改为该环境跳过（`6e0f374`），本机 macOS 仍真跑。
+- **契约**：`rui_compat` 不变（`>=0.8.1 <0.9.0`）；**无协议破坏性变更**，`Metrics` 只新增 additive 字段
+  （`turn_rejected: dict`、`limiter_count: int`，均带默认值，老 plane/老控制面可互通）；
+  插件（dot2 / xiaoai）零改动；`keywords.txt` 文件格式未变。
+- **新增配置**：`audio.voice.speaker_gate.*`、`audio.voice.vad_max_speech_ms`、`audio.voice.gain_db`、
+  `audio.voice.empty_wake_cooldown_s|_after`、`audio.aec.wake_hold_ms`（语义改为上限）、
+  `devices[].audio.voice.kws_threshold|kws_boost`、`ack.keep_overlapping_speech`；`wake_skip_ms` 默认 300 → 0。
+
+## 已完成
+
+**四批全部完成，独立评审 3 次 + verifier 3 次；生产未部署、未重启、未改 `/vol1/rui/config`。**
+
+| 批次 | 卡 | commit | 评审 | 验证 |
+|---|---|---|---|---|
+| 1 | 声纹唤醒门控 + 静默拒绝 | `5430923` | rev-a：3 阻塞 → PASS | 定向 + 全量绿 |
+| 1 | 注册入口 `/api/v2/speakers/*` + 控制台「家庭成员」 | `5430923` | rev-b：3 阻塞 → PASS | 45 tests + 前端 build |
+| 2 | 段级门控（锚点/分块/短窗）+ cue 切除 | `0389622` | rev-c：PASS | verifier-c：全量 2470 绿（修 1 处 EOF 空行） |
+| 3 | 六条小修（skip 0 / 增益限幅 / 残差旁路 / per-device 门限 / 冷却） | `0e4fd77` | rev-d：2 阻塞 → PASS | verifier-d：全量 5 红（测试期望）→ 修 → 9 passed 复验 |
+| 发版 | 版本/CHANGELOG/D8′/release notes | `eb45d40` | — | verifier-d：全量 **2496 passed / 7 skipped**、11/11 一致性 PASS |
+| 发版 | CI 修复（libspeexdsp 缺失跳过） | `6e0f374` | — | CI 四绿（见上表） |
+
+**评审/验证抓出、已修的关键坑（下次别再踩）**
+1. 逐设备声纹库「本设备无档案」会让设备**完全变聋**（`best_match(device_id)` 恒 (0.0,None) 且绕过 empty fail-open）→ 回退全库 + 每设备一次 info。
+2. `best is None`（换模型维度不符）同样变聋 → fail-open。
+3. ring 加长到 2 s 后 standby 冷→热把**整个 ring** 回灌 KWS，可能二次命中旧唤醒词 → 回灌窗口与历史解耦（500 ms）。
+4. sidecar `speech_ms` 显式 0 不能回退成整段时长（否则静音入库）。
+5. 姓名归一化必须与 `SpeakerLibrary` 一致，否则重录/删除/相似度全错位。
+6. 冷冻期（cooldown）把 **barge 空收**也计入 → 放歌时两次就静音 120 s；已排除。
+7. **冷装模板**仍写 `wake_skip_ms: 300` 会盖掉 schema 新默认 → 新装设备继续丢首字；已改 0。
+8. 默认 `gain_db=6` 让 `test_audio_scale` 的「幅度不变」断言变红 → 测试 pin `gain_db=0` 保原意 + 新增增益用例。
+9. CI 无 `libspeexdsp`，`AecChain` 构造会抛 `AecUnavailable` → AEC 相关用例必须 `speex_available()` 守卫。
+
+**证据（Lead 亲自跑的收口项）**
+- `git status` 干净（仅 `.gitleaks-rui.json` 未跟踪，10-31 旧产物，未进任何提交）；`git diff --check` 0。
+- 全量 pytest：`2496 passed, 7 skipped`（verifier 独立跑，`-o addopts="" -q`）；ruff 0；web typecheck+build 0。
+- 镜像内版本：见下方「镜像校验」。
+
+**回滚键（生产部署后按需一行回滚；全部有单测）**
+| 键 | 0.8.16 默认 | 回滚到 |
+|---|---|---|
+| `audio.voice.speaker_gate.enabled` | `false`（未启用即 0.8.15） | 保持 false |
+| `audio.voice.speaker_gate.segment_gate` | `true` | `false` |
+| `audio.voice.speaker_gate.wake_window_ms` | `2500` | `0` |
+| `audio.voice.speaker_gate.skip_on_barge` | `true` | `false` |
+| `audio.voice.vad_max_speech_ms` | `8000` | 调大 |
+| `audio.voice.gain_db` | `6.0` | `0`（逐字节等于 0.8.15） |
+| `audio.aec.wake_hold_ms` | `15000`（上限） | `1500` / `0` |
+| `audio.voice.empty_wake_cooldown_s` | `120` | `0` |
+| `audio.voice.empty_wake_cooldown_after` | `2` | 调大 |
+| `devices[].audio.voice.kws_threshold` / `kws_boost` | `null`（继承） | 删除覆盖 |
+| `ack.keep_overlapping_speech` | `true` | `false` |
+| `audio.voice.wake_skip_ms` | `0` | `300` |
+
+**声纹模型（来源已定，校验和待 bridge 记录）**
+- `3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx`（CAM++，约 28 MB，dim 192）。
+- 位置：宿主机 `/vol1/rui/data/models/speaker/campplus.onnx` → 容器 `/data/models/speaker/campplus.onnx`。
+- **本会话无法访问 NAS，sha256 未取**；部署时请 `sha256sum` 后回填本节（不要引用未核实的哈希）。
+- 缺失/加载失败时门控 **fail-open**（`speaker gate unavailable` 一行 warning），不影响唤醒。
+
+**镜像校验（待补）**：`docker run --rm --platform linux/amd64 --entrypoint python <amd64 digest> -c "import rui;print(rui.__version__)"`
+应输出 `0.8.16`；本会话执行结果见下方「收口附注」。
+
+## 下一步
+
+**1. bridge 部署（不在开发会话做）**
+- 用 amd64 摘要 pin：`ghcr.io/yes999zc/rui@sha256:9d28f00d30192becf0be6bb08ada3cba06c6d4bfa3add207e5eee9eb366ca11e`。
+- 部署前备份：`/vol1/rui/config/config.yaml`、`/vol1/rui/config/keywords.txt`；回滚锚 = 0.8.15 镜像
+  `sha256:4a4c2db421367ee5c110d97d8ac5a984f4702fa6f854fde12f1a087723cd948d` + 两份配置备份。
+- **部署顺序建议**：① 起镜像（`speaker_gate.enabled` 先保持 false，确认 5 台/`device_health` 正常）；
+  ② 控制台「家庭成员」注册 3 人 × 相关设备；③ 开 `speaker_gate.enabled: true`、阈值 0.55，观察
+  `wake admitted/rejected` 两类日志；④ `keywords.txt` 回到 `:4.00 #0.07`（视频误唤醒交给声纹拦）；
+  ⑤ 按需开 per-device 门限（客厅 0.07、卫生间/儿童房 0.15，写 `devices[].audio.voice.kws_threshold`）。
+- **不要**在开发会话里改 `/vol1/rui/config/`、重启容器或部署 —— 由 bridge 在窗口内执行。
+
+**2. 真机验收（9 哥 在场，每项带分母；结果回填本文件）**
+1. 视频在场 10 分钟：误唤醒「在呢」= **0**，日志有 `wake rejected: speaker`。
+2. 家庭三人 3.5 米：唤醒 ≥ **4/5**（门限 0.07），每条有 `wake admitted: speaker score=`。
+3. 视频播放中家人说「几点了」×5：≥ **4** 次正确；视频人声 **0 个 turn**（看 `turn_rejected` 与 `segment rejected`）。
+4. 注册：3 人 × 每台设备 3 段 × 3 s；重录后旧 embedding 不残留；删除后样本 wav 也没了。
+5. 放歌 80%：3.5 米「下一首」×5 ≥ **4/5**；歌本身 10 分钟 **0 次**唤醒；
+   `overdrive_count = 0`、`aec_erle_db ≥ 15`（目标 ≥20）；观察 `limiter_count` 与 `cue_gate: … overlap_from=`。
+6. 回归：`wake_skip 0` 下「你好小宝，几点了」不丢首字；`mic 10` 放歌 `overdrive_count = 0`；2 米近场 `[seg] peak < 0.95`。
+7. 资源：`docker stats` 看 5 台 RSS 增量（每平面 +1 份 CAM++ ≈ +28 MB 模型，未实测）；`grep -c "speaker gate unavailable"` 应为 0。
+
+**3. 阈值与参数标定（部署后第一周）**
+- 声纹阈值 0.55：按 `wake admitted/rejected` 的分数分布定；偏低误放、偏高误拒。
+- `cue_gate: … overlap_from=`：确认重叠检测在真实回授下的命中率；必要时调 `CUE_OVERLAP_RATIO`（当前 1.6）。
+- 空唤醒冷却（120 s / 2 次）：dot2-b 噪声场景是否还会连击；必要时调 `empty_wake_cooldown_s/after`。
+- per-device 门限：客厅 0.07 与卫生间 0.15 的实际召回/误唤醒。
+
+**4. backlog（本版明确未做，别当已完成）**
+- **DTD / AEC3**：放歌时「下一首」的声学污染只做了残差级全程旁路，没有双讲检测。
+- **device wake 路径不走声纹门控**（`_handle_device_wake`）：当前 5 台都走 RUI KWS，无生产缺口；device OWW 上线前必须补。
+- **同步 embedding 在音频面事件循环**：每唤醒/段一次 CAM++，真机耗时未测（目标 <100 ms），可能影响 barge 延迟。
+- **多人同时说话分离**：不做（无参考通道无法做）。
+- 声纹**不是安全边界**：录音回放可绕过（D8′ 明确写入设计文档）。
+- `uv.lock` 仍写 0.8.14（0.8.15/0.8.16 两次未同步；`uv sync` 非 `--locked` 会自动重建，`security-pip-audit.sh --frozen` 按旧集合审计）。
+- `01_Code/experiments/erle-bench/erle_bench.py` 的 `SET_ECHO_STATE=14` 仍是错的（应为 24）——0.8.15 遗留，未做。
+
+**5. 关键文件**
+- `src/rui/audio/speaker_gate.py`：注册库、CAM++ embedder、唤醒/段级判定、锚点。
+- `src/rui/web/api/speakers.py`：注册 API 与状态机；`web/src/v2/views/FamilyView.vue`：控制台页。
+- `src/rui/audio/process.py`：唤醒链门控、段级门控、增益限幅、冷却、per-device KWS、录制钩子。
+- `src/rui/audio/vad.py`：cue 切除（`overlap_from`）。
+- `src/rui/audio/aec.py`：`hold_for()/release()`。
+- `docs/multi-device-design.md` §9.2/§9.3：D8′。
+- `docs/releases/v0.8.16.md`：面向部署者的说明与回滚键。
