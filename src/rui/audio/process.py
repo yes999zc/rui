@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import hashlib
 import itertools
+import json
 import logging
 import math
 import os
@@ -74,6 +75,7 @@ from .protocol import (
     DeviceVolume,
     DeviceVolumeResult,
     DeviceWakeMsg,
+    EnrollStart,
     Error,
     FrameType,
     Hello,
@@ -104,6 +106,15 @@ from .protocol import (
 )
 from .resample import resample
 from .ring import ArrivalStats, PcmRing
+from .speaker_gate import (
+    SPEAKER_PREROLL_HISTORY_MS,
+    SPEAKER_WAKE_WINDOW_MS,
+    SpeakerEmbedder,
+    SpeakerGate,
+    SpeakerLibrary,
+    SpeakerUnavailable,
+    WakeDecision,
+)
 from .vad import GateConfig, UtteranceGate, VadUnavailable
 from .volume_keys import VOLUME_KEY_GRACE_S, volume_key_target
 from .wav import read_wav_mono
@@ -876,6 +887,11 @@ class AudioPlane:
         # The control-plane socket, for plane -> control events (PlayFinished).
         self._ctl_writer: asyncio.StreamWriter | None = None
         self._ctl_connected: asyncio.Event | None = None
+        # Speaker enrollment (0.8.16 Card B). None = not recording. While armed, the
+        # post-AEC voice stream is kept for `seconds` and written as a wav plus the
+        # sidecar the control plane watches (see `_begin_enroll`). Additive: with no
+        # EnrollStart the frame path is byte-identical to 0.8.15.
+        self._enroll: dict | None = None
         self._reply_open = False
         self.started = time.monotonic()
         self._stop = asyncio.Event()
@@ -916,6 +932,13 @@ class AudioPlane:
         self.ack_failed = 0
         self.ack_mode_effective = cfg.ack.mode
         self.ack_error = ""
+        # Wake-time speaker gate (0.8.16 P0). Built here, not in `_capture`: it needs
+        # only the config and data_dir, so `_preroll_history_ms` can size the ring
+        # before the first frame arrives. A missing model is logged here at info (one
+        # line) and warned once by the gate on its first wake, where admitting matters.
+        self.speaker_gate: SpeakerGate | None = None
+        self.speaker_gate_error = ""
+        self._build_speaker_gate()
 
     # ---------------------------------------------------------------- adapter
     async def _open_adapter(self) -> DeviceAdapter:
@@ -984,6 +1007,46 @@ class AudioPlane:
         except KwsUnavailable as exc:
             self.kws_error = str(exc)
             log.warning("kws off: %s", exc)
+
+    def _build_speaker_gate(self) -> None:
+        """Construct the wake-time speaker gate; never raises (fail-open by design).
+
+        With `audio.voice.speaker_gate.enabled` off this leaves `speaker_gate=None`, so
+        the wake path is byte-identical to 0.8.15. With it on but the model/library
+        unusable, the gate still exists and admits every wake - it is the gate that
+        fails open, not the plane that fails to start.
+        """
+        gate_cfg = self.cfg.audio.voice.speaker_gate
+        if not gate_cfg.enabled:
+            return
+        data_dir = str(getattr(self.cfg.system, "data_dir", "") or "").strip()
+        if not data_dir:
+            self.speaker_gate_error = "system.data_dir is empty: no speaker library"
+            log.warning("speaker gate off: %s", self.speaker_gate_error)
+            return
+        try:
+            library = SpeakerLibrary(data_dir, threshold=gate_cfg.threshold)
+            library.load()
+        except Exception as exc:  # noqa: BLE001 - config/data problems must not stop wake
+            self.speaker_gate_error = f"speaker library unavailable: {exc}"
+            log.warning("speaker gate off: %s", self.speaker_gate_error)
+            return
+        embedder: SpeakerEmbedder | None = None
+        try:
+            embedder = SpeakerEmbedder(gate_cfg.model_path, num_threads=1)
+        except SpeakerUnavailable as exc:
+            # Not an error: the gate logs its own one-line warning (once) when a wake
+            # finds the embedder unusable, so startup only records the fact at info.
+            self.speaker_gate_error = str(exc)
+            log.info("speaker gate unavailable: %s; admitting without gating", exc)
+        self.speaker_gate = SpeakerGate(
+            gate_cfg, library, embedder, device_id=self.device_id
+        )
+        log.info(
+            "speaker gate on: threshold=%.2f enrolled=%d model=%s%s",
+            gate_cfg.threshold, library.count(), gate_cfg.model_path or "(none)",
+            "" if embedder is not None else " (unavailable: admitting every wake)",
+        )
 
     def _build_vad(self) -> None:
         voice = self.cfg.audio.voice
@@ -1548,6 +1611,11 @@ class AudioPlane:
                 self.arrivals.add(frame.ts_ms - last_ts)
             last_ts = frame.ts_ms
             pcm = self._frame_to_voice(frame, decimator)
+            # Enrollment taps the post-AEC voice before the mute window: a muted frame
+            # is silence in the recording too, and dropping it here would only make
+            # `speech_ms` disagree with the wav.
+            if pcm and self._enroll is not None:
+                self._feed_enroll(pcm)
             if self._mic_is_muted():
                 # Post-playback mute: a device-AEC plug's residual outlives its AEC and
                 # VAD/ASR would turn it into a request. Playback itself is over here, so
@@ -1663,11 +1731,24 @@ class AudioPlane:
         The ring is not drained: `_begin_wake_turn` still selects from it by timestamp
         for the VAD replay, and the KWS is the only consumer here. `list()` freezes the
         window because a wake hit inside the replay can replay the ring itself.
+
+        The replay window is deliberately *not* the whole ring. With the speaker gate
+        on, the ring is longer (>= 2000 ms) only so the gate can score the wake audio;
+        replaying all of it into the spotter would let it hear a wake it has already
+        reported a second time, i.e. a duplicated cue/barge. The spotter only needs the
+        KWS latency's worth of context, so the window stays `wake_preroll_ms`.
         """
         if self.wake is None:
             return
         self.wake.reset()
-        for block_ts, block in list(self._preroll):
+        replay_ms = max(500, max(0, int(self.cfg.audio.voice.wake_preroll_ms)))
+        history = list(self._preroll)
+        if history:
+            frame_ms = max(1, int(self.cfg.audio.voice.frame_ms))
+            end = float(history[-1][0]) + frame_ms
+            lower = end - replay_ms
+            history = [(ts, block) for ts, block in history if float(ts) >= lower]
+        for block_ts, block in history:
             if not block:
                 continue
             for hit in self.wake.accept(block, ts_ms=block_ts):
@@ -2375,17 +2456,197 @@ class AudioPlane:
             connected.clear()
 
     # ---------------------------------------------------- wake, preroll, ack
+    def _speaker_window_ms(self) -> int:
+        """Audio scored by the speaker gate: at least 1500 ms, more if configured."""
+        return max(SPEAKER_WAKE_WINDOW_MS, int(self.cfg.audio.voice.speaker_gate.min_speech_ms))
+
     def _preroll_history_ms(self) -> int:
         """How much timestamped audio to retain for wake replay (P1-7).
 
         A device wake may arrive up to `DEVICE_WAKE_STALE_MS` late, so the history has to
         reach back past the event timestamp; the replay window itself is still
         `wake_preroll_ms` long and is selected from this deque by timestamp.
+
+        With the speaker gate on, the history is also long enough to score the wake
+        audio: the KWS reports a hit ~0.5 s after the phrase, so the ring must hold the
+        whole gate window even though the VAD replay stays `wake_preroll_ms`.
         """
         preroll_ms = max(0, int(self.cfg.audio.voice.wake_preroll_ms))
+        if self.cfg.audio.voice.speaker_gate.enabled:
+            preroll_ms = max(preroll_ms, SPEAKER_PREROLL_HISTORY_MS, self._speaker_window_ms())
         if not self.device_wake_active:
             return preroll_ms
         return max(preroll_ms, int(DEVICE_WAKE_STALE_MS) + preroll_ms)
+
+    def _speaker_wake_pcm(self, window_ms: int) -> bytes:
+        """Snapshot (never drain) the newest `window_ms` of post-AEC voice audio.
+
+        `_take_preroll` clears the ring for the VAD replay, and it runs later in
+        `_begin_wake_turn`; the gate reads the ring now and leaves it intact. The
+        anchor is the *end* of the newest block, so a window that is a multiple of the
+        frame length selects exactly that many milliseconds.
+        """
+        if not self._preroll:
+            return b""
+        frame_ms = max(1, int(self.cfg.audio.voice.frame_ms))
+        end = float(self._preroll[-1][0]) + frame_ms
+        lower = end - max(0, int(window_ms))
+        return b"".join(block for ts, block in self._preroll if float(ts) >= lower)
+
+    def _speaker_gate_admit(self, barged: bool) -> bool:
+        """Run the wake speaker gate; False means this wake must stay silent.
+
+        The silence is the product decision (0.8.16 P0): no cue, no gate arm, no Wake
+        event, no turn - just a counter and one log line the operator can grep.
+        """
+        gate = self.speaker_gate
+        if gate is None:
+            return True
+        rate = max(1, int(self.cfg.audio.voice.rate))
+        pcm = self._speaker_wake_pcm(self._speaker_window_ms())
+        decision: WakeDecision = gate.evaluate_wake(pcm, rate, barge=barged)
+        if decision.accepted:
+            if decision.reason == "match":
+                log.info(
+                    "wake admitted: speaker score=%.2f best=%s",
+                    decision.score, decision.best or "none",
+                )
+            else:
+                # Fail-open reasons already logged their own warning once.
+                log.debug("wake admitted without speaker gating: %s", decision.reason)
+            return True
+        self.wake_rejections["speaker"] = self.wake_rejections.get("speaker", 0) + 1
+        if decision.reason == "short":
+            duration_ms = len(pcm) // 2 * 1000.0 / rate
+            log.info("wake rejected: speaker short=%.0fms", duration_ms)
+        else:
+            log.info(
+                "wake rejected: speaker score=%.2f best=%s (threshold %.2f)",
+                decision.score,
+                decision.best or "none",
+                float(getattr(gate.cfg, "threshold", 0.55)),
+            )
+        return False
+
+    # ---------------------------------------------------- speaker enrollment (Card B)
+
+    #: A 20 ms frame at or above this level counts as speech for `speech_ms`.
+    #: The same -45 dBFS line the playback/ack trims use; the control plane only
+    #: compares it with `speaker_gate.min_speech_ms`, it is not an identity decision.
+    ENROLL_SPEECH_DB = -45.0
+
+    def _begin_enroll(self, msg: EnrollStart) -> None:
+        """Arm the recorder for the next `seconds` of post-AEC voice.
+
+        The control plane owns the path (`data_dir/enroll/<id>.wav`) and completion:
+        it polls ``<id>.json``, never the socket. Nothing in the wake/VAD/AEC chain
+        changes here - an armed recorder only reads the blocks `_frame_to_voice`
+        already produced.
+        """
+        if not msg.path:
+            log.warning("speaker enroll: EnrollStart without a path id=%s", msg.enroll_id)
+            return
+        if self._enroll is not None:
+            # The control plane allows one recording per device, so a fresh arm means
+            # the previous file can never be committed: drop it instead of keeping it.
+            self._finish_enroll(reason="superseded")
+        seconds = max(1, min(10, int(msg.seconds)))
+        path = Path(msg.path)
+        self._enroll = {
+            "enroll_id": msg.enroll_id,
+            "device_id": msg.device_id or self.device_id,
+            "path": path,
+            "seconds": seconds,
+            "deadline": time.monotonic() + seconds,
+            "pcm": bytearray(),
+            "ms": 0.0,
+            "speech_ms": 0.0,
+        }
+        log.info(
+            "speaker enroll: arm id=%s device=%s seconds=%d path=%s",
+            msg.enroll_id, self._enroll["device_id"], seconds, path,
+        )
+
+    def _feed_enroll(self, pcm: bytes) -> None:
+        """Append one post-AEC block and finish exactly when the window elapses."""
+        state = self._enroll
+        if state is None:
+            return
+        block = np.frombuffer(pcm, dtype="<i2")
+        if block.size:
+            rms = float(np.sqrt(np.mean(np.square(block.astype(np.float32))))) / 32768.0
+            level_db = 20.0 * math.log10(max(rms, 1e-9))
+            frame_ms = block.size * 1000.0 / float(self.cfg.audio.voice.rate)
+            state["ms"] += frame_ms
+            if level_db >= self.ENROLL_SPEECH_DB:
+                state["speech_ms"] += frame_ms
+        state["pcm"].extend(pcm)
+        # Sample count and wall clock both end the window: the deadline covers a device
+        # that stopped sending frames, the count makes the wav exactly `seconds` long
+        # when frames arrive in bursts (and makes the behaviour testable without sleeping).
+        if (state["ms"] >= state["seconds"] * 1000.0
+                or time.monotonic() >= state["deadline"]):
+            self._finish_enroll(reason="done")
+
+    def _finish_enroll(self, *, reason: str) -> None:
+        """Write the wav + sidecar atomically (``done``) or drop the partial file.
+
+        Called from the frame loop, from a superseding arm and from the control
+        session's teardown. It never raises: a full disk or a read-only data_dir must
+        not take the microphone down, and the control plane answers 409/503 anyway.
+        """
+        state = self._enroll
+        self._enroll = None
+        if state is None:
+            return
+        path: Path = state["path"]
+        sidecar = path.with_suffix(".json")
+        if reason != "done":
+            for leftover in (path, path.with_name(path.name + ".tmp"), sidecar,
+                             path.with_name(path.name + ".json.part")):
+                try:
+                    leftover.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+            log.info("speaker enroll: drop id=%s device=%s reason=%s",
+                     state["enroll_id"], state["device_id"], reason)
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".tmp")
+            with wave.open(str(tmp), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(max(1, int(self.cfg.audio.voice.rate)))
+                handle.writeframes(bytes(state["pcm"]))
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+            payload = {
+                "enroll_id": state["enroll_id"],
+                "device_id": state["device_id"],
+                "path": str(path),
+                "ms": round(float(state["ms"]), 1),
+                "speech_ms": round(float(state["speech_ms"]), 1),
+            }
+            part = path.with_name(path.name + ".json.part")
+            part.write_text(json.dumps(payload), encoding="utf-8")
+            os.chmod(part, 0o600)
+            os.replace(part, sidecar)
+            log.info(
+                "speaker enroll: done id=%s device=%s ms=%.0f speech_ms=%.0f",
+                state["enroll_id"], state["device_id"], state["ms"], state["speech_ms"],
+            )
+        except Exception as exc:  # noqa: BLE001 - never take the plane down for this
+            log.warning("speaker enroll: write failed id=%s: %s",
+                        state.get("enroll_id"), exc)
+            for leftover in (path, path.with_name(path.name + ".tmp"), sidecar,
+                             path.with_name(path.name + ".json.part")):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
 
     def _keep_preroll(self, pcm: bytes, ts_ms: float) -> None:
         """Hold timestamped voice-rate audio for the next wake.
@@ -2434,11 +2695,14 @@ class AudioPlane:
     async def _on_wake(
         self, hit: WakeHit, writer: asyncio.StreamWriter, connected: asyncio.Event
     ) -> None:
-        """One KWS hit: cue the speaker, replay what came before, then listen.
+        """One KWS hit: gate the speaker, cue, replay what came before, then listen.
 
-        Order is the whole point. The cue is chosen first because its length decides how
-        long the gate must stay shut; the pre-wake ring is replayed before the hold starts
-        because it is the user's own speech, captured before the microphone went quiet.
+        Order is the whole point. The speaker gate runs first (0.8.16 P0): a wake whose
+        audio matches no enrolled family voice is dropped silently before the cue, the
+        replay or the arbiter see it. Then the cue is chosen because its length decides
+        how long the VAD gate must stay shut; the pre-wake ring is replayed before the
+        hold starts because it is the user's own speech, captured before the microphone
+        went quiet.
         """
         # Barge-in first: a wake while the speaker is still talking means "stop".
         # Everything already handed to the device (up to MAX_LEAD_S) cannot be recalled,
@@ -2454,6 +2718,11 @@ class AudioPlane:
             # must not stop the speaker. Ignoring it is safer than arming a gate over
             # our own audio; the wake word works again once the answer drains.
             log.info("wake during playback ignored: voice.barge_in is off")
+            return
+        # 0.8.16 P0: the wake audio must match an enrolled family voice. A rejection
+        # returns here, before the arbiter/cue/gate/event: the false wake stays silent
+        # (no "在呢", no turn) and only the counter and one log line record it.
+        if not self._speaker_gate_admit(barged):
             return
         if self.arbitrate:
             admitted = await self._arbitrate_candidate(
@@ -4353,6 +4622,11 @@ class AudioPlane:
                 elif isinstance(msg, QueryMetrics):
                     writer.write(encode_json(self.metrics()))
                     await writer.drain()
+                elif isinstance(msg, EnrollStart):
+                    # Card B: capture only. The control plane polls the sidecar this
+                    # writes; no reply is sent (the client has no branch for one and
+                    # would log it as unhandled).
+                    self._begin_enroll(msg)
                 elif isinstance(msg, PlayFile):
                     path = self._start_playback(msg)
                     log.info("playback requested: %s loop=%s gain=%.2f", path, msg.loop, msg.gain)
@@ -4407,6 +4681,9 @@ class AudioPlane:
             raise
         finally:
             self._stop.set()
+            # Nobody is left to commit an armed recording: drop it instead of leaving
+            # a wav and a sidecar behind that no control plane knows about.
+            self._finish_enroll(reason="cancelled")
             await self._stop_playback()
             for task in tasks:
                 task.cancel()

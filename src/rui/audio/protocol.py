@@ -506,6 +506,50 @@ class DeviceVolumeResult(BaseModel):
     error: str = ""
 
 
+class EnrollStart(BaseModel):
+    """control -> plane: keep the next `seconds` of post-AEC voice for enrollment.
+
+    Speaker enrollment (0.8.16 Card B) reuses the stream the device is already
+    pushing: the plane writes what it would have fed ASR to `path` (16 kHz mono
+    int16 wav, atomic ``.tmp`` + ``os.replace``), then writes the sidecar
+    ``path.with_suffix('.json')`` atomically:
+
+        {"enroll_id": ..., "device_id": ..., "path": ..., "ms": ..., "speech_ms": ...}
+
+    The sidecar is the **only** completion signal the control plane watches.
+    `AudioPlaneClient._dispatch` has no branch for an `EnrollResult` reply, and a
+    control frame it cannot place is logged as an error, so the plane must not
+    answer on the socket today; `EnrollResult` below documents the shape that
+    will travel there once the client grows the branch.
+    """
+
+    type: Literal["enroll_start"] = "enroll_start"
+    enroll_id: str
+    device_id: str
+    seconds: int = Field(default=3, ge=1, le=10)
+    # Absolute path of the wav to produce. The control plane owns the naming so
+    # the file lands under `system.data_dir/enroll/`, next to the sidecar.
+    path: str = ""
+
+
+class EnrollResult(BaseModel):
+    """plane -> control: one enrollment recording finished (reserved, see above).
+
+    Not sent by the current plane: the control plane reads the sidecar file
+    instead, because the socket dispatcher would drop (and log) an unknown
+    control message. Kept in the union so the day the client handles it the wire
+    is already agreed, and so a plane that sends it early is still parsed.
+    """
+
+    type: Literal["enroll_result"] = "enroll_result"
+    enroll_id: str
+    device_id: str = ""
+    path: str = ""
+    ms: float = 0.0
+    speech_ms: float = 0.0
+    error: str = ""
+
+
 class PlayFinished(BaseModel):
     """plane -> control: a non-looping play_file reached its natural end.
 
@@ -593,7 +637,7 @@ ControlMessage = Annotated[
     Hello | Ready | Metrics | QueryMetrics | PlayFile | StopAudio | Wake | LedState
     | SpeakStart | SpeakFinished | ReplyFinished | VendorSignalMsg | WakeIdle | Error | Shutdown | ShellCommand
     | ShellResult | DeviceVolume | DeviceVolumeResult | PlayFinished | PauseMusic | ResumeMusic
-    | DeviceWakeMsg | WakeCandidate | WakeAdmit | WakeReject,
+    | DeviceWakeMsg | WakeCandidate | WakeAdmit | WakeReject | EnrollStart | EnrollResult,
     Field(discriminator="type"),
 ]
 CONTROL = TypeAdapter(ControlMessage)

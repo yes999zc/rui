@@ -982,6 +982,59 @@ export interface MemoryEditResponse {
   item: MemoryItem | null
 }
 
+/* — speaker enrollment (0.8.16 Card B) ————————————————————————
+ *
+ * The family page records a person on one device at a time: the audio plane
+ * keeps the next N seconds of post-AEC voice, and the commit turns it into a
+ * profile keyed by `(name, device_id)`. `score` is the similarity to the
+ * library as it was *before* this commit (the same person's previous embedding,
+ * else the closest other person on that device) — a re-record quality signal,
+ * not an identity claim (`null` on the first enrollment).
+ */
+
+export interface SpeakerDeviceRow {
+  device_id: string
+  samples: number
+  /** ISO 8601; empty when the library row predates the field. */
+  enrolled_at: string
+  /** A kept sample wav exists, so the page may render "play sample". */
+  sample: boolean
+}
+
+export interface SpeakerEntry {
+  name: string
+  devices: SpeakerDeviceRow[]
+  threshold: number
+}
+
+export interface EnrollStartRequest {
+  name: string
+  device_id: string
+  seconds: number
+}
+
+export interface EnrollStartResponse {
+  enroll_id: string
+  device_id: string
+  seconds: number
+  started_at: string
+}
+
+export interface EnrollCommitResponse {
+  name: string
+  device_id: string
+  samples: number
+  dim: number
+  /** Similarity to the pre-commit library; `null` when there was nothing to compare. */
+  score: number | null
+  reference: 'previous' | 'others' | 'none'
+  speech_ms: number
+}
+
+export interface SpeakerDeleteResponse {
+  removed: number
+}
+
 /* — M9 config pages: v1 non-device endpoints (C-002 §1.2) —————————————
  *
  * The config-center, music, secrets, providers, doctor and recovery endpoints
@@ -1817,4 +1870,49 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  /* — speaker enrollment (0.8.16 Card B) ————————————————————— */
+
+  /** `GET /api/v2/speakers` — one entry per person, one row per device. */
+  speakers: (): Promise<SpeakerEntry[]> =>
+    request<SpeakerEntry[]>('/api/v2/speakers'),
+
+  /**
+   * `POST /api/v2/speakers/enroll` — start recording on one device.
+   *
+   * 201 is "recording", not "enrolled". 404 = unknown/disabled device,
+   * 409 = that device is already recording or has no live plane.
+   */
+  startEnrollment: (body: EnrollStartRequest): Promise<EnrollStartResponse> =>
+    request<EnrollStartResponse>('/api/v2/speakers/enroll', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /**
+   * `POST /api/v2/speakers/enroll/{id}/commit` — embed and store.
+   *
+   * 409 = not finished yet (retry), 400 = too short / no speech (re-record),
+   * 503 = the speaker model is missing on this host.
+   */
+  commitEnrollment: (enrollId: string): Promise<EnrollCommitResponse> =>
+    request<EnrollCommitResponse>(
+      `/api/v2/speakers/enroll/${encodeId(enrollId)}/commit`,
+      { method: 'POST' },
+    ),
+
+  /** `DELETE /api/v2/speakers/{name}` — one device, or every device of that person. */
+  deleteSpeaker: (name: string, deviceId?: string): Promise<SpeakerDeleteResponse> => {
+    const query = deviceId ? `?device_id=${encodeId(deviceId)}` : ''
+    return request<SpeakerDeleteResponse>(
+      `/api/v2/speakers/${encodeId(name)}${query}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  /** `GET /api/v2/speakers/{name}/sample.wav` — needs the header, so bytes land here. */
+  speakerSample: (name: string, deviceId: string): Promise<Blob> =>
+    requestBlob(
+      `/api/v2/speakers/${encodeId(name)}/sample.wav?device_id=${encodeId(deviceId)}`,
+    ),
 }

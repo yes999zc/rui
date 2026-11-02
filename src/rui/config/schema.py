@@ -332,6 +332,36 @@ class CaptureConfig(BaseModel):
         return self
 
 
+class SpeakerGateConfig(BaseModel):
+    """Wake-time speaker gate (0.8.16 P0): is the wake audio an enrolled family voice?
+
+    Off by default: `enabled=false` is the rollback key and reproduces 0.8.15 exactly.
+    The gate never authenticates anyone - a matched score only admits the wake, and a
+    missing model, corrupt library or empty library admits as well (fail-open), so a
+    misconfiguration can silence the gate but never the wake word.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    # Production: /data/models/speaker/campplus.onnx (CAM++, 192-dim).
+    model_path: str = ""
+    # Cosine similarity over CAM++ embeddings. 0.55 is the sherpa-onnx reference
+    # speaker-verification level; it is the one knob to tune per household.
+    threshold: float = Field(default=0.55, ge=0.0, le=1.0)
+    # Shorter than this is rejected without an embedding: half a phrase says nothing
+    # about who spoke it, and a truncated clip would otherwise score randomly.
+    min_speech_ms: int = Field(default=600, ge=200, le=3000)
+    # "any_enrolled": any family member registered on this device may wake it.
+    # "wake_owner" belongs to the segment-level gate (Card C); the value is accepted
+    # and stored now so a config can be written ahead of that code.
+    mode: Literal["any_enrolled", "wake_owner"] = "any_enrolled"
+    accept_anchor_or_library: bool = True
+    # A barge wake is spoken over music, so its embedding is polluted by the mix;
+    # skipping the gate there keeps the interrupting person's wake working.
+    skip_on_barge: bool = True
+
+
 class VoiceConfig(BaseModel):
     """The AEC/KWS/VAD rate. Downsample from capture; never run DSP at 48 kHz."""
 
@@ -386,6 +416,9 @@ class VoiceConfig(BaseModel):
     # streaming KWS reports a hit ~0.5 s late, so without this the first words of a
     # request spoken straight after the wake word never reach the transcriber.
     wake_preroll_ms: int = Field(default=500, ge=0, le=1500)
+    # Wake-time speaker gate (0.8.16 P0): a wake whose audio matches no enrolled family
+    # voice is silently dropped. Off by default, so an untouched config is 0.8.15.
+    speaker_gate: SpeakerGateConfig = Field(default_factory=SpeakerGateConfig)
     # Follow-up gate: how long after the pacer drains before the microphone reopens
     # for the next sentence. 1000 ms is the reference speaker's measured echo tail; a device-AEC
     # plug (no reference, RUI AEC off) keeps residual echo on the mic for seconds.

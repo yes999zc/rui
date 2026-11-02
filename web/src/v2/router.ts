@@ -10,6 +10,7 @@ import { createRouter, createWebHistory, type RouteLocation } from 'vue-router'
  *   /v2/setup            first-run eight-step wizard (M6)
  *   /v2/devices/:id      device detail (`?tab=config|danger` are M3 writes)
  *   /v2/rooms            rooms, multi-device policy, global audio (M5)
+ *   /v2/family           family voices enrolled for the wake gate (0.8.16)
  *   /v2/run              house overview with exceptions first (M7)
  *   /v2/conversation     recent turns, device/room badges and filters (M8)
  *   /v2/logs             service-log tail with level filter and copy (M8)
@@ -46,6 +47,8 @@ const routes = [
     props: true,
   },
   { path: '/rooms', name: 'rooms', component: () => import('./views/RoomsView.vue') },
+  // 0.8.16 Card B: enroll each family member's voice per device (wake gate).
+  { path: '/family', name: 'family', component: () => import('./views/FamilyView.vue') },
   {
     // First-run wizard: the backend decides first-run vs add from the house state.
     path: '/setup',

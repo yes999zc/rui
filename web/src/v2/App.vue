@@ -31,6 +31,8 @@ const navItems: Array<{ key: string; to: string; labelKey: MsgKey }> = [
   { key: 'run', to: '/run', labelKey: 'v2.nav.run' },
   { key: 'devices', to: '/devices', labelKey: 'v2.nav.devices' },
   { key: 'rooms', to: '/rooms', labelKey: 'v2.nav.rooms' },
+  // 0.8.16 Card B: the people whose voices may wake the speaker.
+  { key: 'family', to: '/family', labelKey: 'v2.nav.family' },
   { key: 'config', to: '/voice-assistant', labelKey: 'v2.nav.config' },
 ]
 
@@ -55,6 +57,7 @@ const configSubnav: Array<{ key: string; to: string; labelKey: MsgKey }> = [
 const section = computed(() => {
   if (route.path.startsWith('/devices') || route.path.startsWith('/setup')) return 'devices'
   if (route.path.startsWith('/rooms')) return 'rooms'
+  if (route.path.startsWith('/family')) return 'family'
   if (
     route.path.startsWith('/run') ||
     route.path.startsWith('/conversation') ||
@@ -96,6 +99,7 @@ const configPage = computed(() => {
 const pageLabel = computed(() => {
   if (section.value === 'devices') return t('v2.nav.devices')
   if (section.value === 'rooms') return t('v2.nav.rooms')
+  if (section.value === 'family') return t('v2.nav.family')
   if (section.value === 'run') {
     if (runPage.value === 'conversation') return t('v2.nav.conversation')
     if (runPage.value === 'logs') return t('v2.nav.logs')

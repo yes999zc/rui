@@ -473,6 +473,17 @@ _VOICE_GOLDEN = {
     "kws_probe_file": "",
     "post_playback_mute_ms": 0,
     "rate": 16000,
+    # 0.8.16 P0: the wake-time speaker gate is new and off by default, so an existing
+    # config resolves to these schema defaults (the rollback key is `enabled: false`).
+    "speaker_gate": {
+        "enabled": False,
+        "model_path": "",
+        "threshold": 0.55,
+        "min_speech_ms": 600,
+        "mode": "any_enrolled",
+        "accept_anchor_or_library": True,
+        "skip_on_barge": True,
+    },
     # task-6 (0.8.7): standby KWS gate defaults. The gate is new, so these are the
     # schema defaults an existing config resolves to (no old value to preserve).
     "standby_kws_db": -60.0,

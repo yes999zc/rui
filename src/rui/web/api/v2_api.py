@@ -103,6 +103,7 @@ from .device_write import (
 from .device_write import (
     validation_document as _validation_document,
 )
+from .speakers import install_speaker_routes
 
 __all__ = ["V2Error", "install_v2_routes"]
 
@@ -3728,6 +3729,23 @@ def install_v2_routes(
             if result is not None:
                 response["result"] = result
             return response
+
+    # ------------------------------------------------------------------ speaker enrollment
+    # Card B: one injectable seam instead of a second config/plane lookup. The
+    # client lives on the app module's supervisor/fleet, so this resolves it late
+    # (same lazy import `resolve` above uses to avoid a circular import).
+    def speaker_plane_client(device_id: str) -> Any:
+        from . import app as app_module
+
+        return app_module._client_for(app, device_id)
+
+    install_speaker_routes(
+        app,
+        auth_dep=v2_auth,
+        config_now=cfg_now,
+        error_cls=V2Error,
+        plane_client=speaker_plane_client,
+    )
 
     # ------------------------------------------------------------------ static hosting
     shell = Path(dist) / "v2.html"
