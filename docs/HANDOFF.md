@@ -2981,3 +2981,60 @@ dot2-d 1 次（09:09:45），全部 `wake with no speech`、`[seg]` 0、轮次 0
 
 **下一步**：批次 3 = 六条小修（`wake_skip_ms` 默认 0、AEC 后增益+限幅、残差级全程旁路/DTD、per-device KWS 门限、
 空唤醒惩罚、回归用例）。之后发版卡。
+
+### 2026-11-02 11:3x 0.8.16 批次 3 开发完成（六条小修；未部署）
+
+**commit** `0e4fd77`（`feat(audio): six on-device fixes for the far-field and playback paths`）。
+**前置**：批次 1 `5430923`、批次 2 `0389622`。生产仍是 0.8.15 临时止血态，本批**未部署**。
+
+**做了什么（按今天的证据排序）**
+1. **`wake_skip_ms` 默认 300 → 0**：schema、`GateConfig` 兜底、**冷装模板**（`src/rui/config/template.yaml`、
+   `config.example.yaml`）、控制台文案、`docs/socket-plug-v1.md` 全部同步。`rui setup` 新装即 0。
+   注意：存量配置里**显式写着** `wake_skip_ms: 300` 的会被保留（今天生产手工改过 0，不受影响）。
+2. **AEC 后人声增益 + 限幅**：`audio.voice.gain_db`（默认 6.0，0–18）在 AEC 之后、KWS/VAD/ASR 之前；
+   峰值 > 0.95 硬限幅并计 `limiter_count`。**overdrive / voice_peak 的观测点在增益前**，所以它仍然描述「采集有没有饱和」，
+   不会被增益掩盖。`gain_db: 0` 与旧实现逐字节一致（verifier 用 `cmp` 验过）。
+3. **残差级全程旁路**：唤醒 → 本次 turn 结束（段上报 / 段被拒 / 静默关窗 / barge 结束）全程 `hold`，
+   `AecChain.release()` 恢复；`wake_hold_ms` 改为**上限**（默认 15000，0=关闭旁路）。
+   回滚：`wake_hold_ms: 1500`（接近旧的固定 1.5 s，但 turn 提前结束会更早恢复，不是逐字回滚）。
+4. **per-device KWS 门限**：`devices[].audio.voice.kws_threshold` / `kws_boost`（None=继承）。
+   有覆盖时按该设备 `wake_words` 生成 `data_dir/kws/<device>.txt`（原子写，失败回退全局）；无覆盖零行为变化。
+   生产门限值本身不在这批改（bridge 部署时写配置：客厅 0.07、卫生间/儿童房 0.15）。
+5. **空唤醒冷却**：连续第 `empty_wake_cooldown_after`（默认 2）次空唤醒后，该设备 KWS 命中直接丢弃
+   `empty_wake_cooldown_s`（默认 120 s），`wake_rejections["cooldown"] += 1`，日志
+   `wake suppressed: cooldown <N>s left (empty wakes=<n>)`。barge 空收**不计数**（评审抓出的坑）。
+   注意：冷却期内**真人唤醒也会被丢弃**，回滚键 `empty_wake_cooldown_s: 0`。
+6. 切除策略（第 6 条）已在批次 2 完成，不重复。
+
+**新增配置总表（0.8.16 全部）**
+| 键 | 默认 | 回滚到 |
+|---|---|---|
+| `audio.voice.speaker_gate.enabled` | `false` | 已是回滚态 |
+| `…speaker_gate.segment_gate` | `true` | `false` |
+| `…speaker_gate.wake_window_ms` | `2500` | `0` |
+| `…speaker_gate.skip_on_barge` | `true` | `false` |
+| `audio.voice.vad_max_speech_ms` | `8000` | 调大 |
+| `audio.voice.gain_db` | `6.0` | `0` |
+| `audio.aec.wake_hold_ms` | `15000` | `1500` / `0` |
+| `audio.voice.empty_wake_cooldown_s` | `120` | `0` |
+| `audio.voice.empty_wake_cooldown_after` | `2` | 调大 |
+| `devices[].audio.voice.kws_threshold` / `kws_boost` | `null`（继承） | 删除覆盖 |
+| `ack.keep_overlapping_speech` | `true` | `false` |
+
+**证据**
+- `ruff check src tests` → All checks passed。
+- 定向：四个新测试 32 passed；卡片指定回归 139 passed / 6 skipped；相邻回归 123 passed。
+- `tests/test_audio_scale.py` 9 passed（旧的幅度不变式 pin `gain_db=0`，新增默认增益用例）。
+- 评审 rev-d：2 轮（2 条阻塞 → PASS）。verifier-d：首轮全量 **5 failed**（都是 `test_audio_scale.py` 的幅度断言，
+  已按有意行为变化更新测试）；复验 `test_audio_scale.py` 9 passed、无断言放宽（diff +21 −0）。
+- **全量测试在批次 3 收口时是红的（5 failed）→ 已修，但未重跑全量**；发版前的全量是最终判据（见发版卡）。
+
+**已知风险（全部只有单测/合成音频）**
+- 增益 +6 dB 对 3.5 m 识别率、限幅对听感的影响未上真机；`limiter_count` 真实分布未采样。
+- 残差全程旁路对「放歌 80% 下一首」的实际收益未上真机；ERLE 会掉（这是有意的取舍）。
+- per-device 门限的真实召回/误唤醒未标定；空唤醒冷却的 120 s / 2 次阈值未实测。
+- 冷却会静音真人唤醒（设计），`empty_wake_cooldown_s: 0` 是回滚键。
+- 增益同时作用于注册 wav 与声纹 embedding；因为注册与判定都走同一条 post-AEC 链路，口径一致
+  （`speaker_gate.enabled=false` 时零变化）。
+
+**下一步**：发版卡（版本号 0.8.16、CHANGELOG、D8 → D8′ 文档、CI 四绿口径、amd64 digest、HANDOFF 回填）。
