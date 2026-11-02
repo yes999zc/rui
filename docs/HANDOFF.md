@@ -3463,3 +3463,17 @@ API 报的 `token_missing` 是次要码（`token_managed_by_adapter` 要求 link
 - 小爱 Pro：**AUX 档位由 9哥 在机身上手动设好（≈80），此后固定不动**；rui 已不再管理它（living disabled）。
 - 最终响度 = Dot 100% × 小爱固定档；9哥 现场确认「效果不错」。
 - 两级音量的口径写死：**只调 Dot，不动小爱**。若日后某段语音发炸（模拟链路削顶），先把 Dot 退到 90 再听。
+
+### 2026-11-02 16:01 记录点：9哥 拔掉客厅小爱，只测 Dot（我不再改配置）
+
+**起因**：15:5x 的调试里，「在呢」之后仍会多一句——不是自听那条路径，而是回声残片「呢。」被判噪声后
+走 `app.py:3581 rules.is_noise -> _not_heard`，回了「没听清，你再说一遍」。9哥 已明确：停止改动，先拔小爱、
+只测 Dot 本身。**此记录点之后不得擅自改配置/代码，只记日志事实。**
+
+**16:01 快照**（改不动的东西记清楚，方便对比）：
+- 版本 0.8.16 / health ok / 4 台 / 0 错误；`dot2-d` = 客厅 / ready；音量 255
+- 服务器热修 `process.py` **在**（`skip = ACK_PLAYOUT_LEAD_MS + cue + ACK_TAIL_MS` = 1680 ms）
+- 设备侧 `DOT2_AEC_DELAY_MS` **已撤**（仅 `DOT2_AEC_ENABLED=1`）
+- `ack.keep_overlapping_speech = false`；`session.farewell = off`
+- 客厅声音路径：Dot 3.5 mm → 小爱 AUX 功放
+- **待测**：拔掉小爱后，Dot 只剩自己喇叭，AEC 参考与实际发声一致 → 观察「在呢」之后是否还多一句
