@@ -3239,3 +3239,15 @@ if self._extractor is None or (pcm.size == 0 if isinstance(pcm, np.ndarray) else
 **临时验证路径**（只在容器内热修 `site-packages/.../speaker_gate.py` + `docker restart rui`，
 等价于只给「commit 那一次调用」放行；下次 `compose up -d` 会丢，不能当正式修复）——
 用于今天先把 3 人 × 2 台的 embedding 录进 `data_dir/speakers.json`（数据本身不受补丁影响）。
+
+### 2026-11-02 12:26 注册 bug 已热修（bind-mount，非正式修复），commit 通路打通
+
+- 容器 rootfs 是 `read_only: true`，`docker exec` 改 site-packages 会 `OSError: Read-only file system`。
+- 做法：把 `speaker_gate.py` 拷到 `/vol1/rui/hotfix/speaker_gate.py`，只改 `embed()` 的守卫，
+  override 里加一行只读 bind mount：
+  `- ./hotfix/speaker_gate.py:/usr/local/lib/python3.12/site-packages/rui/audio/speaker_gate.py:ro`
+  再 `compose up -d`（容器重建，health 0.8.16 / 5 台 / 0 错误）。
+- 验证：`POST /api/v2/speakers/enroll` → 2 s 无语音 → `commit` 返回 **200**（此前 500），
+  库内出现 `_smoke`（已 DELETE 清掉，库回到空）。
+- **这不是正式修复**：0.8.17 必须在源码里改守卫 + 补单测（task-2），上线后删掉 hotfix 挂载并把
+  `hotfix/` 目录归档。备份原文件：`/vol1/rui/data/speaker_gate.py.0.8.16-orig`。
