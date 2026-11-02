@@ -3621,3 +3621,15 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 
 **部署**：本机生产**仍是 0.8.15**，未升级（9哥 未要求）。GHCR 16:2x 起从 NAS 不可达，
    0.8.17 镜像由 GitHub Actions `docker-publish` 在 tag 上构建发布；NAS 拉取需等网络恢复。
+
+**CI 结果（16:53）**：`docker-publish` ✅ 成功，镜像已发布：
+- index digest `sha256:77841cab698342c76deef794876df19605e66ba2a63eb035b917d2518b777a46`
+- **amd64 `sha256:5020f0640a824f76a997929987f11f8dbb43db1c9fe4e19ed9b33df73d027383`**（NAS 部署用这个钉）
+- tags：`0.8.17` / `0.8` / `latest` / `sha-70dc019`
+- `secret-scan` ✅、`ci` ✅；`security`（Trivy 镜像扫描）❌ —— 报 base image 里有未豁免的 HIGH/CRITICAL，
+  与本次改动无关（扫的是基础镜像），**不阻塞发布**（publish 只依赖 test 门）。
+- 镜像 label 的 description 仍写着「Xiaomi LX06 via open-xiaoai」，与小爱停维护的定位不符，
+  属 workflow 元数据遗留，下次发版前顺手改。
+
+**部署**：本机生产**仍是 0.8.15，未升级**。NAS 侧 GHCR 16:2x 起不可达，要升级得等网络恢复后
+`docker pull ghcr.io/yes999zc/rui@sha256:5020f064…`（或先在一台网络正常的机器 `docker save` 再导入）。
