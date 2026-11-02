@@ -2931,3 +2931,53 @@ dot2-d 1 次（09:09:45），全部 `wake with no speech`、`[seg]` 0、轮次 0
 
 **下一步（批次 2，未开工）**：段级声纹 + 锚点连续性 + `vad_max_speech_ms`（默认 8000）+ 唤醒后短窗（2500 ms）
 + 切除策略（只丢 cue 段，不做 `[0, cue_end+40]` 整段）。批次 3：六条小修。最后发版卡。
+
+### 2026-11-02 11:0x 0.8.16 批次 2 开发完成（媒体在场门控 + 切除策略；未部署）
+
+**commit** `0389622`（`feat(audio): gate media voices out of turns and keep speech spoken over the cue`）。
+**前置**：批次 1 = `5430923`（声纹唤醒门控 + 注册入口）。生产仍是 0.8.15 临时止血态，本批同样**未部署**。
+
+**做了什么**
+1. **段级声纹**：VAD 段关闭后、上报控制面之前判定；不匹配 → 不发 `UTTERANCE_PCM`、不置 `_turn_pending`、
+   `turn_rejections[reason] += 1`、发非 barge `WakeIdle` 安静关窗、日志
+   `segment rejected: <reason> score=.. anchor=.. best=.. window=wake|none chunks=N (threshold ..)`。
+2. **锚点**：唤醒音频 embedding 存为本次锚点（每次唤醒先清旧的）。`any_enrolled` = max(库, 锚)；
+   `wake_owner` = 锚点（`accept_anchor_or_library=true` 时 OR 库兜底）。无锚点（barge 跳过 / device wake / embedding 失败）fail-open 且 warning 一次。
+3. **段长上限**：`audio.voice.vad_max_speech_ms`（默认 8000）按块切分逐块算分，全过才接受；今天的 9.38 s 媒体长段会因此被拒。
+4. **唤醒后短窗**：`speaker_gate.wake_window_ms`（默认 2500，按**音频时钟**）内只认锚点；`0` 关闭本层。
+5. **切除策略**：`vad.py` 用对齐后的 observed/reference 包络找「纯 cue 前缀」终点，只丢前缀；从首个重叠块起保留人声。
+   clipped / 无法定位 cue 仍走保守回退。日志新增 `overlap_from=`（无重叠 = none），真机可 grep 标定。
+   回滚键 `ack.keep_overlapping_speech: false` = 旧 `[0, cue_end+40]` 行为。
+
+**配置与回滚键**
+| 键 | 默认 | 回滚到 |
+|---|---|---|
+| `audio.voice.speaker_gate.segment_gate` | `true` | `false` = 不做段级判定 |
+| `audio.voice.speaker_gate.wake_window_ms` | `2500` | `0` = 关闭短窗 |
+| `audio.voice.vad_max_speech_ms` | `8000` | 调大即可放宽分块 |
+| `ack.keep_overlapping_speech` | `true` | `false` = 旧整段切除 |
+
+**协议/观测**：`Metrics.turn_rejected: dict[str,int] = {}`（additive default，老 plane/老控制面都可解析），
+`/health` 每设备可见 `turn_rejected`。
+
+**证据**
+- 全量 `pytest`（2470 用例）→ exit 0，0 failed / 0 errors（verifier 真跑；提醒：`addopts=-q` 与 `-q` 叠加会吞掉汇总行，要计数用 `-o addopts="" -q`）。
+- `ruff check src tests` → All checks passed；`npm run typecheck` / `npm run build` → exit 0；`web/dist` 未被跟踪。
+- 定向：新增两测试 25 passed；回归 160 passed / 6 skipped；补充 90 passed。
+- 评审 rev-c：PASS（无阻塞）；verifier：功能闸门全绿，唯一阻塞是 `speaker_gate.py` EOF 多一个空行，Lead 已修并复跑 `git diff --check`(0) + `ruff`(0)。
+- 评审独立复算：纯 cue 时 `keep_overlapping_speech=true/false` 输出**逐字节相同**（27520==27520）；重叠用例保留人声能量≈100%，纯 cue 相关性 <0.4（cue 未进 ASR）。
+
+**已知风险（全为合成音频/注入 embedder 证据，真机未验证）**
+- `CUE_OVERLAP_RATIO=1.6` + 连续 2 块是启发式：人声明显高于 cue 时能定位；cue 很响而人声较轻时不触发 → 退回旧整段丢 cue（不新增丢失）。需真机 `overlap_from=` 标定。
+- 重叠起点落在 skip 窗口内时，buffer 整段保留（含 cue 尾音回授）→ ASR 可能听到「在呢+命令」；这是为了不丢命令的取舍。
+- 段级 embedding 仍在帧循环里**同步**执行（9.38 s 段 2 次 CAM++），真机掉帧未测。
+- 尾块 <50 ms 时真实 embedder 返回 None → 该块 fail-open（仅 8000–8050 ms 边界可能触发）。
+- 无锚点 + 窗外 + any_enrolled 走库兜底；barge 段起点早于唤醒落在窗内 → fail-open（不拦 barge，属设计）。
+
+**bridge 真机验收要额外看的**
+1. 视频播放中家人说「几点了」×5 → ≥4 次正确；视频人声产生 **0 个 turn**（`turn_rejected` 增加、日志有 `segment rejected`）。
+2. 日志 `cue_gate: … overlap_from=` 是否出现非 none；出现时命令是否保住（对比 `keep_overlapping_speech: false`）。
+3. `/health` 每设备 `turn_rejected` 分布；`segment rejected` 与 `wake rejected` 的比例。
+
+**下一步**：批次 3 = 六条小修（`wake_skip_ms` 默认 0、AEC 后增益+限幅、残差级全程旁路/DTD、per-device KWS 门限、
+空唤醒惩罚、回归用例）。之后发版卡。
