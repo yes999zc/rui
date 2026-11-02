@@ -2735,3 +2735,23 @@ phase-close: task-3
 1. `mic_shift 11` 是出厂口径，但 01:36 的同窗口对比是 **10 更好**（3 米轻声：mic11 只 3 次唤醒、mic10 有 5 次）。
    明天测试要不要换回 10，等 9哥 一句话。
 2. 80% 音量会让「在呢」变响（9哥 之前抱怨过）；cue 没有独立音量，只能压总音量或 `ack.mode: none`。
+
+### 2026-11-02 09:05 卫生间 dot2-b 误唤醒：4 分钟内 7 次「在呢」（实测日志）
+
+**现象**（9哥 洗脸时发现的）：dot2-b（卫生间，`adapter: dot2`，16 kHz 单声道、`ref_channels: 0`、
+本机 AEC）在 09:04:11–09:08:18 之间连续 **7 次** `kws: wake: 你好小宝` → 7 次 admit（402–409 ms）→
+7 次 `wake with no speech after 5000 ms` → **0 次 `[seg]`、0 次 utt**。每次都播了「在呢」（音量 80%）。
+同期 living 在 08:59 也有 1 次空唤醒；dot2 / dot2-c / dot2-d 为 0。
+`[level] voice peak -24.1/-24.2/-25.4 dBFS` ⇒ 触发源是洗脸水声这类**响亮宽带噪声**，不是人声。
+
+**直接原因**：`/vol1/rui/config/keywords.txt` 是 `:4.00 #0.07 @你好小宝` —— boost 4.0、门限 0.07，
+而代码默认是 `:2.00 #0.15`（`kws.py:keyword_lines`）。10-29 为了救远场漏唤醒把灵敏度调高，
+现在反过来：噪声一响就过门限。
+
+**结构限制（今天改不了的原因）**：
+- 门限/boost **不是配置字段**，只存在于 `keywords.txt`；且 `kws_keywords_file` 是**全局唯一**一份；
+- `DeviceVoiceOverride` 只有 followup/post_playback_mute/ack_echo_ignore_ms，**没有 per-device KWS 开关或门限**；
+  `audio.voice.kws_enabled` 也是全局；设备 `wake_words` 只用于 setup/控制台，音频面不读（grep 确认）。
+⇒ 「卫生间严格、客厅灵敏」必须改代码，属于 0.8.16 候选。
+
+**可用但粗糙的两个旋钮**：① 全局 `keywords.txt` 门限/boost；② dot2-b 的 `volume`（只降低「在呢」的骚扰，不减误唤醒）。
