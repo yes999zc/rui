@@ -323,7 +323,7 @@ class SpeakerEmbedder:
 
     def embed(self, pcm: bytes | np.ndarray, rate: int) -> np.ndarray | None:
         """One embedding, or None when the audio cannot be embedded (caller admits)."""
-        if self._extractor is None or not pcm:
+        if self._extractor is None or (pcm.size == 0 if isinstance(pcm, np.ndarray) else not pcm):
             return None
         samples = _as_float32(pcm)
         if samples is None or samples.size < max(1, int(rate) // 20):

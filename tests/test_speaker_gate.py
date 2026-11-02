@@ -329,6 +329,65 @@ def test_embedder_without_a_model_path_raises_unavailable() -> None:
         SpeakerEmbedder("/nonexistent/campplus.onnx")
 
 
+class _FakeStream:
+    """The three calls `SpeakerEmbedder.embed` makes on a sherpa stream."""
+
+    def __init__(self) -> None:
+        self.waveform = None
+
+    def accept_waveform(self, sample_rate, waveform) -> None:  # noqa: ARG002
+        self.waveform = np.asarray(waveform)
+
+    def input_finished(self) -> None:
+        pass
+
+
+class _FakeExtractor:
+    """Duck-typed extractor: exercises `embed()` without sherpa-onnx or a model."""
+
+    def __init__(self, embedding: list[float]) -> None:
+        self._embedding = np.asarray(embedding, dtype=np.float32)
+        self.streams = 0
+
+    def create_stream(self) -> _FakeStream:
+        self.streams += 1
+        return _FakeStream()
+
+    def is_ready(self, stream) -> bool:  # noqa: ARG002
+        return True
+
+    def compute(self, stream) -> list[float]:  # noqa: ARG002
+        return list(self._embedding)
+
+
+def _fake_embedder() -> SpeakerEmbedder:
+    embedder = object.__new__(SpeakerEmbedder)
+    embedder._extractor = _FakeExtractor([0.1, 0.2, 0.3])  # type: ignore[attr-defined]
+    embedder._dim = 3  # type: ignore[attr-defined]
+    embedder.model_path = "fake"  # type: ignore[attr-defined]
+    return embedder
+
+
+def test_embed_accepts_int16_and_float32_arrays_not_only_bytes() -> None:
+    """0.8.16 regression: `not pcm` raised ValueError on an array (enroll commit 500).
+
+    The enroll path hands `embed()` an array read from the recorded wav, so the
+    guard must not ask a multi-element array for its truth value.
+    """
+    embedder = _fake_embedder()
+    pcm_bytes = _pcm(600)
+    int16 = np.frombuffer(pcm_bytes, dtype="<i2").copy()
+    float32 = int16.astype(np.float32) / 32768.0
+
+    for audio in (pcm_bytes, int16, float32):
+        embedding = embedder.embed(audio, RATE)
+        assert embedding is not None
+        assert embedding.shape == (3,)
+
+    assert embedder.embed(np.zeros(0, dtype="<i2"), RATE) is None
+    assert embedder.embed(b"", RATE) is None
+
+
 def test_real_campplus_model_embeds_when_the_extra_is_installed() -> None:
     pytest.importorskip("sherpa_onnx")
     model = Path(os.environ.get("RUI_SPEAKER_MODEL", "/data/models/speaker/campplus.onnx"))
