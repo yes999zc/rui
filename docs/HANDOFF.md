@@ -3584,3 +3584,9 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 | `ack.keep_overlapping_speech` | True | **False** |
 同步改 `config.example.yaml` 与三处测试断言（`test_config_v3.py` 模板、`test_speaker_segment_gate.py` 默认值）。
 **保留** per-device KWS 门限/boost 与 `vad_max_speech_ms`。
+
+**测试**（提交 `b1cdd9d`，已推）：`pytest` 全量 → 除 2 条环境相关外全绿。
+那 2 条是 `test_devices_admin::test_probe_reports_an_unreachable_host` 与
+`test_setup::test_probe_reports_an_unreachable_host_instead_of_raising`：
+本机 DNS 把 `no-such-host.invalid` 解析到 `198.18.0.188`（代理/catch-all），端口"能连上"，
+与本次改动无关（`git stash` 后同样失败）。
