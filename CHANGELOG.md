@@ -18,6 +18,28 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.17] - 2026-11-02
+
+**Theme: Dot-only 收口 —— 0.8.16 的副作用默认值全部退回中性；小爱（LX06）停止维护。**
+
+> **维护状态变更**：作者不再维护小爱（LX06 / `rui-xiaoai-bridge`），新部署请全面使用 Echo Dot（dot2）。
+> 代码与插件**不删**，已有部署继续可用，但不再保证行为对齐与新特性适配。
+
+### Changed
+
+- `audio.voice.gain_db` 默认 `6.0` → `0.0`：+6 dB 的 AEC 后增益把提示音回声残差一起放大，
+  越过 VAD 门限后被当成用户请求（实测 `turn: '在呢。' => '在呢，你说。'` 自问自答）。
+- `audio.voice.wake_skip_ms` 默认 `0` → `300`：0 让唤醒词自己的尾巴进转写（实测 `turn: '宝。'`）。
+- `audio.voice.empty_wake_cooldown_s` 默认 `120.0` → `0.0`：冷却期内真人唤醒也被丢弃（实测锁 120 s）。
+- `ack.keep_overlapping_speech` 默认 `True` → `False`（回到整段切掉 cue 前缀）。
+- `wake_hold_ms` 语义明确为「上限」：turn 结束即释放，只影响服务器 AEC 的设备。
+- `uv.lock` 的 rui 版本号与代码对齐（此前停在 0.8.14）。
+
+### Kept
+
+- per-device `kws_threshold` / `kws_boost`、`vad_max_speech_ms`；声纹门控与 enroll API 保留但默认关闭。
+- `lx06` adapter / `rui_xiaoai_bridge` 插件与 `RUI_ADAPTER_PLUGINS` 的 `lx06=…` 原样保留。
+
 ## [0.8.16] - 2026-11-02
 
 **Theme: 声纹只做门控（D8 → D8′），媒体在场不再冒充家人。**

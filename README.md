@@ -73,6 +73,9 @@ cat console-token.txt         # 控制台 token；之后也可用 `rui token` �
 
 桥的 release：[rui-dot2-bridge](https://github.com/yes999zc/rui-dot2-bridge/releases) / [rui-xiaoai-bridge](https://github.com/yes999zc/rui-xiaoai-bridge/releases)。
 
+> **维护状态（2026-11-02）**：小爱（LX06 / `rui-xiaoai-bridge`）**不再维护**，新部署请全面使用 Echo Dot（dot2）。
+> 代码与插件保留、已有部署可继续使用，但不再保证行为对齐与新特性适配（见 [0.8.17](docs/releases/v0.8.17.md)）。
+
 ## 三个仓库
 
 | 仓库 | 角色 |
@@ -177,6 +180,10 @@ Open `http://127.0.0.1:8080/v2/`, log in with that token, and add your first spe
 The core and every bridge are released independently; `compatibility.rui_min` in the device manifest and `rui_compat` in the plug manifest must both hold, and the loader refuses out-of-range plugs outright. The current windows are whatever the latest release of each repository says.
 
 Bridge releases: [rui-dot2-bridge](https://github.com/yes999zc/rui-dot2-bridge/releases) / [rui-xiaoai-bridge](https://github.com/yes999zc/rui-xiaoai-bridge/releases).
+
+> **Maintenance status (2026-11-02).** The Xiaomi AI Speaker (LX06 / `rui-xiaoai-bridge`) is **no longer maintained**:
+> new deployments should use the Echo Dot (dot2). The plug and adapter stay in place and keep working, but
+> behavioural parity and new features are no longer guaranteed (see [0.8.17](docs/releases/v0.8.17.md)).
 
 ## The three repositories
 
