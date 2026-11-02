@@ -3606,3 +3606,18 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 
 **结论**：0.8.17 按默认值跑，行为 ≈ 0.8.15 + 一条长段切块；真正的增量是「可选能力」。
 要不要发这一版，取决于以后是否需要按房间调 KWS 门限。
+
+### 2026-11-02 16:47 **发版 0.8.17**（Dot-only 收口 + 小爱停止维护声明）
+
+**内容**（提交 `70dc019`，tag `v0.8.17` 已推，CI 已触发）：
+- 默认值回滚（同 `b1cdd9d`）：`gain_db 0`、`wake_skip_ms 300`、`empty_wake_cooldown_s 0`、
+  `keep_overlapping_speech false`。
+- **维护状态变更（9哥 定）**：作者不再维护小爱（LX06 / `rui-xiaoai-bridge`），新部署全面用 Dot。
+  **代码与插件不删**，`lx06` adapter / `RUI_ADAPTER_PLUGINS` 原样保留；README 加中英双语声明，
+  `docs/releases/v0.8.17.md` 写全原因（LX06 靠服务器 AEC，远场/双讲劣于 Dot 的设备侧硬件 AEC）。
+- `uv.lock` 版本终于对齐（此前一直停在 0.8.14，0.8.12 发版时吃过一次亏）。
+
+**验证**：`test_version` / `test_wake_skip_default` / `test_audio_scale` / `test_config_v3` 全绿；`ruff` 全绿。
+
+**部署**：本机生产**仍是 0.8.15**，未升级（9哥 未要求）。GHCR 16:2x 起从 NAS 不可达，
+   0.8.17 镜像由 GitHub Actions `docker-publish` 在 tag 上构建发布；NAS 拉取需等网络恢复。
