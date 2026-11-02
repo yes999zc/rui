@@ -3174,3 +3174,21 @@ docker run --rm --platform linux/amd64 --entrypoint python \
 - `src/rui/audio/aec.py`：`hold_for()/release()`。
 - `docs/multi-device-design.md` §9.2/§9.3：D8′。
 - `docs/releases/v0.8.16.md`：面向部署者的说明与回滚键。
+
+### 2026-11-02 12:1x 0.8.16 开始部署（bridge 执行，9哥 已批准）
+
+**开发侧**：0.8.16 四批 + 评审 3 次 + verifier 全量 `2496 passed / 7 skipped`，CI 四绿（`6e0f374`），
+amd64 镜像 `ghcr.io/yes999zc/rui@sha256:9d28f00d30192becf0be6bb08ada3cba06c6d4bfa3add207e5eee9eb366ca11e`。
+
+**部署前状态**（12:12 实测）：0.8.15、5 台、`device_errors 0`、`mic 10 / ref 14`、`wake_skip_ms 0`、
+`ack tts`、音量 80%、门限临时 `2.00 #0.15`。
+
+**部署顺序**（照开发会话建议）：
+1. 备份 `config.yaml` / `keywords.txt`；override 里换 amd64 摘要并 `compose up -d`；
+2. `speaker_gate.enabled` **保持 false** 先验等价性（5 台 / 0 错误 / capture / ack）；
+3. 控制台注册 3 人 × 2 台（living、dot2-c）；
+4. 开 `speaker_gate.enabled: true`（阈值 0.55），`keywords.txt` 回 `4.00 #0.07`；
+5. 按需 `devices[].audio.voice.kws_threshold`（客厅 0.07、1 m 三台 0.15）；
+6. 回填模型 sha256、镜像 digest、以及 `tests/0.8.16-acceptance.md` 的验收结果。
+
+**回滚锚**：0.8.15 amd64 `sha256:4a4c2db421367ee5c110d97d8ac5a984f4702fa6f854fde12f1a087723cd948d` + 上面两份配置备份。
