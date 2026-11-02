@@ -3651,3 +3651,10 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 - 处理：按 `security/trivy-ignore.yaml` 的规则加一条带 statement 的豁免（到位日 2027-01-23，
   ≤90 天），并更新 `docs/security-scanning.md` 的 SQLite 分组与计数说明；提交 `489d4e1`。
 - 结论：**与 0.8.17 的代码/默认值无关**，也**不阻塞镜像发布**（publish 只依赖 test 门）。
+
+**16:59 进展（未收口，下一轮接着看）**：给 `CVE-2026-119373` 加了带 statement 的豁免（`489d4e1`）后重扫，
+`security` **仍是红**：`Fail on unignored or unexpired HIGH/CRITICAL findings`，但本次运行没上传到 SARIF artifact，
+无法直接看剩余项。下一轮排查顺序：
+① 从该 run 的 job summary 看 "unignored 数量"；② 确认 `trivy-ignore.yaml` 的条目是否需要 `purls`/`paths`
+（库类发现按包路径匹配时，只有 id 可能不足以命中）；③ 确认是否有**到期**条目（expired_at 2027-01-23 未到期）。
+注：此红**不阻塞发布**（publish 只依赖 test 门），也不影响当前生产（0.8.15）。
