@@ -500,10 +500,10 @@ _VOICE_GOLDEN = {
     "vad_preroll_ms": 350,
     "wake_preroll_ms": 500,
     # 0.8.16: 0 keeps the first syllable spoken right after the wake word.
-    "wake_skip_ms": 0,
+    "wake_skip_ms": 300,
     # 0.8.16: post-AEC voice gain (+6 dB) and the empty-wake punishment.
-    "gain_db": 6.0,
-    "empty_wake_cooldown_s": 120.0,
+    "gain_db": 0.0,
+    "empty_wake_cooldown_s": 0.0,
     "empty_wake_cooldown_after": 2,
 }
 _AEC_GOLDEN = {

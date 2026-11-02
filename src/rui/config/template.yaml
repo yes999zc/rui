@@ -72,7 +72,7 @@ audio:
     # and 300 ms ate the first syllable of a request spoken right after the wake
     # word ("几点了" arrived as "点了"). Only raise it for a device whose KWS
     # tail is measurably longer.
-    wake_skip_ms: 0
+    wake_skip_ms: 300
     barge_in: true
     kws_enabled: true
     kws_model_dir: /data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20

@@ -3563,3 +3563,24 @@ GHCR 在 16:2x 起不可达（`context deadline exceeded`），0.8.15 是用**�
 
 **遗留**：① GHCR 断连，digest 未重钉；② 生产配置仍是 10-30 时代的房间标签（dot2=儿童房 / dot2-b=次卧 /
 dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示；③ 今晚只验了 Dot 单台，验收 A/C/D 仍未跑。
+
+### 2026-11-02 16:37 本机禁用小爱 + 清掉 0.8.16 副作用默认值（仓库侧）
+
+**本地（生产 0.8.15）**
+- `devices[living].enabled: false`，room 改标 `客厅（小爱·本机不接入）` → `/health` = devices 4 / enabled 4 / 0 错误。
+  配置 diff 只有这一处 + 四台 dot2 的 `ack_echo_ignore_ms: 1200`（0.8.12 当时的部署值）。
+- **GitHub 上的小爱支持继续保留**：`rui_xiaoai_bridge` 插件、`lx06` adapter、`RUI_ADAPTER_PLUGINS` 里的
+  `lx06=…` 一律不动 —— 只是这台部署不接入。
+- hotfix 遗留清理：`/vol1/rui/hotfix/`（process.py / speaker_gate.py / __pycache__）与
+  `data/speaker_gate.py.0.8.16-orig` 一并归档到 `/vol1/rui/backups/hotfix-archive-20261102-163734/`，
+  `hotfix/` 目录已移除；override 里 hotfix 挂载计数 0。
+
+**仓库（未发版，只改默认值）** —— 去掉 0.8.16 的四个副作用默认值：
+| 字段 | 0.8.16 | 改回 |
+|---|---|---|
+| `audio.voice.gain_db` | 6.0 | **0.0** |
+| `audio.voice.wake_skip_ms` | 0 | **300** |
+| `audio.voice.empty_wake_cooldown_s` | 120.0 | **0.0** |
+| `ack.keep_overlapping_speech` | True | **False** |
+同步改 `config.example.yaml` 与三处测试断言（`test_config_v3.py` 模板、`test_speaker_segment_gate.py` 默认值）。
+**保留** per-device KWS 门限/boost 与 `vad_max_speech_ms`。

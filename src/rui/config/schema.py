@@ -395,7 +395,7 @@ class VoiceConfig(BaseModel):
     # 0.8.16: 300 ms cut the first syllable of a request spoken straight after the wake
     # word ("几点了" lost its onset). The wake phrase's own tail is already excluded by
     # the KWS latency and the pre-wake replay; 0 keeps the person's first word.
-    wake_skip_ms: int = Field(default=0, ge=0, le=1000)
+    wake_skip_ms: int = Field(default=300, ge=0, le=1000)
     barge_in: bool = True
     # Wake word. Off unless a model directory is configured: the model is a download,
     # not something a pip install can guess.
@@ -442,12 +442,12 @@ class VoiceConfig(BaseModel):
     # is untouched); the far field needs ~6 dB before KWS/VAD/ASR, and a hard limiter
     # keeps the extra gain from wrapping. 0 is the rollback key: the output is then
     # byte-identical to 0.8.15.
-    gain_db: float = Field(default=6.0, ge=0.0, le=18.0)
+    gain_db: float = Field(default=0.0, ge=0.0, le=18.0)
     # Empty-wake punishment (0.8.16): after this many consecutive wakes that heard no
     # speech, the device ignores KWS hits for `empty_wake_cooldown_s`. 0 disables it;
     # the first N-1 empty wakes only count. Note: while the cooldown runs, a real
     # person's wake is dropped too - rollback key `empty_wake_cooldown_s: 0`.
-    empty_wake_cooldown_s: float = Field(default=120.0, ge=0.0, le=600.0)
+    empty_wake_cooldown_s: float = Field(default=0.0, ge=0.0, le=600.0)
     empty_wake_cooldown_after: int = Field(default=2, ge=1, le=10)
     # Wake-time speaker gate (0.8.16 P0): a wake whose audio matches no enrolled family
     # voice is silently dropped. Off by default, so an untouched config is 0.8.15.
@@ -578,7 +578,7 @@ class AckConfig(BaseModel):
     # removed a command spoken over the cue. With this on, only the pure-cue prefix is
     # dropped and everything from the first block with speech on top of it is kept.
     # False restores the old whole-window excision (A/B and rollback).
-    keep_overlapping_speech: bool = True
+    keep_overlapping_speech: bool = False
 
     @field_validator("chime")
     @classmethod

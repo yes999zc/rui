@@ -1,7 +1,9 @@
-"""0.8.16 ①: `wake_skip_ms` defaults to 0 so the first word after the wake survives.
+"""`wake_skip_ms`: default 300; 0 is available per deployment (0.8.17 decision).
 
-The old 300 ms skip removed the onset of a request spoken straight after 「你好小瑞」
-("几点了" arrived as "点了"). The range stays 0–1000 for per-device/rollback use.
+0.8.16 defaulted this to 0 to keep the first word after the wake ("几点了" had arrived
+as "点了"). On the 2026-11-02 Dot-only architecture that default let the wake phrase's
+own tail into the transcript (a turn built from 「宝。」), so the default is back to 300
+and 0 stays a documented per-deployment choice. Range stays 0–1000.
 """
 from __future__ import annotations
 
@@ -76,15 +78,16 @@ def _feed(gate: UtteranceGate, pcm: bytes) -> tuple[bytes, float] | None:
     return out
 
 
-def test_schema_default_is_zero_and_the_range_is_unchanged() -> None:
-    assert VoiceConfig().wake_skip_ms == 0
-    assert Config().audio.voice.wake_skip_ms == 0
+def test_schema_default_is_300_and_zero_stays_available() -> None:
+    assert VoiceConfig().wake_skip_ms == 300
+    assert Config().audio.voice.wake_skip_ms == 300
+    assert VoiceConfig(wake_skip_ms=0).wake_skip_ms == 0
     assert VoiceConfig(wake_skip_ms=1000).wake_skip_ms == 1000
     with pytest.raises(ValueError):
         VoiceConfig(wake_skip_ms=1001)
 
 
-def test_the_plane_passes_zero_into_the_vad_gate(tmp_path, monkeypatch) -> None:
+def test_the_plane_passes_the_configured_skip_into_the_vad_gate(tmp_path, monkeypatch) -> None:
     captured: list[GateConfig] = []
 
     class StubGate:
@@ -99,7 +102,11 @@ def test_the_plane_passes_zero_into_the_vad_gate(tmp_path, monkeypatch) -> None:
     cfg.audio.voice.vad_model_path = "silero_vad.onnx"
     plane = AudioPlane(cfg, "living", tmp_path / "plane.sock")
     plane._build_vad()
-    assert captured and captured[0].skip_after_wake_ms == 0
+    assert captured and captured[0].skip_after_wake_ms == 300
+
+    cfg.audio.voice.wake_skip_ms = 0
+    plane._build_vad()
+    assert captured[-1].skip_after_wake_ms == 0, "a deployment may still opt into 0"
 
 
 def test_a_request_right_after_the_wake_keeps_its_first_word(make_gate) -> None:
@@ -121,16 +128,16 @@ def test_the_gate_config_fallback_is_also_zero() -> None:
     assert GateConfig().skip_after_wake_ms == 0
 
 
-def test_a_cold_install_template_carries_zero(tmp_path) -> None:
+def test_a_cold_install_template_carries_300(tmp_path) -> None:
     """`rui setup` writes template.yaml verbatim; an explicit 300 would beat the schema."""
     from rui.__main__ import _production_template
 
     path = tmp_path / "config.yaml"
     path.write_text(_production_template(path), encoding="utf-8")
-    assert load_config(path).audio.voice.wake_skip_ms == 0
+    assert load_config(path).audio.voice.wake_skip_ms == 300
 
     repo = Path(__file__).resolve().parents[1]
     template = (repo / "src" / "rui" / "config" / "template.yaml").read_text(encoding="utf-8")
-    assert "wake_skip_ms: 0" in template
+    assert "wake_skip_ms: 300" in template
     example = (repo / "config.example.yaml").read_text(encoding="utf-8")
-    assert "wake_skip_ms: 0" in example
+    assert "wake_skip_ms: 300" in example

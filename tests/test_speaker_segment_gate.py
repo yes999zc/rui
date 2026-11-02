@@ -92,7 +92,7 @@ def test_new_defaults_are_the_documented_ones() -> None:
     assert cfg.audio.voice.vad_max_speech_ms == 8000
     assert cfg.audio.voice.speaker_gate.segment_gate is True
     assert cfg.audio.voice.speaker_gate.wake_window_ms == 2500
-    assert cfg.ack.keep_overlapping_speech is True
+    assert cfg.ack.keep_overlapping_speech is False
 
 
 def test_out_of_range_values_are_rejected() -> None:

@@ -83,11 +83,16 @@ def test_echo_cancelled_path_keeps_the_amplitude_too(monkeypatch) -> None:
 
 
 
-def test_the_default_gain_lifts_the_voice_amplitude() -> None:
-    """0.8.16: `audio.voice.gain_db=6` is applied after AEC and before KWS/VAD/ASR."""
+def test_the_gain_lifts_the_voice_amplitude() -> None:
+    """`audio.voice.gain_db` is applied after AEC and before KWS/VAD/ASR.
+
+    0.8.17 puts the default back to 0 (the +6 dB default lifted the ack echo residual
+    over the VAD threshold), so the lift is exercised with an explicit value.
+    """
     cfg = Config()
     cfg.audio.aec.enabled = False
-    assert cfg.audio.voice.gain_db == 6.0
+    assert cfg.audio.voice.gain_db == 0.0, "the default must not colour the bytes"
+    cfg.audio.voice.gain_db = 6.0
     plane = AudioPlane(cfg, "living", Path("/tmp/scale.sock"))
     out = plane._frame_to_voice(make_frame(16000), Decimator(factor=1, channels=8))
 
