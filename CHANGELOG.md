@@ -18,6 +18,67 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.16] - 2026-11-02
+
+**Theme: 声纹只做门控（D8 → D8′），媒体在场不再冒充家人。**
+
+一天真机实测（09:04–10:05，9 哥全程在场）证明误唤醒与「媒体人声被当命令」都源自外部媒体：
+孩子看视频时 4 分钟 13 次「在呢」，唤醒后视频里的人声被当命令（09:59:16「属好友。」误触出题工具）。
+本版按 [goal-0.8.16](../04_Docs/human-bridge/goal-0.8.16.md) 落地：**声纹不承担身份认证**，
+只回答「这句唤醒/这段话是不是已注册家人说的」；不匹配就完全静默。
+
+### Added
+
+- **唤醒声纹门控**（`audio.voice.speaker_gate`，默认 `enabled: false`）：CAM++（sherpa-onnx，
+  192 维，余弦阈值默认 0.55）给唤醒音频打分；不匹配时**不播「在呢」、不建 turn、不发 Wake**，
+  只记 `wake_rejected["speaker"]` 与一行 `wake rejected: speaker score=… best=…`。
+  缺模型 / 空库 / embedding 失败一律 **fail-open**；本设备无档案时回退全库，避免设备变聋。
+- **注册入口**：`POST /api/v2/speakers/enroll` → `…/commit`、`GET /api/v2/speakers`、
+  `DELETE /api/v2/speakers/{name}`、`GET …/{name}/sample.wav`；控制台 v2 新增「家庭成员」页
+  （注册/重录/删除/播放样本/相似度）。复用设备推流录 1–10 s，落 `data_dir/speakers.json`
+  （键 `(name, device_id)`，原子写 0600），**不重启即生效**。
+- **段级门控**（`speaker_gate.segment_gate`）：每个 VAD 段在进 ASR 前与注册库+唤醒锚点比对，
+  不匹配静默丢弃（`turn_rejected`）；`wake_window_ms`（默认 2500，音频时钟）内只认锚点；
+  超过 `vad_max_speech_ms`（默认 8000）的段按块逐段判定（9.38 s 的媒体长段会被拒）。
+- **AEC 后人声增益 + 限幅**：`audio.voice.gain_db`（默认 6），在 KWS/VAD/ASR 之前；峰值 > 0.95 限幅
+  并计 `limiter_count`。采集增益（`mic_shift`）不动；overdrive 观测保持在增益前。
+- **per-device KWS 门限**：`devices[].audio.voice.kws_threshold` / `kws_boost`（None=继承），
+  有覆盖时按该设备 `wake_words` 生成 `data_dir/kws/<device>.txt`。
+- **空唤醒冷却**：连续第 2 次空唤醒后该设备 KWS 命中被抑制 `empty_wake_cooldown_s`（默认 120 s）。
+
+### Changed
+
+- **`wake_skip_ms` 默认 300 → 0**（含冷装模板）：300 ms 会吃掉唤醒词后第一个音节
+  （「几点了」→「电了/辩了/远了」实测 3/6）。存量配置若显式写着 300 会保留。
+- **残差级旁路跟随 turn**：唤醒 → 本次 turn 结束全程旁路（旧值是固定 1500 ms），
+  `audio.aec.wake_hold_ms` 改为上限（默认 15000）。
+- **cue 切除只丢纯 cue 前缀**：与提示音重叠的人声不再被整段切掉（`ack.keep_overlapping_speech`，
+  默认 true；false 回到旧 `[0, cue_end+40]`）。日志新增 `cue_gate: … overlap_from=`。
+
+### Fixed
+
+- 视频/电视声命中唤醒词时不再出声（静默拒绝）。
+- 唤醒后媒体人声不再产生 turn（段级门控 + 锚点）。
+- 唤醒词后第一个字不再被 300 ms skip 吃掉。
+- 远场识别不再依赖危险的采集增益（改用 AEC 后 +6 dB + 限幅）。
+- 放歌中的命令不再被残差级在 1.5 s 后压掉（全程旁路）。
+- 卫生间类噪声场景不再 4 分钟连击唤醒（冷却 + per-device 门限）。
+
+### Rollback (each is one config line)
+
+`audio.voice.speaker_gate.enabled: false` · `…segment_gate: false` · `…wake_window_ms: 0` ·
+`audio.voice.vad_max_speech_ms`（调大）· `audio.voice.gain_db: 0` · `audio.aec.wake_hold_ms: 1500` ·
+`audio.voice.empty_wake_cooldown_s: 0` · `ack.keep_overlapping_speech: false` · `wake_skip_ms: 300`
+
+### Notes
+
+- 声纹只做 UX 过滤，**不构成安全边界**（录音回放可绕过）；不做多人同时说话分离。
+- 本版**未部署**：真机验收（视频 10 分钟 0 误唤醒、3.5 米 ≥4/5、放歌「下一首」≥4/5、
+  注册/重录流程、六条回归）由 bridge 在部署窗口执行，结果回填 `docs/HANDOFF.md`。
+- 声纹模型：`3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx`（CAM++，28 MB，192 维），
+  部署在 `/vol1/rui/data/models/speaker/campplus.onnx`（容器内 `/data/models/speaker/campplus.onnx`），
+  不随镜像发布；缺失时门控 fail-open 不影响唤醒。
+
 ## [0.8.15] - 2026-11-02
 
 **Theme: AEC grows the vendor's second stage, and the wake window protects the command.**

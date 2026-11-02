@@ -467,12 +467,13 @@ multi_device:
 | D5 | 隐私 | 允许 KWS 持续上行设备全屋部署；控制台设备列表/详情显示 `wake.source` 与“持续采集”标记 |
 | D6 | Dot2 device_wake 前置 | OWW 运行时/模型未就位前 Dot2 走 KWS（持续上行），控制台按 D5 标注 |
 | D7 | 房间模型 | 不引入顶层 `rooms`；用 `devices[].room` + `arbitration.room_priority`；`multi_device.enabled=true` 时 `room` 必填 |
-| D8 | voice identity | 不做声纹；只按房间仲裁（多用户同时说话无法区分，接受） |
+| D8′ | voice identity | **声纹只做唤醒/开场门控，不做身份认证、不当作安全边界**（可被录音回放绕过）；注册最多 5 人，按 `(name, device_id)` 存 `data_dir/speakers.json`；不匹配时**静默拒绝**（不播提示音、不建 turn、只记日志与 `wake_rejected["speaker"]`）；`mode: any_enrolled` 为默认，`wake_owner` 只收紧「谁能接着说」。房间仲裁继续保留作为第二层。（2026-11-02 由 D8「不做声纹」改；原因见 §9.3） |
 | D9 | 回滚 | Phase 2 起生产默认 `multi_device.enabled=false`；LX06+Dot2 验收通过后才开 |
 
 ### 9.3 变更记录
 
 - **2026-10-25**：冻结 K1–K6 + 接受 D1–D9（9 哥 确认，Lead 记录）。同时并入 dot2 #11 的三点补充：同房间交叉回声抑制（§4.5）、来源分层/不跨来源比 score（K3）、可解释 trace 字段（§11 Q6）。
+- **2026-11-02**：**D8 改为 D8′**。原「不做声纹，只按房间仲裁」的前提是「多用户同时说话无法区分，接受」；09:04–10:05 的真机日志证明真正的痛点不是「分不清谁在说」，而是**媒体声本身能命中唤醒词、唤醒后媒体人声被当命令**（孩子看视频时 13 次误唤醒、09:59:16「属好友。」误触出题工具）。声纹门控（CAM++ / sherpa-onnx，192 维，余弦阈值 0.55）能把这两类**静默拦掉**，于是把范围明确限定为「唤醒/开场门控」：不做身份认证、不做安全边界、不做多人分离。实现：`src/rui/audio/speaker_gate.py`、`audio.voice.speaker_gate.*`（`enabled` 默认 false，一行回滚 0.8.15）；注册入口 `/api/v2/speakers/*` + 控制台「家庭成员」；段级门控见 `speaker_gate.segment_gate`。残余风险：房间内人 + 电视同时说话时 embedding 分数会降（见 `goal-0.8.16.md` P1 诚实说明）。
 - **2026-10-28**：D4 资源上限 `max_planes` 默认 4 → **5**（第 3 台 dot2 到货，目标 lx06 + dot2×4 同时在线）；可配窗口 1–8 不变，超限仍是明确告警 + 不排队。代码：`src/rui/config/schema.py`；测试：`tests/test_config_v3.py`。
 
 ## 10. 参考（代码/文档路径）
