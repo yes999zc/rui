@@ -637,6 +637,13 @@ class AudioPlane:
         self.wake_admit_timeouts = 0
         self.wake_admit_latency_ms: float | None = None
         self.wake_rejections: dict[str, int] = {}
+        # 0.8.16 P1: why finished VAD segments were dropped before ASR (same shape as
+        # `wake_rejections`, exposed through Metrics.turn_rejected).
+        self.turn_rejections: dict[str, int] = {}
+        # Audio-clock timestamp of the last accepted wake: the segment gate's
+        # "post-wake window" is measured in captured audio, not wall time, so a slow
+        # control plane cannot widen it.
+        self._wake_audio_ts: float | None = None
         self._admit_timeout_s = (
             cfg.multi_device.arbitration.candidate_merge_window_ms + 500
         ) / 1000.0
@@ -1063,6 +1070,8 @@ class AudioPlane:
                     end_silence_ms=voice.vad_end_silence_ms,
                     skip_after_wake_ms=voice.wake_skip_ms,
                     preroll_ms=voice.vad_preroll_ms,
+                    # 0.8.16 P1: keep a command spoken over the cue (rollback key).
+                    keep_overlapping_speech=self.cfg.ack.keep_overlapping_speech,
                 ),
                 voice.vad_model_path,
             )
@@ -2502,6 +2511,12 @@ class AudioPlane:
         gate = self.speaker_gate
         if gate is None:
             return True
+        # A new wake owns a new anchor: a rejected or fail-open wake must never inherit
+        # the previous turn's voice for its segment gate. Optional: the anchor hook is
+        # newer than the wake path, and a missing hook must never crash a wake.
+        clear_anchor = getattr(gate, "clear_anchor", None)
+        if callable(clear_anchor):
+            clear_anchor()
         rate = max(1, int(self.cfg.audio.voice.rate))
         pcm = self._speaker_wake_pcm(self._speaker_window_ms())
         decision: WakeDecision = gate.evaluate_wake(pcm, rate, barge=barged)
@@ -2514,6 +2529,12 @@ class AudioPlane:
             else:
                 # Fail-open reasons already logged their own warning once.
                 log.debug("wake admitted without speaker gating: %s", decision.reason)
+            # The wake's own embedding becomes this turn's anchor (0.8.16 P1): the
+            # segment gate compares the request against the person who woke the box.
+            anchor = getattr(gate, "last_wake_embedding", None)
+            set_anchor = getattr(gate, "set_anchor", None)
+            if decision.reason == "match" and anchor is not None and callable(set_anchor):
+                set_anchor(anchor, decision.best)
             return True
         self.wake_rejections["speaker"] = self.wake_rejections.get("speaker", 0) + 1
         if decision.reason == "short":
@@ -2526,6 +2547,57 @@ class AudioPlane:
                 decision.best or "none",
                 float(getattr(gate.cfg, "threshold", 0.55)),
             )
+        return False
+
+    def _segment_gate_admit(self, utt: bytes, ts: float) -> bool:
+        """Gate one finished VAD segment before it becomes a turn (0.8.16 P1).
+
+        A rejection is silent: no UTTERANCE_PCM, no `_turn_pending`, no "没听清" - the
+        caller closes the session with a plain `WakeIdle(barge=False)` and only the
+        counter and one log line record it. Returns True when the segment may go on to
+        ASR/the control plane.
+        """
+        gate = self.speaker_gate
+        seg_cfg = self.cfg.audio.voice.speaker_gate
+        if gate is None or not seg_cfg.segment_gate:
+            return True
+        rate = max(1, int(self.cfg.audio.voice.rate))
+        duration_ms = len(utt) // 2 * 1000.0 / rate
+        since_wake_ms: float | None = None
+        if self._wake_audio_ts is not None:
+            since_wake_ms = float(ts) - duration_ms - self._wake_audio_ts
+        decision = gate.evaluate_segment(
+            utt,
+            rate,
+            since_wake_ms=since_wake_ms,
+            max_speech_ms=int(self.cfg.audio.voice.vad_max_speech_ms),
+        )
+        if decision.accepted:
+            log.debug(
+                "segment admitted: speaker score=%.2f anchor=%.2f best=%s window=%s "
+                "chunks=%d ms=%.1f",
+                decision.score,
+                decision.anchor_score,
+                decision.best or "none",
+                "wake" if decision.window else "none",
+                decision.chunks,
+                decision.ms,
+            )
+            return True
+        self.turn_rejections[decision.reason] = (
+            self.turn_rejections.get(decision.reason, 0) + 1
+        )
+        log.info(
+            "segment rejected: %s score=%.2f anchor=%.2f best=%s window=%s chunks=%d "
+            "(threshold %.2f)",
+            decision.reason,
+            decision.score,
+            decision.anchor_score,
+            decision.best or "none",
+            "wake" if decision.window else "none",
+            decision.chunks,
+            float(getattr(seg_cfg, "threshold", 0.55)),
+        )
         return False
 
     # ---------------------------------------------------- speaker enrollment (Card B)
@@ -2812,6 +2884,8 @@ class AudioPlane:
         # §5: our own accepted wake clears the vendor's quiet window (the control plane
         # does the same in VendorWindow.ours_spoke).
         self._vendor_quiet_until = 0.0
+        # 0.8.16 P1: the segment gate's post-wake window runs on the capture clock.
+        self._wake_audio_ts = float(ts_ms)
         # P2-2 (task-19): a wake starts a new turn. Whatever the previous turn had
         # queued (a goodbye/answer still being streamed) is dropped now, and anything
         # that arrives before this turn's own utterance is ignored (see
@@ -3019,6 +3093,19 @@ class AudioPlane:
         if finished is None or not connected.is_set():
             return
         utt, ts = finished
+        if not self._segment_gate_admit(utt, ts):
+            # 0.8.16 P1: a media voice must not become a turn, and it must not make the
+            # control plane say「没听清」either - that answer belongs to a failed barge.
+            # A plain WakeIdle(barge=False) closes the session silently.
+            self._active_wake_barge = False
+            self._stale_speech_blocked = False
+            try:
+                writer.write(encode_json(WakeIdle(
+                    waited_ms=0.0, wake_id=self._active_wake_id, barge=False)))
+                await writer.drain()
+            except (ConnectionResetError, BrokenPipeError):
+                connected.clear()
+            return
         self.utterances += 1
         # The duck now belongs to this turn: the reply (or its failure) ends it.
         self._turn_pending = True
@@ -4256,6 +4343,7 @@ class AudioPlane:
             wake_admit_timeouts=self.wake_admit_timeouts,
             wake_admit_latency_ms=self.wake_admit_latency_ms,
             wake_rejected=dict(self.wake_rejections),
+            turn_rejected=dict(self.turn_rejections),
             device_wakes=self.device_wakes,
             device_wake_turns=self.device_wake_turns,
             device_wake_barges=self.device_wake_barges,

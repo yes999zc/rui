@@ -360,6 +360,14 @@ class SpeakerGateConfig(BaseModel):
     # A barge wake is spoken over music, so its embedding is polluted by the mix;
     # skipping the gate there keeps the interrupting person's wake working.
     skip_on_barge: bool = True
+    # Segment gate (0.8.16 P1): after the wake, a finished VAD segment must also match
+    # an enrolled voice (or the wake's own anchor) before it becomes a turn. False is
+    # the rollback key and restores batch-1 behaviour exactly.
+    segment_gate: bool = True
+    # The post-wake window, on the audio clock: until this long after the wake only the
+    # wake's own anchor counts, because a media voice may be the loudest thing in the
+    # room right after the cue. 0 disables the layer.
+    wake_window_ms: int = Field(default=2500, ge=0, le=10000)
 
 
 class VoiceConfig(BaseModel):
@@ -412,6 +420,11 @@ class VoiceConfig(BaseModel):
     standby_kws_hold_ms: int = Field(default=1000, ge=0, le=10000)
     # Turn segmentation. Empty path disables it (wake fires, nothing is transcribed).
     vad_model_path: str = ""
+    # The longest stretch the segment speaker gate judges as one embedding (0.8.16 P1).
+    # Anything longer is cut into chunks of this length and scored per chunk, so a
+    # 9.38 s media sentence cannot ride into ASR on one lucky average. The VAD's own
+    # single-segment contract (`max_utterance_ms`) is unchanged.
+    vad_max_speech_ms: int = Field(default=8000, ge=2000, le=30000)
     # Audio kept from *before* the KWS hit and replayed into the gate afterwards. The
     # streaming KWS reports a hit ~0.5 s late, so without this the first words of a
     # request spoken straight after the wake word never reach the transcriber.
@@ -537,6 +550,11 @@ class AckConfig(BaseModel):
     max_ms: int = Field(default=600, ge=100, le=3000)
     # The box hears its own spoken cue. Ignore that tail before a turn may start.
     echo_ignore_ms: int = Field(default=1200, ge=0, le=3000)
+    # 0.8.16 P1 cue excision: today the gate drops the whole cue window, which also
+    # removed a command spoken over the cue. With this on, only the pure-cue prefix is
+    # dropped and everything from the first block with speech on top of it is kept.
+    # False restores the old whole-window excision (A/B and rollback).
+    keep_overlapping_speech: bool = True
 
     @field_validator("chime")
     @classmethod

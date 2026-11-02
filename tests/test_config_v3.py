@@ -483,6 +483,8 @@ _VOICE_GOLDEN = {
         "mode": "any_enrolled",
         "accept_anchor_or_library": True,
         "skip_on_barge": True,
+        "segment_gate": True,
+        "wake_window_ms": 2500,
     },
     # task-6 (0.8.7): standby KWS gate defaults. The gate is new, so these are the
     # schema defaults an existing config resolves to (no old value to preserve).
@@ -490,6 +492,9 @@ _VOICE_GOLDEN = {
     "standby_kws_gate": True,
     "standby_kws_hold_ms": 1000,
     "vad_end_silence_ms": 1000,
+    # 0.8.16 P1: the longest stretch the segment speaker gate judges as one embedding;
+    # anything longer is chunked. New field, so this is the schema default.
+    "vad_max_speech_ms": 8000,
     "vad_min_speech_ms": 200,
     "vad_model_path": "",
     "vad_preroll_ms": 350,

@@ -72,6 +72,17 @@ CUE_POST_SILENCE_MS = 100.0
 # reply lining up with the cue's tail (a false positive that would cut the reply).
 CUE_ONSET_MS = 100.0
 CUE_ONSET_RATIO = 0.1
+# 0.8.16 P1: how much louder a block has to be than the cue itself explains before it
+# counts as somebody talking over the cue. Both envelopes are peak-normalised, so the
+# ratio compares shapes: the person's voice adds energy on top of the cue's own rhythm.
+# Two consecutive blocks (~40 ms) are required so one transient cannot open the window.
+CUE_OVERLAP_RATIO = 1.6
+# A located cue can lock one or two blocks early/late (the device latency is not a
+# multiple of the block size). `_overlap_from_ms` re-aligns the reference around the
+# matched offset by up to this many blocks before comparing shapes: otherwise a syllable
+# edge reads as "extra energy" and every pure cue looks like somebody talks over it.
+CUE_OVERLAP_ALIGN_BLOCKS = 3
+CUE_OVERLAP_MIN_BLOCKS = 2
 # T5: sample-level clipping in one utterance. At or above this magnitude a sample is
 # treated as saturated (0.97 leaves headroom for dither/DC offset); a segment with a
 # larger clipped share gets `clipped=NN%` appended to its [seg] line. Diagnostic only:
@@ -120,6 +131,10 @@ class GateConfig:
     # microphone during the cue is unaffected.
     echo_block_ms: int = 20
     echo_match_min: float = 0.6
+    # 0.8.16 P1: keep speech spoken over the cue. With this on, a located cue is only
+    # dropped up to the first block where the microphone carries clearly more than the
+    # cue explains (see `_overlap_from_ms`); off restores the old whole-window drop.
+    keep_overlapping_speech: bool = True
 
 
 class UtteranceGate:
@@ -323,16 +338,19 @@ class UtteranceGate:
 
     def _cue_echo(
         self, buffered: list[np.ndarray]
-    ) -> tuple[float, float, float, bool, bool]:
+    ) -> tuple[float, float, float, bool, bool, float | None]:
         """Locate the cue in the skipped + buffered audio of this hold.
 
-        Returns ``(cue_start_ms, cue_end_ms, match_score, matched, contaminated)`` where
-        the times are relative to the hold start and ``contaminated`` means the cue may
-        be present but could not be located (clipped capture, or cue energy in the skip
-        window). The whole held window is searched, not
-        just the nominal skip window: a slow device can put the entire cue inside the
-        echo buffer, where the old skip-only search saw nothing and replayed all of it
-        (2026-10-26 07:01: cue 540 ms -> turn 「在呢。」 -> 「我在，你说。」).
+        Returns ``(cue_start_ms, cue_end_ms, match_score, matched, contaminated,
+        overlap_from_ms)`` where the times are relative to the hold start and
+        ``contaminated`` means the cue may be present but could not be located (clipped
+        capture, or cue energy in the skip window). ``overlap_from_ms`` is the first
+        block where the microphone carries clearly more than the cue explains (somebody
+        talking over it), or None when no cue was located / nothing overlaps. The whole
+        held window is searched, not just the nominal skip window: a slow device can put
+        the entire cue inside the echo buffer, where the old skip-only search saw nothing
+        and replayed all of it (2026-10-26 07:01: cue 540 ms -> turn 「在呢。」 ->
+        「我在，你说。」).
 
         A clipped or overlapped window cannot be matched (the envelope is no longer the
         cue's rhythm) and reports ``matched=False, contaminated=True``; the caller then
@@ -340,15 +358,15 @@ class UtteranceGate:
         """
         self._last_match_offset_ms = None
         if self._echo_env is None:
-            return 0.0, 0.0, 0.0, False, False
+            return 0.0, 0.0, 0.0, False, False, None
         blocks = list(self._hold_skip_samples) + list(buffered)
         if not blocks:
-            return 0.0, 0.0, 0.0, False, False
+            return 0.0, 0.0, 0.0, False, False, None
         raw = np.concatenate(blocks)
         observed = self._envelope(raw, self.rate)
         reference = self._echo_env
         if observed.size == 0 or reference.size == 0:
-            return 0.0, 0.0, 0.0, False, False
+            return 0.0, 0.0, 0.0, False, False, None
         # Same relative scale as the stored reference: the echo is attenuated by the
         # device AEC and the capture gain is arbitrary.
         observed_peak = float(np.max(observed))
@@ -387,13 +405,71 @@ class UtteranceGate:
                 # sounding past the cue's length. It does NOT teach the latency -
                 # a mistaken narrow hit would reinforce its own error.
                 self._last_match_offset_ms = narrow_offset * self.cfg.echo_block_ms
-                return 0.0, 0.0, narrow, False, True
-            return 0.0, 0.0, best_score, False, clipped or heard_any
+                return 0.0, 0.0, narrow, False, True, None
+            return 0.0, 0.0, best_score, False, clipped or heard_any, None
         cue_start_ms = best_offset * self.cfg.echo_block_ms
         self._last_match_offset_ms = cue_start_ms
         cue_end_ms = cue_start_ms + reference.size * self.cfg.echo_block_ms
         self._learn_lag(cue_start_ms)
-        return cue_start_ms, cue_end_ms, best_score, True, clipped
+        # A clipped capture flattens the envelope (the person was louder than the
+        # microphone's ceiling), so the block-by-block comparison is no longer evidence
+        # of where the cue ends. Clipping keeps today's conservative excision.
+        overlap_from_ms = (
+            None if clipped else self._overlap_from_ms(observed, reference, best_offset)
+        )
+        return cue_start_ms, cue_end_ms, best_score, True, clipped, overlap_from_ms
+
+    def _align_envelope(
+        self, observed: np.ndarray, reference: np.ndarray, offset: int
+    ) -> int:
+        """Block shift in [-N, N] that best aligns the reference with the observed cue."""
+        best_shift = 0
+        best_score = -1.0
+        for shift in range(-CUE_OVERLAP_ALIGN_BLOCKS, CUE_OVERLAP_ALIGN_BLOCKS + 1):
+            start = offset + shift
+            if start < 0 or start + reference.size > observed.size:
+                continue
+            window = observed[start : start + reference.size]
+            denom = float(np.linalg.norm(window) * np.linalg.norm(reference))
+            if denom <= 0.0:
+                continue
+            score = float(np.dot(window, reference) / denom)
+            if score > best_score:
+                best_score, best_shift = score, shift
+        return best_shift
+
+    def _overlap_from_ms(
+        self, observed: np.ndarray, reference: np.ndarray, offset: int
+    ) -> float | None:
+        """First block of the cue window where somebody is talking over the cue.
+
+        Both envelopes are peak-normalised, so the comparison is of shape: a block
+        whose observed energy exceeds the cue's own block by `CUE_OVERLAP_RATIO` for
+        `CUE_OVERLAP_MIN_BLOCKS` consecutive blocks has speech added on top of the cue.
+        The returned time is relative to the hold start (the first block of that run),
+        which is where the pure-cue prefix ends. None means the cue explains the whole
+        window, so the caller keeps today's whole-cue excision.
+        """
+        if reference.size == 0 or observed.size == 0:
+            return None
+        # The cue's start rarely lands on a block boundary (the device's latency is
+        # arbitrary), so the matcher can lock a block or two early. Re-align the
+        # reference once, then compare block by block: the cue's own syllable edges must
+        # not read as "extra energy" (that would make every pure cue look overlapped).
+        align = self._align_envelope(observed, reference, offset)
+        run = 0
+        limit = min(reference.size, observed.size - offset - align)
+        for index in range(limit):
+            expected = float(reference[index])
+            seen = float(observed[offset + align + index])
+            if seen > expected * CUE_OVERLAP_RATIO:
+                run += 1
+                if run >= CUE_OVERLAP_MIN_BLOCKS:
+                    first = index - run + 1
+                    return (offset + first) * self.cfg.echo_block_ms
+            else:
+                run = 0
+        return None
 
     def _quiet_after(
         self, observed: np.ndarray, reference: np.ndarray, offset: int,
@@ -484,8 +560,19 @@ class UtteranceGate:
             # that starts after the cue is untouched and buffered as before.
             pending = list(self._hold_buf)
             self._hold_buf.clear()
-            cue_start, cue_end, match, matched, contaminated = self._cue_echo(pending)
-            if matched:
+            cue_start, cue_end, match, matched, contaminated, overlap_from = (
+                self._cue_echo(pending)
+            )
+            # 0.8.16 P1: when somebody talks over the cue, the located cue's end is the
+            # wrong cut - it also removes their first words. Keep everything from the
+            # first overlapping block on; only the pure-cue prefix is dropped.
+            overlap_from_ms = (
+                overlap_from if (matched and self.cfg.keep_overlapping_speech) else None
+            )
+            if matched and overlap_from_ms is not None:
+                drop_ms = max(0.0, overlap_from_ms - self._hold_skip_total_ms)
+                fallback = False
+            elif matched:
                 # The cue's end is measured; remove it (plus reverb) and keep the
                 # person's reply from that point on, including its first syllable.
                 drop_ms = max(
@@ -521,7 +608,7 @@ class UtteranceGate:
                     self._hold_skip_total_ms + drop_ms, self._hold_total_ms)
                 log.info(
                     "cue_gate: cue=[%.0f,%.0f]ms dropped=[0,%.0f]ms kept=[%.0f,%.0f]ms "
-                    "match=%.2f fallback=%s lag_hint=%s match_offset=%s",
+                    "match=%.2f fallback=%s lag_hint=%s match_offset=%s overlap_from=%s",
                     cue_start if matched else 0.0,
                     cue_end if matched else self._cue_ms,
                     dropped_end,
@@ -532,6 +619,7 @@ class UtteranceGate:
                     f"{self._cue_lag_ms:.0f}" if self._cue_lag_seen else "unknown",
                     "none" if self._last_match_offset_ms is None
                     else f"{self._last_match_offset_ms:.0f}",
+                    "none" if overlap_from_ms is None else f"{overlap_from_ms:.0f}",
                 )
             out = None
             dropped_ms = 0.0

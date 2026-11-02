@@ -150,6 +150,9 @@ class Metrics(BaseModel):
     wake_admit_timeouts: int = 0
     wake_admit_latency_ms: float | None = None
     wake_rejected: dict[str, int] = Field(default_factory=dict)
+    # 0.8.16 P1: finished VAD segments dropped before ASR, by reason ("speaker",
+    # "chunk", "wake_window"). Additive with a default, like `wake_rejected`.
+    turn_rejected: dict[str, int] = Field(default_factory=dict)
     # Socket & Plug v1 (docs/socket-plug-v1.md §5). `wake_count` stays the RUI KWS
     # count; a device-detected wake is a different event and is counted separately.
     # `device_wakes` is every valid event accepted for policy; the rest are the

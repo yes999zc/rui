@@ -371,6 +371,20 @@ class WakeDecision:
     ms: float = 0.0
 
 
+@dataclass
+class SegmentDecision:
+    """One segment-gate answer; `ms` is the evaluation cost."""
+
+    accepted: bool
+    score: float
+    anchor_score: float
+    best: str | None
+    reason: str
+    window: bool
+    chunks: int
+    ms: float = 0.0
+
+
 class SpeakerGate:
     """Decide whether the wake audio belongs to an enrolled voice.
 
@@ -399,6 +413,16 @@ class SpeakerGate:
         # Per-device, not per-gate: a house with three unenrolled rooms must log three
         # lines, not one, or the operator cannot tell which room needs enrolment.
         self._no_enrollment_logged: set[str] = set()
+        # The wake's own embedding, set at admission and compared against every segment
+        # of that turn (the "anchor" layer, 0.8.16 P1). None when the wake was admitted
+        # without an embedding (barge skip / fail-open), which the segment gate treats
+        # as "no anchor" and fails open on.
+        self._anchor: np.ndarray | None = None
+        self._anchor_name: str | None = None
+        # The embedding of the most recent wake evaluation, for `set_anchor` at admission.
+        self.last_wake_embedding: np.ndarray | None = None
+        self._segment_unavailable_logged = False
+        self._no_anchor_logged = False
 
     @property
     def available(self) -> bool:
@@ -411,9 +435,40 @@ class SpeakerGate:
             return self.library.count() > 0
         return any(p.device_id in ("", device) for p in self.library.profiles())
 
+    def _match_device(self) -> str | None:
+        """The device filter for a library match, with the unenrolled-device fallback."""
+        match_device = str(self.device_id or "").strip() or None
+        if match_device is not None and not self._device_has_enrollment():
+            match_device = None
+            if str(self.device_id) not in self._no_enrollment_logged:
+                self._no_enrollment_logged.add(str(self.device_id))
+                log.info(
+                    "speaker gate: no enrollment for device=%s; matching all devices",
+                    self.device_id,
+                )
+        return match_device
+
     def _fail_open(self, reason: str, detail: str) -> WakeDecision:
         log.warning("speaker gate unavailable: %s; admitting without gating", detail)
         return WakeDecision(accepted=True, score=0.0, best=None, reason=reason)
+
+    def set_anchor(self, embedding: Any, name: str | None = None) -> None:
+        """Remember the wake's voice for this turn's segment gate."""
+        self._anchor = _normalised(embedding)
+        self._anchor_name = name
+
+    def clear_anchor(self) -> None:
+        self._anchor = None
+        self._anchor_name = None
+
+    def anchor_score(self, embedding: Any) -> float:
+        """Cosine similarity to the wake anchor, 0.0 when there is no anchor."""
+        if self._anchor is None:
+            return 0.0
+        vector = _normalised(embedding)
+        if vector is None or vector.size != self._anchor.size:
+            return 0.0
+        return float(np.dot(vector, self._anchor))
 
     def evaluate_wake(
         self, pcm: bytes | np.ndarray, rate: int, *, barge: bool = False
@@ -461,25 +516,17 @@ class SpeakerGate:
 
         embedding = self.embedder.embed(pcm, int(rate))
         if embedding is None:
+            self.last_wake_embedding = None
             if not self._embed_failed_logged:
                 self._embed_failed_logged = True
                 return self._fail_open("no_embedding", "the wake audio produced no embedding")
             return WakeDecision(True, 0.0, None, "no_embedding")
+        self.last_wake_embedding = embedding
 
         # A device with no enrolment of its own must not go deaf: three people enrolled
         # in the living room say nothing about the bathroom's sensor. Match every device
         # then, and say so once per device so the missing enrolment is visible.
-        match_device = str(self.device_id or "").strip() or None
-        if match_device is not None and not self._device_has_enrollment():
-            match_device = None
-            if self.device_id not in self._no_enrollment_logged:
-                self._no_enrollment_logged.add(str(self.device_id))
-                log.info(
-                    "speaker gate: no enrollment for device=%s; matching all devices",
-                    self.device_id,
-                )
-
-        score, best = self.library.best_match(embedding, match_device)
+        score, best = self.library.best_match(embedding, self._match_device())
         if best is None:
             # The library is non-empty but nothing is comparable (e.g. profiles enrolled
             # with a different model's dimension). Rejecting would deafen every device
@@ -496,3 +543,145 @@ class SpeakerGate:
         if score >= threshold:
             return WakeDecision(True, score, best, "match")
         return WakeDecision(False, score, best, "mismatch")
+
+    # ------------------------------------------------------------- segment gate
+    def _segment_fail_open(self, reason: str, detail: str) -> SegmentDecision:
+        if not self._segment_unavailable_logged:
+            self._segment_unavailable_logged = True
+            log.warning(
+                "speaker gate unavailable: %s; admitting segment without gating", detail
+            )
+        return SegmentDecision(True, 0.0, 0.0, None, reason, False, 1)
+
+    def _score_chunk(
+        self, embedding: np.ndarray, *, in_wake_window: bool
+    ) -> tuple[float, float, str | None, str | None]:
+        """Score one chunk under the mode/window rules.
+
+        Returns ``(score, anchor_score, best, fail_open_reason)``; the last element is
+        non-None when the rules cannot decide and the chunk must be admitted.
+        """
+        threshold = float(getattr(self.cfg, "threshold", 0.55))
+        anchor = self.anchor_score(embedding)
+        lib_score, best = self.library.best_match(embedding, self._match_device())
+        if best is None and self.library.count() > 0:
+            # Non-empty library with no comparable profile (model swap): do not deafen.
+            return 0.0, anchor, None, "no_candidate"
+        mode = str(getattr(self.cfg, "mode", "any_enrolled"))
+        anchor_or_library = bool(getattr(self.cfg, "accept_anchor_or_library", True))
+        if in_wake_window:
+            # Layer 4: inside the wake window only the wake's own voice counts. Without
+            # an anchor there is nothing to compare, so admit rather than deafen.
+            if self._anchor is None:
+                return 0.0, anchor, best, "no_anchor"
+            score = anchor
+        elif mode == "wake_owner":
+            if self._anchor is not None:
+                score = max(anchor, lib_score) if anchor_or_library else anchor
+            elif anchor_or_library:
+                score = lib_score
+            else:
+                return 0.0, anchor, best, "no_anchor"
+        else:  # any_enrolled
+            score = max(lib_score, anchor) if anchor_or_library else lib_score
+        return score, anchor, best, None if score >= threshold else "low"
+
+    def evaluate_segment(
+        self,
+        pcm: bytes | np.ndarray,
+        rate: int,
+        *,
+        since_wake_ms: float | None = None,
+        max_speech_ms: int = 8000,
+    ) -> SegmentDecision:
+        """Gate one finished VAD segment, before it becomes a turn.
+
+        Layers, in order: library/anchor score by mode; chunking of anything longer
+        than `max_speech_ms` (a 9.38 s media sentence must not be judged by one
+        embedding); and the post-wake window, which only trusts the wake anchor.
+        """
+        started = time.monotonic()
+        decision = self._evaluate_segment(
+            pcm, int(rate), since_wake_ms=since_wake_ms, max_speech_ms=max_speech_ms
+        )
+        decision.ms = (time.monotonic() - started) * 1000.0
+        return decision
+
+    def _evaluate_segment(
+        self,
+        pcm: bytes | np.ndarray,
+        rate: int,
+        *,
+        since_wake_ms: float | None,
+        max_speech_ms: int,
+    ) -> SegmentDecision:
+        if not bool(getattr(self.cfg, "enabled", False)) or not bool(
+            getattr(self.cfg, "segment_gate", True)
+        ):
+            return SegmentDecision(True, 0.0, 0.0, None, "disabled", False, 1)
+        if not self.available:
+            return self._segment_fail_open(
+                "unavailable",
+                f"model unavailable ({self.cfg.model_path or 'no model_path'})",
+            )
+        try:
+            self.library.reload_if_changed()
+        except Exception as exc:  # noqa: BLE001 - file problems must not stop turns
+            return self._segment_fail_open("error", _brief_exc(exc))
+        if self.library.count() == 0 and self._anchor is None:
+            return self._segment_fail_open("empty", "no enrolled speakers in speakers.json")
+
+        samples = _as_float32(pcm)
+        if samples is None or samples.size == 0:
+            return self._segment_fail_open("empty_audio", "the segment carried no samples")
+
+        window_ms = max(0, int(getattr(self.cfg, "wake_window_ms", 2500)))
+        in_wake_window = (
+            window_ms > 0 and since_wake_ms is not None and since_wake_ms < window_ms
+        )
+        chunk_samples = max(1, int(rate * max(1000, int(max_speech_ms)) / 1000))
+        total_chunks = max(1, (samples.size + chunk_samples - 1) // chunk_samples)
+        worst: SegmentDecision | None = None
+        for index in range(total_chunks):
+            chunk = samples[index * chunk_samples : (index + 1) * chunk_samples]
+            embedding = self.embedder.embed(chunk, rate)
+            if embedding is None:
+                return self._segment_fail_open(
+                    "no_embedding", "the segment produced no embedding"
+                )
+            score, anchor, best, fail_reason = self._score_chunk(
+                embedding, in_wake_window=in_wake_window
+            )
+            if fail_reason == "no_candidate":
+                return self._segment_fail_open(
+                    "no_candidate",
+                    "no stored profile matches this embedding "
+                    "(dimension changed after a model swap?)",
+                )
+            if fail_reason == "no_anchor":
+                if not self._no_anchor_logged:
+                    self._no_anchor_logged = True
+                    log.warning(
+                        "speaker gate unavailable: no anchor for this wake; "
+                        "admitting segments without the wake window"
+                    )
+                # The anchor layer cannot judge (barge skip / failed embedding). The
+                # library layers already had their say, so admit instead of closing a
+                # turn the person actually asked for.
+                return SegmentDecision(
+                    True, score, anchor, best, "no_anchor", in_wake_window, total_chunks
+                )
+            if worst is None or score < worst.score:
+                worst = SegmentDecision(
+                    True, score, anchor, best, "match", in_wake_window, total_chunks
+                )
+            if fail_reason == "low":
+                reason = "wake_window" if in_wake_window else (
+                    "chunk" if total_chunks > 1 else "speaker"
+                )
+                return SegmentDecision(
+                    False, score, anchor, best, reason, in_wake_window, total_chunks
+                )
+        assert worst is not None  # at least one chunk was scored
+        worst.accepted = True
+        return worst
