@@ -3120,8 +3120,14 @@ phase-close: task-5
 - **本会话无法访问 NAS，sha256 未取**；部署时请 `sha256sum` 后回填本节（不要引用未核实的哈希）。
 - 缺失/加载失败时门控 **fail-open**（`speaker gate unavailable` 一行 warning），不影响唤醒。
 
-**镜像校验（待补）**：`docker run --rm --platform linux/amd64 --entrypoint python <amd64 digest> -c "import rui;print(rui.__version__)"`
-应输出 `0.8.16`；本会话执行结果见下方「收口附注」。
+**镜像校验（已实测，2026-11-02 11:5x）**：
+```
+docker run --rm --platform linux/amd64 --entrypoint python \
+  ghcr.io/yes999zc/rui@sha256:9d28f00d30192becf0be6bb08ada3cba06c6d4bfa3add207e5eee9eb366ca11e \
+  -c "import rui,sys;print(rui.__version__, sys.version)"
+→ 0.8.16 3.12.16     (exit 0；pull 到的 Digest 与上面 amd64 摘要一致)
+```
+（在 Apple Silicon 上用 amd64 模拟跑通，只证明镜像内容与版本号；**不代表真机音频行为已验证**。）
 
 ## 下一步
 
