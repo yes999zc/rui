@@ -499,14 +499,20 @@ _VOICE_GOLDEN = {
     "vad_model_path": "",
     "vad_preroll_ms": 350,
     "wake_preroll_ms": 500,
-    "wake_skip_ms": 300,
+    # 0.8.16: 0 keeps the first syllable spoken right after the wake word.
+    "wake_skip_ms": 0,
+    # 0.8.16: post-AEC voice gain (+6 dB) and the empty-wake punishment.
+    "gain_db": 6.0,
+    "empty_wake_cooldown_s": 120.0,
+    "empty_wake_cooldown_after": 2,
 }
 _AEC_GOLDEN = {
     "cancel": "mix",
     "enabled": True,
     "filter_len": 4096,
     "residual": True,
-    "wake_hold_ms": 1500,
+    # 0.8.16: an upper bound now; the plane releases when the turn ends.
+    "wake_hold_ms": 15000,
     "who": "controller",
 }
 _PLAYBACK_GOLDEN = {

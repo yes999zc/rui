@@ -290,7 +290,7 @@ class AecChain:
         hysteresis_db: float = 6.0,
         cancel: str = "mix",
         residual: bool = True,
-        wake_hold_ms: int = 1500,
+        wake_hold_ms: int = 15000,
     ) -> None:
         if channels < 1:
             raise ValueError("channels must be >= 1")
@@ -340,6 +340,22 @@ class AecChain:
             return
         span = self.wake_hold_ms / 1000.0 if seconds is None else max(0.0, seconds)
         self._hold_until = max(self._hold_until, time.monotonic() + span)
+
+    def release(self) -> None:
+        """End the wake hold now: the turn it protected is over.
+
+        0.8.16: `hold_for()` is no longer a fixed 1.5 s that outlives a long command; the
+        plane holds at the wake and releases when the segment is reported, rejected, or
+        the listening window closes. `wake_hold_ms` stays as the cap (a stuck turn must
+        not keep the suppressor off forever).
+        """
+        self._hold_until = 0.0
+        self._apply_hold()
+
+    @property
+    def holding(self) -> bool:
+        """True while residual suppression is bypassed (diagnostics/tests)."""
+        return time.monotonic() < self._hold_until
 
     def _apply_hold(self) -> None:
         held = time.monotonic() < self._hold_until
@@ -434,6 +450,6 @@ class AecChain:
     @classmethod
     def from_config(cls, channels: int, rate: int, taps: int,
                     cancel: str = "mix", residual: bool = True,
-                    wake_hold_ms: int = 1500) -> AecChain:
+                    wake_hold_ms: int = 15000) -> AecChain:
         return cls(channels=channels, rate=rate, taps=taps, cancel=cancel,
                    residual=residual, wake_hold_ms=wake_hold_ms)

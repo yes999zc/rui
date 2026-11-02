@@ -654,9 +654,9 @@ def _audio_fields() -> list[dict]:
          "Audio kept before detected onset. 350 ms measured: 200 ate the first syllable; "
          "smaller can clip it.", _t("ms", "ms"), False),
         ("wake_skip_ms", "唤醒尾巴", "Wake tail", "number", 0, 1000,
-         "唤醒词自己尾巴的时长，唤醒后丢掉。300 ms 是实测值；调大可能吃掉紧接的正文。",
-         "Length of the wake phrase's own tail, dropped after a wake. 300 ms measured; "
-         "larger can eat the following words.", _t("ms", "ms"), True),
+         "唤醒词自己尾巴的时长，唤醒后丢掉。默认 0（0.8.16）：300 ms 会吃掉紧接的正文首字。",
+         "Length of the wake phrase's own tail, dropped after a wake. Default 0 "
+         "(0.8.16); 300 ms ate the first word that followed the wake.", _t("ms", "ms"), True),
         ("wake_preroll_ms", "唤醒前预录", "Wake preroll", "number", 0, 1500,
          "唤醒词命中前保留的音频，回灌给识别器，避免「你好小瑞，现在几点」丢开头。"
          "500 ms 是实测值。",

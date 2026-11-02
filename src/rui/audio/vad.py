@@ -113,7 +113,10 @@ def _sherpa_unavailable(exc: BaseException) -> str:
 @dataclass
 class GateConfig:
     rate: int = 16000
-    skip_after_wake_ms: int = 300     # the tail of the wake phrase itself
+    # 0 since 0.8.16: the KWS latency already covers the wake phrase's tail; a
+    # non-zero default would silently eat the first word when a caller forgets
+    # to pass `voice.wake_skip_ms`.
+    skip_after_wake_ms: int = 0
     preroll_ms: int = 200             # kept before the first detected speech
     min_speech_ms: int = 200          # anything shorter is a cough, not a request
     end_silence_ms: int = 1000        # old build's first-segment value

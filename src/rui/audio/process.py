@@ -62,7 +62,15 @@ from .aec import AecChain, AecUnavailable
 from .chime import PRESETS as CHIME_PRESETS
 from .chime import render as render_chime
 from .decimate import Decimator
-from .kws import KwsUnavailable, WakeHit, WakeProbe, WakeWord
+from .kws import (
+    DEFAULT_KWS_BOOST,
+    DEFAULT_KWS_THRESHOLD,
+    KwsUnavailable,
+    WakeHit,
+    WakeProbe,
+    WakeWord,
+    write_keywords_file,
+)
 from .probe import (
     WIRE_MISMATCH_PREFIX,
     WireCheck,
@@ -375,6 +383,10 @@ BARGE_CUE_MAX_MS = 160.0
 # 「。」). A single loud sample is normal; a run of frames with a visible clipped share
 # is not. One burst = `OVERDRIVE_FRAMES` consecutive frames at/above the frame ratio,
 # counted once until the signal falls back below it (the rate limit only gates the log).
+# 0.8.16: post-AEC voice gain limit. 0.95 leaves 0.4 dB of headroom below full scale;
+# the limiter is a hard clamp (no attack/release) because its job is only to stop the
+# 6 dB gain from wrapping, not to be a compressor.
+VOICE_LIMIT_LEVEL = 0.95
 OVERDRIVE_SAMPLE = 0.97
 OVERDRIVE_FRAME_RATIO = 0.01
 OVERDRIVE_FRAMES = 5
@@ -637,6 +649,14 @@ class AudioPlane:
         self.wake_admit_timeouts = 0
         self.wake_admit_latency_ms: float | None = None
         self.wake_rejections: dict[str, int] = {}
+        # 0.8.16 empty-wake punishment: consecutive wakes that heard no speech. The
+        # counter resets on a real turn; the cooldown only arms at the configured
+        # threshold, so one stray wake never mutes a device.
+        self.empty_wakes = 0
+        self._cooldown_until = 0.0
+        # True while the armed VAD window belongs to a wake (not a follow-up): only then
+        # does an idle event count as "the wake heard nothing".
+        self._wake_armed = False
         # 0.8.16 P1: why finished VAD segments were dropped before ASR (same shape as
         # `wake_rejections`, exposed through Metrics.turn_rejected).
         self.turn_rejections: dict[str, int] = {}
@@ -785,9 +805,11 @@ class AudioPlane:
         # Levels are the first thing to look at when "it hears nothing": a silent mic and a
         # mic that hears but does not understand look identical from the counters alone.
         self.voice_rms_db: float | None = None
-        # Peak of the last 10 s of the KWS input: "how loud is he actually talking" had
-        # no answer anywhere, so every threshold discussion was a guess. Cleared on read
-        # by the metrics snapshot so each window is a fresh measurement.
+        # Peak of the last 10 s of the *pre-gain* voice stream: "how loud is he actually
+        # talking" had no answer anywhere, so every threshold discussion was a guess.
+        # Pre-gain on purpose (0.8.16): the level describes the room and the capture, not
+        # the tuning knob, so old and new logs stay comparable. Cleared on read by the
+        # metrics snapshot so each window is a fresh measurement.
         self.voice_peak_db: float | None = None
         self._peak_hold: float = 0.0
         # T5 capture overdrive: cumulative burst counter, worst single-frame clipped
@@ -795,6 +817,10 @@ class AudioPlane:
         # the sliding-window state that decides when a burst starts.
         self.overdrive_count = 0
         self.overdrive_ratio_max = 0.0
+        # 0.8.16: frames whose post-gain peak exceeded `VOICE_LIMIT_LEVEL`. A nonzero
+        # value means the chosen gain_db is pushing normal speech into the clamp: the
+        # far-field tuning number, independent of capture overdrive.
+        self.limiter_count = 0
         self.last_overdrive_at: float | None = None
         self._overdrive_streak = 0
         self._overdrive_active = False
@@ -985,6 +1011,43 @@ class AudioPlane:
             self.aec_error = str(exc)
             log.warning("aec off: %s", exc)
 
+    def _device_kws_keywords(self) -> Path | None:
+        """Write this device's keywords file when it overrides threshold/boost.
+
+        Returns None when the device has no override (the caller keeps the global
+        `kws_keywords_file`, so the five production devices are byte-identical to
+        0.8.15) or when the file cannot be written (fall back, never break KWS).
+        """
+        override = None
+        if self.device_cfg is not None and self.device_cfg.audio is not None:
+            override = self.device_cfg.audio.voice
+        if override is None:
+            return None
+        if override.kws_threshold is None and override.kws_boost is None:
+            return None
+        threshold = float(
+            DEFAULT_KWS_THRESHOLD if override.kws_threshold is None else override.kws_threshold
+        )
+        boost = float(DEFAULT_KWS_BOOST if override.kws_boost is None else override.kws_boost)
+        data_dir = str(getattr(self.cfg.system, "data_dir", "") or "").strip()
+        if not data_dir:
+            log.warning(
+                "kws: per-device keywords need system.data_dir; using the global file"
+            )
+            return None
+        words = self.device_cfg.wake_words if self.device_cfg is not None else []
+        path = Path(data_dir) / "kws" / f"{self.device_id}.txt"
+        try:
+            write_keywords_file(path, words, threshold=threshold, boost=boost)
+        except (OSError, ValueError) as exc:
+            log.warning("kws: cannot write per-device keywords %s: %s", path, exc)
+            return None
+        log.info(
+            "kws: keywords device=%s threshold=%.2f boost=%.2f file=%s",
+            self.device_id, threshold, boost, path,
+        )
+        return path
+
     def _build_kws(self) -> None:
         voice = self.cfg.audio.voice
         if not voice.kws_enabled:
@@ -993,10 +1056,16 @@ class AudioPlane:
             self.kws_error = "kws_enabled but kws_model_dir is empty"
             log.warning("kws off: %s", self.kws_error)
             return
+        # 0.8.16: per-device gate, written from this device's wake words. No override
+        # keeps the global path, which is the production path for every existing device.
+        keywords_file: Path | str | None = voice.kws_keywords_file or None
+        device_keywords = self._device_kws_keywords()
+        if device_keywords is not None:
+            keywords_file = device_keywords
         try:
             self.wake = WakeWord(
                 model_dir=voice.kws_model_dir,
-                keywords_file=voice.kws_keywords_file or None,
+                keywords_file=keywords_file,
                 chunk=voice.kws_chunk,
                 num_threads=voice.kws_num_threads,
                 rate=voice.rate,
@@ -1500,7 +1569,19 @@ class AudioPlane:
         if mono.size:
             peak = float(np.abs(mono).max())
             self._peak_hold = max(self._peak_hold, peak)
+            # Overdrive is a capture fact: measure it *before* the voice gain, otherwise
+            # 6 dB of gain would turn every normal frame into a "clipped" one and hide a
+            # genuinely saturated microphone (0.8.16 H9).
             self._observe_overdrive(mono)
+        gain_db = float(self.effective.voice.gain_db)
+        if gain_db != 0.0 and mono.size:
+            # 0.8.16: the far field needs the level; the limiter keeps the added gain
+            # from wrapping. `gain_db=0` skips both so the output stays byte-identical
+            # to 0.8.15 (a 0.95 clamp alone would already change 0.95..1.0 samples).
+            mono = mono * float(10.0 ** (gain_db / 20.0))
+            if float(np.abs(mono).max()) > VOICE_LIMIT_LEVEL:
+                self.limiter_count += 1
+                mono = np.clip(mono, -VOICE_LIMIT_LEVEL, VOICE_LIMIT_LEVEL)
         return np.clip(mono * 32768.0, -32768, 32767).astype("<i2").tobytes()
 
     def _observe_overdrive(self, samples: np.ndarray) -> None:
@@ -2776,6 +2857,10 @@ class AudioPlane:
         hold starts because it is the user's own speech, captured before the microphone
         went quiet.
         """
+        # 0.8.16: a device that keeps waking on noise is muted before any of the wake
+        # work (speaker gate, cue, arbiter) runs. Only the counter and one log line.
+        if not self._cooldown_allows_wake():
+            return
         # Barge-in first: a wake while the speaker is still talking means "stop".
         # Everything already handed to the device (up to MAX_LEAD_S) cannot be recalled,
         # and the client's own ALSA buffer sits behind that - the old build measured the
@@ -2830,6 +2915,8 @@ class AudioPlane:
         measurement (`last_barge_stop_ms`), so the acceptance number means the same
         thing whichever detector fired.
         """
+        # 0.8.16: the turn being interrupted is over; a following wake re-holds.
+        self._release_aec_hold()
         self.barges += 1
         self.last_barge_s = barged_s
         log.info("barge: %d wake during playback, dropped %.1f s queued", self.barges, barged_s)
@@ -2886,6 +2973,11 @@ class AudioPlane:
         self._vendor_quiet_until = 0.0
         # 0.8.16 P1: the segment gate's post-wake window runs on the capture clock.
         self._wake_audio_ts = float(ts_ms)
+        # 0.8.16: this armed window belongs to a wake (an idle event now means "empty
+        # wake"), and the residual suppressor is bypassed until the turn ends.
+        self._wake_armed = True
+        if self.aec is not None:
+            self.aec.hold_for()
         # P2-2 (task-19): a wake starts a new turn. Whatever the previous turn had
         # queued (a goodbye/answer still being streamed) is dropped now, and anything
         # that arrives before this turn's own utterance is ignored (see
@@ -3045,6 +3137,51 @@ class AudioPlane:
         else:
             log.warning("wake event NOT sent: no control plane connected")
 
+    def _release_aec_hold(self) -> None:
+        """Let residual suppression run again: the turn it protected has ended."""
+        if self.aec is not None:
+            self.aec.release()
+
+    def _note_gate_idle(self) -> None:
+        """The listening window closed with no speech: count it and arm the cooldown.
+
+        Only a *wake's* window counts (a follow-up timeout is not an empty wake). The
+        first `empty_wake_cooldown_after - 1` empty wakes are free, so one stray wake
+        never mutes the room; a real turn resets the streak.
+        """
+        # A barge wake is spoken over playback: the person is already talking and the
+        # VAD may miss that window entirely, so counting it would mute the room after
+        # two ordinary barge attempts. Only a plain wake's silent window counts.
+        was_wake = self._wake_armed and not self._active_wake_barge
+        self._wake_armed = False
+        self._release_aec_hold()
+        if not was_wake:
+            return
+        self.empty_wakes += 1
+        cooldown_s = float(self.cfg.audio.voice.empty_wake_cooldown_s)
+        if cooldown_s <= 0.0:
+            return
+        if self.empty_wakes >= int(self.cfg.audio.voice.empty_wake_cooldown_after):
+            self._cooldown_until = time.monotonic() + cooldown_s
+            log.info(
+                "empty wake #%d: KWS suppressed for %.0f s",
+                self.empty_wakes, cooldown_s,
+            )
+
+    def _cooldown_allows_wake(self) -> bool:
+        """False while the device is parked after repeated empty wakes."""
+        now = time.monotonic()
+        if now >= self._cooldown_until:
+            return True
+        self.wake_rejections["cooldown"] = (
+            self.wake_rejections.get("cooldown", 0) + 1
+        )
+        log.info(
+            "wake suppressed: cooldown %.0fs left (empty wakes=%d)",
+            self._cooldown_until - now, self.empty_wakes,
+        )
+        return False
+
     async def _feed_gate(
         self, pcm: bytes, ts_ms: float, writer: asyncio.StreamWriter, connected: asyncio.Event
     ) -> None:
@@ -3068,6 +3205,7 @@ class AudioPlane:
             # a reply any more, so stop suppressing playback: a later reminder or a
             # console/debug `say` PLAY_PCM must sound (2026-10-26 review).
             self._stale_speech_blocked = False
+            self._note_gate_idle()
             # A wake over a song pauses it. If the wake then hears nothing, the song must
             # come back - a parked song waiting for a reply that will never come is the
             # "music stopped after I woke it" symptom. An explicit 「暂停」 stays paused.
@@ -3105,8 +3243,13 @@ class AudioPlane:
                 await writer.drain()
             except (ConnectionResetError, BrokenPipeError):
                 connected.clear()
+            self._release_aec_hold()
             return
         self.utterances += 1
+        # A real turn resets the empty-wake streak and ends the wake's hold.
+        self.empty_wakes = 0
+        self._wake_armed = False
+        self._release_aec_hold()
         # The duck now belongs to this turn: the reply (or its failure) ends it.
         self._turn_pending = True
         self._turn_pending_ts = time.monotonic()
@@ -3981,6 +4124,7 @@ class AudioPlane:
             # answer). Belt-and-braces with the clear when the utterance formed.
             self._active_wake_barge = False
             log.info("follow-up gate open (%.1f s, %s)", wait_ms / 1000.0, reason)
+            self._wake_armed = False
             gate.arm(followup=True, max_wait_ms=wait_ms)
             await self._replay_followup_tail()
 
@@ -4428,6 +4572,7 @@ class AudioPlane:
             # since the plane started; the ratio is the worst frame since then.
             overdrive_count=self.overdrive_count,
             overdrive_ratio_max=round(self.overdrive_ratio_max, 4),
+            limiter_count=self.limiter_count,
             last_overdrive_at=self.last_overdrive_at,
             barge_count=self.barges,
             probe_hits=self.probe_hits,

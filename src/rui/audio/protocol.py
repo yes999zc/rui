@@ -254,6 +254,10 @@ class Metrics(BaseModel):
     # that never sends them still parses.
     overdrive_count: int = 0
     overdrive_ratio_max: float = 0.0
+    # 0.8.16: voice frames whose post-gain peak hit the limiter (VOICE_LIMIT_LEVEL).
+    # Additive with a default; distinct from `overdrive_count`, which measures the
+    # capture before the gain.
+    limiter_count: int = 0
     last_overdrive_at: float | None = None
     # mysoftvol (0-255): the only knob that changes loudness on this device. None = the
     # shell channel could not read it.

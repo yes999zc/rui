@@ -332,7 +332,7 @@ dot2 = "my_plugin.adapter:build"
 | 厂商静默窗口 | 有效 `device_wake`（无同 tick 冲突） | 清除窗口并 arm gate；同 tick 冲突则厂商优先 |
 | 任意 | VAD 不可用 | 不形成 turn；记 `device_wake_no_vad`，回退 KWS；不得凭事件直接调用 LLM |
 
-**VAD 门是硬要求**：`device_wake` 只负责“打开耳朵”，不负责“提交问题”；没有后续语音（`wake_idle`）就关会话，不产生 turn、不产生 ASR/LLM 成本。事件到达后，**以 `ts_ms` 为锚点**回放 `[ts_ms - wake_preroll_ms, now]` 内仍在缓冲的音频并 arm gate（缓冲保留 `wake_preroll_ms + DEVICE_WAKE_STALE_MS`；锚点比保留的音频更旧时计 `device_wake_replay_missed++`，不错误回放最新窗口）；`device` 来源的 `wake_skip_ms` 默认 **0**（不同于 RUI KWS 的 300 ms）。barge 的“播放中”以 RUI 自己的 `_speak_queued_s`/播放任务为准；设备说 barge 但 RUI 已空闲时按空闲唤醒处理，不执行 stop。
+**VAD 门是硬要求**：`device_wake` 只负责“打开耳朵”，不负责“提交问题”；没有后续语音（`wake_idle`）就关会话，不产生 turn、不产生 ASR/LLM 成本。事件到达后，**以 `ts_ms` 为锚点**回放 `[ts_ms - wake_preroll_ms, now]` 内仍在缓冲的音频并 arm gate（缓冲保留 `wake_preroll_ms + DEVICE_WAKE_STALE_MS`；锚点比保留的音频更旧时计 `device_wake_replay_missed++`，不错误回放最新窗口）；`device` 来源的 `wake_skip_ms` 默认 **0**；`KWS` 路径自 0.8.16 起默认也是 **0**（300 ms 会吃掉唤醒词后第一个音节）。barge 的“播放中”以 RUI 自己的 `_speak_queued_s`/播放任务为准；设备说 barge 但 RUI 已空闲时按空闲唤醒处理，不执行 stop。
 
 **barge 允许条件**（全部满足）：`voice.barge_in: true`（`src/rui/config/schema.py`；半双工/关闭打断时 barge 直接抑制）；不在厂商静默窗口、硬件/ACK mute 或 gate hold 内；manifest `wake.barge_via_device: true` 且能力已生效；事件 `barge=true`；RUI 确认正在播放；未触发去抖/限频。任一条不满足则**不停止播放**，只记录建议。停止路径与 KWS barge 共用：flush + `stop_playback()` + 暂停音乐；服务端停推目标 ≤300 ms（设备 ALSA 缓冲另计），trace 记 `silence_after_ms`。
 

@@ -219,6 +219,12 @@ class DeviceVoiceOverride(BaseModel):
     # None = inherit. Resolved by `effective_ack_echo_ignore_ms()`, not by
     # `effective_audio()` (the `ack` block is deliberately outside `audio`).
     ack_echo_ignore_ms: int | None = Field(default=None, ge=0, le=5000)
+    # Per-device KWS gate (0.8.16). The global keywords file cannot serve a far-field
+    # room and a noisy bathroom at once: 0.07 wakes the living room, 0.15 keeps the
+    # bathroom quiet. None = inherit the global `audio.voice.kws_keywords_file`.
+    # This only writes a per-device keywords file; production keywords stay untouched.
+    kws_threshold: float | None = Field(default=None, ge=0.01, le=1.0)
+    kws_boost: float | None = Field(default=None, ge=0.5, le=10.0)
 
 
 class DeviceCaptureOverride(BaseModel):
@@ -386,7 +392,10 @@ class VoiceConfig(BaseModel):
     # "天天气怎么样" in 20/20 at 200 ms, and 0/20 at 350 ms and 500 ms.
     vad_preroll_ms: int = Field(default=350, ge=0, le=1000)
     # The wake phrase's own tail, dropped after the KWS fires.
-    wake_skip_ms: int = Field(default=300, ge=0, le=1000)
+    # 0.8.16: 300 ms cut the first syllable of a request spoken straight after the wake
+    # word ("几点了" lost its onset). The wake phrase's own tail is already excluded by
+    # the KWS latency and the pre-wake replay; 0 keeps the person's first word.
+    wake_skip_ms: int = Field(default=0, ge=0, le=1000)
     barge_in: bool = True
     # Wake word. Off unless a model directory is configured: the model is a download,
     # not something a pip install can guess.
@@ -429,6 +438,17 @@ class VoiceConfig(BaseModel):
     # streaming KWS reports a hit ~0.5 s late, so without this the first words of a
     # request spoken straight after the wake word never reach the transcriber.
     wake_preroll_ms: int = Field(default=500, ge=0, le=1500)
+    # Post-AEC voice gain (0.8.16). The capture path stays at its old level (mic_shift
+    # is untouched); the far field needs ~6 dB before KWS/VAD/ASR, and a hard limiter
+    # keeps the extra gain from wrapping. 0 is the rollback key: the output is then
+    # byte-identical to 0.8.15.
+    gain_db: float = Field(default=6.0, ge=0.0, le=18.0)
+    # Empty-wake punishment (0.8.16): after this many consecutive wakes that heard no
+    # speech, the device ignores KWS hits for `empty_wake_cooldown_s`. 0 disables it;
+    # the first N-1 empty wakes only count. Note: while the cooldown runs, a real
+    # person's wake is dropped too - rollback key `empty_wake_cooldown_s: 0`.
+    empty_wake_cooldown_s: float = Field(default=120.0, ge=0.0, le=600.0)
+    empty_wake_cooldown_after: int = Field(default=2, ge=1, le=10)
     # Wake-time speaker gate (0.8.16 P0): a wake whose audio matches no enrolled family
     # voice is silently dropped. Off by default, so an untouched config is 0.8.15.
     speaker_gate: SpeakerGateConfig = Field(default_factory=SpeakerGateConfig)
@@ -513,7 +533,11 @@ class AecConfig(BaseModel):
     # How long after an admitted wake the preprocessor stays off. The suppressor removes
     # whatever correlates with playback - including the command word spoken over music -
     # so the first ~1.5 s of near-end speech is protected instead. 0 disables the hold.
-    wake_hold_ms: int = Field(default=1500, ge=0, le=5000)
+    # 0.8.16: an upper bound, not the whole window. The plane holds at the wake and
+    # releases when the turn ends, so a long command keeps its near-end speech; the cap
+    # only stops a stuck turn from disabling the suppressor forever. 0 = no hold;
+    # rollback to the old fixed window: 1500.
+    wake_hold_ms: int = Field(default=15000, ge=0, le=30000)
 
 
 class AckConfig(BaseModel):
@@ -909,6 +933,10 @@ def effective_audio(
             # instead of letting a resolved-looking value vanish; `ack` is resolved by
             # `effective_ack_echo_ignore_ms()`.
             values.pop("ack_echo_ignore_ms", None)
+            # Per-device-only keys: the plane reads them from `devices[].audio.voice`
+            # itself (`_build_kws`), so they must not look resolved in `VoiceConfig`.
+            values.pop("kws_threshold", None)
+            values.pop("kws_boost", None)
             merged.update(values)
         resolved[name] = type(block).model_validate(merged)
     return EffectiveAudio(**resolved)

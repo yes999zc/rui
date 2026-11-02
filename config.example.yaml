@@ -130,7 +130,9 @@ audio:
     # every gate metric are then inert. `rui fetch-models` downloads it.
     vad_model_path: /data/models/silero_vad.onnx
     vad_preroll_ms: 350     # measured: 200 ms clips the first syllable, 350 does not
-    wake_skip_ms: 300       # the wake phrase's own tail, dropped after the KWS fires
+    # 0 (0.8.16 default): 300 ms drops the first syllable of a request spoken
+    # straight after the wake word ("几点了" arrived as "点了").
+    wake_skip_ms: 0         # the wake phrase's own tail, dropped after the KWS fires
     barge_in: true
   playback:
     # The pipeline is 16 kHz mono end to end and the LX06 client plays mono frames

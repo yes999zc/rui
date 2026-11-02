@@ -45,6 +45,11 @@ def make_frame(rate: int, amplitude: float = 8000.0) -> AudioFrame:
 def test_voice_pcm_keeps_the_amplitude(rate: int, factor: int, channels: int) -> None:
     cfg = Config()
     cfg.audio.aec.enabled = False
+    # 0.8.16: the voice gain is a separate, deliberate stage (+6 dB by default). This
+    # test exists to prove the de-interleave/AEC path adds no scale of its own, so the
+    # gain is pinned to 0 here; `test_the_default_gain_lifts_the_voice_amplitude`
+    # covers the gain itself.
+    cfg.audio.voice.gain_db = 0.0
     plane = AudioPlane(cfg, "living", Path("/tmp/scale.sock"))
     frame = make_frame(rate)
     out = plane._frame_to_voice(frame, Decimator(factor=factor, channels=channels))
@@ -63,6 +68,7 @@ def test_echo_cancelled_path_keeps_the_amplitude_too(monkeypatch) -> None:
 
     cfg = Config()
     cfg.audio.aec.enabled = True
+    cfg.audio.voice.gain_db = 0.0  # measure the canceller, not the 0.8.16 voice gain
     plane = AudioPlane(cfg, "living", Path("/tmp/scale.sock"))
     plane._build_aec(mic_channels=6, ref_channels=2)
     assert plane.aec is not None
@@ -74,6 +80,21 @@ def test_echo_cancelled_path_keeps_the_amplitude_too(monkeypatch) -> None:
     # a 1 kHz tone must survive at roughly its original level, not as clipped noise
     assert 4000 < np.abs(pcm).max() < 9000
 
+
+
+
+def test_the_default_gain_lifts_the_voice_amplitude() -> None:
+    """0.8.16: `audio.voice.gain_db=6` is applied after AEC and before KWS/VAD/ASR."""
+    cfg = Config()
+    cfg.audio.aec.enabled = False
+    assert cfg.audio.voice.gain_db == 6.0
+    plane = AudioPlane(cfg, "living", Path("/tmp/scale.sock"))
+    out = plane._frame_to_voice(make_frame(16000), Decimator(factor=1, channels=8))
+
+    pcm = np.frombuffer(out, dtype="<i2").astype(np.float32)
+    expected = 8000.0 * 10.0 ** (cfg.audio.voice.gain_db / 20.0)
+    assert np.abs(pcm).max() == pytest.approx(expected, rel=0.02)
+    assert plane.limiter_count == 0, "an 8000/32768 input must not reach the limiter"
 
 # ------------------------------------------------- capture-path narrowing (0.8.9)
 def test_the_voice_path_reads_only_the_columns_it_uses() -> None:

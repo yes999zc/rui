@@ -13,6 +13,7 @@ already running when someone speaks.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,25 +92,37 @@ def keyword_lines(
     return lines
 
 
+# The production reference numbers (the old deployment's keywords file): a visible
+# `#0.15` threshold and `:2.00` boost per line. Per-device overrides replace one or
+# both; the defaults stay here so a single-sided override uses the other's old value.
+DEFAULT_KWS_THRESHOLD = 0.15
+DEFAULT_KWS_BOOST = 2.0
+
+
 def write_keywords_file(
     path: Path | str,
     words: Iterable[str],
     *,
-    threshold: float = 0.15,
-    boost: float = 2.0,
+    threshold: float = DEFAULT_KWS_THRESHOLD,
+    boost: float = DEFAULT_KWS_BOOST,
 ) -> int:
     """Write a keywords file for `words`; returns the number of lines.
 
     A cold install used to have no keywords file at all, so KWS refused to start:
     the assistant answered only after someone edited a file by hand. The file is
     generated now, from the same wake words the config already declares.
+
+    Atomic (temp + `os.replace`): a per-device file is rewritten whenever the config
+    changes, and the spotter must never load a half-written file.
     """
     lines = keyword_lines(words, threshold=threshold, boost=boost)
     if not lines:
         raise ValueError("no wake words to write")
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
     return len(lines)
 
 

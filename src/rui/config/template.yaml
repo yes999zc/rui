@@ -68,7 +68,11 @@ audio:
     vad_min_speech_ms: 200
     vad_end_silence_ms: 600
     vad_preroll_ms: 350
-    wake_skip_ms: 300
+    # 0 since 0.8.16: the KWS latency already covers the wake phrase's own tail,
+    # and 300 ms ate the first syllable of a request spoken right after the wake
+    # word ("几点了" arrived as "点了"). Only raise it for a device whose KWS
+    # tail is measurably longer.
+    wake_skip_ms: 0
     barge_in: true
     kws_enabled: true
     kws_model_dir: /data/models/kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20
