@@ -3251,3 +3251,16 @@ if self._extractor is None or (pcm.size == 0 if isinstance(pcm, np.ndarray) else
   库内出现 `_smoke`（已 DELETE 清掉，库回到空）。
 - **这不是正式修复**：0.8.17 必须在源码里改守卫 + 补单测（task-2），上线后删掉 hotfix 挂载并把
   `hotfix/` 目录归档。备份原文件：`/vol1/rui/data/speaker_gate.py.0.8.16-orig`。
+
+### 2026-11-02 13:1x 注册 bug 源码修复已提交（`e57e59d`，已推）
+
+- `src/rui/audio/speaker_gate.py`：`embed()` 守卫改为
+  `if self._extractor is None or (pcm.size == 0 if isinstance(pcm, np.ndarray) else not pcm):`
+- 新增回归 `tests/test_speaker_gate.py::test_embed_accepts_int16_and_float32_arrays_not_only_bytes`：
+  用鸭子类型 extractor 驱动，喂 `bytes` / int16 数组 / float32 数组 / 空数组，不依赖 sherpa-onnx 与模型文件。
+- 验证：`.venv/bin/python -m pytest tests/test_speaker_gate.py tests/test_speakers_api.py -q` → 全过（1 skip
+  是真实模型那条）；`ruff check` → All checks passed。
+- **生产侧现状没变**：容器仍在用 `/vol1/rui/hotfix/speaker_gate.py` 的只读挂载版本（同一行修改）。
+  0.8.17 出镜像后：`compose up -d` 换成新镜像 → 从 override 删掉那行 hotfix 挂载 → `hotfix/` 归档，
+  并把 `data/speaker_gate.py.0.8.16-orig` 删掉（保留到那天为止）。
+- 本次只提交了源码修复，**没有升版本**（0.8.17 的版本号/CHANGELOG/镜像走正常发版流程）。
