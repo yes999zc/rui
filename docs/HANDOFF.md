@@ -3669,3 +3669,52 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
    **硬约束**：不得包含任何密钥值（`.env`、`device_token`、token 值、证书），只存结构与非敏感参数。
 3. **主仓库**：功能定型，不再投入维护；**但不在主仓库写“停止维护”**（9哥 明确要求不公开说）。
    主仓库保持现状，只继续用它出私有仓库的基线 tag。小爱停维护的声明（0.8.17 里那条）是 9哥 之前明确要的，保留。
+
+## ★ 压缩交接（2026-11-02 17:08，下个会话从这里接）
+
+### A. 生产现状（别信转述，先复核）
+| 项 | 值 |
+|---|---|
+| 版本 | **0.8.15**（health ok / devices 4 / enabled 4 / 0 错误） |
+| 镜像 | 本地 `82ba71acd3bf`，`docker tag` 成 `ghcr.io/yes999zc/rui:0.8.15` —— **override 里现在是 tag 不是 digest** |
+| 配置 | 10-30 09:15 那份 + `living.enabled=false`（客厅小爱·本机不接入）+ 四台 dot2 `ack_echo_ignore_ms: 1200` |
+| 有效参数 | `wake_skip_ms 300`、无 `gain_db`、无声纹门控、无空唤醒冷却、无 hotfix 挂载 |
+| 在线 | `dot2`(儿童房) / `dot2-b`(次卧) / `dot2-d`(卫生间) 的标签是 10-30 的，与物理摆放不符（仅影响日志/控制台） |
+| 物理 | 客厅 = Dot（设备侧 AEC），小爱已拔电；儿童房/书房/主卧/卫生间各一台 Dot |
+
+### B. 回滚与镜像锚
+| 目标 | 镜像 |
+|---|---|
+| **0.8.15（现在）** | 本地 `82ba71acd3bf` / `:0.8.15`；amd64 `sha256:4a4c2db421367ee5c110d97d8ac5a984f4702fa6f854fde12f1a087723cd948d` |
+| 0.8.16 | 本地 `4b76da9cfc57` / `sha256:9d28f00d30192becf0be6bb08ada3cba06c6d4bfa3add207e5eee9eb366ca11e` |
+| 0.8.12 | `sha256:64a2c260dbf8373efefdebe06be3817ba555c874ce18a12a03e9a54424dfa33e` |
+| **0.8.17（已发未部署）** | index `sha256:77841cab…`；**amd64 `sha256:5020f0640a824f76a997929987f11f8dbb43db1c9fe4e19ed9b33df73d027383`** |
+
+- **NAS 侧 GHCR 自 16:2x 起不可达**（`context deadline exceeded`）；GitHub / GitHub Actions 正常。
+  要在 NAS 上升级 0.8.17，得等网络恢复拉上面那个 amd64 digest，或在能联网的机器 `docker save` 后导入。
+- 归档：hotfix 文件在 `/vol1/rui/backups/hotfix-archive-20261102-163734/`；配置备份按时间戳在 `/vol1/rui/config/config.yaml.bak-*`。
+
+### C. 今天定下来的结论（别再重推）
+1. **0.8.16 自问自答的根因 = `0e4fd77` 的 AEC 后 +6 dB 增益**（把提示音回声残差抬过 VAD 门限）。
+   实测：0.8.12/0.8.15 同场景 0 次；0.8.16 出现 `turn: '在呢。' => '在呢，你说。'`。
+   同一提交的「空唤醒冷却」把真人唤醒锁了 120 s（`empty_wake_cooldown_s: 0` 是回滚键）。
+2. 修法不是加长丢弃窗口（试过，热修已归档），是**把增益默认值改回 0**。
+3. 客厅拓扑（Dot 3.5 mm → 小爱 AUX 功放）**已废弃**；小爱本机禁用，但**主仓库保留 lx06 支持**（GitHub 上下继续可用）。
+4. 0.8.17 已发版（tag `v0.8.17`，CI publish ✅），内容 = 默认值回滚（`b1cdd9d`）+ README/CHANGELOG/`docs/releases/v0.8.17.md` 的「小爱停维护」声明。
+5. **主仓库功能定型，不再投入维护；但不在主仓库写“停止维护”**（9哥 要求只做不说）。
+
+### D. 待办（优先级顺序）
+1. **修 `security`**（task-4）：Trivy 仍红。已知 `CVE-2026-119373`（`libsqlite3-0`，无修复版本，服务不链接 SQLite），
+   豁免已加（`489d4e1`）仍失败。三步：读 job summary 的未豁免计数 → 是否需要 `purls`/`paths` 作用域 → 是否有到期条目。
+   **不阻塞发布，也不影响生产。**
+2. **建私有仓库**（task-5）：基于 `v0.8.15`，只存本地配置与非敏感资产；**严禁** `.env` / `dot2-secrets` / token 值；
+   提交前跑 `scripts/secret_scan.sh`。
+3. 验收 A/C/D 仍没跑（视频 10 分钟 0「在呢」/ 视频中命令 ≥4/5 / 放歌双讲）；**注意 0.8.16 的声纹与 +6 dB 都已回滚，
+   验收口径要按 0.8.15 重写**。
+4. 可选：把 0.8.15 重新钉回 amd64 digest；房间标签与物理摆放对齐。
+
+### E. 常用入口
+- 采集脚本：NAS `/vol1/rui/bin/enroll_speaker.py`（本仓库 `scripts/enroll_speaker.py`）
+- 日志：`docker logs rui --since 10m`、`/api/v1/logs?lines=N`（`X-Auth-Token`）
+- 关键日志行：`wake:`、`cue: NN ms of audio handed over`、`cue_gate:`、`[seg]`、`turn: {'transcript':…}`、
+  `noise, no turn`、`own voice heard back`、`wake without speech`
