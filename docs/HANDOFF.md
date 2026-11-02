@@ -3327,3 +3327,57 @@ if self._extractor is None or (pcm.size == 0 if isinstance(pcm, np.ndarray) else
 档案一致性也变好（新孩子档案 vs 旧：0.60）。**当前生效配置**：`speaker_gate.enabled: true`、阈值 0.55、
 `mode: any_enrolled`、`ack tts`、库内 `爸爸` + `孩子`（都在 living）、5 台 0 错误。
 9哥 决定：**先用这套**。待办：妈妈录音、主卧 dot2-c 三人档案、视频 10 分钟 0 误唤醒验收、放歌双讲验收。
+
+## ★ 压缩交接（2026-11-02 15:15，下个会话从这里接）
+
+### A. 生产现状（15:15 实测，别信转述，先复核）
+
+| 项 | 值 |
+|---|---|
+| 版本 | **0.8.16**（镜像 `ghcr.io/yes999zc/rui@sha256:9d28f00d…`，pin 在 `/vol1/rui/rui-dot2-override.yml`） |
+| 健康 | 5 台 / 5 启用 / `device_errors 0` / planes 5 / `ack.mode tts` |
+| capture | `mic_shift 10 / ref_shift 14` |
+| voice | `gain_db 6.0`、`wake_skip_ms 0` |
+| aec | `residual true`、`wake_hold_ms 15000`（语义=旁路上限） |
+| 声纹门控 | **enabled true**、`threshold 0.55`、`mode any_enrolled`、`segment_gate true`、`wake_window_ms 2500`；模型 `/data/models/speaker/campplus.onnx` |
+| 声纹库 | **爸爸 + 孩子**（都在 living）；妈妈未录；dot2-c 主卧未录 |
+| keywords | `:4.00 #0.07`（两行，含「你好小宝儿」） |
+| 音量 | 运行时 230/255（**用户手动调过**，config `devices[living].volume = 80`；fleet restart 会重置成 204） |
+
+### B. 两处"临时但正在生产运行"的东西（0.8.17 必须收掉）
+
+1. **只读热修挂载**：`rui-dot2-override.yml` 第 5 行
+   `./hotfix/speaker_gate.py:/usr/local/lib/python3.12/site-packages/rui/audio/speaker_gate.py:ro`，
+   修的是 enrol commit 的 numpy 真值 bug。源码已修（commit `e57e59d` + 回归测试），**0.8.17 出镜像后要删掉这行挂载**并归档 `hotfix/`。
+2. 原文件备份 `/vol1/rui/data/speaker_gate.py.0.8.16-orig` 也在，那行挂载删掉后可一并删除。
+
+### C. 声纹注册唯一可用流程（今天试错 4 次才定，照抄）
+
+**一次只录一个人，10 秒**：
+1. `POST /api/v2/speakers/enroll {name:"_cap", device_id:"living", seconds:10}` **同时**放
+   `/var/lib/rui/data/beep2.wav`（两声 700 Hz，用 `/api/v1/debug/play {"device":"living","file":…}`）；
+2. 1.7 s 后 `PUT /api/v1/device/volume {"value":1,"device":"living"}`（压掉 TTS 回复）；
+3. 8.9 s 后**立刻** `cp /var/lib/rui/enroll/<id>.wav`（**只活 30 秒**）；
+4. 剪掉开头 1.5 s（滴滴）+ 首尾静音（50 ms RMS>0.012~0.015 找语音段）；
+5. 入库：再 arm 1 s 会话（name=真人名，注意 409 要重试）→ sleep 2.5 → 覆盖该 `enroll_id` 的 wav 与 sidecar
+   （`ms`/`speech_ms`=时长）→ `commit`；
+6. `docker restart rui` 让平面加载新档案 → 真机 3 米验证（≥0.7 算稳，0.55 是阈值下限）。
+
+**不可用路线**：手机近讲录音（域差：孩子 phone-vs-device 0.00，爸爸 3 米实测 0.46 被拒）；
+按秒换人的定时窗口（家人跟不上）；"两段自相似高=质量好"（底噪也高，曾误判 0.975）。
+
+### D. 待办（按优先级）
+
+1. **妈妈录音**（10 秒，同流程）→ 真机验证
+2. **主卧 dot2-c 三人档案**（吊顶 3 米，需在那台单独录 + 单独标定；注意 dot2 = 设备侧 AEC、无 ref）
+3. **验收三项**（`04_Docs/human-bridge/tests/0.8.16-acceptance.md`）：
+   A 视频 10 分钟 0 次「在呢」/ C 视频中命令 ≥4/5 / D 放歌「下一首」×5 ≥4/5
+4. **0.8.17**：把 `e57e59d` 发版 → 删 hotfix 挂载；顺带 `erle-bench` 的错误常量 14→24（backlog）
+5. `uv.lock` 还写 0.8.14（0.8.15/0.8.16 未同步）
+
+### E. 今天已确认的引擎级事实（0.8.16 做到了什么）
+
+- `wake_skip_ms 0` 修掉「几点了」丢首字；`gain_db 6` 提升远场识别；`wake_hold_ms 15000` 让残差级全程让位；
+- 声纹门控能区分家人与媒体（爸爸 0.62–0.77、孩子 0.66–0.69，best 从不串台）；
+- 但**放歌双讲**（「下一首」→「下一周」）仍是 DTD/AEC3 级问题，0.8.16 只做了旁路，未根治；
+- 外部媒体（电视/视频）没有参考通道，只能靠声纹拦，音频本身消不掉。
