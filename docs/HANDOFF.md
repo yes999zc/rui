@@ -2832,3 +2832,15 @@ dot2-d 1 次（09:09:45），全部 `wake with no speech`、`[seg]` 0、轮次 0
 处置：`keywords.txt` 临时升到 `:2.00 #0.15`（10:03 重启，重启后 1 分钟内 0 次唤醒），
 备份 `keywords.txt.bak-20261102-1002-bridge-gate-0.07-to-0.15`。代价是远场灵敏度下降；
 **媒体在场门控**因此升为 0.8.16 的 P0（阈值只能止血）。
+
+### 2026-11-02 10:2x 0.8.16 卡定稿（未开工）
+
+- 卡：`04_Docs/human-bridge/goal-0.8.16.md`（178 行）。范围：P0 声纹门控 + 静默拒绝 + 后台录制入口；
+  P1 媒体在场门控四层 + 六条小修（skip 默认 0 / AEC 后增益+限幅 / 残差级全程旁路或 DTD /
+  per-device 门限 / 空唤醒惩罚 / 切除只丢 cue 段）。
+- 已定：`speaker_gate.mode: any_enrolled`；提示音保留；D8 → D8′（声纹只做门控，不做身份认证）。
+- 模型已就位并验证：`/vol1/rui/data/models/speaker/campplus.onnx`（CAM++ 28 MB，dim 192，
+  容器内 `SpeakerEmbeddingExtractor/Manager` 可用，sherpa-onnx 2.0.1）。
+- **当前生产是临时止血态**：门限 `:2.00 #0.15`（视频在场，误唤醒压到偶发）；
+  其余 = `mic 10 / ref 14`、`wake_skip_ms 0`、`ack tts`、5 台。
+  0.8.16 上线后门限回到 `:4.00 #0.07`，视频误唤醒改由声纹拦。
