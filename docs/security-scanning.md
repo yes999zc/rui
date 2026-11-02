@@ -109,11 +109,11 @@ and prune entries when the rebuilt base image no longer reports them. Do not
 renew mechanically; re-check the Debian tracker and the package version first.
 
 Current state (Trivy DB 2026-10-24, `python:3.12-slim-bookworm`, Debian 12.15):
-63 HIGH/CRITICAL findings, 61 HIGH and 2 CRITICAL, across 16 unique CVEs. All
+63 HIGH/CRITICAL findings across 16 unique CVEs (plus CVE-2026-119373, added 2026-11-02). All
 had no fixed Debian package at that point; they are grouped in the file as:
 
 - util-linux 2.38.1-5+deb12u3 — 6 CVEs;
-- SQLite 3.40.1-2+deb12u2 — 3 CVEs, including CRITICAL CVE-2025-7458;
+- SQLite 3.40.1-2+deb12u2 — 4 CVEs, including CRITICAL CVE-2025-7458; the fourth (CVE-2026-119373) is not reachable: the service never links SQLite;
 - gzip, libacl, ncurses, OpenSSL, systemd, perl-base — 1 each;
 - zlib 1.2.13 — CRITICAL CVE-2023-45853, marked `will_not_fix` by Debian because
   the vulnerable code is MiniZip, not zlib itself.

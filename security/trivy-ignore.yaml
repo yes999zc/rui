@@ -54,6 +54,9 @@ vulnerabilities:
     expired_at: 2027-01-23
   - id: CVE-2026-11824
     statement: "SQLite heap buffer overflow; Debian 12 libsqlite3-0 is unfixed. No application path executes untrusted SQL."
+  - id: CVE-2026-119373
+    statement: "SQLite HIGH finding reported 2026-11-02 against libsqlite3-0 3.40.1-2+deb12u2; Debian 12 has no fixed package. The service does not link or call SQLite; the library is an unused base-image dependency."
+    expired_at: 2027-01-23
     expired_at: 2027-01-23
 
   - id: CVE-2026-84782
