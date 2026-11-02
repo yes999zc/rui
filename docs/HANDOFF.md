@@ -3192,3 +3192,21 @@ amd64 镜像 `ghcr.io/yes999zc/rui@sha256:9d28f00d30192becf0be6bb08ada3cba06c6d4
 6. 回填模型 sha256、镜像 digest、以及 `tests/0.8.16-acceptance.md` 的验收结果。
 
 **回滚锚**：0.8.15 amd64 `sha256:4a4c2db421367ee5c110d97d8ac5a984f4702fa6f854fde12f1a087723cd948d` + 上面两份配置备份。
+
+### 2026-11-02 12:15 0.8.16 已部署（bridge 执行，等价性验证通过）
+
+**部署结果（实测）**
+- `/health` → **0.8.16**、devices 5、enabled 5、**device_errors 0**、planes 5、`ack.mode tts`；容器 StartedAt
+  `2026-11-02T04:15:34Z`、`RestartCount 0`、镜像 = `ghcr.io/yes999zc/rui@sha256:9d28f00d…`（amd64 摘要 pin 进 override）。
+- `effective.capture = mic 10 / ref 14`；`audio.voice.gain_db = 6.0`、`wake_skip_ms = 0`；
+  `audio.aec.residual = true`、`wake_hold_ms = 15000`；
+  `audio.voice.speaker_gate = {enabled: false, model_path: '', threshold: 0.55, mode: any_enrolled,
+  segment_gate: true, wake_window_ms: 2500}`（尚未启用，符合部署顺序 ①）。
+- 声纹模型 sha256：`f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11`
+  （`/vol1/rui/data/models/speaker/campplus.onnx`，28 281 138 B）。
+- 备份（本次部署前）：`config.yaml.bak-20261102-121411-bridge-pre0816`、
+  `keywords.txt.bak-20261102-121411-bridge-pre0816`、`rui-dot2-override.yml.bak-20261102-121411-bridge-0815`。
+- 回滚：override 换回 `sha256:7c1a3aa7…`（0.8.15 index）/`4a4c2db4…`（amd64）+ `compose up -d`。
+
+**下一步**：② 注册 3 人 × 2 台（living、dot2-c）→ ③ 开 `speaker_gate.enabled: true` + `model_path`，
+`keywords.txt` 回 `4.00 #0.07` → ④ 按 `04_Docs/human-bridge/tests/0.8.16-acceptance.md` 验收。
