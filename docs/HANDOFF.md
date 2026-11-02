@@ -3766,3 +3766,36 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 
 **要注意**：任何地方保存过旧 token 的客户端（手机快捷指令、HA、自写脚本）都要换成 NAS 上
 `/vol1/rui/console-token.txt` 里的新值，否则会 401。
+
+### 2026-11-02 17:22 Dot 调优第一步：唤醒词全换「你好小瑞」+ 清掉 audio_conflict
+
+**9哥 定**：以后**着重调优 Dot**。第一条 = 所有 rui 唤醒词换「你好小瑞」，顺带把他贴的两条启动警告清掉。
+
+**改动**（私有库 `rui-local`，已部署 + tag `deploy-20261102-1722`）：
+1. 5 台设备 `wake_words` 全改 `你好小瑞`（living 那台已禁用也改了）；
+   `keywords.txt` 重写为 `n ǐ h ǎo x iǎo r uì :4.00 #0.07 @你好小瑞`
+   —— **保留手调过的 boost 4.00 / 门限 0.07**，没回默认 2.00/0.15。
+2. 删掉配置顶层 `audio.capture`（`8ch/6mic/2ref/32bit`、`mic_shift 12`、`ref_shift 16`）。
+   那套是 LX06 服务器 AEC 的阵列参数；Dot 的 plug manifest 声明 16-bit 单声道无 shift，
+   于是每台 Dot 启动都报一次 `audio_conflict` 再按 manifest 用 0。删掉后走中性默认值。
+   **回滚** = 从 git 恢复该块（`git show deploy-20261102-1706:config/config.yaml`）。
+
+**同时把线上漂移拉回来了**（先 `pull-from-nas.sh` 再改，避免覆盖 9哥 的手动调整）：
+- room 改名：`dot2`=客厅、`dot2-b`=儿童房、`dot2-c`=主卧、`dot2-d`=卫生间（不再是 10-30 那套）
+- `dot2-d` 音量 95（手按出来的），其余 100/80/80
+
+**验证**（重启后实测）：
+- `audio.capture.*_shift` / `audio_conflict` 在重启后的日志里 **0 条**（重启前 17:18 那批是旧的）
+- `/health` ok、version 0.8.15、devices 4 / enabled 4 / `device_errors 0`，4 条 plane 全 running
+- NAS `keywords.txt` 内容 = 你好小瑞 那一行
+- 部署脚本修了两个真问题：① 第一版 `--apply` 忘了推 `keywords.txt`（唤醒词换了但门限文件没换，靠验证抓到的）；
+  ② `$STAMP（` 被 bash 当成变量名导致 `unbound variable`，改成 `${STAMP}`；重启后改成轮询 `/health` 等就绪
+
+**还有一条启动 WARNING 是预期的**（不是故障）：
+`device_wake: manifest declares wake.source=device, but probe() does not advertise it; falling back to RUI KWS`
+—— Dot manifest 声明设备侧唤醒，但 override 里 `DOT2_OWW_ON_DEVICE: "off"`，且设备 OWW 模型是英文
+`hey_jarvis`，认不了中文 ⇒ 按设计回退服务器 KWS。每次面启动打一次，不动它。
+
+**未改**：`assistant.name` 仍是「小宝」（会回答"我叫小宝"），与唤醒词「你好小瑞」不一致；等 9哥 定要不要改。
+**下一步（Dot 调优，见私有库 `docs/dot-tuning.md`）**：逐台 3 米唤醒率 10 次、唤醒后静默 3 秒查自问自答、
+跨房间串音、按房间调音量；0.8.15 只有全局 KWS 门限，per-device 门限要 0.8.17。
