@@ -3417,3 +3417,27 @@ API 报的 `token_missing` 是次要码（`token_managed_by_adapter` 要求 link
 1. `dot2-d` 录孩子：`python3 /vol1/rui/bin/enroll_speaker.py --name 孩子 --device dot2-d`，3 米验证；
 2. 客厅补妈妈（爸爸/孩子现有档案继续有效）；
 3. 全部录完再把 `audio.voice.speaker_gate.enabled` 改回 `true` + 重启。
+
+### 2026-11-02 15:18 客厅拓扑改造：小爱下线，Dot 接管（`dot2-d` 搬进客厅）
+
+**物理事实（9哥 确认，纠正 15:0x 的误判）**：客厅是 **小爱音箱 Pro（LX06）**，它有 3.5 mm **AUX 输入**；
+那台 Echo Dot 2nd（RS03QR，rui 里的 `dot2-d`）**就在客厅、和小爱挨着**，Dot 的 3.5 mm 输出插在小爱的 AUX 上。
+此前 rui 里 `living` = LX06，所以**收音和播放都走小爱**，Dot 只是把模拟声音灌进小爱 ⇒ 两条声音路径混在一起。
+
+**改造内容**（备份 `config.yaml.bak-*-living-to-dot`）：
+- `devices[dot2-d].room`：`儿童房` → `客厅`；
+- `devices[living].enabled`：`true` → `false`，room 标注 `客厅（小爱·已下线）`；
+- `docker restart rui`。
+
+**结果复核**：`health ok / 0.8.16 / 4 台 / 4 启用 / 0 错误`；`dot2-d = ready`（port 8874、capture 16 k、playback 48 k、音量 191 = 75%）；
+`living = disabled`（不再占 4412 端口，重启后无 lx06 拨号）；`POST /api/v1/debug/say {device:dot2-d}`
+实际在 `dot2-d` 播放（`reply: first chunk at 48000 Hz`），链路通。
+
+**待验证/待标定**：
+1. Dot 之前在儿童房 1 米（设备侧 mic 偏热），现在客厅 2–3 米 ⇒ **唤醒率要重新量**（`[seg] rms` / ASR / 唤醒分母）；
+2. 小爱 AUX 档位要先手动定好并**不再动**，之后音量只由 rui 控 Dot（两级音量）。
+3. 如果 Dot 的 3.5 mm 插入没有自动静音其内置喇叭，会出现「小喇叭 + 小爱」双出声，要确认。
+
+**⚠️ 副作用**：`儿童房` 现在没有设备了（dot2-d 是唯一一台在那间的）。要恢复就在儿童房再放一台。
+
+**回滚**：`living.enabled: true` + `dot2-d.room: 儿童房` → 重启（配置备份 `config.yaml.bak-20261102-1518xx-living-to-dot`）。
