@@ -33,7 +33,9 @@ set -u
 # example is not a host address; flagging it made every netguard doc a
 # permanent failure. The regexes spell the sensitive words with a character
 # class so this file does not match the scan itself.
-hard="sk-[A-Za-z0-9]{16,}|[/]Users[/]|passw[o]rd[[:space:]]*[:=][[:space:]]*[\"'][^\"']+[\"']|passw[o]rd[[:space:]]*[:=][[:space:]]*[^\"'\$[:space:]]*[0-9][^\"'\$[:space:]]*|Bearer [A-Za-z0-9_-]{20,}"
+# The token-assignment rule exists because 970e13b committed a console token as
+# `DEFAULT_TOKEN = "<32 random chars>"`, which every earlier rule missed.
+hard="sk-[A-Za-z0-9]{16,}|[A-Za-z_]*[Tt][Oo][Kk][Ee][Nn][A-Za-z_]*[[:space:]]*[=:][[:space:]]*[\"'][A-Za-z0-9+/]{28,}={0,2}[\"']|[/]Users[/]|passw[o]rd[[:space:]]*[:=][[:space:]]*[\"'][^\"']+[\"']|passw[o]rd[[:space:]]*[:=][[:space:]]*[^\"'\$[:space:]]*[0-9][^\"'\$[:space:]]*|Bearer [A-Za-z0-9_-]{20,}"
 soft='(^|[^0-9.])192\.168\.[0-9]{1,3}\.[0-9]{1,3}([^0-9/]|$)|(^|[^0-9.])10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9/]|$)'
 
 # Redacted samples written up by an audit, and the binary fixtures, are

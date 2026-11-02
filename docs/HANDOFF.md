@@ -3740,9 +3740,29 @@ dot2-d=卫生间），与物理摆放不符，只影响日志与控制台显示�
 - `./deploy/push-to-nas.sh`（dry-run）= 渲染模板 → 注入 NAS 上的 token → 与 `/vol1/rui/config/config.yaml` **diff 为空**，
   说明仓库快照与生产逐字节一致；
 - `./deploy/health.sh` = `ghcr.io/yes999zc/rui:0.8.15` / healthy / devices 4 enabled 4 errors 0；
-- `./scripts/private-scan.sh` clean（硬密钥、私钥、`/Users/` 路径、明文 auth_token 全拦），已设为 pre-commit。
+- `./scripts/private-scan.sh` clean（硬密钥、私钥、本机绝对路径、明文 auth_token 全拦），已设为 pre-commit。
 
 **约定**：在 NAS 上直接改过配置后跑 `./deploy/pull-from-nas.sh` 拉回（自动脱敏），别让仓库和机器分叉；
 部署用 `push-to-nas.sh --apply`（先备份 `config.yaml.bak-<stamp>` 再重启）。
 
 **主仓库**：不动，也不写「停止维护」（9哥 要求只做不说）。私有仓库需要基线时从主仓库 tag 取。
+
+### 2026-11-02 17:14 发现并处理一处真实泄露：console token 进了公开仓库
+
+**怎么发现的**：建 `rui-local` 后把 `scripts/enroll_speaker.py` 拷过去，克隆校验时 grep 出
+`DEFAULT_TOKEN = "<32 位>"` —— 同一个字面量早在 **提交 `970e13b`** 就进了公开仓库 `yes999zc/rui`，
+`secret-scan` 没拦住（旧规则只认 `sk-` / `Bearer` / 密码字面量，不认「变量名带 TOKEN 的赋值」）。
+
+**已做（按顺序）**：
+1. **轮换 token**（NAS，17:10）：重新生成 32 位随机值写进 `/vol1/rui/config/config.yaml` 的 `web.auth_token`
+   和 `/vol1/rui/console-token.txt`（0600），重启 rui。备份 `config.yaml.bak-20261102-171011-rotate-token`。
+   复核：新 token `200`，旧 token `401`，无 token `401`，容器 healthy、4 台设备。
+2. **删字面量**：`scripts/enroll_speaker.py` 改为从 `$RUI_CONSOLE_TOKEN` 或 `/vol1/rui/console-token.txt`
+   解析，取不到就 `ap.error` 退出，不再有硬编码兜底。
+3. **补规则**：`scripts/secret_scan.sh` 加「变量名含 TOKEN 且赋 28+ 位随机串」的硬匹配；
+   对既有测试夹具（`console-token-do-not-leak` 等）无误报，`./scripts/secret_scan.sh` 现在 clean。
+
+**没做历史重写**：泄露值已随轮换失效，公开仓库不 force-push（避免破坏别人的 clone/引用）。
+
+**要注意**：任何地方保存过旧 token 的客户端（手机快捷指令、HA、自写脚本）都要换成 NAS 上
+`/vol1/rui/console-token.txt` 里的新值，否则会 401。

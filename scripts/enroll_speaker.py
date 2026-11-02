@@ -49,7 +49,18 @@ from array import array
 from pathlib import Path
 
 DEFAULT_HOST = "http://localhost:8080"
-DEFAULT_TOKEN = "WqA9hzgVOdxl6-TcDMbPhrlRy2pTk6Jd"  # console token, local only
+# The console token is never committed: it lives on the NAS (root-only file the
+# container also reads) or in the environment. Refuse to run rather than fall back
+# to a literal, because a literal is exactly how the value leaked in 970e13b.
+TOKEN_FILE = Path("/vol1/rui/console-token.txt")
+
+
+def _default_token() -> str:
+    import os
+    token = os.environ.get("RUI_CONSOLE_TOKEN", "").strip()
+    if not token and TOKEN_FILE.is_file():
+        token = TOKEN_FILE.read_text().strip()
+    return token
 DATA_DIR = Path("/vol1/rui/data")          # host path == container /var/lib/rui/data
 BEEP = "/var/lib/rui/data/beep2.wav"       # two 700 Hz beeps, 0.81 s
 CONTAINER = "rui"
@@ -274,11 +285,14 @@ def main() -> int:
     ap.add_argument("--device", default="living", help="room id (default living)")
     ap.add_argument("--seconds", type=int, default=10, help="capture window (default 10)")
     ap.add_argument("--host", default=DEFAULT_HOST)
-    ap.add_argument("--token", default=DEFAULT_TOKEN)
+    ap.add_argument("--token", default=_default_token(),
+                    help="console token (default: $RUI_CONSOLE_TOKEN or /vol1/rui/console-token.txt)")
     ap.add_argument("--out", default="/tmp/enroll-sample.wav")
     ap.add_argument("--dry-run", action="store_true", help="capture + trim only, do not commit")
     ap.add_argument("--no-restart", action="store_true", help="skip the container restart")
     args = ap.parse_args()
+    if not args.token:
+        ap.error("no console token: set RUI_CONSOLE_TOKEN or run on the NAS (which holds /vol1/rui/console-token.txt)")
 
     print(f"== enrolling {args.name} on {args.device} ==")
     raw = Path("/tmp/enroll-raw.wav")
