@@ -2862,3 +2862,72 @@ dot2-d 1 次（09:09:45），全部 `wake with no speech`、`[seg]` 0、轮次 0
 1 m 的三台比客厅热 10 dB+，这解释了卫生间为什么水声/视频声一响就命中；它们的采集增益与门限都要单独定，
 不能拿客厅的值套用（0.8.16 的 per-device 门限那条按这张表验收）。主卧是吊顶 + 3 m，混响更重，
 声纹必须在**床位**录，不能贴着设备录。
+
+### 2026-11-02 10:5x 0.8.16 批次 1 开发完成（声纹唤醒门控 + 注册入口；未部署）
+
+**commit** `5430923`（`feat(audio): gate wakes by enrolled speaker voice and add enrollment API`），main 分支，未打 tag。
+**范围**：D8 → D8′ 的第一刀（P0）。生产仍是 0.8.15 临时止血态（门限 `:2.00 #0.15`），本批**没有**部署、没有重启容器、
+没有碰 `/vol1/rui/config`。
+
+**做了什么（用户可感知）**
+1. 唤醒音频必须匹配已注册家人：不匹配 → **完全静默**（不播「在呢」、不建 turn、不发 Wake），只加
+   `wake_rejections["speaker"]` 与一行 `wake rejected: speaker score=… best=… (threshold …)`；
+   通过打 `wake admitted: speaker score=… best=…`。
+2. 注册入口：`POST /api/v2/speakers/enroll` → `POST …/enroll/{id}/commit`、`GET /api/v2/speakers`、
+   `DELETE /api/v2/speakers/{name}`、`GET …/{name}/sample.wav?device_id=`；
+   控制台 v2 新增「家庭成员」页（注册/重录/删除/播放样本/相似度，中英双语）。
+   库里键是 `(name, device_id)`，落盘 `data_dir/speakers.json`（原子写 0600），注册后**不重启即生效**（mtime 热读）。
+3. 录制复用现有推流：控制面下发 `EnrollStart`，音频面把 post-AEC 16k 单声道写成
+   `data_dir/enroll/<id>.wav` + sidecar `{enroll_id, device_id, path, ms, speech_ms}`（均原子）；
+   **sidecar 是唯一完成信号**（`client.py::_dispatch` 没加分支，`EnrollResult` 只定义不发送）。
+
+**配置与回滚键（全部默认关闭/零行为变化）**
+| 键 | 默认 | 作用 |
+|---|---|---|
+| `audio.voice.speaker_gate.enabled` | `false` | **一行回到 0.8.15 行为** |
+| `…model_path` | `""` | 生产填 `/data/models/speaker/campplus.onnx` |
+| `…threshold` | `0.55` | 余弦阈值（待真机标定） |
+| `…min_speech_ms` | `600` | 短于此直接拒（`wake rejected: speaker short=NNNms`） |
+| `…mode` | `any_enrolled` | 字段已落；`wake_owner` 的段级语义属批次 2 |
+| `…accept_anchor_or_library` | `true` | 段级语义属批次 2 |
+| `…skip_on_barge` | `true` | 放歌 barge 唤醒不做声纹（音乐污染 embedding） |
+
+**失败方向（有意选择，必须知情）**
+- 模型缺失 / 库为空 / embedding 失败 / speakers.json 损坏 → **fail-open**（照旧唤醒），warning 一次。
+- 本设备没有档案但库非空 → 回退**全库匹配**（每设备一次 info），避免「没在卫生间注册 = 卫生间变聋」。
+- 库非空但全部维度不匹配（换模型后旧档未重录）→ fail-open。
+
+**证据（Lead 亲自跑）**
+- `git diff --stat`：15 文件 / +4107 −7（含新建 `speaker_gate.py`、`speakers.py`、`FamilyView.vue` 与 3 个测试文件）。
+- `ruff check src tests` → All checks passed。
+- **全量** `pytest -q`（2445 用例）→ exit 0。
+- 定向：`test_speaker_gate.py`+`test_config_speaker_gate.py` 38 passed/1 skipped（真模型 importorskip）；
+  `test_speakers_api.py` 45 passed；`test_config_v3.py`+`test_audio_plane.py`+`test_ack_echo_gate.py` 53 passed。
+- 前端：`npm run typecheck` / `npm run build` exit 0（`web/dist` 不入库）。
+- 评审：Card A rev-a（2 轮：3 条阻塞→PASS）、Card B rev-b（2 轮：3 条阻塞→PASS），实现者与评审者不同人。
+
+**评审抓出、已修的坑（下次别重踩）**
+1. 逐设备库里「本设备无档案」会让设备**完全变聋**（`best_match(device_id)` 恒 (0.0,None) 且绕过了 empty fail-open）。
+2. `best is None`（换模型维度不符）同样会变聋 → 必须 fail-open。
+3. ring 加长到 2 s 后，standby 冷→热回灌把**整个 ring** 喂回 KWS，可能二次命中旧唤醒词；回灌窗口必须与 ring 长度解耦。
+4. sidecar 的 `speech_ms` 显式为 0 时不能回退成整段时长（否则静音也入库）。
+5. 姓名归一化必须与 `SpeakerLibrary` 一致（`" ".join(split())`），否则重录覆盖/删除样本/相似度对比全错位。
+
+**已知残留风险（不阻塞本批，别写成已验证）**
+- 声纹推理是同步调用，跑在音频面事件循环上（每次唤醒 1 次 ~1.5 s 音频）；本机无 sherpa-onnx/模型，
+  **耗时未实测**。发版前需在 dot2 上量单次 embed（目标 <100 ms），否则 barge 延迟会退化。
+- `speaker_gate.enabled` 切换需要重建 plane（与 AEC/VAD/KWS 一致），热改配置不会即时生效。
+- device wake（`_handle_device_wake`）路径**不走**声纹门控；当前 5 台都走 RUI KWS，无生产缺口，device OWW 上线前必须补。
+- 放歌时 `skip_on_barge=true` 会绕过门控（媒体声+音乐仍可能误唤醒）；「下一个」的声学污染属批次 3。
+- 5 台各加载一份 28 MB 模型（约 +140 MB RSS）未实测；发版前看 `docker stats`。
+- 真机端到端（真 CAM++、真实录音、真实门控分数）**一次都没跑过**——本批只到单测/协议层。
+
+**bridge 真机验收清单（部署后，按卡）**
+1. 视频在场 10 分钟：误唤醒「在呢」= 0，且日志有 `wake rejected: speaker`（证明是被拒，不是没听到）。
+2. 3 人 × 每台设备 3 段 × 3 s 注册；重录后旧 embedding 不残留；删除后样本 wav 也没了。
+3. 家庭三人 3.5 米：唤醒 ≥4/5（门限回 `:4.00 #0.07`），且每条都有 `wake admitted: speaker score=`。
+4. `docker stats` 看 5 台 RSS 增量；`grep -c "speaker gate unavailable"` 应为 0。
+5. 只改配置回滚验证：`speaker_gate.enabled: false` + 重建 plane → 行为与 0.8.15 一致。
+
+**下一步（批次 2，未开工）**：段级声纹 + 锚点连续性 + `vad_max_speech_ms`（默认 8000）+ 唤醒后短窗（2500 ms）
++ 切除策略（只丢 cue 段，不做 `[0, cue_end+40]` 整段）。批次 3：六条小修。最后发版卡。
