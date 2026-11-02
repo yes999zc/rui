@@ -184,7 +184,12 @@ class FakeWriter:
 
 
 def test_aec_release_ends_the_hold_immediately() -> None:
-    from rui.audio.aec import AecChain
+    from rui.audio.aec import AecChain, speex_available
+
+    # CI installs no libspeexdsp: `AecChain` cannot be constructed there, and this
+    # test is about the hold/release state machine, not about the canceller itself.
+    if not speex_available():
+        pytest.skip("libspeexdsp is not installed: AecChain is unavailable")
 
     chain = AecChain(channels=1, wake_hold_ms=15000)
     assert chain.holding is False
