@@ -3210,3 +3210,32 @@ amd64 镜像 `ghcr.io/yes999zc/rui@sha256:9d28f00d30192becf0be6bb08ada3cba06c6d4
 
 **下一步**：② 注册 3 人 × 2 台（living、dot2-c）→ ③ 开 `speaker_gate.enabled: true` + `model_path`，
 `keywords.txt` 回 `4.00 #0.07` → ④ 按 `04_Docs/human-bridge/tests/0.8.16-acceptance.md` 验收。
+
+### 2026-11-02 12:2x 0.8.16 **注册（enroll/commit）必失败**：numpy 真值判断 bug（P0，需 0.8.17）
+
+**现象（bridge 部署后自测，无需人声）**：
+```
+POST /api/v2/speakers/enroll {"name":"_smoke","device_id":"living","seconds":2}  → 201（arm 正常）
+POST …/commit                                                                    → 500 Internal Server Error
+```
+traceback 定位：
+```
+speakers.py:580 in commit
+speaker_gate.py:326 in embed
+ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
+```
+**原因**：`SpeakerEmbedder.embed(pcm: bytes | np.ndarray, rate)` 的守卫写成 `if self._extractor is None or not pcm:`；
+commit 路径传进来的是 **numpy 数组**，`not pcm` 在多元素数组上抛 ValueError。`_as_float32()` 已兼容数组，
+说明本意是支持数组的，只是守卫没兼容。
+**影响**：声纹注册入口 100% 不可用（控制台「家庭成员」页同样会 500）。唤醒门控本身未受影响
+（5 台 `speaker gate on: threshold=0.55 enrolled=0`，库空时 fail-open）。
+
+**修法（0.8.17，一行）**：
+```python
+if self._extractor is None or (pcm.size == 0 if isinstance(pcm, np.ndarray) else not pcm):
+```
+并补单测：`embed()` 分别喂 `bytes` / `np.int16 数组` / `np.float32 数组` / 空数组，不得抛异常。
+
+**临时验证路径**（只在容器内热修 `site-packages/.../speaker_gate.py` + `docker restart rui`，
+等价于只给「commit 那一次调用」放行；下次 `compose up -d` 会丢，不能当正式修复）——
+用于今天先把 3 人 × 2 台的 embedding 录进 `data_dir/speakers.json`（数据本身不受补丁影响）。
