@@ -542,6 +542,9 @@ class _FakeLink:
     async def speak(self, pcm: bytes, **kwargs: object) -> None:
         return None
 
+    async def reply_finished(self, **kwargs: object) -> None:
+        return None
+
 
 class _FakeRunner:
     def __init__(self) -> None:

@@ -194,6 +194,29 @@ def test_zero_means_no_followup_window_at_all(caplog) -> None:
     assert "follow-up window disabled" in caplog.text
 
 
+def test_listening_led_tracks_the_receive_gate() -> None:
+    plane = _plane()
+    plane.gate = SimpleNamespace(armed=True, _hold_ms=100)  # type: ignore[assignment]
+    effects = []
+
+    async def paint(effect, repaint=False):
+        effects.append(effect)
+
+    async def run():
+        plane._apply_led = paint
+        plane._request_led("listening")
+        await asyncio.sleep(0)
+        plane.gate._hold_ms = 0
+        plane._request_led("off")
+        await asyncio.sleep(0)
+        plane.gate.armed = False
+        plane._request_led("listening")
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+    assert effects == ["wake", "listening", "off"]
+
+
 class _SilentVad:
     """The gate's own timeout/arming state machine, without the optional model."""
 

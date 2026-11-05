@@ -187,6 +187,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Load amd64 release digest for security scan
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/download-artifact@v4
+        with:
+          name: digest-amd64
+          path: ${{ runner.temp }}/release-scan-amd64
+
+      - name: Resolve release image for security scan
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: release_image
+        working-directory: ${{ runner.temp }}/release-scan-amd64
+        run: |
+          digests=(*)
+          [[ ${#digests[@]} -eq 1 && ${digests[0]} =~ ^[0-9a-f]{64}$ ]]
+          echo "ref=ghcr.io/${{ github.repository }}@sha256:${digests[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the release scan policy
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Scan the release image before publishing tags
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.1
+          image-ref: ${{ steps.release_image.outputs.ref }}
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          trivyignores: security/trivy-ignore.yaml
+          exit-code: "1"
+
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5

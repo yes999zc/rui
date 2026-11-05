@@ -18,6 +18,13 @@ canonical per-version record.
 
 _Nothing yet._
 
+## [0.8.18] - 2026-11-05
+
+- Give spoken selection and clarification prompts a bounded follow-up window, including while a song is paused for speech.
+- Drive the device listening indication from the audio plane's receive window.
+- Play due reminders in their target room without clearing music. Resume an interrupted song and retain a manual pause.
+- Validate the existing dated Trivy exceptions and scan the amd64 release image before promoting registry tags.
+
 ## [0.8.17] - 2026-11-02
 
 **Theme: Dot-only 收口 —— 0.8.16 的副作用默认值全部退回中性；小爱（LX06）停止维护。**

@@ -3,14 +3,12 @@
 The reminder entry and routing are pinned in ``test_reminder_voice.py``. This file
 covers the *delivery* half of backlog §f.2:
 
-* a target room that is playing music (or answering) is silenced first, and the song is
-  not resumed after the announcement;
+* the target room lends its speaker to the reminder while preserving its music queue;
 * other rooms are not stopped, not spoken into, and their session is not closed;
 * an offline target speaks on ``default_output`` with 「<room>那台没在线」;
 * a delivery that produced no audio increments a counter that ``/health`` exposes -
   it is never a silent ``log.warning``;
-* the announcement closes the session shop: LED ends on ``off`` and no
-  ``reply_finished`` is sent, so the plane arms no follow-up window.
+* the announcement drains with follow-up disabled and the LED ends on ``off``.
 
 The fake clients are the same shape the fleet tests use: ``send`` records control
 messages, ``speak`` records PCM, ``set_led`` records the ring.
@@ -22,7 +20,7 @@ import datetime as dt
 import logging
 from types import SimpleNamespace
 
-from rui.audio.protocol import ResumeMusic, StopAudio
+from rui.audio.protocol import ReplyFinished, ResumeMusic, StopAudio
 from rui.config.schema import Config, DeviceConfig
 from rui.tools.reminders import (
     ZONE,
@@ -187,8 +185,8 @@ def run_delivery(app, reminder: Reminder, runner: FakeRunner, *, settle_s: float
     return asyncio.run(scenario())
 
 
-def test_a_playing_target_room_is_stopped_only_there_and_never_resumed(monkeypatch) -> None:
-    """The song belongs to 书房: stop it, announce, leave 客厅's session alone."""
+def test_a_playing_target_room_keeps_its_queue_during_the_reminder(monkeypatch) -> None:
+    """Announce in 书房, preserve its music, and leave 客厅's session alone."""
     study, living = FakeClient("study"), FakeClient("living")
     music = FakeMusic("playing")
     runner = FakeRunner()
@@ -201,9 +199,9 @@ def test_a_playing_target_room_is_stopped_only_there_and_never_resumed(monkeypat
 
     assert run_delivery(app, item(), runner, settle_s=1.0) is True
 
-    # The song queue was stopped, the target plane was flushed, and no resume followed.
-    assert music.stops == 1
-    assert any(isinstance(msg, StopAudio) for msg in study.sent)
+    # The plane pauses/resumes on speech; the service queue is untouched.
+    assert music.stops == 0
+    assert study.sent == [ReplyFinished(followup=False)]
     assert not any(isinstance(msg, StopAudio) for msg in living.sent)
     assert not any(isinstance(msg, ResumeMusic) for msg in study.sent + living.sent)
     assert music.resumes == 0
@@ -221,8 +219,8 @@ def test_a_playing_target_room_is_stopped_only_there_and_never_resumed(monkeypat
         0, 1, 0, 0)
 
 
-def test_a_paused_target_queue_is_stopped_so_it_cannot_come_back(monkeypatch) -> None:
-    """A paused song under the target is a queue the plane could hand back; C2 ends it."""
+def test_a_paused_target_queue_stays_paused(monkeypatch) -> None:
+    """The reminder leaves the manually paused queue intact."""
     study = FakeClient("study")
     music = FakeMusic("paused")
     runner = FakeRunner()
@@ -233,7 +231,7 @@ def test_a_paused_target_queue_is_stopped_so_it_cannot_come_back(monkeypatch) ->
 
     assert run_delivery(app, item(), runner, settle_s=1.0) is True
 
-    assert music.stops == 1
+    assert music.stops == 0
     assert music.resumes == 0
     assert study.spoken
 
@@ -284,14 +282,14 @@ def _route_source_room(monkeypatch, bedroom: FakeClient, living: FakeClient) -> 
     monkeypatch.setattr(app_module, "_default_output_client", lambda _app: living)
 
 
-def test_an_unnamed_second_bedroom_reminder_stops_only_that_rooms_song(
+def test_an_unnamed_second_bedroom_reminder_preserves_that_rooms_song(
     monkeypatch, tmp_path,
 ) -> None:
-    """task-31: unnamed from 次卧 -> stored room 次卧 -> 次卧's song stops, 客厅 silent.
+    """task-31: unnamed from 次卧 -> stored room 次卧 -> 次卧 gets the announcement, 客厅 stays silent.
 
     The reported failure: the item had ``room=None``, so it spoke on the living
     default output while the 次卧 song kept playing. Now the source room is stored at
-    creation and delivery stops only that room - no resume, LED off, no follow-up.
+    creation and delivery borrows only that room's speaker.
     """
     cfg = _source_room_cfg(tmp_path)
     bedroom, living = FakeClient("dot2-b"), FakeClient("living")
@@ -309,13 +307,13 @@ def test_an_unnamed_second_bedroom_reminder_stops_only_that_rooms_song(
 
     assert run_delivery(app, reminder, runner, settle_s=1.0) is True
 
-    # The 次卧 queue was stopped and never resumed; 客厅 was not touched at all.
-    assert music.stops == 1 and music.resumes == 0
-    assert any(isinstance(msg, StopAudio) for msg in bedroom.sent)
+    # The 次卧 queue survives and 客厅 remains untouched.
+    assert music.stops == 0 and music.resumes == 0
+    assert bedroom.sent == [ReplyFinished(followup=False)]
     assert living.sent == [] and living.spoken == []
     assert bedroom.spoken and bedroom.led[-1] == "off"
-    # No reply_finished: the reminder never opens a wake-free follow-up window.
-    assert bedroom.replies == 0 and living.replies == 0
+    # Setup confirmation closes the gate without a follow-up.
+    assert bedroom.replies == 1 and living.replies == 0
     stats = app_module._reminder_health(app)
     assert (stats["spoken"], stats["failed"], stats["offline"]) == (1, 0, 0)
 
@@ -344,7 +342,7 @@ def test_an_unnamed_second_bedroom_reminder_leaves_the_living_song_alone(
     assert not any(isinstance(msg, StopAudio) for msg in living.sent)
     assert living.spoken == []
     assert bedroom.spoken and bedroom.led[-1] == "off"
-    assert bedroom.replies == 0 and living.replies == 0
+    assert bedroom.replies == 1 and living.replies == 0
 
 
 def _tool_reminder(app, room: str, *, text: str = "喝水") -> Reminder:
@@ -355,10 +353,10 @@ def _tool_reminder(app, room: str, *, text: str = "喝水") -> Reminder:
     return app.state.reminders.store.pending(now=REF)[0]
 
 
-def test_an_llm_tool_reminder_stops_only_the_source_rooms_song(
+def test_an_llm_tool_reminder_preserves_the_source_rooms_song(
     monkeypatch, tmp_path,
 ) -> None:
-    """task-32: the tool path stores the source room too, so delivery stops 次卧 only."""
+    """task-32: the tool path stores the source room too, so delivery borrows the speaker in 次卧."""
     cfg = _source_room_cfg(tmp_path)
     bedroom, living = FakeClient("dot2-b"), FakeClient("living")
     music = FakeMusic("playing")
@@ -375,8 +373,8 @@ def test_an_llm_tool_reminder_stops_only_the_source_rooms_song(
 
     assert run_delivery(app, reminder, runner, settle_s=1.0) is True
 
-    assert music.stops == 1 and music.resumes == 0
-    assert any(isinstance(msg, StopAudio) for msg in bedroom.sent)
+    assert music.stops == 0 and music.resumes == 0
+    assert bedroom.sent == [ReplyFinished(followup=False)]
     assert living.sent == [] and living.spoken == []
     assert bedroom.spoken and bedroom.led[-1] == "off"
     assert bedroom.replies == 0 and living.replies == 0

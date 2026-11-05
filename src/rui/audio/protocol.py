@@ -465,6 +465,8 @@ class PlayFile(BaseModel):
 
 class StopAudio(BaseModel):
     type: Literal["stop_audio"] = "stop_audio"
+    # A scheduled announcement can clear speech without ending the media item.
+    preserve_music: bool = False
 
 
 class QueryMetrics(BaseModel):

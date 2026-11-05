@@ -365,9 +365,9 @@ def test_a_canned_command_that_skips_reply_finished_releases_the_turn(
         assert _next_wake_is_admitted(client, living, "w-after-context") == "wake_admit"
 
 
-def test_a_clarify_turn_that_skips_reply_finished_releases_the_turn(
+def test_a_clarify_turn_opens_followup_and_releases_the_turn(
         tmp_path, monkeypatch) -> None:
-    """A bare device name answers 「打开还是关闭」 without reply_finished either."""
+    """A bare device name asks 「打开还是关闭」 and waits for the answer."""
     FakeFleet.instances.clear()
     app = _app(tmp_path, monkeypatch)
     with TestClient(app) as client:
@@ -381,7 +381,7 @@ def test_a_clarify_turn_that_skips_reply_finished_releases_the_turn(
         assert app.state.last_turn["tools"] == ["clarify.verb"]
         assert coordinator.arbiter.state.turn_open is False, (
             "the clarify turn left every later wake rejected turn_open")
-        assert living.replies == 0, "clarify must not open the follow-up window"
+        assert living.replies == 1, "clarify needs a follow-up window"
         assert _next_wake_is_admitted(client, living, "w-after-clarify") == "wake_admit"
 
 

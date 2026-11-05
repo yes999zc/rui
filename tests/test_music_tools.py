@@ -317,6 +317,10 @@ def test_a_music_turn_asks_the_plane_for_an_immediate_resume() -> None:
     assert _turn_hold(SimpleNamespace(tools=["volume"])) == 0.0
     assert _turn_hold(SimpleNamespace(tools=["weather"])) is None
     assert _turn_hold(SimpleNamespace(tools=[])) is None
+    assert _turn_hold(SimpleNamespace(
+        tools=["music_search"], reply="有两首。你想听哪首？", audio_bytes=100)) == 5.0
+    assert _turn_hold(SimpleNamespace(
+        tools=["music_search"], reply="有两首。Which one?", audio_bytes=0)) == 0.0
 
 
 def test_a_successful_transport_is_silent(tmp_path: Path) -> None:

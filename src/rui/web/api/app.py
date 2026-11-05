@@ -41,7 +41,7 @@ from ...audio.coordinator import WakeCoordinator
 from ...audio.fleet import PlaneFleet
 from ...audio.kws import KwsUnavailable, keyword_meta, model_files, write_keywords_file
 from ...audio.probe import safe_probe
-from ...audio.protocol import PauseMusic, PlayFile, ResumeMusic, StopAudio
+from ...audio.protocol import PauseMusic, PlayFile, ReplyFinished, ResumeMusic, StopAudio
 from ...audio.volume_keys import volume_key_target
 from ...channels.supervisor import ChannelSupervisor
 from ...channels.weixin import WeixinAdapter
@@ -1120,6 +1120,7 @@ async def _music_transport(app: FastAPI, clean: str, runner, client, trace, trac
 # No command window: 9哥 is fine repeating the wake word over music, and the
 # ducked gap only delayed the song. 0 = the song returns the moment it can.
 MUSIC_COMMAND_WINDOW_S = 0.0
+ANSWER_REQUEST_WINDOW_S = 5.0
 
 
 def _turn_light(result: object, default: str = "listening") -> str:
@@ -1350,12 +1351,15 @@ async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trac
         _record_turn(app, {"transcript": clean, "reply": line, "audio_bytes": spoken,
                            "error": "", "tools": ["reminder.voice"], "stages": {}})
         traces.add(trace)
+        await client.reply_finished(hold_music_s=ANSWER_REQUEST_WINDOW_S,
+                                    followup=bool(spoken))
         log.info("reminder voice: %r -> %s (nothing created)", clean, exc.reason)
         return True
     if parsed is None:
         return False
 
     room = _reminder_room(cfg, client, parsed.room)
+    scheduled = False
     try:
         item = scheduler.store.add(parsed.text, parsed.at, now=moment, room=room)
     except ValueError:
@@ -1364,6 +1368,7 @@ async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trac
         log.warning("reminder voice: cannot save to %s: %s", scheduler.store.path, exc)
         line = phrases.book.render("reminder.save_failed")
     else:
+        scheduled = True
         # The spoken confirmation keeps the user's own wording: a room they named is
         # repeated back, a source room derived from the device is only stored (and
         # logged below), never announced as if they had chosen it.
@@ -1377,6 +1382,9 @@ async def _voice_reminder_command(app: FastAPI, clean: str, runner, client, trac
     _record_turn(app, {"transcript": clean, "reply": line, "audio_bytes": spoken,
                        "error": "", "tools": ["reminder.voice"], "stages": {}})
     traces.add(trace)
+    await client.reply_finished(
+        hold_music_s=0.0 if scheduled else ANSWER_REQUEST_WINDOW_S,
+        followup=not scheduled and bool(spoken))
     return True
 
 
@@ -2010,48 +2018,22 @@ def _consume_reminder_preempt(app: FastAPI, room: str) -> bool:
 
 async def _reminder_yield_room(
     app: FastAPI, room: str, client: object, runner: object,
-) -> tuple[bool, bool]:
-    """Silence only the named target room before its reminder speaks.
-
-    Returns ``(stopped, turn_here)``. Music is torn down through the service (queue +
-    plane + LED) only when the song is pinned to this room; a paused or playing song in
-    another room is left alone. ``turn_here`` says the target was mid-answer, so the
-    caller must abort the rest of that answer after the reminder has been queued.
-
-    A fallback room is never yielded: its caller passes an empty room because the named
-    room was offline, and cutting a song nobody asked us to interrupt would be worse
-    than waiting for a quieter moment.
-    """
+) -> bool:
+    """Clear competing speech in the target room and report whether a turn was active."""
     if not room:
-        return False, False
-    service = getattr(app.state, "music", None)
-    owner = str(getattr(app.state, "output_owner", "") or "")
-    music_room = str(getattr(app.state, "music_room", "") or "")
-    # Playing *or* paused: a paused queue under this room is one the plane may hand
-    # back after a reply, and C2 promises no auto-resume. Stopping is the only way to
-    # keep that promise, so the reminder takes the room's place in the queue too.
-    music_here = bool(
-        service is not None
-        and getattr(service, "state", "idle") != "idle"
-        and (owner == room or music_room == room)
-    )
+        return False
     metrics = getattr(client, "metrics", None)
-    sounding = bool(metrics is not None and getattr(metrics, "output_owner", ""))
+    output = getattr(metrics, "output_owner", "")
     turn_here = bool(
         getattr(runner, "busy", False)
         and str(getattr(app.state, "turn_device", "") or "") == room
     )
-    if music_here:
-        try:
-            await service.stop()  # type: ignore[union-attr]
-        except Exception as exc:  # noqa: BLE001 - never let a teardown block the reminder
-            log.warning("reminder: stopping music in %r failed: %s", room, exc)
-    if music_here or sounding or turn_here:
-        with contextlib.suppress(Exception):
-            await client.send(StopAudio())  # type: ignore[attr-defined]
     if turn_here:
         _mark_reminder_preempt(app, room)
-    return music_here or sounding or turn_here, turn_here
+    if turn_here or (output and output != "music"):
+        with contextlib.suppress(Exception):
+            await client.send(StopAudio(preserve_music=True))  # type: ignore[attr-defined]
+    return turn_here
 
 
 def _finish_reminder_session(
@@ -2060,10 +2042,8 @@ def _finish_reminder_session(
 ) -> None:
     """Close the target's session window after the announcement (task-17 semantics).
 
-    No ``reply_finished`` is sent: that message is what makes the plane arm the
-    wake-free follow-up gate. A room whose session belonged to the reminder is stopped;
-    another room's session is left alone. The ring's last event is `off`, after the
-    announcement has actually drained.
+    The announcement drains with follow-up disabled. Only its own room's session
+    is closed, and the ring is turned off after the audio drains.
 
     The turn latch is released only when the reminder owned the turn. An offline named
     room falls back to a speaker that may be mid-answer in another room; ``room`` is
@@ -2108,7 +2088,7 @@ async def _deliver_reminder(app: FastAPI, item: Reminder, runner: object) -> boo
     # is offline the fallback speaker keeps whatever it is doing (other room / song),
     # so there is no target to yield.
     target_room = "" if offline_room else delivery_room
-    _stopped, turn_here = await _reminder_yield_room(app, target_room, client, runner)
+    turn_here = await _reminder_yield_room(app, target_room, client, runner)
     try:
         spoken = await runner.say(  # type: ignore[attr-defined]
             _reminder_line(item, offline_room),
@@ -2128,6 +2108,9 @@ async def _deliver_reminder(app: FastAPI, item: Reminder, runner: object) -> boo
         _reminder_failed(app, item, "nothing was spoken (empty or aborted reply)")
         return False
 
+    # Use the plane directly: this finish belongs to the announcement, not to
+    # the interrupted turn's latch or its preemption mark.
+    await client.send(ReplyFinished(followup=False))  # type: ignore[attr-defined]
     _finish_reminder_session(app, target_room, client, runner, spoken, turn_here=turn_here)
     stats = _reminder_stats(app)
     stats["spoken"] = int(stats.get("spoken", 0)) + 1
@@ -2978,8 +2961,21 @@ def _mirror_keywords(cfg_now: Config, path: Path) -> bool:
     return True
 
 
+_ANSWER_REQUEST = re.compile(
+    r"(?:哪(?:一)?首|哪(?:一)?个|要(?:放|播放|听)吗|是否(?:播放|继续)|"
+    r"想听什么|选(?:一首|一个|哪)|告诉我|请(?:选择|确认)|"
+    r"\b(?:which (?:one|song|track)|would you like|shall i|do you want|"
+    r"please (?:choose|confirm))\b)", re.IGNORECASE,
+)
+
+
 def _turn_hold(result: object) -> float | None:
-    """0 when this turn's tools were about the song itself (music/volume)."""
+    """Give a spoken request for an answer a finite window before media returns."""
+    reply = str(getattr(result, "reply", "") or "").rstrip("。！!\n ")
+    last_sentence = re.split(r"[。！!\n]", reply)[-1]
+    if (getattr(result, "audio_bytes", 0) and not getattr(result, "error", "")
+            and _ANSWER_REQUEST.search(last_sentence)):
+        return ANSWER_REQUEST_WINDOW_S
     tools = getattr(result, "tools", None) or []
     for name in tools:
         tool = str(name).rsplit(".", 1)[-1]
@@ -3531,6 +3527,8 @@ def create_app(
                     line = phrases.book.render("turn.not_heard")
                     runner.idle.touch()
                     spoken = await runner.say(line, _speaking(app, link), trace)
+                    await link.reply_finished(
+                        hold_music_s=ANSWER_REQUEST_WINDOW_S, followup=bool(spoken))
                     _record_turn(app, {
                         "transcript": heard, "reply": line, "audio_bytes": spoken,
                         "error": "", "tools": ["turn.not_heard"], "stages": {},
@@ -3611,6 +3609,8 @@ def create_app(
                     line = phrases.book.render("device.ask_verb")
                     runner.idle.touch()
                     spoken = await runner.say(line, _speaking(app, link), trace)
+                    await link.reply_finished(
+                        hold_music_s=ANSWER_REQUEST_WINDOW_S, followup=bool(spoken))
                     _record_turn(app, {
                         "transcript": clean, "reply": line, "audio_bytes": spoken,
                         "error": "", "tools": ["clarify.verb"],
@@ -3667,8 +3667,8 @@ def create_app(
                 trace.note_playback_metrics(getattr(link, "metrics", None))
                 _log_reply_segments(trace)
                 traces.add(trace)
-                # A music/volume turn wants the song back the moment the reply
-                # drains, not after the follow-up window (measured 09:21: ~10 s).
+                # Transport confirmations release the song immediately. A spoken
+                # question gets a bounded window, even when music is waiting.
                 await link.reply_finished(hold_music_s=_turn_hold(result))
                 _light_after_audio(app, result.audio_bytes, cfg.audio.voice.rate,
                                    _turn_light(result))

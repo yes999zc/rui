@@ -915,6 +915,8 @@ class AudioPlane:
         # first block disarms the gate, so gate state alone would release the song
         # before the window ever armed.
         self._music_hold_until: float | None = None
+        # Only explicit follow-ups own this empty-window wall limit.
+        self._explicit_followup_until: float | None = None
         # Per-turn override of the music window (ReplyFinished.hold_music_s).
         self._reply_hold: float | None = None
         # The control-plane socket, for plane -> control events (PlayFinished).
@@ -1891,6 +1893,7 @@ class AudioPlane:
         self.capture_errors += 1
         self._capture_fail_streak += 1
         self.capture_last_error = f"{type(exc).__name__}: {exc}"[:300]
+        self._disarm_gate("capture interrupted")
         now = time.monotonic()
         if now - self._capture_error_logged >= CAPTURE_ERROR_LOG_S:
             self._capture_error_logged = now
@@ -3100,7 +3103,7 @@ class AudioPlane:
                 )
             replayed = 0
             for ts, block in blocks:
-                await self._feed_gate(block, ts, writer, connected)
+                await self._feed_gate(block, ts, writer, connected, paint=False)
                 replayed += len(block) // 2
             self.preroll_replayed_ms = round(replayed * 1000.0 / self.cfg.audio.voice.rate, 1)
             self.preroll_replays += 1
@@ -3125,6 +3128,8 @@ class AudioPlane:
         if audio.size:
             self.ack_attempts += 1
             self._start_ack(audio)
+        if self._gate_receptive():
+            self._request_led("listening")
 
         if connected.is_set():
             try:
@@ -3183,7 +3188,8 @@ class AudioPlane:
         return False
 
     async def _feed_gate(
-        self, pcm: bytes, ts_ms: float, writer: asyncio.StreamWriter, connected: asyncio.Event
+        self, pcm: bytes, ts_ms: float, writer: asyncio.StreamWriter, connected: asyncio.Event,
+        *, paint: bool = True,
     ) -> None:
         gate = self.gate
         if gate is None:
@@ -3191,6 +3197,8 @@ class AudioPlane:
         before_idle = getattr(gate, "idle_events", 0)
         was_armed = bool(getattr(gate, "armed", False))
         finished = gate.feed(pcm, ts_ms=ts_ms)
+        if paint and self._gate_receptive() != getattr(self, "_gate_led_receptive", False):
+            self._request_led("thinking" if finished is not None else "off")
         idle_events = getattr(gate, "idle_events", 0)
         if was_armed and not getattr(gate, "armed", False):
             # armed -> disarmed without an utterance (silent timeout, also when a cue
@@ -3792,6 +3800,7 @@ class AudioPlane:
                     self._reply_max_gap_ms = 0.0
                     self.playback_gap_chunks = []
                     finished_reply = self._reply_finished
+                    finished_generation = self._speak_generation
                     self._reply_finished = False
                     followup, self._reply_followup = self._reply_followup, True
                     reply_hold, self._reply_hold = self._reply_hold, None
@@ -3829,7 +3838,11 @@ class AudioPlane:
                                 self._start_followup_capture(
                                     max(0.0, pacer.due - time.monotonic()), delay)
                             asyncio.create_task(
-                                self._arm_followup_later(delay, reason="reply drained"),
+                                self._arm_followup_later(
+                                    delay, reason="reply drained", generation=finished_generation,
+                                    max_wait_ms=(None if reply_hold is None else
+                                                 max(0, int(reply_hold * 1000))),
+                                    wall_limit=reply_hold is not None),
                                 name="followup-gate"
                             )
                     # The song waits out the whole turn. An empty queue alone once meant
@@ -3858,17 +3871,29 @@ class AudioPlane:
                             self._music_hold_until = None
                         else:
                             self._music_hold_until = (
-                                time.monotonic() + delay + hold_ms / 1000.0)
+                                time.monotonic() + delay +
+                                (hold_ms if reply_hold is None else
+                                 self._followup_wait_ms(hold_ms)) / 1000.0)
                             if hold_ms > 0:
                                 self._start_followup_capture(
                                     max(0.0, pacer.due - time.monotonic()), delay)
                                 asyncio.create_task(
-                                    self._arm_followup_later(delay, max_wait_ms=hold_ms,
-                                                             reason="music hold"),
+                                    self._arm_followup_later(
+                                        delay, max_wait_ms=hold_ms, reason="music hold",
+                                        generation=finished_generation,
+                                        wall_limit=reply_hold is not None),
                                     name="followup-gate")
                             else:
                                 self._music_hold_until = None   # resume on this very tick
                     now = time.monotonic()
+                    if self._explicit_followup_until is not None:
+                        if self.gate is None or not self.gate.armed:
+                            self._explicit_followup_until = None
+                        elif (self.device_muted or
+                              (now >= self._explicit_followup_until and
+                               getattr(self.gate, "speech_ms", 0.0) <= 0.0)):
+                            self._disarm_gate("empty explicit follow-up expired")
+                            self._explicit_followup_until = None
                     holding = self._music_hold_until is not None and (
                         now < self._music_hold_until
                         or (self.gate is not None and self.gate.armed))
@@ -4095,13 +4120,22 @@ class AudioPlane:
 
     async def _arm_followup_later(self, delay: float,
                                   max_wait_ms: int | None = None,
-                                  reason: str = "reply drained") -> None:
+                                  reason: str = "reply drained",
+                                  generation: int | None = None,
+                                  wall_limit: bool = False) -> None:
         """Open the follow-up gate after the speaker has finished, not after sending."""
         try:
             await asyncio.sleep(max(0.0, delay))
         except asyncio.CancelledError:
             raise
+        if generation is not None and generation != self._speak_generation:
+            return
+        if self._stop.is_set():
+            return
         gate = self.gate
+        if self.device_muted or self.capture_degraded or self._speaker_link_up is False:
+            self._music_hold_until = None
+            return
         if self._owner is not None:
             # A song resumed behind the reply, or a reminder took the line: the follow-up
             # window must not open over our own audio, or its lyrics become the next
@@ -4125,8 +4159,12 @@ class AudioPlane:
             self._active_wake_barge = False
             log.info("follow-up gate open (%.1f s, %s)", wait_ms / 1000.0, reason)
             self._wake_armed = False
+            self._explicit_followup_until = (
+                time.monotonic() + wait_ms / 1000.0 if wall_limit else None)
             gate.arm(followup=True, max_wait_ms=wait_ms)
             await self._replay_followup_tail()
+            if self._gate_receptive():
+                self._request_led("listening")
 
     def _disarm_gate_for_our_audio(self) -> None:
         """Our own playback closes an armed follow-up gate.
@@ -4158,6 +4196,8 @@ class AudioPlane:
         if gate.armed:
             gate.disarm()
             self._stale_speech_blocked = False
+            if getattr(self, "_gate_led_receptive", False):
+                self._request_led("off")
             return True
         return False
 
@@ -4198,6 +4238,7 @@ class AudioPlane:
                 "red" if muted else "restored",
             )
             if muted:
+                self._disarm_gate("device muted")
                 self._request_led("muted", repaint=True)
             else:
                 gate = self.gate
@@ -4272,6 +4313,15 @@ class AudioPlane:
             self._muted_known = True
             log.info("device muted at connect; the wake cue stays off")
 
+    def _gate_receptive(self) -> bool:
+        gate = self.gate
+        return bool(gate is not None and gate.armed
+                    and getattr(gate, "_hold_ms", 0) <= 0
+                    and getattr(gate, "_skipping", 0) <= 0
+                    and not self.device_muted and not self.capture_degraded
+                    and self._speaker_link_up is not False
+                    and self._owner is None and not self._stop.is_set())
+
     def _request_led(self, effect: str, repaint: bool = False) -> None:
         """Paint the newest LED state and abandon any older paint still in flight.
 
@@ -4286,8 +4336,13 @@ class AudioPlane:
         thinking, a stale off) is replaced by ``muted``, which is the one state the
         key owns until it is pressed again (task-18).
         """
+        self._gate_led_receptive = self._gate_receptive()
         if self.device_muted:
             effect = "muted"
+        elif self._gate_led_receptive:
+            effect = "listening"
+        elif effect == "listening":
+            effect = "wake" if self.gate is not None and self.gate.armed else "off"
         previous = self._led_task
         self._led_task = asyncio.create_task(
             self._apply_led(effect, repaint), name="led")
@@ -4309,6 +4364,16 @@ class AudioPlane:
         self._speak_finished = True
         self._starvation_due = None
         self._speak_generation += 1
+        self._reply_finished = False
+        self._reply_followup = True
+        self._reply_hold = None
+        self._music_hold_until = None
+        if self._explicit_followup_until is not None:
+            self._disarm_gate("explicit follow-up flushed")
+        self._explicit_followup_until = None
+        self._followup_capture = False
+        self._followup_tail.clear()
+        self._followup_samples = 0
         # task-23: the per-reply gap ledger belongs to the reply this barge/stop just
         # cancelled. Clearing it here (not only when the speak loop notices the idle
         # queue 0.5 s later) keeps a new turn's trace from inheriting those chunks.
@@ -4343,6 +4408,7 @@ class AudioPlane:
             return
         chunks = self._speak_queue.qsize()
         seconds = self._speak_queued_s
+        self._disarm_gate("speaker link lost")
         self._flush_speech()
         room = str(getattr(self.device_cfg, "room", "") or self.device_id)
         log.info("link lost: dropped %d speech chunks (%.1f s) for room %s",
@@ -4420,7 +4486,9 @@ class AudioPlane:
         log.info("playback resumed after speech at %.1f s",
                  self._file_position / self.effective.playback.rate)
 
-    async def _stop_playback(self) -> None:
+    async def _stop_playback(self, *, preserve_music: bool = False) -> None:
+        if preserve_music:
+            self._pause_for_speech()
         # A cue is playback too: StopAudio and shutdown must not leave it sounding.
         if self._ack_task is not None and not self._ack_task.done():
             self._ack_task.cancel()
@@ -4434,7 +4502,8 @@ class AudioPlane:
                 pass
         self._playback_task = None
         self._music_hold_until = None
-        if self._paused_explicit and self._file_cfg is not None:
+        if self._file_cfg is not None and (self._paused_explicit or
+                                           (preserve_music and self._speech_paused)):
             # A hand-parked song makes no sound. StopAudio here is for the speech
             # tail and the device (the vendor took the line mid-song and kills our
             # reply with it); throwing the parked position away would break the
@@ -4865,7 +4934,7 @@ class AudioPlane:
                     log.info("playback requested: %s loop=%s gain=%.2f", path, msg.loop, msg.gain)
                 elif isinstance(msg, StopAudio):
                     self._flush_speech()
-                    await self._stop_playback()
+                    await self._stop_playback(preserve_music=msg.preserve_music)
                 elif isinstance(msg, PauseMusic):
                     self._pause_for_speech()
                     self._paused_explicit = True
@@ -4884,6 +4953,8 @@ class AudioPlane:
                     if not self._stale_speech_blocked:
                         self._segment_pending = True
                 elif isinstance(msg, ReplyFinished):
+                    if self._stale_speech_blocked:
+                        continue
                     self._reply_finished = True
                     self._reply_followup = msg.followup
                     self._reply_hold = msg.hold_music_s
