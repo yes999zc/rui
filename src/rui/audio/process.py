@@ -3128,7 +3128,7 @@ class AudioPlane:
         if audio.size:
             self.ack_attempts += 1
             self._start_ack(audio)
-        if self._gate_receptive():
+        elif self._gate_receptive():
             self._request_led("listening")
 
         if connected.is_set():
@@ -4343,8 +4343,12 @@ class AudioPlane:
             effect = "listening"
         elif effect == "listening":
             effect = "wake" if self.gate is not None and self.gate.armed else "off"
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
         previous = self._led_task
-        self._led_task = asyncio.create_task(
+        self._led_task = loop.create_task(
             self._apply_led(effect, repaint), name="led")
         if previous is not None and not previous.done():
             previous.cancel()

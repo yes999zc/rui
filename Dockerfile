@@ -128,11 +128,14 @@ LABEL org.opencontainers.image.title="rui" \
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 # libspeexdsp is the echo canceller the plane loads through ctypes. Without it the
 # plane still runs, but barge-in is gone - so it belongs in the image, not in a README.
+# Refresh the inherited APT packages from bookworm-security (CVE-2026-109518).
 RUN if [ -n "$APT_MIRROR" ]; then \
         sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends libspeexdsp1 \
+    && apt-get install -y --no-install-recommends libspeexdsp1 apt libapt-pkg6.0 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 2.6.2 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg6.0)" ge 2.6.2 \
     && rm -rf /var/lib/apt/lists/*
 # The service runs unprivileged. uid/gid 1000 is both the image's runtime identity and
 # the identity deploy/install.sh chowns the ./config and ./data bind mounts to, so the

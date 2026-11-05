@@ -429,8 +429,10 @@ def test_a_newer_off_supersedes_a_slow_listening_paint() -> None:
         plane = _plane()
         adapter = SlowAdapter()
         plane.adapter = adapter  # type: ignore[assignment]
+        plane.gate.arm()
         plane._request_led("listening")
         await asyncio.sleep(0)          # the listening paint is now awaiting the ring
+        plane.gate.disarm()
         plane._request_led("off")
         adapter.release.set()           # let the old paint finish if it still can
         await asyncio.sleep(0.05)
